@@ -1,0 +1,249 @@
+digraph SeedStateMachine {
+  // Render with fdp, then move SVG edge label polygons/text into a final
+  // edge-labels group so transition labels paint above nodes and arrows.
+  graph [
+    label="seed State Machine Grouped By Module",
+    layout=fdp,
+    labelloc=t,
+    fontsize=22,
+    fontname="Arial",
+    rankdir=LR,
+    pad=0.45,
+    nodesep=0.45,
+    ranksep=0.65,
+    splines=true,
+    compound=true,
+    K=0.7,
+    outputorder=edgesfirst
+  ];
+
+  node [
+    shape=box,
+    style="rounded,filled",
+    fillcolor="#f8fafc",
+    color="#334155",
+    fontname="Arial",
+    fontsize=11,
+    margin="0.13,0.08"
+  ];
+
+  edge [
+    color="#475569",
+    fontname="Arial",
+    fontsize=10,
+    arrowsize=0.8,
+    decorate=false,
+    labeldistance=1.0,
+    labelangle=0
+  ];
+
+  start [shape=circle, label="", width=0.25, fillcolor="#0f172a"];
+  exit [shape=doublecircle, label="", width=0.32, fillcolor="#0f172a"];
+  unhandled_error [label="Unhandled error\nprint + set exitCode", fillcolor="#fee2e2", color="#b91c1c"];
+
+  subgraph cluster_legend {
+    label="Legend";
+    color="#e2e8f0";
+    style="rounded,dashed";
+
+    legend_app [label="blue = app/CLI module"];
+    legend_core [label="green/purple/red = core module"];
+    legend_adapter [label="yellow/orange = adapter module"];
+    legend_depth [label="Depth cue: more states and\ninternal transitions inside a cluster\nmeans more behavior is localized there"];
+  }
+
+  subgraph cluster_cli_main {
+    label="apps/cli/main.ts\nthin session loop + command routing\n11 states";
+    color="#bfdbfe";
+    style="rounded,dashed";
+
+    parse_args [label="Parse CLI args"];
+    show_help [label="Print help"];
+    prompt_user [label="Prompt user"];
+    classify_input [shape=diamond, label="Classify input"];
+    ignore_empty [label="Ignore empty input"];
+    exit_command [label="Exit command"];
+    route_new [label="Route /new"];
+    route_resume [label="Route /resume"];
+    route_settings [label="Route settings command"];
+    route_turn [label="Route user message"];
+    render_turn [label="Render streamed\nAgent events"];
+  }
+
+  subgraph cluster_cli_compose {
+    label="apps/cli/compose.ts + auth.ts\nwires adapters, config, auth\n3 states";
+    color="#bfdbfe";
+    style="rounded,dashed";
+
+    load_config [label="Load Agent config"];
+    create_runtime [label="Wire Agent runtime\nstores + Memory + model + tools"];
+    ensure_auth [label="Ensure Codex auth"];
+  }
+
+  subgraph cluster_cli_selection {
+    label="apps/cli/conversationSelection.ts + history.ts\nselection UI only\n2 states";
+    color="#bfdbfe";
+    style="rounded,dashed";
+
+    select_initial [label="List/select initial\nConversation"];
+    render_history [label="Render existing\nhistory"];
+  }
+
+  subgraph cluster_commands {
+    label="apps/cli/commands.ts\nsettings command parser\n1 state";
+    color="#bfdbfe";
+    style="rounded,dashed";
+
+    apply_settings_command [label="Apply /model, /reasoning,\n/set-json to Settings"];
+  }
+
+  subgraph cluster_conversation_manager {
+    label="core/conversations/ConversationManager.ts\nconversation lifecycle invariants\n12 states";
+    color="#bbf7d0";
+    style="rounded,dashed";
+
+    cm_create [label="Create Conversation\nempty turn list"];
+    cm_resume [label="Resume most recent\nor create"];
+    cm_activate [label="Activate Conversation\nsync prompt + Settings"];
+    cm_update_settings [label="Update Settings"];
+    cm_record_user [label="Record user\nopens turn"];
+    cm_record_assistant [label="Record assistant\ncompletes unless tool_call"];
+    cm_record_tool_result [label="Record tool result\nkeeps turn open"];
+    cm_build_context [label="Build replay context"];
+    cm_ready [label="No open turn"];
+    cm_open [label="Open turn"];
+    cm_completed [label="Completed turn"];
+    cm_invalid_transition [label="Invalid lifecycle\ntransition", fillcolor="#fee2e2", color="#b91c1c"];
+  }
+
+  subgraph cluster_memory {
+    label="adapters/memory/simple-linear/SimpleLinearMemory.ts\nprojection between Agent events and Conversation timeline\n5 states";
+    color="#fde68a";
+    style="rounded,dashed";
+
+    mem_record_user [label="Record user_message"];
+    mem_prepare [label="Prepare turn\nfilter reasoning + flatten replay"];
+    mem_record_assistant [label="Record assistant_message\nmap blocks to content"];
+    mem_record_tool [label="Record tool_result"];
+    mem_record_settings [label="Record settings_changed"];
+  }
+
+  subgraph cluster_agent {
+    label="core/agent/Agent.ts\nturn orchestration\n7 states";
+    color="#c4b5fd";
+    style="rounded,dashed";
+
+    agent_start [label="Start runTurn"];
+    agent_first_pass [label="Stream first\nassistant pass"];
+    agent_collect [label="Collect text, reasoning,\ntool calls, failed events"];
+    agent_has_tools [shape=diamond, label="Tool calls?"];
+    agent_execute_tools [label="Execute requested tools"];
+    agent_second_pass [label="Stream recovery pass"];
+    agent_completed [label="Yield completed"];
+  }
+
+  subgraph cluster_tools {
+    label="core/tools/ToolRegistry.ts + Tool adapters\nstable catalog + dispatch\n5 states";
+    color="#fecaca";
+    style="rounded,dashed";
+
+    tools_list [label="List canonical\ntool catalog"];
+    tools_execute [label="Dispatch by name"];
+    tools_unavailable [label="Structured unavailable\ntool result"];
+    tool_adapter [label="Tool adapter\nexecutes side effect"];
+    tool_throw [label="Tool throws", fillcolor="#fee2e2", color="#b91c1c"];
+  }
+
+  subgraph cluster_model {
+    label="adapters/codex/responses\nprovider protocol adapter\n5 states";
+    color="#fed7aa";
+    style="rounded,dashed";
+
+    model_build_body [label="Build Responses body\nprefix, input, tools"];
+    model_fetch [label="POST streaming\nResponses request"];
+    model_map_events [label="Map SSE events to\nModelStreamEvent"];
+    model_failed_event [label="failed event\nreturned to Agent"];
+    model_throw [label="Transport/protocol throw", fillcolor="#fee2e2", color="#b91c1c"];
+  }
+
+  start -> parse_args;
+  agent_start -> cm_record_user [style=invis, weight=20];
+  agent_collect -> cm_record_assistant [style=invis, weight=20];
+  agent_second_pass -> cm_record_tool_result [style=invis, weight=20];
+  parse_args -> show_help [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2" BGCOLOR="white"><TR><TD>--help</TD></TR></TABLE>>];
+  show_help -> exit;
+  parse_args -> load_config [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2" BGCOLOR="white"><TR><TD>chat session</TD></TR></TABLE>>];
+  load_config -> create_runtime;
+  create_runtime -> ensure_auth;
+  ensure_auth -> select_initial;
+
+  select_initial -> cm_create [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2" BGCOLOR="white"><TR><TD>new / none</TD></TR></TABLE>>];
+  select_initial -> cm_activate [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2" BGCOLOR="white"><TR><TD>manual selection</TD></TR></TABLE>>];
+  select_initial -> cm_resume [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2" BGCOLOR="white"><TR><TD>--resume</TD></TR></TABLE>>];
+  cm_resume -> cm_create [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2" BGCOLOR="white"><TR><TD>none</TD></TR></TABLE>>];
+  cm_resume -> cm_activate [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2" BGCOLOR="white"><TR><TD>recent exists</TD></TR></TABLE>>];
+  cm_create -> cm_ready;
+  cm_activate -> render_history;
+  render_history -> cm_ready;
+  cm_ready -> prompt_user;
+
+  prompt_user -> classify_input;
+  classify_input -> ignore_empty [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2" BGCOLOR="white"><TR><TD>blank</TD></TR></TABLE>>];
+  ignore_empty -> prompt_user;
+  classify_input -> exit_command [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2" BGCOLOR="white"><TR><TD>/exit</TD></TR></TABLE>>];
+  exit_command -> exit;
+  classify_input -> route_new [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2" BGCOLOR="white"><TR><TD>/new</TD></TR></TABLE>>];
+  route_new -> cm_create;
+  classify_input -> route_resume [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2" BGCOLOR="white"><TR><TD>/resume</TD></TR></TABLE>>];
+  route_resume -> cm_resume;
+  classify_input -> route_settings [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2" BGCOLOR="white"><TR><TD>settings command</TD></TR></TABLE>>];
+  route_settings -> mem_prepare;
+  mem_prepare -> cm_build_context [constraint=false];
+  cm_build_context -> apply_settings_command;
+  apply_settings_command -> mem_record_settings;
+  mem_record_settings -> cm_update_settings [constraint=false];
+  cm_update_settings -> prompt_user;
+
+  classify_input -> route_turn [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2" BGCOLOR="white"><TR><TD>user message</TD></TR></TABLE>>];
+  route_turn -> agent_start;
+  agent_start -> mem_record_user;
+  mem_record_user -> cm_record_user [constraint=false];
+  cm_record_user -> cm_open;
+  cm_open -> agent_first_pass [constraint=false];
+
+  agent_first_pass -> mem_prepare;
+  mem_prepare -> tools_list;
+  tools_list -> model_build_body;
+  model_build_body -> model_fetch;
+  model_fetch -> model_map_events;
+  model_map_events -> agent_collect;
+  model_failed_event -> agent_collect;
+  agent_collect -> mem_record_assistant;
+  mem_record_assistant -> cm_record_assistant [constraint=false];
+  cm_record_assistant -> agent_has_tools [constraint=false];
+  agent_has_tools -> cm_completed [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2" BGCOLOR="white"><TR><TD>no</TD></TR></TABLE>>];
+  cm_completed -> agent_completed [constraint=false];
+  agent_completed -> render_turn;
+  render_turn -> cm_ready;
+
+  agent_has_tools -> agent_execute_tools [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2" BGCOLOR="white"><TR><TD>yes</TD></TR></TABLE>>];
+  agent_execute_tools -> tools_execute;
+  tools_execute -> tools_unavailable [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2" BGCOLOR="white"><TR><TD>missing</TD></TR></TABLE>>];
+  tools_execute -> tool_adapter [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2" BGCOLOR="white"><TR><TD>found</TD></TR></TABLE>>];
+  tool_adapter -> mem_record_tool;
+  tools_unavailable -> mem_record_tool;
+  mem_record_tool -> cm_record_tool_result [constraint=false];
+  cm_record_tool_result -> agent_second_pass [constraint=false];
+  agent_second_pass -> mem_prepare;
+
+  load_config -> unhandled_error [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2" BGCOLOR="white"><TR><TD>invalid config</TD></TR></TABLE>>];
+  ensure_auth -> unhandled_error [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2" BGCOLOR="white"><TR><TD>auth failure</TD></TR></TABLE>>];
+  cm_record_user -> cm_invalid_transition [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2" BGCOLOR="white"><TR><TD>open turn exists</TD></TR></TABLE>>];
+  cm_invalid_transition -> unhandled_error;
+  apply_settings_command -> unhandled_error [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2" BGCOLOR="white"><TR><TD>invalid JSON</TD></TR></TABLE>>];
+  model_fetch -> model_throw [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="2" BGCOLOR="white"><TR><TD>transport failure</TD></TR></TABLE>>];
+  model_throw -> unhandled_error;
+  tool_adapter -> tool_throw;
+  tool_throw -> unhandled_error;
+  unhandled_error -> exit;
+}

@@ -1,0 +1,3 @@
+# Apps Own Composition Roots
+
+Source is split by architectural role: `src/core` contains reusable agent behavior and public seams, `src/adapters` contains concrete implementations of core seams, and `src/apps` contains replaceable runnable applications. Each app owns its composition root, because app startup is where dependency inversion is resolved: composition modules may wire concrete core modules to adapters, while presentation modules depend on app seams. The CLI is one app around the reusable core, so its composition lives in `src/apps/cli` rather than `src/core`; this keeps core adapter-independent and lets a more robust app replace the CLI without carrying CLI-specific presentation or wiring.
