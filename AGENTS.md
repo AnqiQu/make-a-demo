@@ -2,7 +2,24 @@
 
 ## Project Introduction
 
-`seed` is a minimal Bun/TypeScript coding-agent template. It is intended to be copied into new projects and adapted quickly, while keeping the core Agent independent from concrete storage, auth, model client, tool, and CLI decisions.
+`seed` is the starting template for Owlet, an AI FDE that helps startups explain, configure, and deploy their product for customers through conversational onboarding, GitHub context, uploaded materials, customer tracking, analytics, and product configuration.
+
+The codebase should remain minimal and adaptable while preserving clean seams between frontend UI, backend APIs, auth, persistence, integrations, and background processing.
+
+## Product Stack
+
+Owlet uses:
+
+- Vite + React + TypeScript for the frontend
+- Tailwind CSS for styling
+- TanStack Query for server state, caching, loading states, and mutations
+- TanStack Table for structured tables
+- FastAPI for the backend
+- Postgres for durable state
+- Redis-backed workers for async jobs
+- Clerk for authentication
+
+Keep stack-specific code behind clear seams where practical. Avoid scattering vendor SDK calls, database access, queue logic, or auth logic through unrelated product code.
 
 ## Main Objectives
 
