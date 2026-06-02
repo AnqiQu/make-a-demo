@@ -32,7 +32,7 @@ Keep stack-specific code behind clear seams where practical. Avoid scattering ve
 
 ## Development Practice
 
-Always use the `tdd` skill for code changes. Follow TDD best practices:
+For runtime-code changes, always use the `tdd` skill if you have to it. If you don't, you must read and follow `docs/agents/tdd.md` before editing runtime code. Follow TDD best practices:
 
 - Write one failing behavior test first.
 - Implement the smallest change that makes that test pass.
