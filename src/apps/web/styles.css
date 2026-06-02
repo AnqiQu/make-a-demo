@@ -8,9 +8,9 @@ html,
 }
 
 :root {
-  color: #3a2118;
-  background: #fff7ed;
-  font-family: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  color: #fafafa;
+  background: #0a0a0a;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -22,11 +22,6 @@ body {
   height: 100vh;
   min-height: 100vh;
   margin: 0;
-}
-
-button,
-input {
-  font: inherit;
 }
 
 #root {

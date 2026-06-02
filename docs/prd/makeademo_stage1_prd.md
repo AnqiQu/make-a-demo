@@ -112,7 +112,7 @@ After Project Validation succeeds, MakeADemo generates a read-only Video Script 
 - Capture Script Generator should be tested for producing one Capture Script per Scene Description with Browser Actions represented in a way the Scene Recorder can consume.
 - Scene Recorder should be tested with a fake Sandbox Runner to ensure each Scene Description produces exactly one Scene artifact or a structured capture failure.
 - Pipeline Job Orchestrator should be tested through an integration-style happy path and representative failure paths, using fakes at external seams rather than mocking internal functions.
-- Prior test patterns in the current codebase include focused behavior tests for core seams, adapter boundary tests, and CLI flow tests; Stage 1 tests should follow that integration-through-public-interface style.
+- Stage 1 tests should follow the integration-through-public-interface style: verify observable pipeline outcomes through product seams rather than private implementation details.
 
 ## Out of Scope
 

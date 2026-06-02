@@ -14,7 +14,7 @@ A website that:
 
 # The Architecture
 
-## Agent
+## Linear Pipeline
 
 Needs to accept:
 
@@ -55,7 +55,7 @@ Repo execution contract:
 - Cloudflare R2 storage (better AWS S3)  
 - Pino (dead simple observability logging)
 
-Agent stuff:
+Execution capabilities:
 
 - Docker sandbox  
 - PreMotion  

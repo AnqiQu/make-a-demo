@@ -24,9 +24,9 @@ Keep stack-specific code behind clear seams where practical. Avoid scattering ve
 ## Main Objectives
 
 - Keep the codebase minimal: add the smallest correct module or interface that solves the current need.
-- Keep the codebase extensible: make future Memory, model client, auth, and tool adapters easy to add without rewriting the Agent.
-- Prefer deep modules: put meaningful behavior behind small interfaces, and avoid shallow pass-through helpers.
-- Maintain clear seams: `*.interface.ts` files define stable interfaces; adapters provide concrete implementations; feature modules provide runtime behavior and orchestration.
+- Keep the codebase aligned to the MakeADemo Pipeline: Context Gathering, Project Validation, Script Generation, Footage Capture, Compositing, and final output.
+- Prefer deep modules: put meaningful product behavior behind small interfaces, and avoid shallow pass-through helpers.
+- Maintain clear seams between pipeline stages, external services, persistence, sandbox execution, browser automation, and rendering.
 - Preserve full test coverage for behavior that defines a seam, adapter, or user-visible flow.
 - Prioritize readability: direct imports, explicit names, small files, and domain vocabulary over clever abstractions.
 
@@ -48,8 +48,8 @@ Always use the `tdd` skill for code changes. Follow TDD best practices:
 - Keep each test focused on one behavior. If a test needs many assertions, split it unless the assertions describe one observable flow.
 - Prefer short setup helpers when they remove noise, but keep the behavior under test visible in the test body.
 - Name tests as specifications of observable behavior, not implementation steps.
-- Cover failure cases at seams: invalid lifecycle transitions, missing records, provider failures, tool failures, malformed persisted data, and adapter boundary errors.
-- Use integration-style tests for core flows where practical, especially Agent, Memory, Conversation, model, and tool interactions.
+- Cover failure cases at seams: invalid lifecycle transitions, missing records, provider failures, malformed persisted data, sandbox failures, browser automation failures, and rendering failures.
+- Use integration-style tests for core product flows where practical, especially pipeline orchestration, repo validation, script generation, capture, and compositing.
 - Add regression tests before fixing bugs, and keep them focused on the bug's externally visible behavior.
 - Avoid over-mocking. Use small fakes at external seams when real adapters would make the test slow, flaky, or dependent on network/auth state.
 - Refactor tests after they pass: remove duplicated setup, split broad tests, and keep assertions specific enough to catch real regressions.

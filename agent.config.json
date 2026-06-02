@@ -1,9 +1,0 @@
-{
-  "systemPrompt": "You are a minimal coding agent. Be concise, direct, and careful with code changes.",
-  "model": "gpt-5.5",
-  "reasoning": {
-    "effort": "medium",
-    "summary": "auto"
-  },
-  "responseOverrides": {}
-}
