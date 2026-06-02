@@ -1,10 +1,10 @@
 {
-  "name": "seed",
+  "name": "makeademo",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "bin": {
-    "seed": "./src/apps/cli/main.ts"
+    "makeademo": "./src/apps/cli/main.ts"
   },
   "scripts": {
     "agent": "bun run src/apps/cli/main.ts",

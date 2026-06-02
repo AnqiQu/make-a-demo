@@ -1,14 +1,14 @@
-# seed
+# MakeADemo
 
 ## Project Introduction
 
-`seed` is the starting template for Owlet, an AI FDE that helps startups explain, configure, and deploy their product for customers through conversational onboarding, GitHub context, uploaded materials, customer tracking, analytics, and product configuration.
+`MakeADemo` helps builders turn a runnable web app, codebase context, and product description into a short demo video.
 
 The codebase should remain minimal and adaptable while preserving clean seams between frontend UI, backend APIs, auth, persistence, integrations, and background processing.
 
 ## Product Stack
 
-Owlet uses:
+MakeADemo uses:
 
 - Vite + React + TypeScript for the frontend
 - Tailwind CSS for styling
@@ -56,6 +56,10 @@ Always use the `tdd` skill for code changes. Follow TDD best practices:
 
 ## Agent skills
 
+### Domain docs
+
+You should always take a look at this info in the beginning to facilitate better communication. This is a single-context repo. See `docs/agents/domain.md`.
+
 ### Issue tracker
 
 Issues and PRDs are tracked in GitHub Issues. See `docs/agents/issue-tracker.md`.
@@ -63,7 +67,3 @@ Issues and PRDs are tracked in GitHub Issues. See `docs/agents/issue-tracker.md`
 ### Triage labels
 
 Use the default canonical triage labels. See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-This is a single-context repo. See `docs/agents/domain.md`.

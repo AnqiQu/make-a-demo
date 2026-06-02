@@ -1,0 +1,3 @@
+# Target Text-Led Web App Demo Videos
+
+MakeADemo v1 targets hackathon participants and early founders making short demo videos for browser-accessible JavaScript/TypeScript web apps. We chose text-led videos with captured product footage and background music, rather than narrated Loom-style walkthroughs or pitch videos, because this keeps generation simpler, avoids voiceover quality and consent issues, and fits the fast-submission needs of makers. The broader product concept can support browser-accessible web apps, but the V1 implementation should require a JavaScript/TypeScript repo with `package.json` and a standard JS package manager.
