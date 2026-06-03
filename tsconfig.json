@@ -20,6 +20,8 @@
   "include": [
     "demo/app/**/*.ts",
     "demo/app/**/*.tsx",
+    "demo/capture/**/*.mts",
+    "demo/capture/**/*.ts",
     "src/**/*.ts",
     "src/**/*.tsx",
     "tests/**/*.ts",

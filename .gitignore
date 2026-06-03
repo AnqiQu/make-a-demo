@@ -3,6 +3,8 @@ node_modules/
 coverage/
 dist/
 *.tsbuildinfo
+.demo-capture-runs/
 .demo-script-runs/
 .playwright-cli/
 artifacts/
+demo/artifacts/

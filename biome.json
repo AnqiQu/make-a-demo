@@ -1,7 +1,13 @@
 {
   "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
   "files": {
-    "ignore": [".demo-script-runs", "artifacts", "dist"]
+    "ignore": [
+      ".demo-capture-runs",
+      ".demo-script-runs",
+      "artifacts",
+      "demo/artifacts",
+      "dist"
+    ]
   },
   "formatter": {
     "enabled": true,
