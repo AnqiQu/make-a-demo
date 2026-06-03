@@ -1,0 +1,163 @@
+{
+  "scriptId": "barebones-chat-sample-video-001",
+  "playwrightScriptId": "barebones-chat-sample-playwright-001",
+  "title": "Barebones Chat Sample Video",
+  "version": 1,
+  "estimatedDurationSeconds": 30,
+  "format": "16:9",
+  "audio": {
+    "enabled": false,
+    "notes": "No voiceover or music bed is required for this sample. Scene-level audio may be added later."
+  },
+  "sections": [
+    {
+      "id": "section-001",
+      "title": "Barebones Chat Demo Flow",
+      "scenes": [
+        {
+          "id": "video-scene-001",
+          "type": "full-screen-text",
+          "description": "Open the video with a simple title card.",
+          "durationSeconds": 3,
+          "transition": {
+            "in": "fade",
+            "out": "fade",
+            "durationSeconds": 0.4
+          },
+          "background": {
+            "type": "solid",
+            "colour": "#000000"
+          },
+          "text": {
+            "content": "Barebones chat sample",
+            "font": "default",
+            "text-size": "large",
+            "text-position": "center",
+            "text-colour": "#ffffff"
+          }
+        },
+        {
+          "id": "video-scene-002",
+          "type": "playwright-recording",
+          "playwrightSceneId": "scene-001",
+          "description": "Use Playwright scene-001 to show the user starting a fresh chat and restoring the saved Launch Plan Chat.",
+          "durationSeconds": 5,
+          "transition": {
+            "in": "cut",
+            "out": "fade",
+            "durationSeconds": 0.25
+          },
+          "text": {
+            "content": "Chat chat chat",
+            "font": "default",
+            "text-size": "medium",
+            "text-position": "top-left",
+            "text-colour": "#ffffff"
+          }
+        },
+        {
+          "id": "video-scene-003",
+          "type": "full-screen-text",
+          "description": "Introduce the chat-starting workflow before the message composition capture.",
+          "durationSeconds": 2,
+          "transition": {
+            "in": "fade",
+            "out": "cut",
+            "durationSeconds": 0.3
+          },
+          "background": {
+            "type": "solid",
+            "colour": "#000000"
+          },
+          "text": {
+            "content": "Start a chat!",
+            "font": "default",
+            "text-size": "large",
+            "text-position": "center",
+            "text-colour": "#ffffff"
+          }
+        },
+        {
+          "id": "video-scene-004",
+          "type": "playwright-recording",
+          "playwrightSceneId": "scene-002",
+          "description": "Use Playwright scene-002 to show a user typing and sending a message, followed by a deterministic assistant reply.",
+          "durationSeconds": 6,
+          "transition": {
+            "in": "cut",
+            "out": "fade",
+            "durationSeconds": 0.25
+          }
+        },
+        {
+          "id": "video-scene-005",
+          "type": "full-screen-text",
+          "description": "Introduce the saved-chat review portion of the demo.",
+          "durationSeconds": 2,
+          "transition": {
+            "in": "fade",
+            "out": "cut",
+            "durationSeconds": 0.3
+          },
+          "background": {
+            "type": "solid",
+            "colour": "#ffffff"
+          },
+          "text": {
+            "content": "Review chats!",
+            "font": "default",
+            "text-size": "medium",
+            "text-position": "bottom-left",
+            "text-colour": "#000000"
+          }
+        },
+        {
+          "id": "video-scene-006",
+          "type": "playwright-recording",
+          "playwrightSceneId": "scene-003",
+          "description": "Use Playwright scene-003 to show hovering over the saved chat and revealing the saved-chat hint.",
+          "durationSeconds": 4,
+          "transition": {
+            "in": "cut",
+            "out": "cut",
+            "durationSeconds": 0.2
+          }
+        },
+        {
+          "id": "video-scene-007",
+          "type": "playwright-recording",
+          "playwrightSceneId": "scene-004",
+          "description": "Use Playwright scene-004 to scroll through the transcript and show older and newer messages.",
+          "durationSeconds": 5,
+          "transition": {
+            "in": "cut",
+            "out": "fade",
+            "durationSeconds": 0.25
+          }
+        },
+        {
+          "id": "video-scene-008",
+          "type": "static-image",
+          "description": "Close with a static screenshot of the chat app and a clear call-to-action overlay.",
+          "durationSeconds": 3,
+          "transition": {
+            "in": "fade",
+            "out": "fade",
+            "durationSeconds": 0.4
+          },
+          "image": {
+            "assetPath": "demo/data/barebones-chat-screenshot.png",
+            "alt": "Screenshot of the Barebones Chat app showing saved messages and the message input."
+          },
+          "text": {
+            "content": "CHAT NOW",
+            "font": "default",
+            "text-size": "large",
+            "text-position": "center",
+            "text-colour": "#ffffff"
+          }
+        }
+      ]
+    }
+  ]
+}
