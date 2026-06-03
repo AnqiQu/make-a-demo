@@ -18,6 +18,8 @@
     "types": ["bun-types", "vitest/globals", "node", "vite/client"]
   },
   "include": [
+    "demo/app/**/*.ts",
+    "demo/app/**/*.tsx",
     "src/**/*.ts",
     "src/**/*.tsx",
     "tests/**/*.ts",

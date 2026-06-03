@@ -6,6 +6,8 @@
   "scripts": {
     "arch:deps": "depcruise src --config .dependency-cruiser.cjs --include-only \"^src\"",
     "build": "tsc --noEmit -p tsconfig.json && vite build",
+    "demo": "vite --host 127.0.0.1 --port 3000",
+    "demo:validate-scripts": "bun scripts/validate-demo-playwright-scripts.mts",
     "dev": "vite",
     "fmt": "biome format --write .",
     "graph:deps": "bun scripts/regenerate-dependency-graphs.mts",
@@ -22,6 +24,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
+    "@playwright/test": "^1.60.0",
     "@types/node": "^22.15.3",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",

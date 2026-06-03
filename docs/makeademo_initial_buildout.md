@@ -72,11 +72,11 @@ Execution capabilities:
 
 This document is the overall planning roadmap. The fine-grained Stage 1 PRD lives in `docs/prd/makeademo_stage1_prd.md`.
 
-## Stage 1: Prepare, Validate, Script, and Capture Raw Scenes
+## Stage 1: Prepare, Validate, and Generate the Video Script Package
 
-Goal: prove that MakeADemo can take a prepared JavaScript/TypeScript web app, validate that it satisfies the Demo Run Contract, generate a read-only Video Script, and produce raw Scene footage for each Scene Description.
+Goal: prove that MakeADemo can take a prepared JavaScript/TypeScript web app, validate that it satisfies the Demo Run Contract, and generate a read-only Video Script Package.
 
-Stage 1 intentionally stops before final compositing and user editing semantics.
+Stage 1 intentionally stops before footage capture, final compositing, and user editing semantics.
 
 ### Modules to build
 
@@ -88,9 +88,8 @@ Stage 1 intentionally stops before final compositing and user editing semantics.
 - Project Validation: verifies that the repo satisfies the Demo Run Contract before any LLM script generation.
 - Browser Validation: runs Playwright inside the sandbox to load the configured local URL, detect obvious broken states, and capture screenshot proof.
 - Script Generator: generates the read-only Video Script from key product features and validated repo context.
-- Capture Script Generator: creates one Playwright Capture Script for each Scene Description.
-- Scene Recorder: runs each Capture Script in the sandbox and produces one raw Scene per Scene Description.
-- Artifact Store: stores logs, screenshots, Capture Scripts, and raw Scene videos.
+- Video Script Package Builder: packages the Video Script, Script Sections, Scene Descriptions, Browser Actions, and validation context for handoff to footage capture.
+- Artifact Store: stores logs, screenshots, validation artifacts, and generated Video Script Packages.
 - Pipeline Job Orchestrator: coordinates the linear Stage 1 flow without owning each module's internal logic.
 
 ### Stage 1 user flow
@@ -116,16 +115,15 @@ Stage 1 intentionally stops before final compositing and user editing semantics.
 - Validation should capture proof, such as a screenshot, and report clear failure reasons when the repo cannot be run.
 - If the repo is not ready, MakeADemo gives the user a preparation prompt to paste into their own coding agent.
 
-#### 4. Generate Script and Raw Scene Footage
+#### 4. Generate the Video Script Package
 - MakeADemo generates a read-only Video Script from the key product features and validated repo context.
 - The Video Script is organized into Script Sections containing Scene Descriptions.
-- Each Scene Description has user-readable Browser Actions and a generated Playwright Capture Script.
-- MakeADemo runs each Capture Script in a Docker sandbox to produce one raw Scene per Scene Description.
-- Each Scene is shown to the user as a Companion Video alongside its Scene Description.
+- Each Scene Description has user-readable Browser Actions.
+- MakeADemo packages the Video Script, validation context, assumptions, and capture risks for handoff.
 
 ## Stage 2: Editable Script and Bare-Bones Compositing
 
-Goal: turn the Stage 1 output into a basic final video, while introducing the first version of user editing semantics.
+Goal: turn the Stage 1 Video Script Package into raw Scene footage and then into a basic final video, while introducing the first version of user editing semantics.
 
 Stage 2 should not try to make the video beautiful. It should prove that approved Scene footage can be assembled into a coherent text-led demo video.
 
@@ -133,6 +131,8 @@ Stage 2 should not try to make the video beautiful. It should prove that approve
 
 - Script Editor: lets the user rename/reorder Script Sections, revise Scene Descriptions, and adjust Browser Actions through a structured UI.
 - Script Revision Flow: regenerates affected Capture Scripts and Scenes when the user changes a Scene Description or Browser Actions.
+- Capture Script Generator: creates one Playwright Capture Script for each Scene Description.
+- Scene Recorder: runs each Capture Script in the sandbox and produces one raw Scene per Scene Description.
 - Scene Approval: lets the user accept a Companion Video or request regeneration for that Scene.
 - Bare-Bones Timeline Builder: orders approved Scenes into a linear demo timeline.
 - Basic Compositor: stitches raw Scenes together, trims obvious dead time, and adds simple text overlays from the Video Script.
@@ -141,7 +141,7 @@ Stage 2 should not try to make the video beautiful. It should prove that approve
 
 ### Stage 2 rough flow
 
-- The user reviews the generated Video Script and Companion Videos.
+- The user reviews the generated Video Script Package.
 - The user edits high-level script content through the structured script UI.
 - MakeADemo regenerates only the affected Capture Scripts and Scenes.
 - The user approves the Scenes to include in the final video.

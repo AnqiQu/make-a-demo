@@ -13,6 +13,7 @@
 - **Sandbox**: The isolated execution environment that runs the submitted app, Playwright validation, and Playwright capture with the network boundary sealed after dependency installation.
 - **Script Generation**: The stage where MakeADemo turns validated project context and key product features into a Video Script.
 - **Video Script**: A structured plan for the demo video that organizes what the video will communicate over time.
+- **Video Script Package**: The handoff artifact produced by Script Generation before footage capture begins, containing the Video Script, Script Sections, Scene Descriptions, Browser Actions, and validation context.
 - **Script Section**: A top-level part of the Video Script, such as intro, feature demonstration, or use case, that groups related scenes.
 - **Scene Description**: A script item that summarizes one web-based scene and lists the browser actions needed to capture it.
 - **Browser Action**: One explicit interaction or wait condition in a Scene Description, such as clicking a button, typing into an input, or waiting for streamed output to finish.
@@ -33,6 +34,7 @@
 - **Project Validation** and **Footage Capture** run Playwright inside the **Sandbox** rather than from the backend host.
 - **MakeADemo Config** supplies the demo command and local URL used by **Project Validation**.
 - A **Video Script** contains one or more **Script Sections**, and each **Script Section** contains one or more **Scene Descriptions**.
+- A **Video Script Package** is the handoff from Script Generation to Footage Capture.
 - A **Scene Description** contains one or more **Browser Actions**.
 - A **Capture Script** mirrors the Browser Actions in one Scene Description.
 - Each **Scene Description** maps to exactly one **Scene** during **Footage Capture**.
