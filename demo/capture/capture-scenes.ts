@@ -4,7 +4,7 @@ import { DefaultPlaywrightSceneRecorder } from "./playwright-scene-recorder";
 import type { SceneRecorder } from "./scene-recorder.interface";
 import { parseVideoScriptPackage } from "./video-script-package.schema";
 
-export type CapturedSceneManifestEntry = {
+type CapturedSceneManifestEntry = {
   durationSeconds: number;
   sceneId: string;
   sectionId: string;
@@ -90,10 +90,6 @@ export async function captureScenesFromScript(
     }
     throw error;
   }
-}
-
-export async function cleanupTemporaryCaptureRun(manifest: CaptureManifest) {
-  await rm(manifest.runDirectory, { force: true, recursive: true });
 }
 
 async function createRunDirectory(tempRoot: string, runId: string) {

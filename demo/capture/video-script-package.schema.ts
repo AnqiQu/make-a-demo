@@ -6,7 +6,7 @@ export type SceneDescription = {
   playwrightScript: string;
 };
 
-export type ScriptSection = {
+type ScriptSection = {
   id: string;
   title: string;
   scenes: SceneDescription[];

@@ -16,6 +16,13 @@ The raw Scene chunks are temporary by design:
 .demo-capture-runs/<runId>/raw-scenes/<sceneId>.webm
 ```
 
+During capture, the recorder styles common Playwright interactions for video:
+
+- `locator.fill("text")` is rewritten to click the target and type at about 80 WPM.
+- `locator.click()` is rewritten so a visible pointer starts from the center of the screen, moves to the target, and clicks.
+- `locator.hover()` is rewritten so the visible pointer moves to the target before hovering.
+- Transcript `scrollTop` changes are rewritten as animated scrolls with subtle floating chevrons.
+
 The future Remotion stitching step should consume the manifest during the same run, render the final video, then delete the temporary run directory unless the manifest has `keepTemp: true`.
 
 ## Development Options

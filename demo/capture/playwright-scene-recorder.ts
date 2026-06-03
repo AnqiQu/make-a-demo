@@ -5,6 +5,7 @@ import type {
   RecordedScene,
   SceneRecorder,
 } from "./scene-recorder.interface";
+import { prepareStylizedPlaywrightScript } from "./stylized-playwright-script";
 
 export type PlaywrightSceneRecorderOptions = {
   headed?: boolean;
@@ -31,7 +32,7 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
     await mkdir(rawScenesDirectory, { recursive: true });
     await writeFile(
       scenePath,
-      preparePlaywrightScript(input.scene.playwrightScript, {
+      prepareStylizedPlaywrightScript(input.scene.playwrightScript, {
         baseUrl: input.baseUrl,
         headed: this.headed,
         pauseAfterSceneMs: this.pauseAfterSceneMs,
@@ -55,82 +56,6 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
       videoPath: outputVideoPath,
     };
   }
-}
-
-type PreparePlaywrightScriptInput = {
-  baseUrl: string;
-  headed: boolean;
-  pauseAfterSceneMs: number;
-  videoDirectory: string;
-};
-
-function preparePlaywrightScript(
-  script: string,
-  input: PreparePlaywrightScriptInput,
-) {
-  if (!script.includes("chromium.launch")) {
-    return wrapActionBody(script, input);
-  }
-
-  let prepared = script.replaceAll("http://localhost:3000", input.baseUrl);
-  prepared = prepared.replace(
-    /dir:\s*(['"`])[^'"`]+?\1/,
-    `dir: ${JSON.stringify(input.videoDirectory)}`,
-  );
-
-  if (input.headed) {
-    prepared = prepared.replace(
-      /chromium\.launch\(\s*\)/,
-      "chromium.launch({ headless: false })",
-    );
-  }
-
-  if (input.pauseAfterSceneMs > 0) {
-    prepared = prepared.replace(
-      /await\s+context\.close\(\);/,
-      `await page.waitForTimeout(${input.pauseAfterSceneMs});\nawait context.close();`,
-    );
-  }
-
-  return prepared;
-}
-
-function wrapActionBody(script: string, input: PreparePlaywrightScriptInput) {
-  const launchOptions = input.headed ? "{ headless: false }" : "";
-  const pauseLine =
-    input.pauseAfterSceneMs > 0
-      ? `await page.waitForTimeout(${input.pauseAfterSceneMs});`
-      : "";
-
-  return `import { chromium, expect } from "@playwright/test";
-
-const baseUrl = ${JSON.stringify(input.baseUrl)};
-const browser = await chromium.launch(${launchOptions});
-const context = await browser.newContext({
-  viewport: { width: 1280, height: 720 },
-  recordVideo: {
-    dir: ${JSON.stringify(input.videoDirectory)},
-    size: { width: 1280, height: 720 },
-  },
-});
-const page = await context.newPage();
-
-try {
-${indentScriptBody(script)}
-  ${pauseLine}
-} finally {
-  await context.close();
-  await browser.close();
-}
-void expect;
-`;
-}
-
-function indentScriptBody(script: string) {
-  return script
-    .split("\n")
-    .map((line) => `  ${line}`)
-    .join("\n");
 }
 
 async function runSceneScript(scenePath: string) {
