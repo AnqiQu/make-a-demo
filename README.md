@@ -22,13 +22,13 @@ The demo app lives in `demo/app`, and the sample script data lives in `demo/data
 
 ## Validate Demo Scripts
 
-To validate `demo/data/anqi_playwright_script_example.json`, run:
+To validate `demo/data/milo_video_script_example.json`, run:
 
 ```bash
 bun run demo:validate-scripts
 ```
 
-This command checks that the JSON has the expected script/section/scene shape, starts the demo app automatically if it is not already running on `http://localhost:3000`, extracts each embedded `playwrightScript` into a temporary TypeScript file, and runs every scene against the demo app.
+This command checks that the JSON has the expected unified script/section/scene shape, starts the demo app automatically if it is not already running on `http://localhost:3000`, extracts each `playwright-recording` scene's embedded `playwrightScript` into a temporary TypeScript file, and runs every capture scene against the demo app.
 
 To recalibrate `durationSeconds` plus `estimatedDurationSeconds` from measured runtime rounded to the nearest second, run:
 

@@ -1,6 +1,6 @@
 # Demo Footage Capture
 
-This directory contains Anqi's demo-local Footage Capture prototype. It consumes a Video Script Package-shaped JSON file and records one temporary Playwright video chunk per Scene Description.
+This directory contains Anqi's demo-local Footage Capture prototype. It consumes a unified Video Script-shaped JSON file and records one temporary Playwright video chunk per `playwright-recording` Scene.
 
 ## Capture The Sample Script
 
@@ -8,7 +8,7 @@ This directory contains Anqi's demo-local Footage Capture prototype. It consumes
 bun run demo:capture-scenes
 ```
 
-The command starts `bun run demo` automatically if `http://localhost:3000` is not already reachable, records the sample scenes from `demo/data/anqi_playwright_script_example.json`, and writes a manifest under `.demo-capture-runs/<runId>/capture-manifest.json`.
+The command starts `bun run demo` automatically if `http://localhost:3000` is not already reachable, records the sample `playwright-recording` scenes from `demo/data/milo_video_script_example.json`, and writes a manifest under `.demo-capture-runs/<runId>/capture-manifest.json`.
 
 The raw Scene chunks are temporary by design:
 
@@ -48,5 +48,5 @@ bun run demo:capture-scenes -- --keep-temp
 Use a different script package:
 
 ```bash
-bun run demo:capture-scenes -- --script demo/data/anqi_playwright_script_example.json
+bun run demo:capture-scenes -- --script demo/data/milo_video_script_example.json
 ```

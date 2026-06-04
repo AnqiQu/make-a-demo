@@ -4,14 +4,6 @@
 
 You should always take a look at this info BEFORE DOING ANYTHING to facilitate better communication. This is a single-context repo. See `docs/agents/domain.md`.
 
-### Issue tracker
-
-Issues and PRDs are tracked in GitHub Issues. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-Use the default canonical triage labels. See `docs/agents/triage-labels.md`.
-
 ## Project Introduction
 
 `MakeADemo` helps builders turn a runnable web app, codebase context, and product description into a short demo video.
