@@ -2,7 +2,7 @@ export type PrepareStylizedPlaywrightScriptInput = {
   baseUrl: string;
   headed: boolean;
   pauseAfterSceneMs: number;
-  videoDirectory: string;
+  videoPath: string;
 };
 
 const humanTypingDelayMs = 100;
@@ -11,15 +11,17 @@ export function prepareStylizedPlaywrightScript(
   script: string,
   input: PrepareStylizedPlaywrightScriptInput,
 ) {
-  if (!script.includes("chromium.launch")) {
-    return wrapActionBody(stylizeBrowserActions(script), input);
+  const scriptWithBaseUrl = script.replaceAll(
+    "http://localhost:3000",
+    input.baseUrl,
+  );
+
+  if (!scriptWithBaseUrl.includes("chromium.launch")) {
+    return wrapActionBody(stylizeBrowserActions(scriptWithBaseUrl), input);
   }
 
-  let prepared = script.replaceAll("http://localhost:3000", input.baseUrl);
-  prepared = prepared.replace(
-    /dir:\s*(['"`])[^'"`]+?\1/,
-    `dir: ${JSON.stringify(input.videoDirectory)}`,
-  );
+  let prepared = scriptWithBaseUrl;
+  prepared = stripRecordVideoOptions(prepared);
 
   if (input.headed) {
     prepared = prepared.replace(
@@ -30,6 +32,7 @@ export function prepareStylizedPlaywrightScript(
 
   prepared = stylizeBrowserActions(prepared);
   prepared = injectRecordingHelpers(prepared);
+  prepared = injectScreencastOutputPath(prepared, input.videoPath);
 
   if (input.pauseAfterSceneMs > 0) {
     prepared = prepared.replace(
@@ -37,6 +40,8 @@ export function prepareStylizedPlaywrightScript(
       `await page.waitForTimeout(${input.pauseAfterSceneMs});\nawait context.close();`,
     );
   }
+
+  prepared = injectScreencastLifecycle(prepared);
 
   return prepared;
 }
@@ -51,30 +56,46 @@ function wrapActionBody(
       ? `await page.waitForTimeout(${input.pauseAfterSceneMs});`
       : "";
 
-  return `import { chromium, expect } from "@playwright/test";
+  return `import { writeFile } from "node:fs/promises";
+import { chromium, expect } from "@playwright/test";
 
 ${recordingHelperSource()}
 
 const baseUrl = ${JSON.stringify(input.baseUrl)};
+const screencastVideoPath = ${JSON.stringify(input.videoPath)};
 const browser = await chromium.launch(${launchOptions});
 const context = await browser.newContext({
   viewport: { width: 1280, height: 720 },
-  recordVideo: {
-    dir: ${JSON.stringify(input.videoDirectory)},
-    size: { width: 1280, height: 720 },
-  },
 });
 const page = await context.newPage();
+const screencast = await startScreencastRecording(page, screencastVideoPath);
 
 try {
 ${indentScriptBody(script)}
   ${pauseLine}
 } finally {
+  await screencast.stop();
   await context.close();
   await browser.close();
 }
 void expect;
 `;
+}
+
+function stripRecordVideoOptions(script: string) {
+  return script
+    .replace(
+      /,?\s*\n\s*recordVideo:\s*\{\s*dir:\s*(['"`])[^'"`]+?\1\s*\},?/,
+      "",
+    )
+    .replace(
+      /,\s*\n\s*recordVideo:\s*\{\s*dir:\s*(['"`])[^'"`]+?\1,\s*size:\s*\{\s*width:\s*\d+,\s*height:\s*\d+,?\s*\},?\s*\}/,
+      "",
+    )
+    .replace(
+      /\s*recordVideo:\s*\{\s*dir:\s*(['"`])[^'"`]+?\1,\s*size:\s*\{\s*width:\s*\d+,\s*height:\s*\d+,?\s*\},?\s*\},?/,
+      "",
+    );
 }
 
 function injectRecordingHelpers(script: string) {
@@ -89,8 +110,50 @@ function injectRecordingHelpers(script: string) {
 
   return script.replace(
     importMatch[0],
-    `${importMatch[0]}${recordingHelperSource()}\n`,
+    `${ensureWriteFileImport(importMatch[0])}${recordingHelperSource()}\n`,
   );
+}
+
+function ensureWriteFileImport(importBlock: string) {
+  if (importBlock.includes('"node:fs/promises"')) {
+    return importBlock;
+  }
+
+  return `import { writeFile } from "node:fs/promises";\n${importBlock}`;
+}
+
+function injectScreencastOutputPath(script: string, videoPath: string) {
+  if (script.includes("const screencastVideoPath = ")) {
+    return script;
+  }
+
+  const importBlock = script.match(/^(?:import .*?;\n+)+/m)?.[0];
+  if (!importBlock) {
+    return `const screencastVideoPath = ${JSON.stringify(videoPath)};\n${script}`;
+  }
+
+  return script.replace(
+    importBlock,
+    `${importBlock}const screencastVideoPath = ${JSON.stringify(videoPath)};\n`,
+  );
+}
+
+function injectScreencastLifecycle(script: string) {
+  if (script.includes("startScreencastRecording(page")) {
+    return script;
+  }
+
+  let prepared = script.replace(
+    /const\s+page\s*=\s*await\s+context\.newPage\(\);/,
+    "const page = await context.newPage();\nconst screencast = await startScreencastRecording(page, screencastVideoPath);",
+  );
+
+  prepared = prepared.replace(
+    /await\s+context\.close\(\);/,
+    "await screencast.stop();\nawait context.close();",
+  );
+
+  return prepared;
 }
 
 function stylizeBrowserActions(script: string) {
@@ -135,6 +198,109 @@ function stylizeBrowserActionLine(line: string) {
 
 function recordingHelperSource() {
   return `const humanTypingDelayMs = ${humanTypingDelayMs};
+
+async function startScreencastRecording(page, videoPath) {
+  const encoderPage = await page.context().newPage();
+  await encoderPage.setContent(\`<!doctype html>
+<html>
+  <body style="margin: 0; background: #000;">
+    <canvas id="screencast-canvas" width="1280" height="720"></canvas>
+  </body>
+</html>\`);
+  await encoderPage.evaluate(() => {
+    const canvas = document.getElementById("screencast-canvas");
+    const context = canvas.getContext("2d");
+    const chunks = [];
+    const stream = canvas.captureStream(30);
+    const preferredMimeType = "video/webm;codecs=vp8";
+    const mimeType = MediaRecorder.isTypeSupported(preferredMimeType)
+      ? preferredMimeType
+      : "video/webm";
+    const recorder = new MediaRecorder(stream, {
+      mimeType,
+    });
+
+    window.__makeADemoScreencast = {
+      async drawFrame(dataUrl) {
+        const image = new Image();
+        image.decoding = "async";
+
+        await new Promise((resolve, reject) => {
+          image.onload = resolve;
+          image.onerror = reject;
+          image.src = dataUrl;
+        });
+
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      },
+      async stop() {
+        if (recorder.state === "inactive") {
+          return new Uint8Array();
+        }
+
+        const stopped = new Promise((resolve) => {
+          recorder.onstop = resolve;
+        });
+
+        recorder.stop();
+        await stopped;
+
+        const blob = new Blob(chunks, { type: "video/webm" });
+        return Array.from(new Uint8Array(await blob.arrayBuffer()));
+      },
+    };
+
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        chunks.push(event.data);
+      }
+    };
+    recorder.start();
+  });
+
+  const client = await page.context().newCDPSession(page);
+  const frameWrites = new Set();
+  client.on("Page.screencastFrame", (frame) => {
+    const frameWrite = encoderPage
+      .evaluate(
+        async ({ data, format }) => {
+          await window.__makeADemoScreencast.drawFrame(
+            \`data:image/\${format};base64,\${data}\`,
+          );
+        },
+        { data: frame.data, format: "jpeg" },
+      )
+      .finally(async () => {
+        await client.send("Page.screencastFrameAck", {
+          sessionId: frame.sessionId,
+        });
+      });
+
+    frameWrites.add(frameWrite);
+    frameWrite.finally(() => frameWrites.delete(frameWrite));
+  });
+
+  await client.send("Page.startScreencast", {
+    everyNthFrame: 1,
+    format: "jpeg",
+    maxHeight: 720,
+    maxWidth: 1280,
+    quality: 82,
+  });
+
+  return {
+    async stop() {
+      await client.send("Page.stopScreencast");
+      await Promise.allSettled(Array.from(frameWrites));
+      const bytes = await encoderPage.evaluate(async () => {
+        return window.__makeADemoScreencast.stop();
+      });
+      await writeFile(videoPath, new Uint8Array(bytes));
+      await encoderPage.close();
+      await client.detach();
+    },
+  };
+}
 
 async function animatedClick(page, locator) {
   const target = locator.first();

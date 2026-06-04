@@ -2,6 +2,25 @@ import { describe, expect, it } from "vitest";
 import { prepareStylizedPlaywrightScript } from "./stylized-playwright-script";
 
 describe("prepareStylizedPlaywrightScript", () => {
+  it("captures action-body scripts through a CDP screencast instead of Playwright video recording", () => {
+    const prepared = prepareStylizedPlaywrightScript(
+      "await page.goto(baseUrl);",
+      {
+        baseUrl: "http://localhost:3000",
+        headed: false,
+        pauseAfterSceneMs: 0,
+        videoPath: ".demo-capture-runs/run/raw-scenes/scene-001.webm",
+      },
+    );
+
+    expect(prepared).toContain("Page.startScreencast");
+    expect(prepared).toContain("Page.screencastFrame");
+    expect(prepared).toContain(
+      'const screencastVideoPath = ".demo-capture-runs/run/raw-scenes/scene-001.webm";',
+    );
+    expect(prepared).not.toContain("recordVideo");
+  });
+
   it("types filled text with human pacing instead of instantly setting the input", () => {
     const prepared = prepareStylizedPlaywrightScript(
       "await page.getByLabel(/message/i).fill('Show me the launch plan');",
@@ -9,7 +28,7 @@ describe("prepareStylizedPlaywrightScript", () => {
         baseUrl: "http://localhost:3000",
         headed: false,
         pauseAfterSceneMs: 0,
-        videoDirectory: ".demo-capture-runs/run/playwright-videos",
+        videoPath: ".demo-capture-runs/run/raw-scenes/scene-001.webm",
       },
     );
 
@@ -27,7 +46,7 @@ describe("prepareStylizedPlaywrightScript", () => {
         baseUrl: "http://localhost:3000",
         headed: false,
         pauseAfterSceneMs: 0,
-        videoDirectory: ".demo-capture-runs/run/playwright-videos",
+        videoPath: ".demo-capture-runs/run/raw-scenes/scene-001.webm",
       },
     );
 
@@ -47,7 +66,7 @@ describe("prepareStylizedPlaywrightScript", () => {
         baseUrl: "http://localhost:3000",
         headed: false,
         pauseAfterSceneMs: 0,
-        videoDirectory: ".demo-capture-runs/run/playwright-videos",
+        videoPath: ".demo-capture-runs/run/raw-scenes/scene-001.webm",
       },
     );
 
@@ -75,7 +94,7 @@ await transcript.evaluate((element) => { element.scrollTop = 0; });`,
         baseUrl: "http://localhost:3000",
         headed: false,
         pauseAfterSceneMs: 0,
-        videoDirectory: ".demo-capture-runs/run/playwright-videos",
+        videoPath: ".demo-capture-runs/run/raw-scenes/scene-001.webm",
       },
     );
 
@@ -112,13 +131,15 @@ await browser.close();`,
         baseUrl: "http://localhost:3000",
         headed: false,
         pauseAfterSceneMs: 0,
-        videoDirectory: ".demo-capture-runs/run/playwright-videos",
+        videoPath: ".demo-capture-runs/run/raw-scenes/scene-001.webm",
       },
     );
 
     expect(prepared).toContain(
       'await animatedClick(page, page.getByRole("button", { name: /send/i }));',
     );
+    expect(prepared).toContain("Page.startScreencast");
+    expect(prepared).not.toContain("recordVideo");
     expect(prepared).toContain("await target.click();");
   });
 });

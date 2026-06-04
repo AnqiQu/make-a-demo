@@ -158,7 +158,14 @@ function parsePositiveInteger(value: string | undefined, flag: string) {
 }
 
 function preparePlaywrightScript(script: string) {
-  let prepared = script;
+  let prepared = stripRecordVideoOptions(script).replaceAll(
+    "http://localhost:3000",
+    demoUrl,
+  );
+
+  if (!prepared.includes("chromium.launch")) {
+    return wrapValidationActionBody(prepared);
+  }
 
   if (options.headed) {
     prepared = prepared.replace(
@@ -175,6 +182,56 @@ function preparePlaywrightScript(script: string) {
   }
 
   return prepared;
+}
+
+function wrapValidationActionBody(script: string) {
+  const launchOptions = options.headed ? "{ headless: false }" : "";
+  const pauseLine =
+    options.pauseAfterSceneMs > 0
+      ? `await page.waitForTimeout(${options.pauseAfterSceneMs});`
+      : "";
+
+  return `import { chromium, expect } from "@playwright/test";
+
+const baseUrl = ${JSON.stringify(demoUrl)};
+const browser = await chromium.launch(${launchOptions});
+const context = await browser.newContext({
+  viewport: { width: 1280, height: 720 },
+});
+const page = await context.newPage();
+
+try {
+${indentScriptBody(script)}
+  ${pauseLine}
+} finally {
+  await context.close();
+  await browser.close();
+}
+void expect;
+`;
+}
+
+function indentScriptBody(script: string) {
+  return script
+    .split("\n")
+    .map((line) => `  ${line}`)
+    .join("\n");
+}
+
+function stripRecordVideoOptions(script: string) {
+  return script
+    .replace(
+      /,?\s*\n\s*recordVideo:\s*\{\s*dir:\s*(['"`])[^'"`]+?\1\s*\},?/,
+      "",
+    )
+    .replace(
+      /,\s*\n\s*recordVideo:\s*\{\s*dir:\s*(['"`])[^'"`]+?\1,\s*size:\s*\{\s*width:\s*\d+,\s*height:\s*\d+,?\s*\},?\s*\}/,
+      "",
+    )
+    .replace(
+      /\s*recordVideo:\s*\{\s*dir:\s*(['"`])[^'"`]+?\1,\s*size:\s*\{\s*width:\s*\d+,\s*height:\s*\d+,?\s*\},?\s*\},?/,
+      "",
+    );
 }
 
 function validateDemoScript(script: DemoScript): PlaywrightScene[] {
