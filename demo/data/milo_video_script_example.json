@@ -1,22 +1,13 @@
 {
   "scriptId": "barebones-chat-sample-video-001",
   "playwrightScriptId": "barebones-chat-sample-playwright-001",
-  "title": "Barebones Chat Screencast Demo",
+  "title": "Barebones Chat Sample Video",
   "version": 1,
-  "estimatedDurationSeconds": 35,
+  "estimatedDurationSeconds": 30,
   "format": "16:9",
   "audio": {
     "enabled": false,
-    "notes": "Silent screencast sample. Visual pacing and text overlays carry the demo."
-  },
-  "screencast": {
-    "method": "cdp-screencast",
-    "viewport": {
-      "width": 1280,
-      "height": 720
-    },
-    "frameRate": 30,
-    "pacing": "Deliberate pointer movement, visible waits after state changes, and short text cards between capture scenes."
+    "notes": "No voiceover or music bed is required for this sample. Scene-level audio may be added later."
   },
   "sections": [
     {
@@ -26,8 +17,8 @@
         {
           "id": "video-scene-001",
           "type": "full-screen-text",
-          "description": "Open the screencast with a short title card.",
-          "durationSeconds": 2,
+          "description": "Open the video with a simple title card.",
+          "durationSeconds": 3,
           "transition": {
             "in": "fade",
             "out": "fade",
@@ -38,7 +29,7 @@
             "colour": "#000000"
           },
           "text": {
-            "content": "Barebones Chat",
+            "content": "Barebones chat sample",
             "font": "default",
             "text-size": "large",
             "text-position": "center",
@@ -49,36 +40,36 @@
           "id": "video-scene-002",
           "type": "playwright-recording",
           "playwrightSceneId": "scene-001",
-          "description": "Screencast the clean chat state, create a new chat, then restore the saved Launch Plan conversation.",
-          "durationSeconds": 8,
+          "description": "Show the empty chat app, click the new chat button, and confirm a fresh conversation is ready.",
+          "durationSeconds": 5,
           "transition": {
             "in": "cut",
             "out": "fade",
             "durationSeconds": 0.25
           },
           "text": {
-            "content": "Start clean, then restore context",
+            "content": "Chat chat chat",
             "font": "default",
             "text-size": "medium",
             "text-position": "top-left",
             "text-colour": "#ffffff"
           },
           "events": [
-            "Navigate to the chat app and wait for the first frame to settle.",
+            "Navigate to the chat app.",
             "Click the New chat button.",
             "Wait for the chat status to show that a new chat is ready.",
             "Confirm the previous conversation history is cleared.",
             "Click Launch Plan Chat.",
             "Confirm the saved conversation history is restored.",
-            "Pause long enough for the restored state to read clearly in the screencast."
+            "Pause on the restored chat."
           ],
-          "playwrightScript": "const settle = () => page.waitForTimeout(700);\nawait page.goto(baseUrl);\nawait page.waitForLoadState('networkidle');\nawait settle();\nawait expect(page.getByRole('heading', { name: /barebones chat/i })).toBeVisible();\nawait expect(page.getByText(/welcome to the barebones chat demo/i)).toBeVisible();\nawait page.getByRole('button', { name: /new chat/i }).click();\nawait settle();\nawait expect(page.getByText(/new chat ready/i)).toBeVisible();\nawait expect(page.getByText(/welcome to the barebones chat demo/i)).not.toBeVisible();\nawait expect(page.getByText(/no messages yet/i)).toBeVisible();\nawait page.getByRole('button', { name: /launch plan chat/i }).click();\nawait settle();\nawait expect(page.getByText(/saved chat loaded/i)).toBeVisible();\nawait expect(page.getByText(/welcome to the barebones chat demo/i)).toBeVisible();\nawait expect(page.getByLabel(/message/i)).toBeVisible();\nawait page.waitForTimeout(1800);"
+          "playwrightScript": "import { chromium, expect } from '@playwright/test';\n\nconst browser = await chromium.launch();\nconst context = await browser.newContext({\n  viewport: { width: 1280, height: 720 },\n  recordVideo: {\n    dir: 'artifacts/videos',\n    size: { width: 1280, height: 720 }\n  }\n});\n\nconst page = await context.newPage();\nconst pause = () => page.waitForTimeout(500);\nawait page.goto('http://localhost:3000');\nawait pause();\nawait expect(page.getByRole('heading', { name: /barebones chat/i })).toBeVisible();\nawait expect(page.getByText(/welcome to the barebones chat demo/i)).toBeVisible();\nawait page.getByRole('button', { name: /new chat/i }).click();\nawait pause();\nawait expect(page.getByText(/new chat ready/i)).toBeVisible();\nawait expect(page.getByText(/welcome to the barebones chat demo/i)).not.toBeVisible();\nawait expect(page.getByText(/no messages yet/i)).toBeVisible();\nawait page.getByRole('button', { name: /launch plan chat/i }).click();\nawait pause();\nawait expect(page.getByText(/saved chat loaded/i)).toBeVisible();\nawait expect(page.getByText(/welcome to the barebones chat demo/i)).toBeVisible();\nawait expect(page.getByLabel(/message/i)).toBeVisible();\nawait page.waitForTimeout(2500);\n\nawait context.close();\nawait browser.close();"
         },
         {
           "id": "video-scene-003",
           "type": "full-screen-text",
-          "description": "Briefly introduce the message composition capture.",
-          "durationSeconds": 1,
+          "description": "Introduce the chat-starting workflow before the message composition capture.",
+          "durationSeconds": 2,
           "transition": {
             "in": "fade",
             "out": "cut",
@@ -89,7 +80,7 @@
             "colour": "#000000"
           },
           "text": {
-            "content": "Compose",
+            "content": "Start a chat!",
             "font": "default",
             "text-size": "large",
             "text-position": "center",
@@ -100,28 +91,28 @@
           "id": "video-scene-004",
           "type": "playwright-recording",
           "playwrightSceneId": "scene-002",
-          "description": "Screencast a typed prompt, submit it, and hold on the deterministic assistant response.",
-          "durationSeconds": 8,
+          "description": "Type a message into the chat box, send it, and show the deterministic assistant response.",
+          "durationSeconds": 6,
           "transition": {
             "in": "cut",
             "out": "fade",
             "durationSeconds": 0.25
           },
           "events": [
-            "Create a new chat.",
-            "Type a short user message with visible human-paced typing.",
+            "Click the message input.",
+            "Type a short user message.",
             "Click Send.",
             "Wait for the user message to appear.",
             "Wait for the assistant response to appear.",
-            "Hold on the completed transcript so the response can be read."
+            "Confirm the transcript scrolled to the bottom."
           ],
-          "playwrightScript": "const settle = () => page.waitForTimeout(700);\nawait page.goto(baseUrl);\nawait page.waitForLoadState('networkidle');\nawait settle();\nawait page.getByRole('button', { name: /new chat/i }).click();\nawait settle();\nawait page.getByLabel(/message/i).fill('Show me the launch plan');\nawait page.waitForTimeout(600);\nawait page.getByRole('button', { name: /send/i }).click();\nawait settle();\nawait expect(page.getByText('Show me the launch plan')).toBeVisible();\nawait expect(page.getByText(/demo reply: here is a simple launch plan/i)).toBeVisible();\nconst transcript = page.getByRole('log', { name: /conversation transcript/i });\nawait expect.poll(async () => transcript.evaluate((element) => element.scrollTop + element.clientHeight >= element.scrollHeight)).toBe(true);\nawait page.waitForTimeout(1800);"
+          "playwrightScript": "import { chromium, expect } from '@playwright/test';\n\nconst browser = await chromium.launch();\nconst context = await browser.newContext({\n  viewport: { width: 1280, height: 720 },\n  recordVideo: {\n    dir: 'artifacts/videos',\n    size: { width: 1280, height: 720 }\n  }\n});\n\nconst page = await context.newPage();\nconst pause = () => page.waitForTimeout(500);\nawait page.goto('http://localhost:3000');\nawait pause();\nawait page.getByRole('button', { name: /new chat/i }).click();\nawait pause();\nawait page.getByLabel(/message/i).click();\nawait pause();\nawait page.getByLabel(/message/i).fill('Show me the launch plan');\nawait pause();\nawait page.getByRole('button', { name: /send/i }).click();\nawait pause();\nawait expect(page.getByText('Show me the launch plan')).toBeVisible();\nawait expect(page.getByText(/demo reply: here is a simple launch plan/i)).toBeVisible();\nconst transcript = page.getByRole('log', { name: /conversation transcript/i });\nawait expect.poll(async () => transcript.evaluate((element) => element.scrollTop + element.clientHeight >= element.scrollHeight)).toBe(true);\nawait page.waitForTimeout(2500);\n\nawait context.close();\nawait browser.close();"
         },
         {
           "id": "video-scene-005",
           "type": "full-screen-text",
-          "description": "Briefly introduce the saved-chat review portion of the screencast.",
-          "durationSeconds": 1,
+          "description": "Introduce the saved-chat review portion of the demo.",
+          "durationSeconds": 2,
           "transition": {
             "in": "fade",
             "out": "cut",
@@ -132,7 +123,7 @@
             "colour": "#ffffff"
           },
           "text": {
-            "content": "Review saved chats",
+            "content": "Review chats!",
             "font": "default",
             "text-size": "medium",
             "text-position": "bottom-left",
@@ -143,40 +134,40 @@
           "id": "video-scene-006",
           "type": "playwright-recording",
           "playwrightSceneId": "scene-003",
-          "description": "Screencast the saved chat hover state with enough dwell time for the action hint to read.",
-          "durationSeconds": 5,
+          "description": "Hover over the archived chat item to reveal its action hint and show the app has saved conversations.",
+          "durationSeconds": 4,
           "transition": {
             "in": "cut",
             "out": "cut",
             "durationSeconds": 0.2
           },
           "events": [
-            "Navigate to the chat app and wait for the saved chat list to settle.",
+            "Navigate to the chat app.",
             "Hover over the archived Launch Plan chat item.",
             "Wait for the hover action hint to appear.",
-            "Hold on the highlighted chat item."
+            "Pause on the highlighted chat item."
           ],
-          "playwrightScript": "const settle = () => page.waitForTimeout(700);\nawait page.goto(baseUrl);\nawait page.waitForLoadState('networkidle');\nawait settle();\nawait page.getByRole('button', { name: /launch plan chat/i }).hover();\nawait settle();\nawait expect(page.getByText(/open saved launch plan/i)).toBeVisible();\nawait page.waitForTimeout(1800);"
+          "playwrightScript": "import { chromium, expect } from '@playwright/test';\n\nconst browser = await chromium.launch();\nconst context = await browser.newContext({\n  viewport: { width: 1280, height: 720 },\n  recordVideo: {\n    dir: 'artifacts/videos',\n    size: { width: 1280, height: 720 }\n  }\n});\n\nconst page = await context.newPage();\nconst pause = () => page.waitForTimeout(500);\nawait page.goto('http://localhost:3000');\nawait pause();\nawait page.getByRole('button', { name: /launch plan chat/i }).hover();\nawait pause();\nawait expect(page.getByText(/open saved launch plan/i)).toBeVisible();\nawait page.waitForTimeout(2500);\n\nawait context.close();\nawait browser.close();"
         },
         {
           "id": "video-scene-007",
           "type": "playwright-recording",
           "playwrightSceneId": "scene-004",
-          "description": "Screencast a smooth transcript scroll from recent checklist content back to the first welcome message.",
-          "durationSeconds": 7,
+          "description": "Scroll through the conversation transcript and show the older and newer messages in the same chat.",
+          "durationSeconds": 5,
           "transition": {
             "in": "cut",
             "out": "fade",
             "durationSeconds": 0.25
           },
           "events": [
-            "Navigate to the chat app and wait for the transcript to settle.",
-            "Smoothly scroll down inside the message transcript.",
+            "Navigate to the chat app.",
+            "Scroll down inside the message transcript.",
             "Wait for the final checklist message to be visible.",
-            "Smoothly scroll back to the top of the message transcript.",
+            "Scroll back to the top of the message transcript.",
             "Wait for the first welcome message to be visible."
           ],
-          "playwrightScript": "const settle = () => page.waitForTimeout(700);\nawait page.goto(baseUrl);\nawait page.waitForLoadState('networkidle');\nawait settle();\nconst transcript = page.getByRole('log', { name: /conversation transcript/i });\nawait expect(transcript).toBeVisible();\nawait transcript.evaluate((element) => { element.scrollTop = element.scrollHeight; });\nawait settle();\nawait expect(page.getByText(/final checklist: validate, script, capture, compose/i)).toBeVisible();\nawait page.waitForTimeout(900);\nawait transcript.evaluate((element) => { element.scrollTop = 0; });\nawait settle();\nawait expect(page.getByText(/welcome to the barebones chat demo/i)).toBeVisible();\nawait page.waitForTimeout(1400);"
+          "playwrightScript": "import { chromium, expect } from '@playwright/test';\n\nconst browser = await chromium.launch();\nconst context = await browser.newContext({\n  viewport: { width: 1280, height: 720 },\n  recordVideo: {\n    dir: 'artifacts/videos',\n    size: { width: 1280, height: 720 }\n  }\n});\n\nconst page = await context.newPage();\nconst pause = () => page.waitForTimeout(500);\nawait page.goto('http://localhost:3000');\nawait pause();\nconst transcript = page.getByRole('log', { name: /conversation transcript/i });\nawait transcript.evaluate((element) => { element.scrollTop = element.scrollHeight; });\nawait pause();\nawait expect(page.getByText(/final checklist: validate, script, capture, compose/i)).toBeVisible();\nawait transcript.evaluate((element) => { element.scrollTop = 0; });\nawait pause();\nawait expect(page.getByText(/welcome to the barebones chat demo/i)).toBeVisible();\nawait page.waitForTimeout(2500);\n\nawait context.close();\nawait browser.close();"
         },
         {
           "id": "video-scene-008",

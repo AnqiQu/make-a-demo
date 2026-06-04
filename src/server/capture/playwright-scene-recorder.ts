@@ -1,4 +1,4 @@
-import { mkdir, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type {
   RecordSceneInput,
@@ -23,12 +23,12 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
 
   async recordScene(input: RecordSceneInput): Promise<RecordedScene> {
     const sceneWorkspace = join(input.runDirectory, "work", input.scene.id);
-    const scratchVideoPath = join(sceneWorkspace, `${input.scene.id}.webm`);
+    const videoScratchDirectory = join(sceneWorkspace, "playwright-videos");
     const rawScenesDirectory = join(input.runDirectory, "raw-scenes");
     const scenePath = join(sceneWorkspace, `${input.scene.id}.ts`);
     const outputVideoPath = join(rawScenesDirectory, `${input.scene.id}.webm`);
 
-    await mkdir(sceneWorkspace, { recursive: true });
+    await mkdir(videoScratchDirectory, { recursive: true });
     await mkdir(rawScenesDirectory, { recursive: true });
     await writeFile(
       scenePath,
@@ -36,7 +36,7 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
         baseUrl: input.baseUrl,
         headed: this.headed,
         pauseAfterSceneMs: this.pauseAfterSceneMs,
-        videoPath: scratchVideoPath,
+        videoDirectory: videoScratchDirectory,
       }),
     );
 
@@ -47,8 +47,9 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
       throw new Error(formatSceneFailure(input.scene.id, result));
     }
 
-    await assertVideoWasCreated(scratchVideoPath);
-    await rename(scratchVideoPath, outputVideoPath);
+    const recordedVideoPath = await findSingleVideo(videoScratchDirectory);
+    await rm(outputVideoPath, { force: true });
+    await rename(recordedVideoPath, outputVideoPath);
 
     return {
       durationSeconds: Math.max(1, Math.round((Date.now() - startedAt) / 1000)),
@@ -85,16 +86,43 @@ function formatSceneFailure(
   }`;
 }
 
-async function assertVideoWasCreated(path: string) {
-  try {
-    const video = await stat(path);
+async function findSingleVideo(directory: string) {
+  const videos = await findVideoFiles(directory);
 
-    if (video.size > 0) {
-      return;
-    }
-  } catch {
-    // Fall through to the capture-specific error below.
+  if (videos.length === 0) {
+    throw new Error(`No Playwright video was created in ${directory}`);
   }
 
-  throw new Error(`No screencast video was created at ${path}`);
+  if (videos.length > 1) {
+    throw new Error(
+      `Expected one Playwright video in ${directory}, found ${videos.length}`,
+    );
+  }
+
+  const video = videos[0];
+  if (!video) {
+    throw new Error(`No Playwright video was created in ${directory}`);
+  }
+
+  return video;
+}
+
+async function findVideoFiles(directory: string): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const videos: string[] = [];
+
+  for (const entry of entries) {
+    const entryPath = join(directory, entry.name);
+
+    if (entry.isDirectory()) {
+      videos.push(...(await findVideoFiles(entryPath)));
+      continue;
+    }
+
+    if (entry.isFile() && entry.name.endsWith(".webm")) {
+      videos.push(entryPath);
+    }
+  }
+
+  return videos;
 }

@@ -1,6 +1,6 @@
 # Demo Footage Capture
 
-This directory contains Anqi's demo-local Footage Capture prototype. It consumes a unified Video Script-shaped JSON file and creates one temporary screencast WebM chunk per `playwright-recording` Scene.
+This directory contains Anqi's demo-local Footage Capture prototype. It consumes a unified Video Script-shaped JSON file and records one temporary Playwright video chunk per `playwright-recording` Scene.
 
 ## Capture The Sample Script
 
@@ -8,7 +8,7 @@ This directory contains Anqi's demo-local Footage Capture prototype. It consumes
 bun run demo:capture-scenes
 ```
 
-The command starts `bun run demo` automatically if `http://localhost:3000` is not already reachable, screencasts the sample `playwright-recording` scenes from `demo/data/milo_video_script_example.json`, and writes a manifest under `.demo-capture-runs/<runId>/capture-manifest.json`.
+The command starts `bun run demo` automatically if `http://localhost:3000` is not already reachable, records the sample `playwright-recording` scenes from `demo/data/milo_video_script_example.json`, and writes a manifest under `.demo-capture-runs/<runId>/capture-manifest.json`.
 
 The raw Scene chunks are temporary by design:
 
@@ -16,7 +16,7 @@ The raw Scene chunks are temporary by design:
 .demo-capture-runs/<runId>/raw-scenes/<sceneId>.webm
 ```
 
-During capture, the recorder uses Chrome DevTools screencast frames rather than Playwright `recordVideo`, then styles common Playwright interactions for video:
+During capture, the recorder styles common Playwright interactions for video:
 
 - `locator.fill("text")` is rewritten to click the target and type at about 80 WPM.
 - `locator.click()` is rewritten so a visible pointer starts from the center of the screen, moves to the target, and clicks.
