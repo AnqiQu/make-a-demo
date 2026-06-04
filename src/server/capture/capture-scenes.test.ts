@@ -6,7 +6,7 @@ import { captureScenesFromScript } from "./capture-scenes";
 import type { SceneRecorder } from "./scene-recorder.interface";
 
 describe("captureScenesFromScript", () => {
-  it("records each Scene Description and writes a temporary capture manifest in order", async () => {
+  it("records each Playwright scene from a unified script and writes a temporary capture manifest in order", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
     const scriptPath = join(workspace, "script.json");
     const tempRoot = join(workspace, "runs");
@@ -25,8 +25,16 @@ describe("captureScenesFromScript", () => {
             title: "First Section",
             scenes: [
               {
-                id: "scene-001",
-                humanReadableDescription: "Open the app.",
+                id: "video-scene-001",
+                type: "full-screen-text",
+                description: "Open with a title card.",
+                durationSeconds: 1,
+              },
+              {
+                id: "video-scene-002",
+                type: "playwright-recording",
+                playwrightSceneId: "scene-001",
+                description: "Open the app.",
                 durationSeconds: 4,
                 events: ["Navigate to the app."],
                 playwrightScript: "await page.goto(baseUrl);",
@@ -38,11 +46,19 @@ describe("captureScenesFromScript", () => {
             title: "Second Section",
             scenes: [
               {
-                id: "scene-002",
-                humanReadableDescription: "Click the main action.",
+                id: "video-scene-003",
+                type: "playwright-recording",
+                playwrightSceneId: "scene-002",
+                description: "Click the main action.",
                 durationSeconds: 5,
                 events: ["Click the main action."],
                 playwrightScript: "await page.getByRole('button').click();",
+              },
+              {
+                id: "video-scene-004",
+                type: "static-image",
+                description: "Close with a screenshot.",
+                durationSeconds: 1,
               },
             ],
           },

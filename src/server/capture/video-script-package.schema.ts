@@ -54,42 +54,61 @@ function readSections(packageRecord: Record<string, unknown>) {
       throw new Error(`${sectionPath}.scenes must be a non-empty array`);
     }
 
+    const captureScenes = scenes.flatMap((scene, sceneIndex) =>
+      readCaptureScene(scene, `${sectionPath}.scenes[${sceneIndex}]`),
+    );
+
+    if (captureScenes.length === 0) {
+      throw new Error(
+        `${sectionPath}.scenes must include at least one playwright-recording scene`,
+      );
+    }
+
     return {
       id: readNonEmptyString(sectionRecord, "id", sectionPath),
-      scenes: scenes.map((scene, sceneIndex) =>
-        readScene(scene, `${sectionPath}.scenes[${sceneIndex}]`),
-      ),
+      scenes: captureScenes,
       title: readNonEmptyString(sectionRecord, "title", sectionPath),
     };
   });
 }
 
-function readScene(value: unknown, path: string): SceneDescription {
+function readCaptureScene(value: unknown, path: string): SceneDescription[] {
   const sceneRecord = assertRecord(value, path);
+
+  if (sceneRecord.type !== "playwright-recording") {
+    return [];
+  }
+
   const events = sceneRecord.events;
 
   if (!Array.isArray(events) || events.length === 0) {
     throw new Error(`${path}.events must be a non-empty array`);
   }
 
-  return {
-    durationSeconds: readPositiveNumber(sceneRecord, "durationSeconds", path),
-    events: events.map((event, eventIndex) => {
-      if (typeof event !== "string" || event.trim().length === 0) {
-        throw new Error(
-          `${path}.events[${eventIndex}] must be a non-empty string`,
-        );
-      }
-      return event;
-    }),
-    humanReadableDescription: readNonEmptyString(
-      sceneRecord,
-      "humanReadableDescription",
-      path,
-    ),
-    id: readNonEmptyString(sceneRecord, "id", path),
-    playwrightScript: readNonEmptyString(sceneRecord, "playwrightScript", path),
-  };
+  return [
+    {
+      durationSeconds: readPositiveNumber(sceneRecord, "durationSeconds", path),
+      events: events.map((event, eventIndex) => {
+        if (typeof event !== "string" || event.trim().length === 0) {
+          throw new Error(
+            `${path}.events[${eventIndex}] must be a non-empty string`,
+          );
+        }
+        return event;
+      }),
+      humanReadableDescription: readNonEmptyString(
+        sceneRecord,
+        "description",
+        path,
+      ),
+      id: readNonEmptyString(sceneRecord, "playwrightSceneId", path),
+      playwrightScript: readNonEmptyString(
+        sceneRecord,
+        "playwrightScript",
+        path,
+      ),
+    },
+  ];
 }
 
 function assertRecord(value: unknown, path: string): Record<string, unknown> {

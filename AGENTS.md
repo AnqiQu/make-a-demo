@@ -1,4 +1,8 @@
-# MakeADemo
+## Agent skills
+
+### Domain docs
+
+You should always take a look at this info BEFORE DOING ANYTHING to facilitate better communication. This is a single-context repo. See `docs/agents/domain.md`.
 
 ## Project Introduction
 
@@ -53,17 +57,3 @@ For runtime-code changes, always use the `tdd` skill if you have to it. If you d
 - Add regression tests before fixing bugs, and keep them focused on the bug's externally visible behavior.
 - Avoid over-mocking. Use small fakes at external seams when real adapters would make the test slow, flaky, or dependent on network/auth state.
 - Refactor tests after they pass: remove duplicated setup, split broad tests, and keep assertions specific enough to catch real regressions.
-
-## Agent skills
-
-### Domain docs
-
-You should always take a look at this info in the beginning to facilitate better communication. This is a single-context repo. See `docs/agents/domain.md`.
-
-### Issue tracker
-
-Issues and PRDs are tracked in GitHub Issues. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-Use the default canonical triage labels. See `docs/agents/triage-labels.md`.

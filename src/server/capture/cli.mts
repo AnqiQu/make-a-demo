@@ -46,7 +46,7 @@ function parseOptions(args: string[]): CliOptions {
     headed: false,
     keepTemp: false,
     pauseAfterSceneMs: 0,
-    scriptPath: "demo/data/anqi_playwright_script_example.json",
+    scriptPath: "demo/data/milo_video_script_example.json",
     startServer: true,
     tempRoot: ".demo-capture-runs",
   };
@@ -130,7 +130,7 @@ Usage:
   bun run demo:capture-scenes -- [options]
 
 Options:
-  --script <path>              Script JSON path. Defaults to demo/data/anqi_playwright_script_example.json
+  --script <path>              Script JSON path. Defaults to demo/data/milo_video_script_example.json
   --base-url <url>             App URL to capture. Defaults to http://localhost:3000
   --temp-root <path>           Temporary capture root. Defaults to .demo-capture-runs
   --headed                     Run Playwright in a visible browser
