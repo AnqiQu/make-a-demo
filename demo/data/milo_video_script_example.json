@@ -6,8 +6,11 @@
   "estimatedDurationSeconds": 30,
   "format": "16:9",
   "audio": {
-    "enabled": false,
-    "notes": "No voiceover or music bed is required for this sample. Scene-level audio may be added later."
+    "enabled": true,
+    "music": {
+      "id": "focus"
+    },
+    "notes": "Use the approved focus music bed during Compositing. Scene-level audio may be added later."
   },
   "sections": [
     {
@@ -30,7 +33,7 @@
           },
           "text": {
             "content": "Barebones chat sample",
-            "font": "default",
+            "font": "Nunito",
             "text-size": "large",
             "text-position": "center",
             "text-colour": "#ffffff"
@@ -49,7 +52,7 @@
           },
           "text": {
             "content": "Chat chat chat",
-            "font": "default",
+            "font": "Nunito",
             "text-size": "medium",
             "text-position": "top-left",
             "text-colour": "#ffffff"
@@ -81,7 +84,7 @@
           },
           "text": {
             "content": "Start a chat!",
-            "font": "default",
+            "font": "Nunito",
             "text-size": "large",
             "text-position": "center",
             "text-colour": "#ffffff"
@@ -124,7 +127,7 @@
           },
           "text": {
             "content": "Review chats!",
-            "font": "default",
+            "font": "Nunito",
             "text-size": "medium",
             "text-position": "bottom-left",
             "text-colour": "#000000"
@@ -185,7 +188,7 @@
           },
           "text": {
             "content": "CHAT NOW",
-            "font": "default",
+            "font": "Nunito",
             "text-size": "large",
             "text-position": "center",
             "text-colour": "#ffffff"
