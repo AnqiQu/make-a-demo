@@ -4,6 +4,7 @@ coverage/
 dist/
 *.tsbuildinfo
 .demo-capture-runs/
+.demo-composite-renders/
 .demo-script-runs/
 .playwright-cli/
 artifacts/

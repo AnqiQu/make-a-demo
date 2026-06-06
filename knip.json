@@ -2,6 +2,8 @@
   "ignoreDependencies": ["@playwright/test"],
   "ignore": [
     ".dependency-cruiser.graph.cjs",
-    "scripts/filter-type-only-dot.mts"
+    "scripts/filter-type-only-dot.mts",
+    "src/server/integrations/remotion/makeademo-video.tsx",
+    "src/server/integrations/remotion/remotion-entry.tsx"
   ]
 }

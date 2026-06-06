@@ -8,6 +8,7 @@
     "build": "tsc --noEmit -p tsconfig.json && vite build",
     "demo": "vite --host 127.0.0.1 --port 3000",
     "demo:capture-scenes": "bun src/server/capture/cli.mts",
+    "demo:composite-video": "bun src/server/compositing/cli.mts",
     "demo:validate-scripts": "bun scripts/validate-demo-playwright-scripts.mts",
     "dev": "vite",
     "fmt": "biome format --write .",
@@ -20,8 +21,11 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@remotion/bundler": "^4.0.473",
+    "@remotion/renderer": "^4.0.473",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "remotion": "^4.0.473"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

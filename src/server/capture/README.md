@@ -25,6 +25,24 @@ During capture, the recorder styles common Playwright interactions for video:
 
 The future Remotion stitching step should consume the manifest during the same run, render the final video, then delete the temporary run directory unless the manifest has `keepTemp: true`.
 
+## Composite The Final Video
+
+After capture prints a manifest path, pass that manifest to the Remotion Compositing command:
+
+```bash
+bun run demo:composite-video -- --capture-manifest .demo-capture-runs/<runId>/capture-manifest.json
+```
+
+The command stages captured Scene videos, static images, approved fonts, and the approved background music bed under `.demo-composite-renders/<runId>/public`, renders `final-video.mp4`, and writes:
+
+```text
+.demo-composite-renders/<runId>/final-video.mp4
+.demo-composite-renders/<runId>/composite-manifest.json
+.demo-composite-renders/<runId>/render-plan.json
+```
+
+The composite manifest includes a `file://` view URL for local testing.
+
 ## Development Options
 
 Run with a visible browser:
