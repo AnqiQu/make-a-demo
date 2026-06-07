@@ -1,5 +1,4 @@
 {
-  "ignoreDependencies": ["@playwright/test"],
   "ignore": [
     ".dependency-cruiser.graph.cjs",
     "scripts/filter-type-only-dot.mts",

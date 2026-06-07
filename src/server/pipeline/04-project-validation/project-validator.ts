@@ -50,9 +50,13 @@ export async function validateProject(
     };
   }
 
-  const browserResult = await dependencies.browserValidator.validate({
-    url: input.preparationManifest.url,
-  });
+  const browserResult = await dependencies.browserValidator
+    .validate({
+      url: input.preparationManifest.url,
+    })
+    .finally(async () => {
+      await sandboxResult.cleanup?.();
+    });
 
   if (!browserResult.interactable) {
     return {

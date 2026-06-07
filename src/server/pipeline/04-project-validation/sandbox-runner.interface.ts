@@ -9,6 +9,7 @@ export type SandboxValidationInput = {
 
 export type SandboxValidationOutput = {
   blockedNetworkAttempts: NetworkAttempt[];
+  cleanup?: () => Promise<void>;
   logs: string[];
   repoFiles: string[];
   runtimeExitCode: number;
