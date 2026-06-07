@@ -1,5 +1,7 @@
 import type { DemoBrief } from "../01-context-gathering/intake/demo-brief.schema";
-import type { ProjectValidationResult } from "../02-project-validation/validation-result";
+import type { NormalizedSupportingDocument } from "../01-context-gathering/supporting-documents";
+import type { PreparationManifest } from "../03-repo-preparation/preparation-manifest";
+import type { ProjectValidationResult } from "../04-project-validation/validation-result";
 import type { DemoPlanner } from "./demo-planning/demo-planner.interface";
 import type { ProjectExplorer } from "./project-exploration/project-explorer.interface";
 import type { ScriptComposer } from "./script-composition/script-composer.interface";
@@ -10,6 +12,8 @@ import {
 
 export type ScriptGenerationInput = {
   demoBrief: DemoBrief;
+  normalizedSupportingDocuments: NormalizedSupportingDocument[];
+  preparationManifest: PreparationManifest;
   repoUrl: string;
   validation: ProjectValidationResult;
 };

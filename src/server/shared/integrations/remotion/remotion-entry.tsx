@@ -4,7 +4,7 @@ import {
   Composition,
   registerRoot,
 } from "remotion";
-import type { CompositingRenderPlan } from "../../../pipeline/05-compositing/video-renderer.interface";
+import type { CompositingRenderPlan } from "../../../pipeline/07-compositing/video-renderer.interface";
 import { MakeADemoVideo, defaultRenderPlan } from "./makeademo-video";
 
 const calculateMetadata: CalculateMetadataFunction<CompositingRenderPlan> = ({

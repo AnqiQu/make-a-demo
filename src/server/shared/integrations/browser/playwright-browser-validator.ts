@@ -2,7 +2,7 @@ import type {
   BrowserValidationInput,
   BrowserValidationOutput,
   BrowserValidator,
-} from "../../../pipeline/02-project-validation/browser-validator.interface";
+} from "../../../pipeline/04-project-validation/browser-validator.interface";
 
 export class PlaywrightBrowserValidator implements BrowserValidator {
   async validate(

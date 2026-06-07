@@ -2,7 +2,7 @@ import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { CaptureManifest } from "../04-capture/capture-scenes";
+import type { CaptureManifest } from "../06-capture/capture-scenes";
 import type {
   CompositingFontAsset,
   CompositingMusicAsset,

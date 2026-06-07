@@ -1,4 +1,4 @@
-import type { ProjectValidationResult } from "../02-project-validation/validation-result";
+import type { ProjectValidationResult } from "../04-project-validation/validation-result";
 import type { DemoPlan } from "./demo-planning/demo-plan";
 import type { ProjectExplorationResult } from "./project-exploration/project-exploration-result";
 import type { VideoScript } from "./script-composition/video-script";

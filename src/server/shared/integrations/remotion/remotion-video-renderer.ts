@@ -5,7 +5,7 @@ import { renderMedia, selectComposition } from "@remotion/renderer";
 import type {
   CompositingRenderPlan,
   VideoRenderer,
-} from "../../../pipeline/05-compositing/video-renderer.interface";
+} from "../../../pipeline/07-compositing/video-renderer.interface";
 
 export type RemotionVideoRendererInput = {
   bundleRoot: string;

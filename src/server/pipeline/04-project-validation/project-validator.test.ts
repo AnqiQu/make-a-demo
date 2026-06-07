@@ -28,11 +28,10 @@ describe("validateProject", () => {
 
     const result = await validateProject(
       {
-        config: {
+        preparationManifest: manifest({
           demoCommand: "npm run demo",
           url: "http://127.0.0.1:3000",
-        },
-        repoUrl: "https://github.com/example/app",
+        }),
       },
       { browserValidator, sandboxRunner },
     );
@@ -73,11 +72,10 @@ describe("validateProject", () => {
 
     const result = await validateProject(
       {
-        config: {
+        preparationManifest: manifest({
           demoCommand: "npm run demo",
           url: "http://localhost:5173",
-        },
-        repoUrl: "https://github.com/example/app",
+        }),
       },
       { browserValidator, sandboxRunner },
     );
@@ -92,3 +90,22 @@ describe("validateProject", () => {
     ]);
   });
 });
+
+function manifest(overrides: { demoCommand: string; url: string }) {
+  return {
+    assumptions: [],
+    createdFiles: [],
+    demoCommand: overrides.demoCommand,
+    diffArtifactId: "artifact_diff",
+    existingDemoEvidence: [],
+    mockedServices: [],
+    modifiedFiles: [],
+    repoUrl: "https://github.com/example/app",
+    risks: [],
+    scriptGenerationContext: [],
+    setupSummary: "Prepared demo runtime.",
+    status: "created-new-demo" as const,
+    url: overrides.url,
+    workspaceId: "workspace_123",
+  };
+}

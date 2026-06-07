@@ -1,4 +1,4 @@
-import type { MakeADemoConfig } from "./makeademo-config.schema";
+import type { PreparationManifest } from "../03-repo-preparation/preparation-manifest";
 import type { NetworkAttempt } from "./network-isolation-policy";
 
 export type SandboxValidationInput = {
@@ -21,6 +21,8 @@ export type SandboxValidationOutput = {
  */
 export interface SandboxRunner {
   runValidation(
-    input: SandboxValidationInput & { config: MakeADemoConfig },
+    input: SandboxValidationInput & {
+      preparationManifest: PreparationManifest;
+    },
   ): Promise<SandboxValidationOutput>;
 }

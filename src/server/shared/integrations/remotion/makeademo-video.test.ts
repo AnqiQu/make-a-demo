@@ -1,7 +1,7 @@
 import type React from "react";
 import { Audio } from "remotion";
 import { describe, expect, it } from "vitest";
-import type { CompositingRenderPlan } from "../../../pipeline/05-compositing/video-renderer.interface";
+import type { CompositingRenderPlan } from "../../../pipeline/07-compositing/video-renderer.interface";
 import { MakeADemoVideo } from "./makeademo-video";
 
 describe("MakeADemoVideo", () => {

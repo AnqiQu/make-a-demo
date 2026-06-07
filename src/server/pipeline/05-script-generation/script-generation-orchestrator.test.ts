@@ -7,6 +7,8 @@ describe("generateVideoScriptPackage", () => {
     const packageResult = await generateVideoScriptPackage(
       {
         demoBrief: { keyProductFeatures: ["repo validation"] },
+        normalizedSupportingDocuments: [],
+        preparationManifest: manifest(),
         repoUrl: "https://github.com/example/app",
         validation: {
           blockedNetworkAttempts: [],
@@ -67,3 +69,22 @@ describe("generateVideoScriptPackage", () => {
     expect(packageResult.assumptions).toEqual(["single page app"]);
   });
 });
+
+function manifest() {
+  return {
+    assumptions: ["single page app"],
+    createdFiles: [],
+    demoCommand: "npm run demo:makeademo",
+    diffArtifactId: "artifact_diff",
+    existingDemoEvidence: [],
+    mockedServices: [],
+    modifiedFiles: [],
+    repoUrl: "https://github.com/example/app",
+    risks: [],
+    scriptGenerationContext: [],
+    setupSummary: "Prepared demo runtime.",
+    status: "created-new-demo" as const,
+    url: "http://localhost:3000",
+    workspaceId: "workspace_123",
+  };
+}

@@ -1,13 +1,12 @@
+import type { PreparationManifest } from "../03-repo-preparation/preparation-manifest";
 import type { BrowserValidator } from "./browser-validator.interface";
 import { inferInstallPlan } from "./install-plan";
-import type { MakeADemoConfig } from "./makeademo-config.schema";
 import { findRuntimeBoundaryViolations } from "./network-isolation-policy";
 import type { SandboxRunner } from "./sandbox-runner.interface";
 import type { ProjectValidationResult } from "./validation-result";
 
 export type ProjectValidationInput = {
-  config: MakeADemoConfig;
-  repoUrl: string;
+  preparationManifest: PreparationManifest;
 };
 
 export type ProjectValidationDependencies = {
@@ -20,10 +19,10 @@ export async function validateProject(
   dependencies: ProjectValidationDependencies,
 ): Promise<ProjectValidationResult> {
   const sandboxResult = await dependencies.sandboxRunner.runValidation({
-    config: input.config,
-    demoCommand: input.config.demoCommand,
-    repoUrl: input.repoUrl,
-    url: input.config.url,
+    demoCommand: input.preparationManifest.demoCommand,
+    preparationManifest: input.preparationManifest,
+    repoUrl: input.preparationManifest.repoUrl,
+    url: input.preparationManifest.url,
   });
   const installPlan = inferInstallPlan(sandboxResult.repoFiles);
   const blockedNetworkAttempts = findRuntimeBoundaryViolations(
@@ -52,7 +51,7 @@ export async function validateProject(
   }
 
   const browserResult = await dependencies.browserValidator.validate({
-    url: input.config.url,
+    url: input.preparationManifest.url,
   });
 
   if (!browserResult.interactable) {

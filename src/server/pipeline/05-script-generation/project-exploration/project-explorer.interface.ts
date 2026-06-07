@@ -1,9 +1,13 @@
 import type { DemoBrief } from "../../01-context-gathering/intake/demo-brief.schema";
-import type { ProjectValidationResult } from "../../02-project-validation/validation-result";
+import type { NormalizedSupportingDocument } from "../../01-context-gathering/supporting-documents";
+import type { PreparationManifest } from "../../03-repo-preparation/preparation-manifest";
+import type { ProjectValidationResult } from "../../04-project-validation/validation-result";
 import type { ProjectExplorationResult } from "./project-exploration-result";
 
 export type ProjectExplorationInput = {
   demoBrief: DemoBrief;
+  normalizedSupportingDocuments: NormalizedSupportingDocument[];
+  preparationManifest: PreparationManifest;
   repoUrl: string;
   validation: ProjectValidationResult;
 };
