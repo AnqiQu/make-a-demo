@@ -2,7 +2,7 @@
 
 ### Domain docs
 
-You should always take a look at this info BEFORE DOING ANYTHING to facilitate better communication. This is a single-context repo. See `docs/agents/domain.md`.
+This is a single-context repo. See `docs/agents/domain.md`. You should always take a look at this info BEFORE DOING ANYTHING to facilitate better communication. 
 
 ## Project Introduction
 

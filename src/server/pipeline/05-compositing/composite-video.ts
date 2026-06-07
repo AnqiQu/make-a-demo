@@ -2,7 +2,7 @@ import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { CaptureManifest } from "../capture/capture-scenes";
+import type { CaptureManifest } from "../04-capture/capture-scenes";
 import type {
   CompositingFontAsset,
   CompositingMusicAsset,
@@ -673,13 +673,13 @@ function createRunId() {
 
 async function createDefaultRenderer(): Promise<VideoRenderer> {
   const { RemotionVideoRenderer } = await import(
-    "../integrations/remotion/remotion-video-renderer"
+    "../../shared/integrations/remotion/remotion-video-renderer"
   );
   return new RemotionVideoRenderer({
     bundleRoot: process.cwd(),
     entryPoint: join(
       process.cwd(),
-      "src/server/integrations/remotion/remotion-entry.tsx",
+      "src/server/shared/integrations/remotion/remotion-entry.tsx",
     ),
     tempRoot: join(tmpdir(), "makeademo-remotion-bundles"),
   });

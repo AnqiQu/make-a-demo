@@ -3,7 +3,7 @@
   "ignore": [
     ".dependency-cruiser.graph.cjs",
     "scripts/filter-type-only-dot.mts",
-    "src/server/integrations/remotion/makeademo-video.tsx",
-    "src/server/integrations/remotion/remotion-entry.tsx"
+    "src/server/shared/integrations/remotion/makeademo-video.tsx",
+    "src/server/shared/integrations/remotion/remotion-entry.tsx"
   ]
 }

@@ -1,5 +1,5 @@
-import type { DemoBrief } from "../../context-gathering/intake/demo-brief.schema";
-import type { ProjectValidationResult } from "../../project-validation/validation-result";
+import type { DemoBrief } from "../../01-context-gathering/intake/demo-brief.schema";
+import type { ProjectValidationResult } from "../../02-project-validation/validation-result";
 import type { ProjectExplorationResult } from "./project-exploration-result";
 
 export type ProjectExplorationInput = {

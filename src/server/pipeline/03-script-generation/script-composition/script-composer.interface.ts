@@ -1,4 +1,4 @@
-import type { DemoBrief } from "../../context-gathering/intake/demo-brief.schema";
+import type { DemoBrief } from "../../01-context-gathering/intake/demo-brief.schema";
 import type { DemoPlan } from "../demo-planning/demo-plan";
 import type { ProjectExplorationResult } from "../project-exploration/project-exploration-result";
 import type { VideoScript } from "./video-script";

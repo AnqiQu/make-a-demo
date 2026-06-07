@@ -1,6 +1,6 @@
-import type { ProjectValidationResult } from "../project-validation/validation-result";
-import type { ScriptGenerationInput } from "../script-generation/script-generation-orchestrator";
-import type { VideoScriptPackage } from "../script-generation/video-script-package";
+import type { ProjectValidationResult } from "../../pipeline/02-project-validation/validation-result";
+import type { ScriptGenerationInput } from "../../pipeline/03-script-generation/script-generation-orchestrator";
+import type { VideoScriptPackage } from "../../pipeline/03-script-generation/video-script-package";
 import type { PipelineJobInput, PipelineJobResult } from "./pipeline-job";
 
 export type PipelineOrchestratorDependencies = {

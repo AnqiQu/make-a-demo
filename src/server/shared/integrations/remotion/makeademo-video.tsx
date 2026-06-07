@@ -13,7 +13,7 @@ import type {
   CompositingRenderPlan,
   CompositingScene,
   CompositingTextStyle,
-} from "../../compositing/video-renderer.interface";
+} from "../../../pipeline/05-compositing/video-renderer.interface";
 
 export const defaultRenderPlan = {
   compositionId: "MakeADemoVideo",

@@ -1,9 +1,9 @@
-import type { MakeADemoConfig } from "../../project-validation/makeademo-config.schema";
+import type { MakeADemoConfig } from "../../../pipeline/02-project-validation/makeademo-config.schema";
 import type {
   SandboxRunner,
   SandboxValidationInput,
   SandboxValidationOutput,
-} from "../../project-validation/sandbox-runner.interface";
+} from "../../../pipeline/02-project-validation/sandbox-runner.interface";
 
 export class DockerSandboxRunner implements SandboxRunner {
   async runValidation(
