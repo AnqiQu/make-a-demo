@@ -8,9 +8,21 @@ describe("DockerSandboxRunner", () => {
 
     await expect(
       runner.runValidation({
-        config: {
+        preparationManifest: {
+          assumptions: [],
+          createdFiles: [],
           demoCommand: "npm run demo",
+          diffArtifactId: "artifact_diff",
+          existingDemoEvidence: [],
+          mockedServices: [],
+          modifiedFiles: [],
+          repoUrl: "https://github.com/example/app",
+          risks: [],
+          scriptGenerationContext: [],
+          setupSummary: "Prepared demo runtime.",
+          status: "created-new-demo",
           url: "http://localhost:3000",
+          workspaceId: "workspace_123",
         },
         demoCommand: "npm run demo",
         repoUrl: "https://github.com/example/app",

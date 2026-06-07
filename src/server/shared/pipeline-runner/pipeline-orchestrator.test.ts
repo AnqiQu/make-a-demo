@@ -3,23 +3,25 @@ import { describe, expect, it } from "vitest";
 import { runPipelineJob } from "./pipeline-orchestrator";
 
 describe("runPipelineJob", () => {
-  it("validates the project before generating the Video Script Package", async () => {
+  it("runs security screen, repo preparation, validation, and script generation in order", async () => {
     const calls: string[] = [];
 
     const result = await runPipelineJob(
       {
-        config: {
-          demoCommand: "npm run demo",
-          url: "http://localhost:3000",
-        },
         demoBrief: { keyProductFeatures: ["validation"] },
+        normalizedSupportingDocuments: [],
+        repoSecurity: {
+          files: [{ path: "package.json", text: "{}" }],
+          repoStats: { fileCount: 1, sizeBytes: 1_000 },
+        },
         repoUrl: "https://github.com/example/app",
+        workspaceId: "workspace_123",
       },
       {
-        async generateScriptPackage({ validation }) {
+        async generateScriptPackage({ preparationManifest, validation }) {
           calls.push("script-generation");
           return {
-            assumptions: [],
+            assumptions: preparationManifest.assumptions,
             demoPlan: {
               featureOrder: ["validation"],
               narrative: "Demo it",
@@ -30,8 +32,19 @@ describe("runPipelineJob", () => {
             videoScript: { sections: [], title: "Demo" },
           };
         },
+        async prepareRepo() {
+          calls.push("repo-preparation");
+          return {
+            manifest: manifest(),
+            status: "succeeded",
+          };
+        },
+        screenRepoSecurity() {
+          calls.push("repo-security-screen");
+          return { rejections: [], status: "passed", warnings: [] };
+        },
         async validateProject() {
-          calls.push("validation");
+          calls.push("project-validation");
           return {
             blockedNetworkAttempts: [],
             logs: ["validated"],
@@ -43,46 +56,69 @@ describe("runPipelineJob", () => {
     );
 
     expect(result.status).toBe("succeeded");
-    expect(calls).toEqual(["validation", "script-generation"]);
+    expect(calls).toEqual([
+      "repo-security-screen",
+      "repo-preparation",
+      "project-validation",
+      "script-generation",
+    ]);
   });
 
-  it("stops before Script Generation when Project Validation fails", async () => {
+  it("returns a fallback prompt and stops when Repo Preparation fails", async () => {
     const result = await runPipelineJob(
       {
-        config: {
-          demoCommand: "npm run demo",
-          url: "http://localhost:3000",
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        normalizedSupportingDocuments: [],
+        repoSecurity: {
+          files: [{ path: "package.json", text: "{}" }],
+          repoStats: { fileCount: 1, sizeBytes: 1_000 },
         },
-        demoBrief: { keyProductFeatures: ["validation"] },
         repoUrl: "https://github.com/example/app",
+        workspaceId: "workspace_123",
       },
       {
         async generateScriptPackage() {
           throw new Error(
-            "script generation should not run after validation fails",
+            "script generation should not run after preparation fails",
           );
         },
-        async validateProject() {
+        async prepareRepo() {
           return {
-            blockedNetworkAttempts: [],
-            failureReason: "Demo command failed inside the sandbox.",
-            logs: ["failed"],
+            fallbackPrompt: "Prepare local dashboard fixtures.",
             status: "failed",
-            warnings: [],
           };
+        },
+        screenRepoSecurity() {
+          return { rejections: [], status: "passed", warnings: [] };
+        },
+        async validateProject() {
+          throw new Error("validation should not run after preparation fails");
         },
       },
     );
 
     expect(result).toEqual({
-      status: "failed",
-      validation: {
-        blockedNetworkAttempts: [],
-        failureReason: "Demo command failed inside the sandbox.",
-        logs: ["failed"],
-        status: "failed",
-        warnings: [],
-      },
+      fallbackPrompt: "Prepare local dashboard fixtures.",
+      status: "preparation-failed",
     });
   });
 });
+
+function manifest() {
+  return {
+    assumptions: [],
+    createdFiles: [],
+    demoCommand: "npm run demo:makeademo",
+    diffArtifactId: "artifact_diff",
+    existingDemoEvidence: [],
+    mockedServices: [],
+    modifiedFiles: [],
+    repoUrl: "https://github.com/example/app",
+    risks: [],
+    scriptGenerationContext: [],
+    setupSummary: "Prepared demo runtime.",
+    status: "created-new-demo" as const,
+    url: "http://localhost:3000",
+    workspaceId: "workspace_123",
+  };
+}
