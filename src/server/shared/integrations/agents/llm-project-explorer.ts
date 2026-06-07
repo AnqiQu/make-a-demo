@@ -6,11 +6,27 @@ import type {
 
 export class LlmProjectExplorer implements ProjectExplorer {
   async exploreProject(
-    _input: ProjectExplorationInput,
+    input: ProjectExplorationInput,
   ): Promise<ProjectExplorationResult> {
-    // TODO: Import and wire the Explorer agent implementation from the other project.
-    throw new Error(
-      "LlmProjectExplorer is a stub until the agent code is imported.",
-    );
+    const supportingContext = input.normalizedSupportingDocuments
+      .map((document) => document.normalizedText)
+      .join(" ")
+      .trim();
+    const productSurfaces = unique([
+      ...input.demoBrief.keyProductFeatures,
+      ...input.preparationManifest.existingDemoEvidence,
+    ]);
+
+    return {
+      assumptions: input.preparationManifest.assumptions,
+      productSurfaces,
+      summary: supportingContext
+        ? `${input.preparationManifest.setupSummary} Supporting context: ${supportingContext}`
+        : input.preparationManifest.setupSummary,
+    };
   }
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values.filter((value) => value.trim().length > 0))];
 }
