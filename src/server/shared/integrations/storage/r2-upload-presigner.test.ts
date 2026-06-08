@@ -20,6 +20,9 @@ describe("createSupportingDocumentUpload", () => {
         putObject: async () => {
           throw new Error("putObject should not be called");
         },
+        presignGet: async () => {
+          throw new Error("presignGet should not be called");
+        },
         presignPut: async (input) => {
           expect(input.bucket).toBe("owlet");
           expect(input.key).toBe("uploads/draft-123/file-123-product-brief.md");
@@ -54,6 +57,9 @@ describe("createSupportingDocumentUpload", () => {
           putObject: async () => {
             throw new Error("putObject should not be called");
           },
+          presignGet: async () => {
+            throw new Error("presignGet should not be called");
+          },
           presignPut: async () => "https://uploads.example.test/file",
         },
       ),
@@ -77,6 +83,9 @@ describe("createSupportingDocumentUpload", () => {
           expect(input.key).toBe("uploads/draft-123/file-123-product-brief.md");
           expect(input.contentType).toBe("text/markdown");
           expect(new TextDecoder().decode(input.body)).toBe("hello");
+        },
+        presignGet: async () => {
+          throw new Error("presignGet should not be called");
         },
         presignPut: async () => {
           throw new Error("presignPut should not be called");

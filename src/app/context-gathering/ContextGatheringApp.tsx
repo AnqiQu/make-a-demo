@@ -35,6 +35,15 @@ type SubmitResult = {
   status: "queued";
 };
 
+type DemoRequestProgress =
+  | { status: "completed"; videoUrl: string }
+  | { status: "failed" }
+  | { status: "processing" };
+
+type DemoRequestStatusResponse =
+  | { status: "completed"; videoUrl: string }
+  | { status: "failed" | "processing" };
+
 const durationOptions = [
   { label: "30s", seconds: 30 },
   { label: "1 min", seconds: 60 },
@@ -57,6 +66,8 @@ export function ContextGatheringApp() {
     useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [submitResult, setSubmitResult] = useState<SubmitResult | null>(null);
+  const [demoRequestProgress, setDemoRequestProgress] =
+    useState<DemoRequestProgress>({ status: "processing" });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
 
@@ -104,6 +115,47 @@ export function ContextGatheringApp() {
       top: transcriptRef.current.scrollHeight,
     });
   });
+
+  useEffect(() => {
+    if (
+      draft.chatStep !== "submitted" ||
+      !submitResult ||
+      demoRequestProgress.status === "completed" ||
+      demoRequestProgress.status === "failed"
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    const demoRequestId = submitResult.demoRequestId;
+
+    async function refreshDemoRequestStatus() {
+      const response = await fetch(
+        `/api/demo-requests/${encodeURIComponent(demoRequestId)}`,
+      );
+
+      if (!response.ok) {
+        return;
+      }
+
+      const progress = (await response.json()) as DemoRequestStatusResponse;
+      if (cancelled) {
+        return;
+      }
+
+      setDemoRequestProgress(progress);
+    }
+
+    void refreshDemoRequestStatus();
+    const interval = window.setInterval(() => {
+      void refreshDemoRequestStatus();
+    }, 5000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [demoRequestProgress.status, draft.chatStep, submitResult]);
 
   const currentPrompt = useMemo(
     () => findLastAssistantMessage(draft.contextTranscript),
@@ -240,6 +292,7 @@ export function ContextGatheringApp() {
       }
 
       setSubmitResult((await response.json()) as SubmitResult);
+      setDemoRequestProgress({ status: "processing" });
       setPendingSupportingFiles([]);
       setDraft((current) => ({
         ...current,
@@ -551,22 +604,59 @@ export function ContextGatheringApp() {
       ) : null}
 
       {draft.chatStep === "submitted" ? (
-        <section className="submitted-step" aria-label="Demo processing">
-          <div className="loading-ring" aria-hidden="true" />
-          <h1>Your demo is processing</h1>
-          <p>
-            Your demo video should be finished processing in a few min, but in
-            case you leave the site, we will send you an email to it once its
-            done
-          </p>
-          {submitResult ? (
-            <p className="request-id">Request {submitResult.demoRequestId}</p>
-          ) : null}
-        </section>
+        <SubmittedDemoPanel progress={demoRequestProgress} />
       ) : null}
 
       {error ? <p className="error-banner">{error}</p> : null}
     </main>
+  );
+}
+
+export function SubmittedDemoPanel({
+  progress,
+}: {
+  progress: DemoRequestProgress;
+}) {
+  if (progress.status === "completed") {
+    return (
+      <section className="submitted-step" aria-label="Generated demo video">
+        <h1>Your demo is ready</h1>
+        <video
+          className="generated-demo-video"
+          controls
+          playsInline
+          src={progress.videoUrl}
+        >
+          <track
+            default
+            kind="captions"
+            label="Captions"
+            src="data:text/vtt,WEBVTT"
+            srcLang="en"
+          />
+        </video>
+      </section>
+    );
+  }
+
+  if (progress.status === "failed") {
+    return (
+      <section className="submitted-step" aria-label="Demo processing failed">
+        <h1>We couldn&apos;t finish your demo</h1>
+        <p>We will follow up by email with the next best step.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="submitted-step" aria-label="Demo processing">
+      <div className="loading-ring" aria-hidden="true" />
+      <h1>Your demo is processing</h1>
+      <p>
+        Your demo video should be finished processing in a few min, but in case
+        you leave the site, we will send you an email to it once its done
+      </p>
+    </section>
   );
 }
 

@@ -711,6 +711,19 @@ button:disabled {
   width: 4rem;
 }
 
+.generated-demo-video {
+  aspect-ratio: 16 / 9;
+  background: #111827;
+  border: 1px solid #e7ddd2;
+  border-radius: 0.5rem;
+  box-shadow: 0 24px 52px rgba(58, 33, 24, 0.14);
+  display: block;
+  margin-top: 1.25rem;
+  max-height: min(62vh, 42rem);
+  object-fit: contain;
+  width: 100%;
+}
+
 .request-id {
   color: #b9825b;
   font-size: 0.95rem;

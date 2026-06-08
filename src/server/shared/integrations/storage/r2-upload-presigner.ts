@@ -27,6 +27,11 @@ export type PutPresignerInput = {
   key: string;
 };
 
+export type GetPresignerInput = {
+  bucket: string;
+  key: string;
+};
+
 export type PutObjectInput = {
   body: Uint8Array;
   bucket: string;
@@ -38,6 +43,7 @@ export type R2UploadStorage = {
   bucket: string;
   createId?: () => string;
   putObject(input: PutObjectInput): Promise<void>;
+  presignGet(input: GetPresignerInput): Promise<string>;
   presignPut(input: PutPresignerInput): Promise<string>;
 };
 

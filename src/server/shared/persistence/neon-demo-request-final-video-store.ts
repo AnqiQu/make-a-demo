@@ -6,9 +6,28 @@ import type {
   DemoRequestFinalVideoStore,
   LinkFinalVideoInput,
 } from "../../pipeline/07-compositing/final-video-storage.interface";
+import type {
+  DemoRequestStatus,
+  DemoRequestStatusStore,
+} from "../../pipeline/final-output/demo-request-status.interface";
 import { demoRequests } from "./schema";
 
 type DemoRequestUpdateDatabase = {
+  select(selection: {
+    generatedDemoUrl: typeof demoRequests.generatedDemoUrl;
+    status: typeof demoRequests.status;
+  }): {
+    from(table: typeof demoRequests): {
+      where(condition: unknown): {
+        limit(count: number): Promise<
+          Array<{
+            generatedDemoUrl: string | null;
+            status: string;
+          }>
+        >;
+      };
+    };
+  };
   update(table: typeof demoRequests): {
     set(values: { generatedDemoUrl: string; status: "completed" }): {
       where(condition: unknown): {
@@ -23,7 +42,7 @@ type DemoRequestUpdateDatabase = {
 };
 
 export class NeonDemoRequestFinalVideoStore
-  implements DemoRequestFinalVideoStore
+  implements DemoRequestFinalVideoStore, DemoRequestStatusStore
 {
   private readonly db: DemoRequestUpdateDatabase;
 
@@ -44,6 +63,36 @@ export class NeonDemoRequestFinalVideoStore
     if (!demoRequest) {
       throw new Error("Failed to link final video to Demo Request");
     }
+  }
+
+  async readDemoRequestStatus(
+    demoRequestId: string,
+  ): Promise<DemoRequestStatus | undefined> {
+    const [demoRequest] = await this.db
+      .select({
+        generatedDemoUrl: demoRequests.generatedDemoUrl,
+        status: demoRequests.status,
+      })
+      .from(demoRequests)
+      .where(eq(demoRequests.id, demoRequestId))
+      .limit(1);
+
+    if (!demoRequest) {
+      return undefined;
+    }
+
+    if (demoRequest.status === "completed" && demoRequest.generatedDemoUrl) {
+      return {
+        generatedDemoUrl: demoRequest.generatedDemoUrl,
+        status: "completed",
+      };
+    }
+
+    if (demoRequest.status === "failed") {
+      return { status: "failed" };
+    }
+
+    return { status: "processing" };
   }
 }
 

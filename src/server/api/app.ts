@@ -2,6 +2,7 @@ import {
   type ContextGatheringStore,
   submitContextGathering,
 } from "../pipeline/01-context-gathering/context-gathering-submission";
+import type { DemoRequestStatusStore } from "../pipeline/final-output/demo-request-status.interface";
 import {
   type R2UploadStorage,
   createSupportingDocumentUpload,
@@ -20,6 +21,7 @@ type ApiGithubDependencies = {
 };
 
 export type ApiAppDependencies = {
+  demoRequests: DemoRequestStatusStore;
   github: ApiGithubDependencies;
   store: ContextGatheringStore;
   uploads: R2UploadStorage;
@@ -71,6 +73,48 @@ async function handleRequest(
     });
   }
 
+  const demoRequestStatusMatch = /^\/api\/demo-requests\/([^/]+)$/.exec(
+    url.pathname,
+  );
+  if (request.method === "GET" && demoRequestStatusMatch?.[1]) {
+    const demoRequestId = demoRequestStatusMatch[1];
+    const status =
+      await dependencies.demoRequests.readDemoRequestStatus(demoRequestId);
+
+    if (!status) {
+      return json({ error: "Demo Request not found" }, { status: 404 });
+    }
+
+    if (status.status === "completed" && status.generatedDemoUrl) {
+      return json({
+        status: "completed",
+        videoUrl: `/api/demo-requests/${encodeURIComponent(demoRequestId)}/video`,
+      });
+    }
+
+    return json({
+      status: status.status === "failed" ? "failed" : "processing",
+    });
+  }
+
+  const demoRequestVideoMatch = /^\/api\/demo-requests\/([^/]+)\/video$/.exec(
+    url.pathname,
+  );
+  if (request.method === "GET" && demoRequestVideoMatch?.[1]) {
+    const status = await dependencies.demoRequests.readDemoRequestStatus(
+      demoRequestVideoMatch[1],
+    );
+
+    if (status?.status !== "completed" || !status.generatedDemoUrl) {
+      return json({ error: "Demo video is not ready" }, { status: 404 });
+    }
+
+    return Response.redirect(
+      await createPlaybackUrl(status.generatedDemoUrl, dependencies.uploads),
+      302,
+    );
+  }
+
   if (request.method === "POST" && url.pathname === "/api/uploads/presign") {
     return json(
       await createSupportingDocumentUpload(
@@ -101,6 +145,41 @@ async function handleRequest(
   }
 
   return json({ error: "Not found" }, { status: 404 });
+}
+
+async function createPlaybackUrl(
+  generatedDemoUrl: string,
+  storage: R2UploadStorage,
+) {
+  const storedVideo = parseR2Url(generatedDemoUrl);
+  if (storedVideo.bucket !== storage.bucket) {
+    throw new Error(
+      "generated demo video bucket does not match storage bucket",
+    );
+  }
+
+  return storage.presignGet({
+    bucket: storedVideo.bucket,
+    key: storedVideo.key,
+  });
+}
+
+function parseR2Url(value: string) {
+  const url = new URL(value);
+  if (url.protocol !== "r2:") {
+    return {
+      bucket: "",
+      key: value,
+    };
+  }
+
+  const bucket = url.hostname;
+  const key = url.pathname.replace(/^\//, "");
+  if (!bucket || !key) {
+    throw new Error("generated demo URL must be a valid R2 URL");
+  }
+
+  return { bucket, key };
 }
 
 function readUploadRequest(value: unknown) {

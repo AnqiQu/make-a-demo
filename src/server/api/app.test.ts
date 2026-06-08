@@ -10,6 +10,11 @@ describe("Context Gathering API", () => {
           "https://github.com/apps/owlet/installations/select_target",
         listRepositories: async () => [],
       },
+      demoRequests: {
+        async readDemoRequestStatus() {
+          throw new Error("demoRequests should not be called");
+        },
+      },
       store: {
         async createQueuedProject() {
           throw new Error("store should not be called");
@@ -20,6 +25,9 @@ describe("Context Gathering API", () => {
         createId: () => "file-1",
         putObject: async () => {
           throw new Error("putObject should not be called");
+        },
+        presignGet: async () => {
+          throw new Error("presignGet should not be called");
         },
         presignPut: async ({ key }) => `https://uploads.example.test/${key}`,
       },
@@ -52,6 +60,11 @@ describe("Context Gathering API", () => {
           "https://github.com/apps/owlet/installations/select_target",
         listRepositories: async () => [],
       },
+      demoRequests: {
+        async readDemoRequestStatus() {
+          throw new Error("demoRequests should not be called");
+        },
+      },
       store: {
         async createQueuedProject() {
           throw new Error("store should not be called");
@@ -65,6 +78,9 @@ describe("Context Gathering API", () => {
           expect(input.key).toBe("uploads/draft-1/file-1-product-brief.md");
           expect(input.contentType).toBe("text/markdown");
           expect(new TextDecoder().decode(input.body)).toBe("hello");
+        },
+        presignGet: async () => {
+          throw new Error("presignGet should not be called");
         },
         presignPut: async () => {
           throw new Error("presignPut should not be called");
@@ -100,6 +116,11 @@ describe("Context Gathering API", () => {
           "https://github.com/apps/owlet/installations/select_target",
         listRepositories: async () => [],
       },
+      demoRequests: {
+        async readDemoRequestStatus() {
+          throw new Error("demoRequests should not be called");
+        },
+      },
       store: {
         async createQueuedProject(input) {
           expect(input.user.email).toBe("anqi@example.com");
@@ -115,6 +136,9 @@ describe("Context Gathering API", () => {
         bucket: "owlet",
         putObject: async () => {
           throw new Error("putObject should not be called");
+        },
+        presignGet: async () => {
+          throw new Error("presignGet should not be called");
         },
         presignPut: async () => "https://uploads.example.test/file",
       },
@@ -147,6 +171,101 @@ describe("Context Gathering API", () => {
     });
   });
 
+  it("returns Demo Request processing status without exposing the request id", async () => {
+    const app = createApiApp({
+      github: {
+        createInstallUrl: () =>
+          "https://github.com/apps/owlet/installations/select_target",
+        listRepositories: async () => [],
+      },
+      demoRequests: {
+        async readDemoRequestStatus(demoRequestId) {
+          expect(demoRequestId).toBe("demo-request-1");
+          return { status: "processing" };
+        },
+      },
+      store: {
+        async createQueuedProject() {
+          throw new Error("store should not be called");
+        },
+      },
+      uploads: {
+        bucket: "owlet",
+        putObject: async () => {
+          throw new Error("putObject should not be called");
+        },
+        presignGet: async () => {
+          throw new Error("presignGet should not be called");
+        },
+        presignPut: async () => "https://uploads.example.test/file",
+      },
+    });
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/demo-requests/demo-request-1"),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      status: "processing",
+    });
+  });
+
+  it("returns a browser video URL and redirects playback when a Demo Request is completed", async () => {
+    const app = createApiApp({
+      github: {
+        createInstallUrl: () =>
+          "https://github.com/apps/owlet/installations/select_target",
+        listRepositories: async () => [],
+      },
+      demoRequests: {
+        async readDemoRequestStatus(demoRequestId) {
+          expect(demoRequestId).toBe("demo-request-1");
+          return {
+            generatedDemoUrl:
+              "r2://owlet/demo-videos/demo-request-1/composite-1/final-video.mp4",
+            status: "completed",
+          };
+        },
+      },
+      store: {
+        async createQueuedProject() {
+          throw new Error("store should not be called");
+        },
+      },
+      uploads: {
+        bucket: "owlet",
+        putObject: async () => {
+          throw new Error("putObject should not be called");
+        },
+        presignGet: async (input) => {
+          expect(input.key).toBe(
+            "demo-videos/demo-request-1/composite-1/final-video.mp4",
+          );
+          return "https://videos.example.test/final-video.mp4?signature=1";
+        },
+        presignPut: async () => "https://uploads.example.test/file",
+      },
+    });
+
+    const statusResponse = await app.fetch(
+      new Request("http://localhost/api/demo-requests/demo-request-1"),
+    );
+    expect(statusResponse.status).toBe(200);
+    await expect(statusResponse.json()).resolves.toEqual({
+      status: "completed",
+      videoUrl: "/api/demo-requests/demo-request-1/video",
+    });
+
+    const videoResponse = await app.fetch(
+      new Request("http://localhost/api/demo-requests/demo-request-1/video"),
+    );
+    expect(videoResponse.status).toBe(302);
+    expect(videoResponse.headers.get("Location")).toBe(
+      "https://videos.example.test/final-video.mp4?signature=1",
+    );
+  });
+
   it("returns GitHub App install URLs and installation repositories", async () => {
     const app = createApiApp({
       github: {
@@ -163,6 +282,11 @@ describe("Context Gathering API", () => {
           ];
         },
       },
+      demoRequests: {
+        async readDemoRequestStatus() {
+          throw new Error("demoRequests should not be called");
+        },
+      },
       store: {
         async createQueuedProject() {
           throw new Error("store should not be called");
@@ -172,6 +296,9 @@ describe("Context Gathering API", () => {
         bucket: "owlet",
         putObject: async () => {
           throw new Error("putObject should not be called");
+        },
+        presignGet: async () => {
+          throw new Error("presignGet should not be called");
         },
         presignPut: async () => "https://uploads.example.test/file",
       },

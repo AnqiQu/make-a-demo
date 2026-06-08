@@ -14,6 +14,9 @@ describe("R2FinalVideoStorage", () => {
         );
         expect(new TextDecoder().decode(input.body)).toBe("rendered mp4");
       },
+      presignGet: async () => {
+        throw new Error("presignGet should not be called");
+      },
       presignPut: async () => {
         throw new Error("presignPut should not be called");
       },

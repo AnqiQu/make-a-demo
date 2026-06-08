@@ -1,7 +1,12 @@
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import {
+  GetObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 import type {
+  GetPresignerInput,
   PutObjectInput,
   PutPresignerInput,
   R2UploadStorage,
@@ -28,6 +33,16 @@ export function createR2UploadPresignerFromEnv(): R2UploadStorage {
           ContentType: input.contentType,
           Key: input.key,
         }),
+      );
+    },
+    async presignGet(input: GetPresignerInput) {
+      return getSignedUrl(
+        client,
+        new GetObjectCommand({
+          Bucket: input.bucket,
+          Key: input.key,
+        }),
+        { expiresIn: 60 * 10 },
       );
     },
     async presignPut(input: PutPresignerInput) {
