@@ -440,7 +440,9 @@ export function ContextGatheringApp() {
           </article>
           <p className="repo-help">
             Paste a public GitHub URL, or connect GitHub to grant access to a
-            private repository.
+            private repository. 
+            <br />
+            We currently support web apps built with JavaScript or TypeScript.
           </p>
           <button
             className="primary-hoot"
