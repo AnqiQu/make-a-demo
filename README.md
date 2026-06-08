@@ -71,6 +71,77 @@ OpenCode Repo Preparation runs through the `@opencode-ai/sdk`, but MakeADemo doe
 
 Current limitation: Repo Preparation now has Docker-backed filesystem isolation, but runtime network lockdown is still not implemented. `DockerSandboxRunner` for Project Validation is still a runnable local-process runner, so validation/capture sandbox hardening, resource limits for submitted app runtime, Playwright-inside-sandbox execution, and blocked network attempt reporting still need to be implemented before running untrusted repos in production.
 
+## Run Context Gathering App
+
+The root app is the Owlet Context Gathering frontend. It collects the GitHub repo, product context, optional Supporting Documents, and creates a queued demo request.
+
+Start the frontend and API together:
+
+```bash
+bun run dev
+```
+
+Or run them separately:
+
+```bash
+bun run dev:api
+bun run dev:web
+```
+
+The API listens on `http://localhost:8787`; Vite proxies `/api/*` to it.
+
+### Neon Setup
+
+Create a Neon Postgres database, then set:
+
+```bash
+DATABASE_URL=postgres://USER:PASSWORD@HOST.neon.tech/DATABASE?sslmode=require
+```
+
+Apply the Drizzle schema:
+
+```bash
+bun run db:migrate
+```
+
+The app stores:
+
+- `users`: maker name, email, and creation time.
+- `projects`: repo URL, visibility, GitHub installation id, Context Gathering transcript, Supporting Document R2 URLs, and queued status.
+- `demo_requests`: the queued request that downstream script/video workers will process later.
+
+### Cloudflare R2 Setup
+
+Create one private R2 bucket, for example `owlet`, then set:
+
+```bash
+R2_ACCOUNT_ID=
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=
+R2_BUCKET=owlet
+```
+
+Configure R2 CORS to allow browser `PUT` uploads from local and production origins. Supporting Documents are uploaded under `uploads/{draftId}/...`; future finished demo videos should use `demo-videos/{demoRequestId}/...`.
+
+### GitHub App Setup
+
+Create a GitHub App with:
+
+- Setup URL: `http://localhost:5173/github/callback`
+- Redirect on update: enabled
+- Repository permissions: metadata read and contents read
+
+Set:
+
+```bash
+GITHUB_APP_ID=
+GITHUB_APP_SLUG=
+GITHUB_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
+GITHUB_REDIRECT_URL=http://localhost:5173/github/callback
+```
+
+Public repos can be submitted with a pasted HTTPS URL. Private repos use the GitHub App installation flow and store `github_installation_id` with the Project.
+
 ## Validate Demo Scripts
 
 To validate `demo/data/milo_video_script_example.json`, run:

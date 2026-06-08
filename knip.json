@@ -1,4 +1,5 @@
 {
+  "entry": ["src/server/api/server.mts", "demo/app/main.tsx"],
   "ignore": [
     ".dependency-cruiser.graph.cjs",
     "scripts/filter-type-only-dot.mts",

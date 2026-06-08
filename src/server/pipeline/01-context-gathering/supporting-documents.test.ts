@@ -31,6 +31,27 @@ describe("Supporting Documents", () => {
     ).toThrowError("Supporting Documents cannot be videos or pictures");
   });
 
+  it("accepts advertised presentation and archive Supporting Document formats", () => {
+    expect(
+      readSupportingDocumentUpload({
+        artifactId: "artifact_deck",
+        fileName: "pitch-deck.pptx",
+        mimeType:
+          "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        sizeBytes: 42_000,
+      }).fileName,
+    ).toBe("pitch-deck.pptx");
+
+    expect(
+      readSupportingDocumentUpload({
+        artifactId: "artifact_archive",
+        fileName: "brand-assets.zip",
+        mimeType: "application/zip",
+        sizeBytes: 42_000,
+      }).fileName,
+    ).toBe("brand-assets.zip");
+  });
+
   it("normalizes document contents into text artifacts with source metadata", () => {
     const normalized = normalizeSupportingDocument({
       contents:
