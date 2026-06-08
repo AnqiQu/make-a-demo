@@ -26,11 +26,25 @@ export type LinkFinalVideoInput = {
   generatedDemoUrl: string;
 };
 
+export type LinkedFinalVideoDemoRequest = {
+  finalVideoEmailSentAt: string | null;
+  makerEmail: string;
+};
+
+export type MarkFinalVideoEmailSentInput = {
+  demoRequestId: string;
+  sentAt: string;
+};
+
 /**
  * Links a generated final video to its Demo Request in durable persistence.
- * Implementations must update only the identified Demo Request and must not
- * create a new request when the id is missing.
+ * Implementations must update only the identified Demo Request, return the
+ * maker email for final-output notification, and must not create a new request
+ * when the id is missing.
  */
 export interface DemoRequestFinalVideoStore {
-  linkFinalVideo(input: LinkFinalVideoInput): Promise<void>;
+  linkFinalVideo(
+    input: LinkFinalVideoInput,
+  ): Promise<LinkedFinalVideoDemoRequest>;
+  markFinalVideoEmailSent(input: MarkFinalVideoEmailSentInput): Promise<void>;
 }

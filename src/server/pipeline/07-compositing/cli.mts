@@ -1,6 +1,8 @@
+import { createResendFinalVideoEmailNotifierFromEnv } from "../../shared/integrations/email/resend-final-video-email-notifier";
 import { createR2UploadPresignerFromEnv } from "../../shared/integrations/storage/r2-client";
 import { R2FinalVideoStorage } from "../../shared/integrations/storage/r2-final-video-storage";
 import { createNeonDemoRequestFinalVideoStore } from "../../shared/persistence/neon-demo-request-final-video-store";
+import { finalVideoEmailsEnabled } from "../final-output/final-video-email-feature";
 import { compositeVideoFromScript } from "./composite-video";
 
 type CliOptions = {
@@ -24,6 +26,13 @@ const finalVideoDependencies = options.demoRequestId
       finalVideoStorage: new R2FinalVideoStorage(
         createR2UploadPresignerFromEnv(),
       ),
+      ...(finalVideoEmailsEnabled(process.env)
+        ? {
+            finalVideoEmailNotifier:
+              createResendFinalVideoEmailNotifierFromEnv(),
+            publicAppBaseUrl: readRequiredEnv("PUBLIC_APP_BASE_URL"),
+          }
+        : {}),
     }
   : {};
 
@@ -89,6 +98,15 @@ function readFlagValue(args: string[], index: number, flag: string) {
   if (!value || value.startsWith("--")) {
     throw new Error(`${flag} must be followed by a value`);
   }
+  return value;
+}
+
+function readRequiredEnv(name: string) {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`${name} is required`);
+  }
+
   return value;
 }
 

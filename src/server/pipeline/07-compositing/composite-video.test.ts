@@ -2,6 +2,7 @@ import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { FinalVideoEmailNotifier } from "../final-output/final-video-email-notifier.interface";
 import {
   type CompositedVideoManifest,
   compositeVideoFromScript,
@@ -16,6 +17,124 @@ import type {
 } from "./video-renderer.interface";
 
 describe("compositeVideoFromScript", () => {
+  it("emails the maker a stable final video link after Compositing completes", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "makeademo-composite-test-"),
+    );
+    const outputRoot = join(workspace, "renders");
+    const scriptPath = join(workspace, "script.json");
+    const captureManifestPath = join(workspace, "capture-manifest.json");
+    const sentEmails: Array<{
+      demoRequestId: string;
+      title: string;
+      to: string;
+      videoUrl: string;
+    }> = [];
+    const markedEmails: Array<{
+      demoRequestId: string;
+      sentAt: string;
+    }> = [];
+
+    await writeFile(
+      scriptPath,
+      JSON.stringify({
+        estimatedDurationSeconds: 2,
+        format: "16:9",
+        scriptId: "script-001",
+        sections: [
+          {
+            id: "section-001",
+            scenes: [
+              {
+                background: { colour: "#101010", type: "solid" },
+                description: "Open with text.",
+                durationSeconds: 2,
+                id: "video-scene-001",
+                type: "full-screen-text",
+              },
+            ],
+            title: "Generated Demo",
+          },
+        ],
+        title: "Generated Demo",
+        version: 1,
+      }),
+    );
+    await writeFile(
+      captureManifestPath,
+      JSON.stringify({
+        baseUrl: "http://localhost:3000",
+        createdAt: "2026-06-06T12:00:00.000Z",
+        keepTemp: true,
+        manifestPath: captureManifestPath,
+        runDirectory: workspace,
+        runId: "capture-001",
+        scenes: [],
+        scriptId: "script-001",
+        temporary: true,
+        title: "Generated Demo",
+      }),
+    );
+
+    const emailNotifier: FinalVideoEmailNotifier = {
+      async sendFinalVideoReadyEmail(input) {
+        sentEmails.push(input);
+      },
+    };
+    const demoRequests: DemoRequestFinalVideoStore = {
+      async linkFinalVideo() {
+        return {
+          finalVideoEmailSentAt: null,
+          makerEmail: "maker@example.com",
+        };
+      },
+      async markFinalVideoEmailSent(input) {
+        markedEmails.push(input);
+      },
+    };
+
+    await compositeVideoFromScript({
+      captureManifestPath,
+      demoRequestId: "demo-request-001",
+      demoRequestStore: demoRequests,
+      finalVideoEmailNotifier: emailNotifier,
+      finalVideoStorage: {
+        async storeFinalVideo() {
+          return {
+            key: "demo-videos/demo-request-001/composite-001/final-video.mp4",
+            r2Url:
+              "r2://owlet/demo-videos/demo-request-001/composite-001/final-video.mp4",
+          };
+        },
+      },
+      outputRoot,
+      publicAppBaseUrl: "https://makeademo.example",
+      renderer: {
+        async renderVideo(input) {
+          await writeFile(input.outputPath, "rendered mp4");
+        },
+      },
+      runId: "composite-001",
+      scriptPath,
+    });
+
+    expect(sentEmails).toEqual([
+      {
+        demoRequestId: "demo-request-001",
+        title: "Generated Demo",
+        to: "maker@example.com",
+        videoUrl:
+          "https://makeademo.example/api/demo-requests/demo-request-001/video",
+      },
+    ]);
+    expect(markedEmails).toEqual([
+      {
+        demoRequestId: "demo-request-001",
+        sentAt: expect.any(String),
+      },
+    ]);
+  });
+
   it("uploads the final video and links it to the Demo Request without retaining local output", async () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "makeademo-composite-test-"),
@@ -93,6 +212,13 @@ describe("compositeVideoFromScript", () => {
     const demoRequests: DemoRequestFinalVideoStore = {
       async linkFinalVideo(input) {
         linkedVideos.push(input);
+        return {
+          finalVideoEmailSentAt: null,
+          makerEmail: "maker@example.com",
+        };
+      },
+      async markFinalVideoEmailSent() {
+        throw new Error("markFinalVideoEmailSent should not be called");
       },
     };
 

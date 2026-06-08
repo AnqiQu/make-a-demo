@@ -7,6 +7,74 @@ describe("NeonDemoRequestFinalVideoStore", () => {
     const updates: unknown[] = [];
     const db = {
       select() {
+        return {
+          from() {
+            return {
+              innerJoin() {
+                return {
+                  innerJoin() {
+                    return {
+                      where() {
+                        return {
+                          limit: async () => [
+                            {
+                              email: "maker@example.com",
+                            },
+                          ],
+                        };
+                      },
+                    };
+                  },
+                };
+              },
+            };
+          },
+        };
+      },
+      update() {
+        return {
+          set(values: unknown) {
+            updates.push(values);
+            return {
+              where() {
+                return {
+                  returning: async () => [
+                    {
+                      finalVideoEmailSentAt: null,
+                      id: "demo-request-123",
+                    },
+                  ],
+                };
+              },
+            };
+          },
+        };
+      },
+    };
+    const store = new NeonDemoRequestFinalVideoStore(db);
+
+    await expect(
+      store.linkFinalVideo({
+        demoRequestId: "demo-request-123",
+        generatedDemoUrl: "r2://owlet/demo-videos/demo-request-123/video.mp4",
+      }),
+    ).resolves.toEqual({
+      finalVideoEmailSentAt: null,
+      makerEmail: "maker@example.com",
+    });
+
+    expect(updates).toEqual([
+      {
+        generatedDemoUrl: "r2://owlet/demo-videos/demo-request-123/video.mp4",
+        status: "completed",
+      },
+    ]);
+  });
+
+  it("marks the final video ready email as sent", async () => {
+    const updates: unknown[] = [];
+    const db = {
+      select() {
         throw new Error("select should not be called");
       },
       update() {
@@ -26,15 +94,14 @@ describe("NeonDemoRequestFinalVideoStore", () => {
     };
     const store = new NeonDemoRequestFinalVideoStore(db);
 
-    await store.linkFinalVideo({
+    await store.markFinalVideoEmailSent({
       demoRequestId: "demo-request-123",
-      generatedDemoUrl: "r2://owlet/demo-videos/demo-request-123/video.mp4",
+      sentAt: "2026-06-08T02:00:00.000Z",
     });
 
     expect(updates).toEqual([
       {
-        generatedDemoUrl: "r2://owlet/demo-videos/demo-request-123/video.mp4",
-        status: "completed",
+        finalVideoEmailSentAt: new Date("2026-06-08T02:00:00.000Z"),
       },
     ]);
   });

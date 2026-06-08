@@ -123,6 +123,20 @@ R2_BUCKET=owlet
 
 Configure R2 CORS to allow browser `PUT` uploads from local and production origins. Supporting Documents are uploaded under `uploads/{draftId}/...`; future finished demo videos should use `demo-videos/{demoRequestId}/...`.
 
+### Resend Email Setup
+
+Create a Resend API key and set it in your server or worker environment:
+
+```bash
+FINAL_VIDEO_EMAILS_ENABLED=true
+RESEND_API_KEY=re_...
+RESEND_FROM_EMAIL="MakeADemo <demo@your-domain.com>"
+PUBLIC_APP_BASE_URL=https://your-app-domain.com
+```
+
+Email notifications are off unless `FINAL_VIDEO_EMAILS_ENABLED=true` or `FINAL_VIDEO_EMAILS_ENABLED=1`.
+`PUBLIC_APP_BASE_URL` is used in the finished-video email so makers receive a stable app URL instead of a short-lived R2 signed URL.
+
 ### GitHub App Setup
 
 Create a GitHub App with:

@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { CaptureManifest } from "../06-capture/capture-scenes";
+import type { FinalVideoEmailNotifier } from "../final-output/final-video-email-notifier.interface";
 import type {
   DemoRequestFinalVideoStore,
   FinalVideoStorage,
@@ -112,9 +113,11 @@ export type CompositeVideoFromScriptInput = {
   captureManifestPath: string;
   demoRequestId?: string;
   demoRequestStore?: DemoRequestFinalVideoStore;
+  finalVideoEmailNotifier?: FinalVideoEmailNotifier;
   finalVideoStorage?: FinalVideoStorage;
   outputRoot?: string;
   projectRoot?: string;
+  publicAppBaseUrl?: string;
   renderer?: VideoRenderer;
   runId?: string;
   scriptPath: string;
@@ -194,8 +197,11 @@ export async function compositeVideoFromScript(
     demoRequestStore: input.demoRequestStore,
     finalVideoStorage: input.finalVideoStorage,
     outputVideoPath,
+    publicAppBaseUrl: input.publicAppBaseUrl,
     runId,
     scriptId: scriptPackage.scriptId,
+    title: scriptPackage.title,
+    emailNotifier: input.finalVideoEmailNotifier,
   });
 
   const manifest: CompositedVideoManifest = {
@@ -229,15 +235,24 @@ function assertFinalVideoDependencies(input: CompositeVideoFromScriptInput) {
       "demoRequestId, demoRequestStore, and finalVideoStorage are all required to store final Compositing output",
     );
   }
+
+  if (input.finalVideoEmailNotifier && !input.publicAppBaseUrl) {
+    throw new Error(
+      "publicAppBaseUrl is required to email final Compositing output",
+    );
+  }
 }
 
 async function storeAndLinkFinalVideo(input: {
   demoRequestId: string | undefined;
   demoRequestStore: DemoRequestFinalVideoStore | undefined;
+  emailNotifier: FinalVideoEmailNotifier | undefined;
   finalVideoStorage: FinalVideoStorage | undefined;
   outputVideoPath: string;
+  publicAppBaseUrl: string | undefined;
   runId: string;
   scriptId: string;
+  title: string;
 }) {
   if (
     !input.demoRequestId ||
@@ -256,13 +271,43 @@ async function storeAndLinkFinalVideo(input: {
     scriptId: input.scriptId,
   });
 
-  await input.demoRequestStore.linkFinalVideo({
+  const linkedDemoRequest = await input.demoRequestStore.linkFinalVideo({
     demoRequestId: input.demoRequestId,
     generatedDemoUrl: finalVideo.r2Url,
   });
+
+  if (
+    input.emailNotifier &&
+    input.publicAppBaseUrl &&
+    !linkedDemoRequest.finalVideoEmailSentAt
+  ) {
+    await input.emailNotifier.sendFinalVideoReadyEmail({
+      demoRequestId: input.demoRequestId,
+      title: input.title,
+      to: linkedDemoRequest.makerEmail,
+      videoUrl: createFinalVideoAppUrl({
+        demoRequestId: input.demoRequestId,
+        publicAppBaseUrl: input.publicAppBaseUrl,
+      }),
+    });
+    await input.demoRequestStore.markFinalVideoEmailSent({
+      demoRequestId: input.demoRequestId,
+      sentAt: new Date().toISOString(),
+    });
+  }
   await unlink(input.outputVideoPath);
 
   return finalVideo;
+}
+
+function createFinalVideoAppUrl(input: {
+  demoRequestId: string;
+  publicAppBaseUrl: string;
+}) {
+  const baseUrl = input.publicAppBaseUrl.replace(/\/+$/g, "");
+  return `${baseUrl}/api/demo-requests/${encodeURIComponent(
+    input.demoRequestId,
+  )}/video`;
 }
 
 async function stageScenes(input: {

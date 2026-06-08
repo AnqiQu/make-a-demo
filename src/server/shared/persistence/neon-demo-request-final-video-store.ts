@@ -5,37 +5,49 @@ import postgres from "postgres";
 import type {
   DemoRequestFinalVideoStore,
   LinkFinalVideoInput,
+  LinkedFinalVideoDemoRequest,
+  MarkFinalVideoEmailSentInput,
 } from "../../pipeline/07-compositing/final-video-storage.interface";
 import type {
   DemoRequestStatus,
   DemoRequestStatusStore,
 } from "../../pipeline/final-output/demo-request-status.interface";
-import { demoRequests } from "./schema";
+import { demoRequests, projects, users } from "./schema";
 
 type DemoRequestUpdateDatabase = {
-  select(selection: {
-    generatedDemoUrl: typeof demoRequests.generatedDemoUrl;
-    status: typeof demoRequests.status;
-  }): {
-    from(table: typeof demoRequests): {
-      where(condition: unknown): {
-        limit(count: number): Promise<
-          Array<{
-            generatedDemoUrl: string | null;
-            status: string;
-          }>
-        >;
-      };
+  select(selection: unknown): unknown;
+  update(table: unknown): unknown;
+};
+
+type UpdateReturningQuery = {
+  set(values: Record<string, unknown>): {
+    where(condition: unknown): {
+      returning(selection: unknown): Promise<Array<Record<string, unknown>>>;
     };
   };
-  update(table: typeof demoRequests): {
-    set(values: { generatedDemoUrl: string; status: "completed" }): {
-      where(condition: unknown): {
-        returning(selection: { id: typeof demoRequests.id }): Promise<
-          Array<{
-            id: string;
-          }>
-        >;
+};
+
+type SelectWhereQuery = {
+  from(table: unknown): {
+    where(condition: unknown): {
+      limit(count: number): Promise<Array<Record<string, unknown>>>;
+    };
+  };
+};
+
+type SelectMakerEmailQuery = {
+  from(table: unknown): {
+    innerJoin(
+      table: unknown,
+      condition: unknown,
+    ): {
+      innerJoin(
+        table: unknown,
+        condition: unknown,
+      ): {
+        where(condition: unknown): {
+          limit(count: number): Promise<Array<Record<string, unknown>>>;
+        };
       };
     };
   };
@@ -50,29 +62,71 @@ export class NeonDemoRequestFinalVideoStore
     this.db = db;
   }
 
-  async linkFinalVideo(input: LinkFinalVideoInput): Promise<void> {
-    const [demoRequest] = await this.db
-      .update(demoRequests)
+  async linkFinalVideo(
+    input: LinkFinalVideoInput,
+  ): Promise<LinkedFinalVideoDemoRequest> {
+    const updateQuery = this.db.update(demoRequests) as UpdateReturningQuery;
+    const [demoRequest] = await updateQuery
       .set({
         generatedDemoUrl: input.generatedDemoUrl,
         status: "completed",
       })
       .where(eq(demoRequests.id, input.demoRequestId))
-      .returning({ id: demoRequests.id });
+      .returning({
+        finalVideoEmailSentAt: demoRequests.finalVideoEmailSentAt,
+        id: demoRequests.id,
+      });
 
     if (!demoRequest) {
       throw new Error("Failed to link final video to Demo Request");
+    }
+
+    const makerEmailQuery = this.db.select({
+      email: users.email,
+    }) as SelectMakerEmailQuery;
+    const [maker] = await makerEmailQuery
+      .from(demoRequests)
+      .innerJoin(projects, eq(demoRequests.projectId, projects.id))
+      .innerJoin(users, eq(projects.userId, users.id))
+      .where(eq(demoRequests.id, input.demoRequestId))
+      .limit(1);
+
+    if (typeof maker?.email !== "string") {
+      throw new Error("Failed to read Demo Request maker email");
+    }
+
+    return {
+      finalVideoEmailSentAt: formatNullableDate(
+        demoRequest.finalVideoEmailSentAt,
+      ),
+      makerEmail: maker.email,
+    };
+  }
+
+  async markFinalVideoEmailSent(
+    input: MarkFinalVideoEmailSentInput,
+  ): Promise<void> {
+    const updateQuery = this.db.update(demoRequests) as UpdateReturningQuery;
+    const [demoRequest] = await updateQuery
+      .set({
+        finalVideoEmailSentAt: new Date(input.sentAt),
+      })
+      .where(eq(demoRequests.id, input.demoRequestId))
+      .returning({ id: demoRequests.id });
+
+    if (!demoRequest) {
+      throw new Error("Failed to mark final video email as sent");
     }
   }
 
   async readDemoRequestStatus(
     demoRequestId: string,
   ): Promise<DemoRequestStatus | undefined> {
-    const [demoRequest] = await this.db
-      .select({
-        generatedDemoUrl: demoRequests.generatedDemoUrl,
-        status: demoRequests.status,
-      })
+    const statusQuery = this.db.select({
+      generatedDemoUrl: demoRequests.generatedDemoUrl,
+      status: demoRequests.status,
+    }) as SelectWhereQuery;
+    const [demoRequest] = await statusQuery
       .from(demoRequests)
       .where(eq(demoRequests.id, demoRequestId))
       .limit(1);
@@ -81,14 +135,20 @@ export class NeonDemoRequestFinalVideoStore
       return undefined;
     }
 
-    if (demoRequest.status === "completed" && demoRequest.generatedDemoUrl) {
+    const status = demoRequest.status;
+    const generatedDemoUrl = demoRequest.generatedDemoUrl;
+    if (
+      status === "completed" &&
+      typeof generatedDemoUrl === "string" &&
+      generatedDemoUrl.length > 0
+    ) {
       return {
-        generatedDemoUrl: demoRequest.generatedDemoUrl,
+        generatedDemoUrl,
         status: "completed",
       };
     }
 
-    if (demoRequest.status === "failed") {
+    if (status === "failed") {
       return { status: "failed" };
     }
 
@@ -112,4 +172,16 @@ function readRequiredEnv(name: string) {
   }
 
   return value;
+}
+
+function formatNullableDate(value: unknown) {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  return null;
 }

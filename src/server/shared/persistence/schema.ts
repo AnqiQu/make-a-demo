@@ -33,6 +33,9 @@ export const demoRequests = pgTable("demo_requests", {
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),
+  finalVideoEmailSentAt: timestamp("final_video_email_sent_at", {
+    withTimezone: true,
+  }),
   generatedDemoUrl: text("generated_demo_url"),
   id: uuid("id").defaultRandom().primaryKey(),
   projectId: uuid("project_id")
