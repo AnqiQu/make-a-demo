@@ -12,7 +12,7 @@ The goal is to give Milo one file that contains both compositing instructions an
 - `version`: schema/content version for migration.
 - `estimatedDurationSeconds`: expected total runtime.
 - `format`: output aspect ratio, currently `16:9`.
-- `audio`: optional top-level audio plan. This sample disables audio.
+- `audio`: optional top-level audio plan. This sample uses the approved `focus` music bed.
 - `sections`: ordered groups of scenes.
 
 ## Scene Types
@@ -71,6 +71,8 @@ When a scene includes `text`, the text object should include:
 - `text-colour`
 
 This keeps compositing style attached to the text overlay rather than spreading it across unrelated scene fields.
+
+This sample uses the approved `Nunito` font for every text overlay.
 
 ## Static Image Scenes
 

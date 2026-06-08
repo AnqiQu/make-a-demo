@@ -1,47 +1,53 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-type Scene = {
-  id: string;
-  humanReadableDescription: string;
+type UnifiedScene = {
+  description: string;
   durationSeconds: number;
-  events: string[];
-  playwrightScript: string;
+  events?: string[];
+  id: string;
+  playwrightSceneId?: string;
+  playwrightScript?: string;
+  type: string;
 };
 
 type Section = {
   id: string;
+  scenes: UnifiedScene[];
   title: string;
-  scenes: Scene[];
 };
 
 type DemoScript = {
-  scriptId: string;
-  title: string;
-  version: number;
   estimatedDurationSeconds: number;
   format: string;
+  scriptId: string;
   sections: Section[];
+  title: string;
+  version: number;
 };
 
-const demoScriptPath = "demo/data/anqi_playwright_script_example.json";
+type PlaywrightScene = {
+  scene: UnifiedScene;
+  sceneId: string;
+  script: string;
+};
+
+const demoScriptPath = "demo/data/milo_video_script_example.json";
 const runDirectory = ".demo-script-runs";
 const demoUrl = "http://localhost:3000";
 const options = parseOptions(Bun.argv.slice(2));
 
 const demoScript = (await Bun.file(demoScriptPath).json()) as DemoScript;
-validateDemoScript(demoScript);
-
-const scenes = demoScript.sections.flatMap((section) => section.scenes);
+const playwrightScenes = validateDemoScript(demoScript);
 const server = await ensureDemoServer();
 
 await rm(runDirectory, { force: true, recursive: true });
 await mkdir(runDirectory, { recursive: true });
 
 try {
-  for (const scene of scenes) {
-    const scenePath = join(runDirectory, `${scene.id}.ts`);
-    await writeFile(scenePath, preparePlaywrightScript(scene.playwrightScript));
+  for (const playwrightScene of playwrightScenes) {
+    const scenePath = join(runDirectory, `${playwrightScene.sceneId}.ts`);
+    await writeFile(scenePath, preparePlaywrightScript(playwrightScene.script));
 
     const startedAt = Date.now();
     const child = Bun.spawn(["bun", scenePath], {
@@ -56,7 +62,7 @@ try {
     ]);
 
     if (exitCode !== 0) {
-      console.error(`Scene ${scene.id} failed.`);
+      console.error(`Scene ${playwrightScene.sceneId} failed.`);
       if (stdout.trim()) {
         console.error(stdout);
       }
@@ -72,15 +78,22 @@ try {
     );
 
     if (shouldUpdateDurations()) {
-      scene.durationSeconds = durationSeconds;
+      playwrightScene.scene.durationSeconds = durationSeconds;
     }
 
-    console.log(`Scene ${scene.id} passed in ${durationSeconds}s.`);
+    console.log(
+      `Scene ${playwrightScene.sceneId} passed in ${durationSeconds}s.`,
+    );
   }
 
   if (shouldUpdateDurations()) {
-    demoScript.estimatedDurationSeconds = scenes.reduce(
-      (total, scene) => total + scene.durationSeconds,
+    demoScript.estimatedDurationSeconds = demoScript.sections.reduce(
+      (total, section) =>
+        total +
+        section.scenes.reduce(
+          (sectionTotal, scene) => sectionTotal + scene.durationSeconds,
+          0,
+        ),
       0,
     );
     await writeFile(demoScriptPath, `${JSON.stringify(demoScript, null, 2)}\n`);
@@ -164,7 +177,7 @@ function preparePlaywrightScript(script: string) {
   return prepared;
 }
 
-function validateDemoScript(script: DemoScript) {
+function validateDemoScript(script: DemoScript): PlaywrightScene[] {
   assertNonEmptyString(script.scriptId, "scriptId");
   assertNonEmptyString(script.title, "title");
   assertPositiveNumber(script.version, "version");
@@ -178,6 +191,8 @@ function validateDemoScript(script: DemoScript) {
     throw new Error("sections must be a non-empty array");
   }
 
+  const playwrightScenes: PlaywrightScene[] = [];
+
   for (const [sectionIndex, section] of script.sections.entries()) {
     const sectionPath = `sections[${sectionIndex}]`;
     assertNonEmptyString(section.id, `${sectionPath}.id`);
@@ -190,13 +205,24 @@ function validateDemoScript(script: DemoScript) {
     for (const [sceneIndex, scene] of section.scenes.entries()) {
       const scenePath = `${sectionPath}.scenes[${sceneIndex}]`;
       assertNonEmptyString(scene.id, `${scenePath}.id`);
-      assertNonEmptyString(
-        scene.humanReadableDescription,
-        `${scenePath}.humanReadableDescription`,
-      );
+      assertNonEmptyString(scene.type, `${scenePath}.type`);
+      assertNonEmptyString(scene.description, `${scenePath}.description`);
       assertPositiveNumber(
         scene.durationSeconds,
         `${scenePath}.durationSeconds`,
+      );
+
+      if (scene.type !== "playwright-recording") {
+        continue;
+      }
+
+      assertNonEmptyString(
+        scene.playwrightSceneId,
+        `${scenePath}.playwrightSceneId`,
+      );
+      assertNonEmptyString(
+        scene.playwrightScript,
+        `${scenePath}.playwrightScript`,
       );
 
       if (!Array.isArray(scene.events) || scene.events.length === 0) {
@@ -207,15 +233,27 @@ function validateDemoScript(script: DemoScript) {
         assertNonEmptyString(event, `${scenePath}.events[${eventIndex}]`);
       }
 
-      assertNonEmptyString(
-        scene.playwrightScript,
-        `${scenePath}.playwrightScript`,
-      );
+      playwrightScenes.push({
+        scene,
+        sceneId: scene.playwrightSceneId,
+        script: scene.playwrightScript,
+      });
     }
   }
+
+  if (playwrightScenes.length === 0) {
+    throw new Error(
+      "sections must include at least one playwright-recording scene",
+    );
+  }
+
+  return playwrightScenes;
 }
 
-function assertNonEmptyString(value: unknown, path: string) {
+function assertNonEmptyString(
+  value: unknown,
+  path: string,
+): asserts value is string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new Error(`${path} must be a non-empty string`);
   }

@@ -138,7 +138,6 @@ Stage 2 should not try to make the video beautiful. It should prove that approve
 - Basic Compositor: stitches raw Scenes together, trims obvious dead time, and adds simple text overlays from the Video Script.
 - Render Job Runner: runs the basic composition job and produces a downloadable video artifact.
 - Revision Tracking: records which Script Sections, Scene Descriptions, Capture Scripts, and Scenes belong to a given generated output.
-
 ### Stage 2 rough flow
 
 - The user reviews the generated Video Script Package.

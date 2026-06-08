@@ -7,9 +7,16 @@
 - **MakeADemo Pipeline**: The linear product flow that turns a submitted project into a demo video through intake, validation, script generation, footage capture, and compositing.
 - **Context Gathering**: The stage where the maker submits the GitHub repo URL and key product features to demo.
 - **Project Intake**: The data captured during Context Gathering.
+- **Supporting Document**: A non-image, non-video document uploaded or provided by the maker during Context Gathering to help Repo Preparation and Script Generation understand the product, setup, audience, and demo goals.
+- **Normalized Supporting Document**: A text artifact extracted from a Supporting Document before Repo Preparation begins, preserving source metadata while giving agent and non-agent stages a consistent document representation.
+- **Repo Security Screen**: The non-agent, deterministic pipeline stage that performs a fast, static-only rough safety pass on a cloned submitted repo before any agent or runtime preparation work begins.
+- **Repo Preparation**: The pipeline stage where MakeADemo works in a locked-down ephemeral cloud workspace to discover existing demo setup, prepare a deterministic demo runtime, and gather script-generation context without modifying the maker's source repo.
+- **Preparation Fallback Prompt**: A targeted prompt generated when Repo Preparation fails, giving the maker and the maker's coding agent the blockers and context needed to prepare the demo manually.
 - **Project Validation**: The stage where MakeADemo verifies that the submitted project satisfies the demo run contract and is capturable in a browser.
 - **Demo Run Contract**: The requirement that the submitted repo can start a deterministic browser-accessible demo inside an isolated sandbox, with no inbound or outbound network communication across the sandbox boundary after dependency installation.
-- **MakeADemo Config**: A `makeademo.config.json` file in the submitted repo that is the source of truth for the demo command and local URL MakeADemo should validate.
+- **MakeADemo Config**: A legacy-compatible `makeademo.config.json` file that may describe a demo command and local URL, but is no longer the primary Stage 1 source of truth once Repo Preparation produces a Preparation Manifest.
+- **Preparation Manifest**: The durable internal pipeline artifact produced by Repo Preparation that records the prepared demo command, local URL, existing demo evidence, workspace changes, mocks, assumptions, risks, and script-generation context for later stages, analytics, and future product features.
+- **Runtime Network Lockdown**: The Repo Preparation and Project Validation boundary where the prepared app runtime is sealed from external network access after setup, and any attempted inbound or outbound sandbox-boundary communication is reported as a failure.
 - **Sandbox**: The isolated execution environment that runs the submitted app, Playwright validation, and Playwright capture with the network boundary sealed after dependency installation.
 - **Script Generation**: The stage where MakeADemo turns validated project context and key product features into a Video Script.
 - **Video Script**: A structured plan for the demo video that organizes what the video will communicate over time.
@@ -30,9 +37,22 @@
 
 ## Relationships
 
-- The **MakeADemo Pipeline** runs linearly from **Context Gathering** to **Project Validation**, **Script Generation** with **Footage Capture**, **Compositing**, and final output.
+- The **MakeADemo Pipeline** runs linearly from **Context Gathering** to **Repo Security Screen**, **Repo Preparation**, **Project Validation**, **Script Generation** with **Footage Capture**, **Compositing**, and final output.
+- **Context Gathering** accepts the repo URL, structured demo intent, and broad document uploads for **Supporting Documents**, but excludes videos and pictures in Stage 1.
+- **Supporting Documents** are normalized into text artifacts before **Repo Preparation** begins.
+- **Repo Security Screen** runs before **Repo Preparation** and does not use an agent.
+- **Repo Security Screen** does not install dependencies or execute submitted repo code.
+- **Repo Preparation** happens in an ephemeral cloud workspace and does not modify the maker's source repo.
+- During **Repo Preparation**, the preparation agent may edit and execute the ephemeral workspace, but the prepared output must still pass non-agent **Project Validation** before downstream stages trust it.
+- During **Repo Preparation**, the preparation agent may use controlled network access for setup and research, but the prepared app runtime must pass **Runtime Network Lockdown** before handoff.
+- The preparation agent can invoke **Runtime Network Lockdown** as an iterative tool/check; app runtime network attempts return structured tool-call failures so the agent can mock or remove dependencies before retrying.
+- **Repo Preparation** first checks whether the submitted project already contains a prepared demo command, MakeADemo Config, or existing demo flow before creating a new one.
+- **Repo Preparation** mutates the ephemeral workspace directly and stores the resulting diff as an artifact for auditability, fallback prompts, and future apply-to-repo flows.
+- **Repo Preparation** may gather script-generation context, but final **Script Generation** remains a separate post-validation stage.
+- If **Repo Preparation** cannot produce a deterministic demo runtime, MakeADemo returns a **Preparation Fallback Prompt** and does not proceed to Script Generation.
 - **Project Validation** and **Footage Capture** run Playwright inside the **Sandbox** rather than from the backend host.
-- **MakeADemo Config** supplies the demo command and local URL used by **Project Validation**.
+- **Preparation Manifest** supplies the prepared demo command and local URL used by **Project Validation**.
+- Later pipeline stages may consume the **Preparation Manifest** directly, including non-agent stages and coding-agent stages that access it through tools or skills.
 - A **Video Script** contains one or more **Script Sections**, and each **Script Section** contains one or more **Scene Descriptions**.
 - A **Video Script Package** is the handoff from Script Generation to Footage Capture.
 - A **Scene Description** contains one or more **Browser Actions**.
