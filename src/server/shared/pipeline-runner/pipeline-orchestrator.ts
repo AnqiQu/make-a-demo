@@ -23,15 +23,35 @@ export type PipelineOrchestratorDependencies = {
   ): Promise<ProjectValidationResult>;
 };
 
+type PipelineStage =
+  | "project-validation"
+  | "repo-preparation"
+  | "repo-security-screen"
+  | "script-generation";
+
+type PipelineProgressEvent = {
+  stage: PipelineStage;
+  status: "failed" | "started" | "succeeded";
+};
+
+export type PipelineOrchestratorOptions = {
+  onProgress?: (event: PipelineProgressEvent) => void;
+};
+
 export async function runPipelineJob(
   input: PipelineJobInput,
   dependencies: PipelineOrchestratorDependencies,
+  options: PipelineOrchestratorOptions = {},
 ): Promise<PipelineJobResult> {
+  options.onProgress?.({ stage: "repo-security-screen", status: "started" });
   const security = dependencies.screenRepoSecurity(input.repoSecurity);
   if (security.status === "rejected") {
+    options.onProgress?.({ stage: "repo-security-screen", status: "failed" });
     return { security, status: "security-rejected" };
   }
+  options.onProgress?.({ stage: "repo-security-screen", status: "succeeded" });
 
+  options.onProgress?.({ stage: "repo-preparation", status: "started" });
   const preparation = await dependencies.prepareRepo({
     normalizedSupportingDocuments: input.normalizedSupportingDocuments,
     repoUrl: input.repoUrl,
@@ -40,20 +60,26 @@ export async function runPipelineJob(
   });
 
   if (preparation.status === "failed") {
+    options.onProgress?.({ stage: "repo-preparation", status: "failed" });
     return {
       fallbackPrompt: preparation.fallbackPrompt,
       status: "preparation-failed",
     };
   }
+  options.onProgress?.({ stage: "repo-preparation", status: "succeeded" });
 
+  options.onProgress?.({ stage: "project-validation", status: "started" });
   const validation = await dependencies.validateProject({
     preparationManifest: preparation.manifest,
   });
 
   if (validation.status === "failed") {
+    options.onProgress?.({ stage: "project-validation", status: "failed" });
     return { status: "validation-failed", validation };
   }
+  options.onProgress?.({ stage: "project-validation", status: "succeeded" });
 
+  options.onProgress?.({ stage: "script-generation", status: "started" });
   const videoScriptPackage = await dependencies.generateScriptPackage({
     demoBrief: input.demoBrief,
     normalizedSupportingDocuments: input.normalizedSupportingDocuments,
@@ -61,6 +87,7 @@ export async function runPipelineJob(
     repoUrl: input.repoUrl,
     validation,
   });
+  options.onProgress?.({ stage: "script-generation", status: "succeeded" });
 
   return {
     preparationManifest: preparation.manifest,

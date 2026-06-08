@@ -70,4 +70,37 @@ describe("prepareRepo", () => {
       expect(result.fallbackPrompt).toContain("add local dashboard fixtures");
     }
   });
+
+  it("returns a fallback prompt when the preparation agent returns an invalid manifest", async () => {
+    const agent: RepoPreparationAgent = {
+      async prepare() {
+        return {
+          manifest: {
+            demoCommand: "npm run demo",
+            repoUrl: "https://github.com/example/app",
+            url: "http://localhost:3000",
+            workspaceId: "workspace_123",
+          },
+          status: "succeeded",
+        };
+      },
+    };
+
+    const result = await prepareRepo(
+      {
+        normalizedSupportingDocuments: [],
+        repoUrl: "https://github.com/example/app",
+        structuredDemoIntent: { keyProductFeatures: ["dashboard"] },
+        workspaceId: "workspace_123",
+      },
+      { agent },
+    );
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") {
+      expect(result.fallbackPrompt).toContain(
+        "Preparation Manifest was invalid: status must be a non-empty string",
+      );
+    }
+  });
 });

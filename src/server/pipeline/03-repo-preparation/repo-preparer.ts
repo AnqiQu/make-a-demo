@@ -24,8 +24,24 @@ export async function prepareRepo(
     };
   }
 
-  return {
-    manifest: readPreparationManifest(result.manifest),
-    status: "succeeded",
-  };
+  try {
+    return {
+      manifest: readPreparationManifest(result.manifest),
+      status: "succeeded",
+    };
+  } catch (error) {
+    return {
+      fallbackPrompt: createPreparationFallbackPrompt({
+        assumptions: [],
+        blockers: [
+          `Preparation Manifest was invalid: ${error instanceof Error ? error.message : String(error)}`,
+        ],
+        repoUrl: input.repoUrl,
+        suggestedChanges: [
+          "Retry repo preparation and return a complete Preparation Manifest JSON object.",
+        ],
+      }),
+      status: "failed",
+    };
+  }
 }

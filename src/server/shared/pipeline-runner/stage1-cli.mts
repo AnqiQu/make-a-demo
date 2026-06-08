@@ -19,6 +19,7 @@ import { createStage1PipelineDependencies } from "./stage1-pipeline";
 const options = await readOptions(process.argv.slice(2));
 const workspaceDirectory = join(options.workspaceRoot, options.workspaceId);
 
+process.stderr.write("[pipeline] clone: started\n");
 await rm(workspaceDirectory, { force: true, recursive: true });
 await mkdir(options.workspaceRoot, { recursive: true });
 await runCommand("git", [
@@ -28,6 +29,7 @@ await runCommand("git", [
   options.repoUrl,
   workspaceDirectory,
 ]);
+process.stderr.write("[pipeline] clone: succeeded\n");
 
 const repoSecurity = await readRepoSecurityInput(workspaceDirectory);
 const normalizedSupportingDocuments = await Promise.all(
@@ -48,6 +50,7 @@ const normalizedSupportingDocuments = await Promise.all(
 const repoPreparationAgent = new OpenCodeRepoPreparationAgent({
   directory: workspaceDirectory,
   modelID: options.modelID,
+  onProgress: (line) => process.stderr.write(`${line}\n`),
   providerID: options.providerID,
 });
 
@@ -65,9 +68,17 @@ const result = await runPipelineJob(
       workspaceRoot: options.workspaceRoot,
     }),
   }),
+  {
+    onProgress: (event) =>
+      process.stderr.write(`[pipeline] ${event.stage}: ${event.status}\n`),
+  },
 );
 
 process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+
+if (result.status !== "succeeded") {
+  process.exitCode = 1;
+}
 
 async function readOptions(args: string[]) {
   if (args.length > 0) {

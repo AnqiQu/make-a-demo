@@ -64,6 +64,69 @@ describe("runPipelineJob", () => {
     ]);
   });
 
+  it("reports stage progress in order", async () => {
+    const progress: string[] = [];
+
+    await runPipelineJob(
+      {
+        demoBrief: { keyProductFeatures: ["validation"] },
+        normalizedSupportingDocuments: [],
+        repoSecurity: {
+          files: [{ path: "package.json", text: "{}" }],
+          repoStats: { fileCount: 1, sizeBytes: 1_000 },
+        },
+        repoUrl: "https://github.com/example/app",
+        workspaceId: "workspace_123",
+      },
+      {
+        async generateScriptPackage({ preparationManifest, validation }) {
+          return {
+            assumptions: preparationManifest.assumptions,
+            demoPlan: {
+              featureOrder: ["validation"],
+              narrative: "Demo it",
+              risks: [],
+            },
+            exploration: { assumptions: [], productSurfaces: [], summary: "" },
+            validation,
+            videoScript: { sections: [], title: "Demo" },
+          };
+        },
+        async prepareRepo() {
+          return {
+            manifest: manifest(),
+            status: "succeeded",
+          };
+        },
+        screenRepoSecurity() {
+          return { rejections: [], status: "passed", warnings: [] };
+        },
+        async validateProject() {
+          return {
+            blockedNetworkAttempts: [],
+            logs: ["validated"],
+            status: "succeeded",
+            warnings: [],
+          };
+        },
+      },
+      {
+        onProgress: (event) => progress.push(`${event.stage}:${event.status}`),
+      },
+    );
+
+    expect(progress).toEqual([
+      "repo-security-screen:started",
+      "repo-security-screen:succeeded",
+      "repo-preparation:started",
+      "repo-preparation:succeeded",
+      "project-validation:started",
+      "project-validation:succeeded",
+      "script-generation:started",
+      "script-generation:succeeded",
+    ]);
+  });
+
   it("returns a fallback prompt and stops when Repo Preparation fails", async () => {
     const result = await runPipelineJob(
       {
