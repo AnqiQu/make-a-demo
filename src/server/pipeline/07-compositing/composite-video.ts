@@ -1,8 +1,20 @@
-import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  readFile,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { CaptureManifest } from "../06-capture/capture-scenes";
+import type {
+  DemoRequestFinalVideoStore,
+  FinalVideoStorage,
+  StoredFinalVideo,
+} from "./final-video-storage.interface";
 import type {
   CompositingFontAsset,
   CompositingMusicAsset,
@@ -85,8 +97,9 @@ export type CompositedVideoManifest = {
   createdAt: string;
   durationInFrames: number;
   fps: number;
+  finalVideo?: StoredFinalVideo;
   manifestPath: string;
-  outputVideoPath: string;
+  outputVideoPath?: string;
   renderPlanPath: string;
   runDirectory: string;
   runId: string;
@@ -97,6 +110,9 @@ export type CompositedVideoManifest = {
 
 export type CompositeVideoFromScriptInput = {
   captureManifestPath: string;
+  demoRequestId?: string;
+  demoRequestStore?: DemoRequestFinalVideoStore;
+  finalVideoStorage?: FinalVideoStorage;
   outputRoot?: string;
   projectRoot?: string;
   renderer?: VideoRenderer;
@@ -107,6 +123,8 @@ export type CompositeVideoFromScriptInput = {
 export async function compositeVideoFromScript(
   input: CompositeVideoFromScriptInput,
 ): Promise<CompositedVideoManifest> {
+  assertFinalVideoDependencies(input);
+
   const projectRoot = input.projectRoot ?? process.cwd();
   const outputRoot = input.outputRoot ?? ".demo-composite-renders";
   const runId = input.runId ?? createRunId();
@@ -171,23 +189,80 @@ export async function compositeVideoFromScript(
   await writeFile(renderPlanPath, `${JSON.stringify(renderPlan, null, 2)}\n`);
   const renderer = input.renderer ?? (await createDefaultRenderer());
   await renderer.renderVideo(renderPlan);
+  const finalVideo = await storeAndLinkFinalVideo({
+    demoRequestId: input.demoRequestId,
+    demoRequestStore: input.demoRequestStore,
+    finalVideoStorage: input.finalVideoStorage,
+    outputVideoPath,
+    runId,
+    scriptId: scriptPackage.scriptId,
+  });
 
   const manifest: CompositedVideoManifest = {
     createdAt: new Date().toISOString(),
     durationInFrames,
     fps: FPS,
+    ...(finalVideo ? { finalVideo } : {}),
     manifestPath,
-    outputVideoPath,
+    ...(finalVideo ? {} : { outputVideoPath }),
     renderPlanPath,
     runDirectory,
     runId,
     scriptId: scriptPackage.scriptId,
     title: scriptPackage.title,
-    viewUrl: pathToFileURL(resolve(outputVideoPath)).href,
+    viewUrl: finalVideo?.r2Url ?? pathToFileURL(resolve(outputVideoPath)).href,
   };
 
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   return manifest;
+}
+
+function assertFinalVideoDependencies(input: CompositeVideoFromScriptInput) {
+  const dependencies = [
+    input.demoRequestId,
+    input.demoRequestStore,
+    input.finalVideoStorage,
+  ].filter(Boolean);
+
+  if (dependencies.length > 0 && dependencies.length !== 3) {
+    throw new Error(
+      "demoRequestId, demoRequestStore, and finalVideoStorage are all required to store final Compositing output",
+    );
+  }
+}
+
+async function storeAndLinkFinalVideo(input: {
+  demoRequestId: string | undefined;
+  demoRequestStore: DemoRequestFinalVideoStore | undefined;
+  finalVideoStorage: FinalVideoStorage | undefined;
+  outputVideoPath: string;
+  runId: string;
+  scriptId: string;
+}) {
+  if (
+    !input.demoRequestId ||
+    !input.demoRequestStore ||
+    !input.finalVideoStorage
+  ) {
+    return undefined;
+  }
+
+  const finalVideo = await input.finalVideoStorage.storeFinalVideo({
+    body: await readFile(input.outputVideoPath),
+    contentType: "video/mp4",
+    demoRequestId: input.demoRequestId,
+    fileName: "final-video.mp4",
+    runId: input.runId,
+    scriptId: input.scriptId,
+  });
+
+  await input.demoRequestStore.linkFinalVideo({
+    demoRequestId: input.demoRequestId,
+    generatedDemoUrl: finalVideo.r2Url,
+  });
+  await unlink(input.outputVideoPath);
+
+  return finalVideo;
 }
 
 async function stageScenes(input: {

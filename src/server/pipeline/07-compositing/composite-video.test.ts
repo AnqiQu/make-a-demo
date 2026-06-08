@@ -7,11 +7,140 @@ import {
   compositeVideoFromScript,
 } from "./composite-video";
 import type {
+  DemoRequestFinalVideoStore,
+  FinalVideoStorage,
+} from "./final-video-storage.interface";
+import type {
   CompositingRenderPlan,
   VideoRenderer,
 } from "./video-renderer.interface";
 
 describe("compositeVideoFromScript", () => {
+  it("uploads the final video and links it to the Demo Request without retaining local output", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "makeademo-composite-test-"),
+    );
+    const outputRoot = join(workspace, "renders");
+    const scriptPath = join(workspace, "script.json");
+    const captureManifestPath = join(workspace, "capture-manifest.json");
+    const storedVideos: Array<{
+      body: string;
+      demoRequestId: string;
+      key: string;
+      scriptId: string;
+    }> = [];
+    const linkedVideos: Array<{
+      demoRequestId: string;
+      generatedDemoUrl: string;
+    }> = [];
+
+    await writeFile(
+      scriptPath,
+      JSON.stringify({
+        estimatedDurationSeconds: 2,
+        format: "16:9",
+        scriptId: "script-001",
+        sections: [
+          {
+            id: "section-001",
+            scenes: [
+              {
+                background: { colour: "#101010", type: "solid" },
+                description: "Open with text.",
+                durationSeconds: 2,
+                id: "video-scene-001",
+                type: "full-screen-text",
+              },
+            ],
+            title: "Main flow",
+          },
+        ],
+        title: "Generated Demo",
+        version: 1,
+      }),
+    );
+    await writeFile(
+      captureManifestPath,
+      JSON.stringify({
+        baseUrl: "http://localhost:3000",
+        createdAt: "2026-06-06T12:00:00.000Z",
+        keepTemp: true,
+        manifestPath: captureManifestPath,
+        runDirectory: workspace,
+        runId: "capture-001",
+        scenes: [],
+        scriptId: "script-001",
+        temporary: true,
+        title: "Generated Demo",
+      }),
+    );
+
+    const storage: FinalVideoStorage = {
+      async storeFinalVideo(input) {
+        const key = `demo-videos/${input.demoRequestId}/${input.runId}/final-video.mp4`;
+        storedVideos.push({
+          body: new TextDecoder().decode(input.body),
+          demoRequestId: input.demoRequestId,
+          key,
+          scriptId: input.scriptId,
+        });
+        return {
+          key,
+          r2Url: `r2://owlet/${key}`,
+        };
+      },
+    };
+    const demoRequests: DemoRequestFinalVideoStore = {
+      async linkFinalVideo(input) {
+        linkedVideos.push(input);
+      },
+    };
+
+    const manifest = await compositeVideoFromScript({
+      captureManifestPath,
+      demoRequestId: "demo-request-001",
+      demoRequestStore: demoRequests,
+      finalVideoStorage: storage,
+      outputRoot,
+      renderer: {
+        async renderVideo(input) {
+          await writeFile(input.outputPath, "rendered mp4");
+        },
+      },
+      runId: "composite-001",
+      scriptPath,
+    });
+
+    expect(storedVideos).toEqual([
+      {
+        body: "rendered mp4",
+        demoRequestId: "demo-request-001",
+        key: "demo-videos/demo-request-001/composite-001/final-video.mp4",
+        scriptId: "script-001",
+      },
+    ]);
+    expect(linkedVideos).toEqual([
+      {
+        demoRequestId: "demo-request-001",
+        generatedDemoUrl:
+          "r2://owlet/demo-videos/demo-request-001/composite-001/final-video.mp4",
+      },
+    ]);
+    expect(manifest).toMatchObject({
+      finalVideo: {
+        key: "demo-videos/demo-request-001/composite-001/final-video.mp4",
+        r2Url:
+          "r2://owlet/demo-videos/demo-request-001/composite-001/final-video.mp4",
+      },
+      viewUrl:
+        "r2://owlet/demo-videos/demo-request-001/composite-001/final-video.mp4",
+    } satisfies Partial<CompositedVideoManifest>);
+    expect(manifest.outputVideoPath).toBeUndefined();
+    await expect(
+      stat(join(outputRoot, "composite-001", "final-video.mp4")),
+    ).rejects.toThrow();
+  });
+
   it("stages the full script for Remotion and stores a viewable final video manifest", async () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "makeademo-composite-test-"),
