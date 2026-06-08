@@ -89,6 +89,58 @@ describe("validateProject", () => {
       "No lockfile found; npm install may be less deterministic.",
     ]);
   });
+
+  it("fails validation when browser runtime requests leave the local boundary", async () => {
+    const sandboxRunner: SandboxRunner = {
+      async runValidation() {
+        return {
+          blockedNetworkAttempts: [],
+          logs: ["started demo"],
+          repoFiles: ["package.json"],
+          runtimeExitCode: 0,
+        };
+      },
+    };
+    const browserValidator: BrowserValidator = {
+      async validate() {
+        return {
+          blockedNetworkAttempts: [
+            {
+              direction: "outbound",
+              host: "api.realworld.io",
+              phase: "runtime",
+            },
+          ],
+          interactable: true,
+          logs: ["loaded app", "blocked https://api.realworld.io/articles"],
+          screenshotArtifactId: "artifact_screenshot",
+        };
+      },
+    };
+
+    const result = await validateProject(
+      {
+        preparationManifest: manifest({
+          demoCommand: "npm run demo",
+          url: "http://localhost:5173",
+        }),
+      },
+      { browserValidator, sandboxRunner },
+    );
+
+    expect(result).toMatchObject({
+      blockedNetworkAttempts: [
+        {
+          direction: "outbound",
+          host: "api.realworld.io",
+          phase: "runtime",
+        },
+      ],
+      failureReason:
+        "Runtime network communication across the sandbox boundary is not allowed.",
+      status: "failed",
+    });
+  });
 });
 
 function manifest(overrides: { demoCommand: string; url: string }) {

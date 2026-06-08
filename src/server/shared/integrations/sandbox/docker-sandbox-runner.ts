@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import type { PreparationManifest } from "../../../pipeline/03-repo-preparation/preparation-manifest";
 import { inferInstallPlan } from "../../../pipeline/04-project-validation/install-plan";
+import type { NetworkAttempt } from "../../../pipeline/04-project-validation/network-isolation-policy";
 import type {
   SandboxRunner,
   SandboxValidationInput,
@@ -13,9 +14,12 @@ import type {
 type SandboxCommandInput = {
   command: string;
   cwd: string;
+  mode: "exit" | "start";
+  readyUrl?: string;
 };
 
 type SandboxCommandOutput = {
+  blockedNetworkAttempts?: NetworkAttempt[];
   cleanup?: () => Promise<void>;
   exitCode: number;
   logs: string[];
@@ -55,11 +59,12 @@ export class DockerSandboxRunner implements SandboxRunner {
     const installResult = await this.commandRunner({
       command: installPlan.command,
       cwd: workspaceDirectory,
+      mode: "exit",
     });
 
     if (installResult.exitCode !== 0) {
       return {
-        blockedNetworkAttempts: [],
+        blockedNetworkAttempts: installResult.blockedNetworkAttempts ?? [],
         logs: installResult.logs,
         repoFiles,
         runtimeExitCode: installResult.exitCode,
@@ -69,10 +74,15 @@ export class DockerSandboxRunner implements SandboxRunner {
     const runtimeResult = await this.commandRunner({
       command: input.demoCommand,
       cwd: workspaceDirectory,
+      mode: "start",
+      readyUrl: input.url,
     });
 
     return {
-      blockedNetworkAttempts: [],
+      blockedNetworkAttempts: [
+        ...(installResult.blockedNetworkAttempts ?? []),
+        ...(runtimeResult.blockedNetworkAttempts ?? []),
+      ],
       ...(runtimeResult.cleanup === undefined
         ? {}
         : { cleanup: runtimeResult.cleanup }),
@@ -100,7 +110,19 @@ async function runShellCommand(
   child.stdout.on("data", (chunk: Buffer) => logs.push(chunk.toString()));
   child.stderr.on("data", (chunk: Buffer) => logs.push(chunk.toString()));
 
-  await new Promise((resolve) => setTimeout(resolve, 2_000));
+  if (input.mode === "exit") {
+    const exitCode = await new Promise<number | null>((resolve) => {
+      child.on("exit", resolve);
+    });
+
+    return { exitCode: exitCode ?? 1, logs };
+  }
+
+  if (input.readyUrl !== undefined) {
+    await waitForReadyUrl(input.readyUrl, child, logs);
+  } else {
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
 
   if (child.exitCode === null) {
     return {
@@ -113,4 +135,33 @@ async function runShellCommand(
   }
 
   return { exitCode: child.exitCode, logs };
+}
+
+async function waitForReadyUrl(
+  url: string,
+  child: ReturnType<typeof spawn>,
+  logs: string[],
+): Promise<void> {
+  const deadline = Date.now() + 20_000;
+
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) {
+      return;
+    }
+
+    try {
+      const response = await fetch(url);
+      await response.arrayBuffer();
+      if (response.ok) {
+        logs.push(`Runtime ready at ${url}`);
+        return;
+      }
+    } catch {
+      // Keep polling until the runtime is reachable or exits.
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  logs.push(`Runtime did not become ready at ${url} before timeout`);
 }

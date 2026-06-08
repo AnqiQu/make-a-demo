@@ -57,6 +57,21 @@ export async function validateProject(
     .finally(async () => {
       await sandboxResult.cleanup?.();
     });
+  const browserNetworkAttempts = findRuntimeBoundaryViolations(
+    browserResult.blockedNetworkAttempts ?? [],
+  );
+
+  if (browserNetworkAttempts.length > 0) {
+    return {
+      blockedNetworkAttempts: browserNetworkAttempts,
+      failureReason:
+        "Runtime network communication across the sandbox boundary is not allowed.",
+      logs: [...sandboxResult.logs, ...browserResult.logs],
+      screenshotArtifactId: browserResult.screenshotArtifactId,
+      status: "failed",
+      warnings: installPlan.warnings,
+    };
+  }
 
   if (!browserResult.interactable) {
     return {
