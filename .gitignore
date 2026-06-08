@@ -10,3 +10,4 @@ dist/
 artifacts/
 demo/artifacts/
 .env
+.DS_Store
