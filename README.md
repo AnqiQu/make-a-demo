@@ -65,9 +65,11 @@ Optional flags:
 --workspace-id workspace-test
 ```
 
-The command clones the repo into the workspace root, runs the static Repo Security Screen, asks OpenCode to prepare the repo in the ephemeral workspace, validates the prepared app, and prints the Stage 1 result JSON.
+The command clones the repo into the workspace root, runs the static Repo Security Screen, asks OpenCode to prepare the repo in the ephemeral workspace, validates the prepared app, and prints the Stage 1 result JSON. OpenCode progress is streamed to stderr with `[opencode]` prefixes while the final Stage 1 result JSON is written to stdout.
 
-Current limitation: `DockerSandboxRunner` is currently a runnable local-process runner, not a hardened Docker sandbox. Filesystem isolation, resource limits, and runtime network lockdown still need to be implemented before running untrusted repos in production.
+OpenCode Repo Preparation runs through the `@opencode-ai/sdk`, but MakeADemo does not use the SDK's default host `opencode serve` helper for the normal Stage 1 path. Instead, it starts `opencode serve` inside a Docker container, bind-mounts only the prepared workspace at `/workspace`, bind-mounts the host `opencode` binary read-only at `/usr/local/bin/opencode`, and points the SDK client at that local container server. The container config allows OpenCode edit/bash/webfetch permissions so Repo Preparation can run unattended, and disables the `question` tool so the agent cannot block on interactive questions. The `opencode` executable must still be installed on the host `PATH`; it does not need to live inside this repo.
+
+Current limitation: Repo Preparation now has Docker-backed filesystem isolation, but runtime network lockdown is still not implemented. `DockerSandboxRunner` for Project Validation is still a runnable local-process runner, so validation/capture sandbox hardening, resource limits for submitted app runtime, Playwright-inside-sandbox execution, and blocked network attempt reporting still need to be implemented before running untrusted repos in production.
 
 ## Validate Demo Scripts
 

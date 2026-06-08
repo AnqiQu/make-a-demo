@@ -9,3 +9,4 @@ dist/
 .playwright-cli/
 artifacts/
 demo/artifacts/
+.env
