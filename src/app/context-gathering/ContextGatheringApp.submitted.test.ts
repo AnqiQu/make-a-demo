@@ -2,7 +2,17 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { SubmittedDemoPanel } from "./ContextGatheringApp";
+import { ContextGatheringApp, SubmittedDemoPanel } from "./ContextGatheringApp";
+
+describe("ContextGatheringApp", () => {
+  it("sets expectations for the supported project type during Context Gathering", () => {
+    const html = renderToStaticMarkup(createElement(ContextGatheringApp));
+
+    expect(html).toContain(
+      "We currently support web apps built with JavaScript or TypeScript.",
+    );
+  });
+});
 
 describe("SubmittedDemoPanel", () => {
   it("shows processing without exposing the Demo Request id", () => {
