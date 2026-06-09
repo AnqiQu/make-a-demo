@@ -606,7 +606,6 @@ export function ContextDetailsForm({
             onChange={(event) =>
               onFieldChange("productSummary", event.currentTarget.value)
             }
-            required
             value={form.productSummary}
           />
         </label>
@@ -616,7 +615,6 @@ export function ContextDetailsForm({
             onChange={(event) =>
               onFieldChange("targetUsers", event.currentTarget.value)
             }
-            required
             value={form.targetUsers}
           />
         </label>
@@ -626,7 +624,6 @@ export function ContextDetailsForm({
             onChange={(event) =>
               onFieldChange("importantFeatures", event.currentTarget.value)
             }
-            required
             value={form.importantFeatures}
           />
         </label>

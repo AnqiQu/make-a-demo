@@ -114,6 +114,45 @@ describe("Context Gathering draft", () => {
     ]);
   });
 
+  it("only requires name and email when collecting the combined intake form", () => {
+    const draft = setRepoDetails(createInitialContextGatheringDraft(), {
+      repoUrl: "https://github.com/example/app",
+      repoVisibility: "public",
+    });
+
+    const collected = collectIntakeDetails(
+      draft,
+      {
+        email: "founder@example.com",
+        importantFeatures: "",
+        name: "Anqi",
+        productSummary: "",
+        requestedDurationSeconds: 60,
+        supplementaryInformation: "",
+        targetUsers: "",
+      },
+      { now: () => "2026-06-07T17:05:00.000Z" },
+    );
+
+    expect(collected.contact).toEqual({
+      email: "founder@example.com",
+      name: "Anqi",
+    });
+    expect(collected.structuredContext).toEqual({
+      importantFeatures: "",
+      productSummary: "",
+      requestedDurationSeconds: 60,
+      supplementaryInformation: "",
+      targetUsers: "",
+    });
+    expect(collected.contextTranscript.map((message) => message.text)).toEqual([
+      "What is your name and email address",
+      "Anqi, founder@example.com",
+      "How long do you want the demo video to be? Choose between 30s-3min.",
+      "1 minute",
+    ]);
+  });
+
   it("rejects image and video Supporting Documents", () => {
     expect(() =>
       rejectUnsupportedSupportingFile({ name: "hero.png", type: "image/png" }),
