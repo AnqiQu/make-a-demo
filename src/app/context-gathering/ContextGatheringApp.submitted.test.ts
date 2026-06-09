@@ -2,7 +2,11 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { ContextGatheringApp, SubmittedDemoPanel } from "./ContextGatheringApp";
+import {
+  ContextDetailsForm,
+  ContextGatheringApp,
+  SubmittedDemoPanel,
+} from "./ContextGatheringApp";
 
 describe("ContextGatheringApp", () => {
   it("sets expectations for the supported project type during Context Gathering", () => {
@@ -11,6 +15,54 @@ describe("ContextGatheringApp", () => {
     expect(html).toContain(
       "We currently support web apps built with JavaScript or TypeScript.",
     );
+  });
+
+  it("brands the product as MakeADemo with Owlet attribution", () => {
+    const html = renderToStaticMarkup(createElement(ContextGatheringApp));
+
+    expect(html).toContain("MakeADemo");
+    expect(html).toContain("By Owlet");
+    expect(html).toContain("Make me a demo");
+    expect(html).not.toContain("Let&#x27;s Hoot");
+  });
+});
+
+describe("ContextDetailsForm", () => {
+  it("renders the combined second page as a halfway-progress form", () => {
+    const html = renderToStaticMarkup(
+      createElement(ContextDetailsForm, {
+        form: {
+          email: "",
+          importantFeatures: "",
+          name: "",
+          productSummary: "",
+          requestedDurationSeconds: 60,
+          supplementaryInformation: "",
+          targetUsers: "",
+        },
+        isDraggingSupportingFile: false,
+        isSubmitting: false,
+        isUploading: false,
+        onBack: () => undefined,
+        onFieldChange: () => undefined,
+        onRemovePendingFile: () => undefined,
+        onStageFiles: () => undefined,
+        onSubmit: () => undefined,
+        pendingSupportingFiles: [],
+      }),
+    );
+
+    expect(html).toContain('role="progressbar"');
+    expect(html).toContain('aria-valuenow="50"');
+    expect(html).toContain('aria-label="Back to repository"');
+    expect(html).toContain("Any supplementary information?");
+    expect(html).toContain("E.g. pitch decks, styling guides, manifestos...");
+    expect(html).toContain("Let&#x27;s go");
+    expect(html).not.toContain("Tell us what the demo should show");
+    expect(html).not.toContain("Supporting Documents");
+    expect(html).not.toContain("<h2>Supporting documents</h2>");
+    expect(html).not.toContain("Chat response");
+    expect(html).not.toContain("<textarea");
   });
 });
 
