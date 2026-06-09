@@ -162,18 +162,6 @@ export function collectIntakeDetails(
     throw new Error("Email must be valid");
   }
 
-  if (productSummary.length === 0) {
-    throw new Error("Product summary is required");
-  }
-
-  if (targetUsers.length === 0) {
-    throw new Error("Target users are required");
-  }
-
-  if (importantFeatures.length === 0) {
-    throw new Error("Important features are required");
-  }
-
   if (
     !Number.isFinite(input.requestedDurationSeconds) ||
     input.requestedDurationSeconds < 30 ||
@@ -191,18 +179,30 @@ export function collectIntakeDetails(
       answer: `${name}, ${email}`,
       prompt: readPrompt("name-email"),
     },
-    {
-      answer: productSummary,
-      prompt: readPrompt("product-summary"),
-    },
-    {
-      answer: targetUsers,
-      prompt: readPrompt("target-users"),
-    },
-    {
-      answer: importantFeatures,
-      prompt: readPrompt("important-features"),
-    },
+    ...(productSummary.length === 0
+      ? []
+      : [
+          {
+            answer: productSummary,
+            prompt: readPrompt("product-summary"),
+          },
+        ]),
+    ...(targetUsers.length === 0
+      ? []
+      : [
+          {
+            answer: targetUsers,
+            prompt: readPrompt("target-users"),
+          },
+        ]),
+    ...(importantFeatures.length === 0
+      ? []
+      : [
+          {
+            answer: importantFeatures,
+            prompt: readPrompt("important-features"),
+          },
+        ]),
     {
       answer: formatDuration(input.requestedDurationSeconds),
       prompt: readPrompt("demo-duration"),

@@ -58,6 +58,7 @@ describe("ContextDetailsForm", () => {
     expect(html).toContain("Any supplementary information?");
     expect(html).toContain("E.g. pitch decks, styling guides, manifestos...");
     expect(html).toContain("Let&#x27;s go");
+    expect(html.match(/required=""/g)?.length).toBe(2);
     expect(html).not.toContain("Tell us what the demo should show");
     expect(html).not.toContain("Supporting Documents");
     expect(html).not.toContain("<h2>Supporting documents</h2>");
