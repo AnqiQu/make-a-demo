@@ -22,9 +22,19 @@ type ApiGithubDependencies = {
 
 export type ApiAppDependencies = {
   demoRequests: DemoRequestStatusStore;
+  frontend?: FrontendAssetReader;
   github: ApiGithubDependencies;
   store: ContextGatheringStore;
   uploads: R2UploadStorage;
+};
+
+/**
+ * Reads production frontend assets for browser requests.
+ * Implementations must return null when no asset should be served so API 404s
+ * stay explicit and observable.
+ */
+export type FrontendAssetReader = {
+  readAsset(pathname: string): Promise<Response | null>;
 };
 
 export type ApiApp = {
@@ -142,6 +152,15 @@ async function handleRequest(
         store: dependencies.store,
       }),
     );
+  }
+
+  if (!url.pathname.startsWith("/api/") && dependencies.frontend) {
+    const frontendResponse = await dependencies.frontend.readAsset(
+      url.pathname,
+    );
+    if (frontendResponse) {
+      return frontendResponse;
+    }
   }
 
   return json({ error: "Not found" }, { status: 404 });
