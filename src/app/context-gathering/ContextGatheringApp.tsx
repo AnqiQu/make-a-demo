@@ -1,17 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import githubLogoUrl from "../../../assets/github-logo.png";
 import owletLogoUrl from "../../../assets/owl-logo.png";
 import {
   type ContextGatheringDraft,
+  type IntakeDetailsInput,
   type PendingSupportingFileDraft,
   type SupportingFileDraft,
-  answerCurrentPrompt,
   canContinueFromRepoStep,
+  collectIntakeDetails,
   connectGitHubInstallation,
   createInitialContextGatheringDraft,
   removePendingSupportingFile,
-  selectDemoDuration,
   selectRepositoryForDemo,
   setRepoDetails,
   stagePendingSupportingFiles,
@@ -51,12 +51,24 @@ const durationOptions = [
   { label: "3 min", seconds: 180 },
 ];
 
+const initialIntakeDetailsForm: IntakeDetailsInput = {
+  email: "",
+  importantFeatures: "",
+  name: "",
+  productSummary: "",
+  requestedDurationSeconds: 60,
+  supplementaryInformation: "",
+  targetUsers: "",
+};
+
 export function ContextGatheringApp() {
   const [draft, setDraft] = useState(() =>
     createInitialContextGatheringDraft(),
   );
-  const [chatInput, setChatInput] = useState("");
   const [repoInput, setRepoInput] = useState("");
+  const [intakeDetailsForm, setIntakeDetailsForm] = useState(
+    initialIntakeDetailsForm,
+  );
   const [error, setError] = useState("");
   const [repositories, setRepositories] = useState<InstalledRepository[]>([]);
   const [pendingSupportingFiles, setPendingSupportingFiles] = useState<
@@ -69,7 +81,6 @@ export function ContextGatheringApp() {
   const [demoRequestProgress, setDemoRequestProgress] =
     useState<DemoRequestProgress>({ status: "processing" });
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const transcriptRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -108,13 +119,6 @@ export function ContextGatheringApp() {
         setError(caught instanceof Error ? caught.message : "GitHub failed");
       });
   }, []);
-
-  useEffect(() => {
-    transcriptRef.current?.scrollTo({
-      behavior: "smooth",
-      top: transcriptRef.current.scrollHeight,
-    });
-  });
 
   useEffect(() => {
     if (
@@ -157,10 +161,6 @@ export function ContextGatheringApp() {
     };
   }, [demoRequestProgress.status, draft.chatStep, submitResult]);
 
-  const currentPrompt = useMemo(
-    () => findLastAssistantMessage(draft.contextTranscript),
-    [draft.contextTranscript],
-  );
   const canContinueRepoStep = canContinueFromRepoStep(draft, repoInput);
 
   async function connectGitHub() {
@@ -224,23 +224,40 @@ export function ContextGatheringApp() {
     selectPrivateRepo(repository);
   }
 
-  function submitChatAnswer() {
-    try {
-      setDraft(answerCurrentPrompt(draft, chatInput));
-      setChatInput("");
-      setError("");
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Try that again.");
-    }
+  function updateIntakeDetailsField<Key extends keyof IntakeDetailsInput>(
+    field: Key,
+    value: IntakeDetailsInput[Key],
+  ) {
+    setIntakeDetailsForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
   }
 
-  function chooseDuration(seconds: number) {
+  function returnToRepoStep() {
+    setDraft((current) => ({
+      ...current,
+      chatStep: "repo",
+    }));
+    setError("");
+  }
+
+  function submitDetailsForm() {
+    let nextDraft: ContextGatheringDraft;
     try {
-      setDraft(selectDemoDuration(draft, seconds));
+      nextDraft = collectIntakeDetails(draft, intakeDetailsForm);
+      setDraft(nextDraft);
       setError("");
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Invalid duration.");
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "Check the form and try again.",
+      );
+      return;
     }
+
+    void submitIntake(nextDraft);
   }
 
   function stageFiles(files: File[] | FileList | null) {
@@ -259,7 +276,7 @@ export function ContextGatheringApp() {
     }
   }
 
-  async function submitIntake() {
+  async function submitIntake(draftToSubmit: ContextGatheringDraft) {
     setIsSubmitting(true);
     setError("");
 
@@ -274,12 +291,12 @@ export function ContextGatheringApp() {
       ];
       const response = await fetch("/api/context-gathering/submit", {
         body: JSON.stringify({
-          contact: draft.contact,
-          contextTranscript: draft.contextTranscript,
-          githubInstallationId: draft.githubInstallationId,
-          repoUrl: draft.repoUrl,
-          repoVisibility: draft.repoVisibility,
-          structuredContext: draft.structuredContext,
+          contact: draftToSubmit.contact,
+          contextTranscript: draftToSubmit.contextTranscript,
+          githubInstallationId: draftToSubmit.githubInstallationId,
+          repoUrl: draftToSubmit.repoUrl,
+          repoVisibility: draftToSubmit.repoVisibility,
+          structuredContext: draftToSubmit.structuredContext,
           supportingFiles,
         }),
         headers: { "Content-Type": "application/json" },
@@ -345,15 +362,16 @@ export function ContextGatheringApp() {
   }
 
   return (
-    <main className="owlet-shell">
+    <main className={`owlet-shell owlet-shell-${draft.chatStep}`}>
       <div className="ambient-glow" />
       <div className="dot-field dot-field-left" />
       <div className="dot-field dot-field-right" />
-      <section className="brand" aria-label="Owlet">
-        <span className="brand-logo-frame" aria-hidden="true">
-          <img alt="" className="brand-logo-image" src={owletLogoUrl} />
-        </span>
-        <span className="brand-name">Owlet</span>
+      <section className="brand" aria-label="MakeADemo">
+        <span className="brand-name">MakeADemo</span>
+        <aside className="brand-attribution" aria-label="By Owlet">
+          <span>By Owlet</span>
+          <img alt="" src={owletLogoUrl} />
+        </aside>
       </section>
 
       {draft.chatStep === "repo" ? (
@@ -440,7 +458,7 @@ export function ContextGatheringApp() {
           </article>
           <p className="repo-help">
             Paste a public GitHub URL, or connect GitHub to grant access to a
-            private repository. 
+            private repository.
             <br />
             We currently support web apps built with JavaScript or TypeScript.
           </p>
@@ -450,159 +468,29 @@ export function ContextGatheringApp() {
             onClick={continueFromRepo}
             type="button"
           >
-            Let&apos;s Hoot
+            Make me a demo
           </button>
         </section>
       ) : null}
 
-      {draft.chatStep === "chat" ? (
-        <section className="chat-step" aria-label="Product context chat">
-          <h1 className="context-step-heading">
-            Please tell us more about your product
-          </h1>
-          <article className="chat-card">
-            <div className="chat-window" ref={transcriptRef}>
-              {draft.contextTranscript.map((message) => (
-                <article
-                  className={`chat-bubble chat-bubble-${message.role}`}
-                  key={message.id}
-                >
-                  {message.text}
-                </article>
-              ))}
-            </div>
-            {currentPrompt?.promptId === "demo-duration" ? (
-              <div className="duration-grid">
-                {durationOptions.map((option) => (
-                  <button
-                    key={option.seconds}
-                    onClick={() => chooseDuration(option.seconds)}
-                    type="button"
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <form
-                className="chat-composer"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  submitChatAnswer();
-                }}
-              >
-                <input
-                  aria-label="Chat response"
-                  onChange={(event) => setChatInput(event.currentTarget.value)}
-                  placeholder="Chat with us about it here"
-                  value={chatInput}
-                />
-                <button disabled={chatInput.trim().length === 0} type="submit">
-                  Send
-                </button>
-              </form>
-            )}
-          </article>
-        </section>
-      ) : null}
-
-      {draft.chatStep === "documents" ? (
-        <section className="documents-step" aria-label="Supporting Documents">
-          <article className="document-card">
-            <h1>
-              Are there any documents that could be useful to making the demo?
-            </h1>
-            <p>E.g. pitch decks, styling guides, manifestos...</p>
-            <label
-              className={`upload-zone ${
-                isDraggingSupportingFile ? "upload-zone-active" : ""
-              }`}
-              onDragLeave={() => setIsDraggingSupportingFile(false)}
-              onDragOver={(event) => {
-                event.preventDefault();
-                setIsDraggingSupportingFile(true);
-              }}
-              onDrop={(event) => {
-                event.preventDefault();
-                setIsDraggingSupportingFile(false);
-                stageFiles(event.dataTransfer.files);
-              }}
-            >
-              <input
-                accept=".csv,.doc,.docx,.json,.md,.pdf,.ppt,.pptx,.txt,.zip,application/json,application/msword,application/pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/zip,text/csv,text/markdown,text/plain"
-                multiple
-                onChange={(event) => {
-                  stageFiles(event.currentTarget.files);
-                  event.currentTarget.value = "";
-                }}
-                id="supporting-documents-upload"
-                type="file"
-              />
-              <span className="upload-icon" aria-hidden="true">
-                <svg
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2.4"
-                >
-                  <title>Upload</title>
-                  <path d="M12 20V5" />
-                  <path d="m5 12 7-7 7 7" />
-                </svg>
-              </span>
-              <strong>
-                {isUploading ? "Uploading..." : "Drop anything relevant here"}
-              </strong>
-              <span className="upload-action">Choose files</span>
-              <small>PDF, PPTX, DOCX, TXT, MD, ZIP</small>
-            </label>
-          </article>
-          {pendingSupportingFiles.length > 0 ? (
-            <section
-              aria-label="Selected Supporting Documents"
-              aria-live="polite"
-              className="pending-file-dock"
-            >
-              <p>
-                {pendingSupportingFiles.length === 1
-                  ? "1 document selected"
-                  : `${pendingSupportingFiles.length} documents selected`}
-              </p>
-              <ul className="file-list">
-                {pendingSupportingFiles.map((file) => (
-                  <li key={file.id}>
-                    <span>{file.fileName}</span>
-                    <button
-                      aria-label={`Remove ${file.fileName}`}
-                      onClick={() =>
-                        setPendingSupportingFiles((current) =>
-                          removePendingSupportingFile(current, file.id),
-                        )
-                      }
-                      type="button"
-                    >
-                      x
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ) : null}
-          <button
-            className="primary-hoot"
-            disabled={isSubmitting || isUploading}
-            onClick={() => void submitIntake()}
-            type="button"
-          >
-            {isUploading
-              ? "Uploading files..."
-              : isSubmitting
-                ? "Hooting..."
-                : "Let’s Hoot fr now"}
-          </button>
-        </section>
+      {draft.chatStep === "details" ? (
+        <ContextDetailsForm
+          form={intakeDetailsForm}
+          isDraggingSupportingFile={isDraggingSupportingFile}
+          isSubmitting={isSubmitting}
+          isUploading={isUploading}
+          onBack={returnToRepoStep}
+          onFieldChange={updateIntakeDetailsField}
+          onRemovePendingFile={(fileId) =>
+            setPendingSupportingFiles((current) =>
+              removePendingSupportingFile(current, fileId),
+            )
+          }
+          onStageFiles={stageFiles}
+          onSubmit={submitDetailsForm}
+          pendingSupportingFiles={pendingSupportingFiles}
+          setIsDraggingSupportingFile={setIsDraggingSupportingFile}
+        />
       ) : null}
 
       {draft.chatStep === "submitted" ? (
@@ -611,6 +499,257 @@ export function ContextGatheringApp() {
 
       {error ? <p className="error-banner">{error}</p> : null}
     </main>
+  );
+}
+
+type ContextDetailsFormProps = {
+  form: IntakeDetailsInput;
+  isDraggingSupportingFile: boolean;
+  isSubmitting: boolean;
+  isUploading: boolean;
+  onBack: () => void;
+  onFieldChange: <Key extends keyof IntakeDetailsInput>(
+    field: Key,
+    value: IntakeDetailsInput[Key],
+  ) => void;
+  onRemovePendingFile: (fileId: string) => void;
+  onStageFiles: (files: File[] | FileList | null) => void;
+  onSubmit: () => void;
+  pendingSupportingFiles: Array<PendingSupportingFileDraft<File>>;
+  setIsDraggingSupportingFile?: (isDragging: boolean) => void;
+};
+
+export function ContextDetailsForm({
+  form,
+  isDraggingSupportingFile,
+  isSubmitting,
+  isUploading,
+  onBack,
+  onFieldChange,
+  onRemovePendingFile,
+  onStageFiles,
+  onSubmit,
+  pendingSupportingFiles,
+  setIsDraggingSupportingFile,
+}: ContextDetailsFormProps) {
+  return (
+    <section className="details-step" aria-label="Demo intake details">
+      <button
+        aria-label="Back to repository"
+        className="back-arrow-button"
+        onClick={onBack}
+        type="button"
+      >
+        <svg
+          aria-hidden="true"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth="2.4"
+        >
+          <path d="M19 12H5" />
+          <path d="m12 19-7-7 7-7" />
+        </svg>
+      </button>
+      <div
+        className="progress-track-shell"
+        aria-label="Context Gathering progress"
+      >
+        <div
+          aria-valuemax={100}
+          aria-valuemin={0}
+          aria-valuenow={50}
+          className="progress-track"
+          role="progressbar"
+          tabIndex={0}
+        >
+          <span className="progress-track-fill" />
+        </div>
+      </div>
+      <form
+        className="details-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSubmit();
+        }}
+      >
+        <div className="details-field-grid">
+          <label className="details-field">
+            <span>Name</span>
+            <input
+              autoComplete="name"
+              onChange={(event) =>
+                onFieldChange("name", event.currentTarget.value)
+              }
+              required
+              value={form.name}
+            />
+          </label>
+          <label className="details-field">
+            <span>Email</span>
+            <input
+              autoComplete="email"
+              onChange={(event) =>
+                onFieldChange("email", event.currentTarget.value)
+              }
+              required
+              type="email"
+              value={form.email}
+            />
+          </label>
+        </div>
+        <label className="details-field">
+          <span>Product summary</span>
+          <input
+            onChange={(event) =>
+              onFieldChange("productSummary", event.currentTarget.value)
+            }
+            required
+            value={form.productSummary}
+          />
+        </label>
+        <label className="details-field">
+          <span>Target users</span>
+          <input
+            onChange={(event) =>
+              onFieldChange("targetUsers", event.currentTarget.value)
+            }
+            required
+            value={form.targetUsers}
+          />
+        </label>
+        <label className="details-field">
+          <span>Most important features</span>
+          <input
+            onChange={(event) =>
+              onFieldChange("importantFeatures", event.currentTarget.value)
+            }
+            required
+            value={form.importantFeatures}
+          />
+        </label>
+        <label className="details-field details-duration-field">
+          <span>Demo length</span>
+          <select
+            onChange={(event) =>
+              onFieldChange(
+                "requestedDurationSeconds",
+                Number.parseInt(event.currentTarget.value, 10),
+              )
+            }
+            value={form.requestedDurationSeconds}
+          >
+            {durationOptions.map((option) => (
+              <option key={option.seconds} value={option.seconds}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <section className="details-supporting-documents">
+          <label
+            className={`upload-zone ${
+              isDraggingSupportingFile ? "upload-zone-active" : ""
+            }`}
+            onDragLeave={() => setIsDraggingSupportingFile?.(false)}
+            onDragOver={(event) => {
+              event.preventDefault();
+              setIsDraggingSupportingFile?.(true);
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              setIsDraggingSupportingFile?.(false);
+              onStageFiles(event.dataTransfer.files);
+            }}
+          >
+            <input
+              accept=".csv,.doc,.docx,.json,.md,.pdf,.ppt,.pptx,.txt,.zip,application/json,application/msword,application/pdf,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/zip,text/csv,text/markdown,text/plain"
+              id="supporting-documents-upload"
+              multiple
+              onChange={(event) => {
+                onStageFiles(event.currentTarget.files);
+                event.currentTarget.value = "";
+              }}
+              type="file"
+            />
+            <span className="upload-icon" aria-hidden="true">
+              <svg
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2.4"
+              >
+                <title>Upload</title>
+                <path d="M12 20V5" />
+                <path d="m5 12 7-7 7 7" />
+              </svg>
+            </span>
+            <strong>
+              {isUploading ? "Uploading..." : "Drop anything relevant here"}
+            </strong>
+            <span className="upload-example">
+              E.g. pitch decks, styling guides, manifestos...
+            </span>
+            <span className="upload-action">Choose files</span>
+            <small>PDF, PPTX, DOCX, TXT, MD, ZIP</small>
+          </label>
+        </section>
+        {pendingSupportingFiles.length > 0 ? (
+          <section
+            aria-label="Selected files"
+            aria-live="polite"
+            className="pending-file-dock"
+          >
+            <p>
+              {pendingSupportingFiles.length === 1
+                ? "1 file selected"
+                : `${pendingSupportingFiles.length} files selected`}
+            </p>
+            <ul className="file-list">
+              {pendingSupportingFiles.map((file) => (
+                <li key={file.id}>
+                  <span>{file.fileName}</span>
+                  <button
+                    aria-label={`Remove ${file.fileName}`}
+                    onClick={() => onRemovePendingFile(file.id)}
+                    type="button"
+                  >
+                    x
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+        <label className="details-field">
+          <span>Any supplementary information?</span>
+          <input
+            onChange={(event) =>
+              onFieldChange(
+                "supplementaryInformation",
+                event.currentTarget.value,
+              )
+            }
+            value={form.supplementaryInformation}
+          />
+        </label>
+        <button
+          className="primary-hoot"
+          disabled={isSubmitting || isUploading}
+          type="submit"
+        >
+          {isUploading
+            ? "Uploading files..."
+            : isSubmitting
+              ? "Starting..."
+              : "Let's go"}
+        </button>
+      </form>
+    </section>
   );
 }
 
@@ -660,17 +799,4 @@ export function SubmittedDemoPanel({
       </p>
     </section>
   );
-}
-
-function findLastAssistantMessage(
-  transcript: ContextGatheringDraft["contextTranscript"],
-) {
-  for (let index = transcript.length - 1; index >= 0; index -= 1) {
-    const message = transcript[index];
-    if (message?.role === "assistant") {
-      return message;
-    }
-  }
-
-  return undefined;
 }

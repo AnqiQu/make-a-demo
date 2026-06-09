@@ -24,8 +24,18 @@ export type SupportingFileDraft = {
   sizeBytes: number;
 };
 
+export type IntakeDetailsInput = {
+  email: string;
+  importantFeatures: string;
+  name: string;
+  productSummary: string;
+  requestedDurationSeconds: number;
+  supplementaryInformation: string;
+  targetUsers: string;
+};
+
 export type ContextGatheringDraft = {
-  chatStep: "chat" | "documents" | "repo" | "submitting" | "submitted";
+  chatStep: "details" | "repo" | "submitting" | "submitted";
   contact: {
     email: string;
     name: string;
@@ -39,6 +49,7 @@ export type ContextGatheringDraft = {
     importantFeatures: string;
     productSummary: string;
     requestedDurationSeconds?: number;
+    supplementaryInformation: string;
     targetUsers: string;
   };
   supportingFiles: SupportingFileDraft[];
@@ -105,6 +116,7 @@ export function createInitialContextGatheringDraft(
     structuredContext: {
       importantFeatures: "",
       productSummary: "",
+      supplementaryInformation: "",
       targetUsers: "",
     },
     supportingFiles: [],
@@ -121,12 +133,123 @@ export function setRepoDetails(
 ): ContextGatheringDraft {
   return {
     ...draft,
-    chatStep: "chat",
+    chatStep: "details",
     repoUrl: input.repoUrl,
     repoVisibility: input.repoVisibility,
     ...(input.githubInstallationId === undefined
       ? {}
       : { githubInstallationId: input.githubInstallationId }),
+  };
+}
+
+export function collectIntakeDetails(
+  draft: ContextGatheringDraft,
+  input: IntakeDetailsInput,
+  options: Clock = {},
+): ContextGatheringDraft {
+  const name = input.name.trim();
+  const email = input.email.trim();
+  const productSummary = input.productSummary.trim();
+  const targetUsers = input.targetUsers.trim();
+  const importantFeatures = input.importantFeatures.trim();
+  const supplementaryInformation = input.supplementaryInformation.trim();
+
+  if (name.length === 0) {
+    throw new Error("Name is required");
+  }
+
+  if (!email.includes("@")) {
+    throw new Error("Email must be valid");
+  }
+
+  if (productSummary.length === 0) {
+    throw new Error("Product summary is required");
+  }
+
+  if (targetUsers.length === 0) {
+    throw new Error("Target users are required");
+  }
+
+  if (importantFeatures.length === 0) {
+    throw new Error("Important features are required");
+  }
+
+  if (
+    !Number.isFinite(input.requestedDurationSeconds) ||
+    input.requestedDurationSeconds < 30 ||
+    input.requestedDurationSeconds > 180
+  ) {
+    throw new Error("Demo duration must be between 30 seconds and 3 minutes");
+  }
+
+  const now = readNow(options);
+  const promptAnswers: Array<{
+    answer: string;
+    prompt: { id: ChatPromptId; text: string };
+  }> = [
+    {
+      answer: `${name}, ${email}`,
+      prompt: readPrompt("name-email"),
+    },
+    {
+      answer: productSummary,
+      prompt: readPrompt("product-summary"),
+    },
+    {
+      answer: targetUsers,
+      prompt: readPrompt("target-users"),
+    },
+    {
+      answer: importantFeatures,
+      prompt: readPrompt("important-features"),
+    },
+    {
+      answer: formatDuration(input.requestedDurationSeconds),
+      prompt: readPrompt("demo-duration"),
+    },
+    ...(supplementaryInformation.length === 0
+      ? []
+      : [
+          {
+            answer: supplementaryInformation,
+            prompt: {
+              id: "supporting-documents" as const,
+              text: "Any supplementary information?",
+            },
+          },
+        ]),
+  ];
+
+  return {
+    ...draft,
+    chatStep: "details",
+    contact: {
+      email,
+      name,
+    },
+    contextTranscript: promptAnswers.flatMap(({ answer, prompt }, index) => [
+      {
+        id: `assistant-${prompt.id}-${index * 2}`,
+        promptId: prompt.id,
+        role: "assistant" as const,
+        text: prompt.text,
+        timestamp: now,
+      },
+      {
+        id: `user-${prompt.id}-${index * 2 + 1}`,
+        promptId: prompt.id,
+        role: "user" as const,
+        text: answer,
+        timestamp: now,
+      },
+    ]),
+    structuredContext: {
+      importantFeatures,
+      productSummary,
+      requestedDurationSeconds: input.requestedDurationSeconds,
+      supplementaryInformation,
+      targetUsers,
+    },
   };
 }
 
@@ -223,7 +346,7 @@ export function selectDemoDuration(
 
   return {
     ...draft,
-    chatStep: "documents",
+    chatStep: "details",
     contextTranscript: [
       ...draft.contextTranscript,
       {
@@ -329,6 +452,15 @@ function currentAssistantPrompt(draft: ContextGatheringDraft) {
     id: current.promptId,
     text: current.text,
   };
+}
+
+function readPrompt(promptId: ChatPromptId) {
+  const prompt = prompts.find((item) => item.id === promptId);
+  if (!prompt) {
+    throw new Error(`Unknown prompt: ${promptId}`);
+  }
+
+  return prompt;
 }
 
 function findLastPromptMessage(draft: ContextGatheringDraft) {
