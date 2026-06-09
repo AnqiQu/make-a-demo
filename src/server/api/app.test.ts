@@ -3,6 +3,66 @@ import { describe, expect, it } from "vitest";
 import { createApiApp } from "./app";
 
 describe("Context Gathering API", () => {
+  it("serves the frontend fallback for browser routes while keeping API routes explicit", async () => {
+    const app = createApiApp({
+      frontend: {
+        async readAsset(pathname) {
+          if (pathname === "/dashboard") {
+            return new Response('<div id="root"></div>', {
+              headers: { "Content-Type": "text/html" },
+            });
+          }
+
+          return null;
+        },
+      },
+      github: {
+        createInstallUrl: () =>
+          "https://github.com/apps/owlet/installations/select_target",
+        listRepositories: async () => [],
+      },
+      demoRequests: {
+        async readDemoRequestStatus() {
+          throw new Error("demoRequests should not be called");
+        },
+      },
+      store: {
+        async createQueuedProject() {
+          throw new Error("store should not be called");
+        },
+      },
+      uploads: {
+        bucket: "owlet",
+        putObject: async () => {
+          throw new Error("putObject should not be called");
+        },
+        presignGet: async () => {
+          throw new Error("presignGet should not be called");
+        },
+        presignPut: async () => "https://uploads.example.test/file",
+      },
+    });
+
+    const browserRouteResponse = await app.fetch(
+      new Request("http://localhost/dashboard"),
+    );
+    expect(browserRouteResponse.status).toBe(200);
+    expect(browserRouteResponse.headers.get("Content-Type")).toContain(
+      "text/html",
+    );
+    await expect(browserRouteResponse.text()).resolves.toContain(
+      '<div id="root"></div>',
+    );
+
+    const apiRouteResponse = await app.fetch(
+      new Request("http://localhost/api/not-found"),
+    );
+    expect(apiRouteResponse.status).toBe(404);
+    await expect(apiRouteResponse.json()).resolves.toEqual({
+      error: "Not found",
+    });
+  });
+
   it("presigns Supporting Document uploads", async () => {
     const app = createApiApp({
       github: {
