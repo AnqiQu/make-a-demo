@@ -304,8 +304,8 @@
 <!-- src/server/api/app.ts&#45;&gt;src/server/shared/integrations/storage/r2&#45;upload&#45;presigner.ts -->
 <g id="edge8" class="edge">
 <title>src/server/api/app.ts&#45;&gt;src/server/shared/integrations/storage/r2&#45;upload&#45;presigner.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M408.63,-235.21C438.01,-235.21 480.5,-235.21 480.5,-235.21 480.5,-235.21 480.5,-686.19 480.5,-686.19 480.5,-686.19 563.56,-686.19 563.56,-686.19"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="563.56,-688.29 569.56,-686.19 563.56,-684.09 563.56,-688.29"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M408.64,-235.21C438.33,-235.21 481.5,-235.21 481.5,-235.21 481.5,-235.21 481.5,-686.19 481.5,-686.19 481.5,-686.19 563.52,-686.19 563.52,-686.19"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="563.52,-688.29 569.52,-686.19 563.52,-684.09 563.52,-688.29"/>
 </g>
 <!-- src/server/pipeline/01&#45;context&#45;gathering/supporting&#45;documents.ts -->
 <g id="node22" class="node">
@@ -317,7 +317,7 @@
 </g>
 </g>
 <!-- src/server/shared/integrations/storage/r2&#45;upload&#45;presigner.ts&#45;&gt;src/server/pipeline/01&#45;context&#45;gathering/supporting&#45;documents.ts -->
-<g id="edge88" class="edge">
+<g id="edge89" class="edge">
 <title>src/server/shared/integrations/storage/r2&#45;upload&#45;presigner.ts&#45;&gt;src/server/pipeline/01&#45;context&#45;gathering/supporting&#45;documents.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M572.41,-695.81C533.53,-695.81 489.5,-695.81 489.5,-695.81 489.5,-695.81 489.5,-3190.79 489.5,-3190.79 489.5,-3190.79 555.99,-3190.79 555.99,-3190.79"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="555.99,-3192.89 561.99,-3190.79 555.99,-3188.69 555.99,-3192.89"/>
@@ -349,8 +349,8 @@
 <!-- src/server/api/server.mts&#45;&gt;src/server/shared/integrations/github/github&#45;app.ts -->
 <g id="edge9" class="edge">
 <title>src/server/api/server.mts&#45;&gt;src/server/shared/integrations/github/github&#45;app.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M146.5,-242.08C146.5,-252.57 146.5,-267.5 146.5,-267.5 146.5,-267.5 503.5,-267.5 503.5,-267.5 503.5,-267.5 503.5,-592.79 503.5,-592.79 503.5,-592.79 582.42,-592.79 582.42,-592.79"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="582.42,-594.89 588.42,-592.79 582.42,-590.69 582.42,-594.89"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M146.5,-242.08C146.5,-252.57 146.5,-267.5 146.5,-267.5 146.5,-267.5 502.5,-267.5 502.5,-267.5 502.5,-267.5 502.5,-592.79 502.5,-592.79 502.5,-592.79 582.46,-592.79 582.46,-592.79"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="582.46,-594.89 588.46,-592.79 582.46,-590.69 582.46,-594.89"/>
 </g>
 <!-- src/server/shared/integrations/storage/r2&#45;client.ts -->
 <g id="node13" class="node">
@@ -407,13 +407,13 @@
 </g>
 </g>
 <!-- src/server/shared/persistence/neon&#45;context&#45;gathering&#45;store.ts&#45;&gt;src/server/shared/persistence/schema.ts -->
-<g id="edge89" class="edge">
+<g id="edge90" class="edge">
 <title>src/server/shared/persistence/neon&#45;context&#45;gathering&#45;store.ts&#45;&gt;src/server/shared/persistence/schema.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M461.58,-396.38C531.43,-396.38 621.5,-396.38 621.5,-396.38 621.5,-396.38 621.5,-397.13 621.5,-397.13"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="619.4,-394.92 621.5,-400.92 623.6,-394.92 619.4,-394.92"/>
 </g>
 <!-- src/server/shared/persistence/neon&#45;demo&#45;request&#45;final&#45;video&#45;store.ts&#45;&gt;src/server/shared/persistence/schema.ts -->
-<g id="edge91" class="edge">
+<g id="edge92" class="edge">
 <title>src/server/shared/persistence/neon&#45;demo&#45;request&#45;final&#45;video&#45;store.ts&#45;&gt;src/server/shared/persistence/schema.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M469.5,-420.14C469.5,-416.85 469.5,-414 469.5,-414 469.5,-414 590.15,-414 590.15,-414"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="590.15,-416.1 596.15,-414 590.15,-411.9 590.15,-416.1"/>
@@ -530,8 +530,8 @@
 <g id="node25" class="node">
 <title>src/server/pipeline/03&#45;repo&#45;preparation/dependency&#45;install&#45;network&#45;window.test.ts</title>
 <g id="a_node25"><a xlink:href="src/server/pipeline/03-repo-preparation/dependency-install-network-window.test.ts" xlink:title="dependency&#45;install&#45;network&#45;window.test.ts">
-<path fill="#ddfeff" stroke="black" d="M479.58,-1778.62C479.58,-1778.62 282.92,-1778.62 282.92,-1778.62 279.71,-1778.62 276.5,-1775.42 276.5,-1772.21 276.5,-1772.21 276.5,-1765.79 276.5,-1765.79 276.5,-1762.58 279.71,-1759.38 282.92,-1759.38 282.92,-1759.38 479.58,-1759.38 479.58,-1759.38 482.79,-1759.38 486,-1762.58 486,-1765.79 486,-1765.79 486,-1772.21 486,-1772.21 486,-1775.42 482.79,-1778.62 479.58,-1778.62"/>
-<text xml:space="preserve" text-anchor="start" x="284.5" y="-1765.62" font-family="Helvetica,sans-Serif" font-size="9.00">dependency&#45;install&#45;network&#45;window.test.ts</text>
+<path fill="#ddfeff" stroke="black" d="M479.58,-1714.62C479.58,-1714.62 282.92,-1714.62 282.92,-1714.62 279.71,-1714.62 276.5,-1711.42 276.5,-1708.21 276.5,-1708.21 276.5,-1701.79 276.5,-1701.79 276.5,-1698.58 279.71,-1695.38 282.92,-1695.38 282.92,-1695.38 479.58,-1695.38 479.58,-1695.38 482.79,-1695.38 486,-1698.58 486,-1701.79 486,-1701.79 486,-1708.21 486,-1708.21 486,-1711.42 482.79,-1714.62 479.58,-1714.62"/>
+<text xml:space="preserve" text-anchor="start" x="284.5" y="-1701.62" font-family="Helvetica,sans-Serif" font-size="9.00">dependency&#45;install&#45;network&#45;window.test.ts</text>
 </a>
 </g>
 </g>
@@ -539,68 +539,68 @@
 <g id="node26" class="node">
 <title>src/server/pipeline/03&#45;repo&#45;preparation/dependency&#45;install&#45;network&#45;window.ts</title>
 <g id="a_node26"><a xlink:href="src/server/pipeline/03-repo-preparation/dependency-install-network-window.ts" xlink:title="dependency&#45;install&#45;network&#45;window.ts">
-<path fill="#ddfeff" stroke="black" d="M718.83,-1810.62C718.83,-1810.62 542.42,-1810.62 542.42,-1810.62 539.21,-1810.62 536,-1807.42 536,-1804.21 536,-1804.21 536,-1797.79 536,-1797.79 536,-1794.58 539.21,-1791.38 542.42,-1791.38 542.42,-1791.38 718.83,-1791.38 718.83,-1791.38 722.04,-1791.38 725.25,-1794.58 725.25,-1797.79 725.25,-1797.79 725.25,-1804.21 725.25,-1804.21 725.25,-1807.42 722.04,-1810.62 718.83,-1810.62"/>
-<text xml:space="preserve" text-anchor="start" x="544" y="-1797.62" font-family="Helvetica,sans-Serif" font-size="9.00">dependency&#45;install&#45;network&#45;window.ts</text>
+<path fill="#ddfeff" stroke="black" d="M718.83,-1714.62C718.83,-1714.62 542.42,-1714.62 542.42,-1714.62 539.21,-1714.62 536,-1711.42 536,-1708.21 536,-1708.21 536,-1701.79 536,-1701.79 536,-1698.58 539.21,-1695.38 542.42,-1695.38 542.42,-1695.38 718.83,-1695.38 718.83,-1695.38 722.04,-1695.38 725.25,-1698.58 725.25,-1701.79 725.25,-1701.79 725.25,-1708.21 725.25,-1708.21 725.25,-1711.42 722.04,-1714.62 718.83,-1714.62"/>
+<text xml:space="preserve" text-anchor="start" x="544" y="-1701.62" font-family="Helvetica,sans-Serif" font-size="9.00">dependency&#45;install&#45;network&#45;window.ts</text>
 </a>
 </g>
 </g>
 <!-- src/server/pipeline/03&#45;repo&#45;preparation/dependency&#45;install&#45;network&#45;window.test.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/dependency&#45;install&#45;network&#45;window.ts -->
 <g id="edge20" class="edge">
 <title>src/server/pipeline/03&#45;repo&#45;preparation/dependency&#45;install&#45;network&#45;window.test.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/dependency&#45;install&#45;network&#45;window.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M486.36,-1769C515.59,-1769 539.5,-1769 539.5,-1769 539.5,-1769 539.5,-1781.85 539.5,-1781.85"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="537.4,-1781.85 539.5,-1787.85 541.6,-1781.85 537.4,-1781.85"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M486.28,-1705C486.28,-1705 526.6,-1705 526.6,-1705"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="526.6,-1707.1 532.6,-1705 526.6,-1702.9 526.6,-1707.1"/>
 </g>
 <!-- src/server/pipeline/03&#45;repo&#45;preparation/dependency&#45;network&#45;gate.ts -->
 <g id="node27" class="node">
 <title>src/server/pipeline/03&#45;repo&#45;preparation/dependency&#45;network&#45;gate.ts</title>
 <g id="a_node27"><a xlink:href="src/server/pipeline/03-repo-preparation/dependency-network-gate.ts" xlink:title="dependency&#45;network&#45;gate.ts">
-<path fill="#ddfeff" stroke="black" d="M956.58,-1826.62C956.58,-1826.62 822.92,-1826.62 822.92,-1826.62 819.71,-1826.62 816.5,-1823.42 816.5,-1820.21 816.5,-1820.21 816.5,-1813.79 816.5,-1813.79 816.5,-1810.58 819.71,-1807.38 822.92,-1807.38 822.92,-1807.38 956.58,-1807.38 956.58,-1807.38 959.79,-1807.38 963,-1810.58 963,-1813.79 963,-1813.79 963,-1820.21 963,-1820.21 963,-1823.42 959.79,-1826.62 956.58,-1826.62"/>
-<text xml:space="preserve" text-anchor="start" x="824.5" y="-1813.62" font-family="Helvetica,sans-Serif" font-size="9.00">dependency&#45;network&#45;gate.ts</text>
+<path fill="#ddfeff" stroke="black" d="M956.58,-1746.62C956.58,-1746.62 822.92,-1746.62 822.92,-1746.62 819.71,-1746.62 816.5,-1743.42 816.5,-1740.21 816.5,-1740.21 816.5,-1733.79 816.5,-1733.79 816.5,-1730.58 819.71,-1727.38 822.92,-1727.38 822.92,-1727.38 956.58,-1727.38 956.58,-1727.38 959.79,-1727.38 963,-1730.58 963,-1733.79 963,-1733.79 963,-1740.21 963,-1740.21 963,-1743.42 959.79,-1746.62 956.58,-1746.62"/>
+<text xml:space="preserve" text-anchor="start" x="824.5" y="-1733.62" font-family="Helvetica,sans-Serif" font-size="9.00">dependency&#45;network&#45;gate.ts</text>
 </a>
 </g>
 </g>
 <!-- src/server/pipeline/03&#45;repo&#45;preparation/dependency&#45;install&#45;network&#45;window.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/dependency&#45;network&#45;gate.ts -->
 <g id="edge21" class="edge">
 <title>src/server/pipeline/03&#45;repo&#45;preparation/dependency&#45;install&#45;network&#45;window.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/dependency&#45;network&#45;gate.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M719.5,-1810.86C719.5,-1814.15 719.5,-1817 719.5,-1817 719.5,-1817 807.04,-1817 807.04,-1817"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="807.04,-1819.1 813.04,-1817 807.04,-1814.9 807.04,-1819.1"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M721.5,-1715.07C721.5,-1723.37 721.5,-1733.79 721.5,-1733.79 721.5,-1733.79 807.42,-1733.79 807.42,-1733.79"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="807.42,-1735.89 813.42,-1733.79 807.42,-1731.69 807.42,-1735.89"/>
 </g>
 <!-- src/server/pipeline/03&#45;repo&#45;preparation/security&#45;review&#45;policy.ts -->
 <g id="node29" class="node">
 <title>src/server/pipeline/03&#45;repo&#45;preparation/security&#45;review&#45;policy.ts</title>
 <g id="a_node29"><a xlink:href="src/server/pipeline/03-repo-preparation/security-review-policy.ts" xlink:title="security&#45;review&#45;policy.ts">
-<path fill="#ddfeff" stroke="black" d="M1163.58,-1842.62C1163.58,-1842.62 1053.17,-1842.62 1053.17,-1842.62 1049.96,-1842.62 1046.75,-1839.42 1046.75,-1836.21 1046.75,-1836.21 1046.75,-1829.79 1046.75,-1829.79 1046.75,-1826.58 1049.96,-1823.38 1053.17,-1823.38 1053.17,-1823.38 1163.58,-1823.38 1163.58,-1823.38 1166.79,-1823.38 1170,-1826.58 1170,-1829.79 1170,-1829.79 1170,-1836.21 1170,-1836.21 1170,-1839.42 1166.79,-1842.62 1163.58,-1842.62"/>
-<text xml:space="preserve" text-anchor="start" x="1054.75" y="-1829.62" font-family="Helvetica,sans-Serif" font-size="9.00">security&#45;review&#45;policy.ts</text>
+<path fill="#ddfeff" stroke="black" d="M1163.58,-1794.62C1163.58,-1794.62 1053.17,-1794.62 1053.17,-1794.62 1049.96,-1794.62 1046.75,-1791.42 1046.75,-1788.21 1046.75,-1788.21 1046.75,-1781.79 1046.75,-1781.79 1046.75,-1778.58 1049.96,-1775.38 1053.17,-1775.38 1053.17,-1775.38 1163.58,-1775.38 1163.58,-1775.38 1166.79,-1775.38 1170,-1778.58 1170,-1781.79 1170,-1781.79 1170,-1788.21 1170,-1788.21 1170,-1791.42 1166.79,-1794.62 1163.58,-1794.62"/>
+<text xml:space="preserve" text-anchor="start" x="1054.75" y="-1781.62" font-family="Helvetica,sans-Serif" font-size="9.00">security&#45;review&#45;policy.ts</text>
 </a>
 </g>
 </g>
 <!-- src/server/pipeline/03&#45;repo&#45;preparation/dependency&#45;network&#45;gate.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/security&#45;review&#45;policy.ts -->
 <g id="edge23" class="edge">
 <title>src/server/pipeline/03&#45;repo&#45;preparation/dependency&#45;network&#45;gate.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/security&#45;review&#45;policy.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M963.2,-1815.38C1026.75,-1815.38 1108.5,-1815.38 1108.5,-1815.38 1108.5,-1815.38 1108.5,-1816.13 1108.5,-1816.13"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1106.4,-1813.92 1108.5,-1819.92 1110.6,-1813.92 1106.4,-1813.92"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M963.2,-1737C1026.75,-1737 1108.5,-1737 1108.5,-1737 1108.5,-1737 1108.5,-1766.26 1108.5,-1766.26"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1106.4,-1766.26 1108.5,-1772.26 1110.6,-1766.26 1106.4,-1766.26"/>
 </g>
 <!-- src/server/pipeline/03&#45;repo&#45;preparation/dependency&#45;network&#45;gate.test.ts -->
 <g id="node28" class="node">
 <title>src/server/pipeline/03&#45;repo&#45;preparation/dependency&#45;network&#45;gate.test.ts</title>
 <g id="a_node28"><a xlink:href="src/server/pipeline/03-repo-preparation/dependency-network-gate.test.ts" xlink:title="dependency&#45;network&#45;gate.test.ts">
-<path fill="#ddfeff" stroke="black" d="M707.58,-1842.62C707.58,-1842.62 553.67,-1842.62 553.67,-1842.62 550.46,-1842.62 547.25,-1839.42 547.25,-1836.21 547.25,-1836.21 547.25,-1829.79 547.25,-1829.79 547.25,-1826.58 550.46,-1823.38 553.67,-1823.38 553.67,-1823.38 707.58,-1823.38 707.58,-1823.38 710.79,-1823.38 714,-1826.58 714,-1829.79 714,-1829.79 714,-1836.21 714,-1836.21 714,-1839.42 710.79,-1842.62 707.58,-1842.62"/>
-<text xml:space="preserve" text-anchor="start" x="555.25" y="-1829.62" font-family="Helvetica,sans-Serif" font-size="9.00">dependency&#45;network&#45;gate.test.ts</text>
+<path fill="#ddfeff" stroke="black" d="M707.58,-1746.62C707.58,-1746.62 553.67,-1746.62 553.67,-1746.62 550.46,-1746.62 547.25,-1743.42 547.25,-1740.21 547.25,-1740.21 547.25,-1733.79 547.25,-1733.79 547.25,-1730.58 550.46,-1727.38 553.67,-1727.38 553.67,-1727.38 707.58,-1727.38 707.58,-1727.38 710.79,-1727.38 714,-1730.58 714,-1733.79 714,-1733.79 714,-1740.21 714,-1740.21 714,-1743.42 710.79,-1746.62 707.58,-1746.62"/>
+<text xml:space="preserve" text-anchor="start" x="555.25" y="-1733.62" font-family="Helvetica,sans-Serif" font-size="9.00">dependency&#45;network&#45;gate.test.ts</text>
 </a>
 </g>
 </g>
 <!-- src/server/pipeline/03&#45;repo&#45;preparation/dependency&#45;network&#45;gate.test.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/dependency&#45;network&#45;gate.ts -->
 <g id="edge22" class="edge">
 <title>src/server/pipeline/03&#45;repo&#45;preparation/dependency&#45;network&#45;gate.test.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/dependency&#45;network&#45;gate.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M714.32,-1833C789.95,-1833 889.5,-1833 889.5,-1833 889.5,-1833 889.5,-1832.39 889.5,-1832.39"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="891.6,-1835.89 889.5,-1829.89 887.4,-1835.89 891.6,-1835.89"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M714.4,-1740.21C714.4,-1740.21 807.28,-1740.21 807.28,-1740.21"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="807.28,-1742.31 813.28,-1740.21 807.28,-1738.11 807.28,-1742.31"/>
 </g>
 <!-- src/server/pipeline/03&#45;repo&#45;preparation/preparation&#45;fallback&#45;prompt.test.ts -->
 <g id="node30" class="node">
 <title>src/server/pipeline/03&#45;repo&#45;preparation/preparation&#45;fallback&#45;prompt.test.ts</title>
 <g id="a_node30"><a xlink:href="src/server/pipeline/03-repo-preparation/preparation-fallback-prompt.test.ts" xlink:title="preparation&#45;fallback&#45;prompt.test.ts">
-<path fill="#ddfeff" stroke="black" d="M711.33,-1714.62C711.33,-1714.62 549.92,-1714.62 549.92,-1714.62 546.71,-1714.62 543.5,-1711.42 543.5,-1708.21 543.5,-1708.21 543.5,-1701.79 543.5,-1701.79 543.5,-1698.58 546.71,-1695.38 549.92,-1695.38 549.92,-1695.38 711.33,-1695.38 711.33,-1695.38 714.54,-1695.38 717.75,-1698.58 717.75,-1701.79 717.75,-1701.79 717.75,-1708.21 717.75,-1708.21 717.75,-1711.42 714.54,-1714.62 711.33,-1714.62"/>
-<text xml:space="preserve" text-anchor="start" x="551.5" y="-1701.62" font-family="Helvetica,sans-Serif" font-size="9.00">preparation&#45;fallback&#45;prompt.test.ts</text>
+<path fill="#ddfeff" stroke="black" d="M711.33,-1778.62C711.33,-1778.62 549.92,-1778.62 549.92,-1778.62 546.71,-1778.62 543.5,-1775.42 543.5,-1772.21 543.5,-1772.21 543.5,-1765.79 543.5,-1765.79 543.5,-1762.58 546.71,-1759.38 549.92,-1759.38 549.92,-1759.38 711.33,-1759.38 711.33,-1759.38 714.54,-1759.38 717.75,-1762.58 717.75,-1765.79 717.75,-1765.79 717.75,-1772.21 717.75,-1772.21 717.75,-1775.42 714.54,-1778.62 711.33,-1778.62"/>
+<text xml:space="preserve" text-anchor="start" x="551.5" y="-1765.62" font-family="Helvetica,sans-Serif" font-size="9.00">preparation&#45;fallback&#45;prompt.test.ts</text>
 </a>
 </g>
 </g>
@@ -608,23 +608,23 @@
 <g id="node31" class="node">
 <title>src/server/pipeline/03&#45;repo&#45;preparation/preparation&#45;fallback&#45;prompt.ts</title>
 <g id="a_node31"><a xlink:href="src/server/pipeline/03-repo-preparation/preparation-fallback-prompt.ts" xlink:title="preparation&#45;fallback&#45;prompt.ts">
-<path fill="#ddfeff" stroke="black" d="M960.33,-1722.62C960.33,-1722.62 819.17,-1722.62 819.17,-1722.62 815.96,-1722.62 812.75,-1719.42 812.75,-1716.21 812.75,-1716.21 812.75,-1709.79 812.75,-1709.79 812.75,-1706.58 815.96,-1703.38 819.17,-1703.38 819.17,-1703.38 960.33,-1703.38 960.33,-1703.38 963.54,-1703.38 966.75,-1706.58 966.75,-1709.79 966.75,-1709.79 966.75,-1716.21 966.75,-1716.21 966.75,-1719.42 963.54,-1722.62 960.33,-1722.62"/>
-<text xml:space="preserve" text-anchor="start" x="820.75" y="-1709.62" font-family="Helvetica,sans-Serif" font-size="9.00">preparation&#45;fallback&#45;prompt.ts</text>
+<path fill="#ddfeff" stroke="black" d="M960.33,-1778.62C960.33,-1778.62 819.17,-1778.62 819.17,-1778.62 815.96,-1778.62 812.75,-1775.42 812.75,-1772.21 812.75,-1772.21 812.75,-1765.79 812.75,-1765.79 812.75,-1762.58 815.96,-1759.38 819.17,-1759.38 819.17,-1759.38 960.33,-1759.38 960.33,-1759.38 963.54,-1759.38 966.75,-1762.58 966.75,-1765.79 966.75,-1765.79 966.75,-1772.21 966.75,-1772.21 966.75,-1775.42 963.54,-1778.62 960.33,-1778.62"/>
+<text xml:space="preserve" text-anchor="start" x="820.75" y="-1765.62" font-family="Helvetica,sans-Serif" font-size="9.00">preparation&#45;fallback&#45;prompt.ts</text>
 </a>
 </g>
 </g>
 <!-- src/server/pipeline/03&#45;repo&#45;preparation/preparation&#45;fallback&#45;prompt.test.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/preparation&#45;fallback&#45;prompt.ts -->
 <g id="edge24" class="edge">
 <title>src/server/pipeline/03&#45;repo&#45;preparation/preparation&#45;fallback&#45;prompt.test.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/preparation&#45;fallback&#45;prompt.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M717.99,-1709C717.99,-1709 803.29,-1709 803.29,-1709"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="803.29,-1711.1 809.29,-1709 803.29,-1706.9 803.29,-1711.1"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M717.99,-1769C717.99,-1769 803.29,-1769 803.29,-1769"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="803.29,-1771.1 809.29,-1769 803.29,-1766.9 803.29,-1771.1"/>
 </g>
 <!-- src/server/pipeline/03&#45;repo&#45;preparation/preparation&#45;manifest.test.ts -->
 <g id="node32" class="node">
 <title>src/server/pipeline/03&#45;repo&#45;preparation/preparation&#45;manifest.test.ts</title>
 <g id="a_node32"><a xlink:href="src/server/pipeline/03-repo-preparation/preparation-manifest.test.ts" xlink:title="preparation&#45;manifest.test.ts">
-<path fill="#ddfeff" stroke="black" d="M695.21,-1778.62C695.21,-1778.62 566.04,-1778.62 566.04,-1778.62 562.83,-1778.62 559.62,-1775.42 559.62,-1772.21 559.62,-1772.21 559.62,-1765.79 559.62,-1765.79 559.62,-1762.58 562.83,-1759.38 566.04,-1759.38 566.04,-1759.38 695.21,-1759.38 695.21,-1759.38 698.42,-1759.38 701.62,-1762.58 701.62,-1765.79 701.62,-1765.79 701.62,-1772.21 701.62,-1772.21 701.62,-1775.42 698.42,-1778.62 695.21,-1778.62"/>
-<text xml:space="preserve" text-anchor="start" x="567.62" y="-1765.62" font-family="Helvetica,sans-Serif" font-size="9.00">preparation&#45;manifest.test.ts</text>
+<path fill="#ddfeff" stroke="black" d="M695.21,-1842.62C695.21,-1842.62 566.04,-1842.62 566.04,-1842.62 562.83,-1842.62 559.62,-1839.42 559.62,-1836.21 559.62,-1836.21 559.62,-1829.79 559.62,-1829.79 559.62,-1826.58 562.83,-1823.38 566.04,-1823.38 566.04,-1823.38 695.21,-1823.38 695.21,-1823.38 698.42,-1823.38 701.62,-1826.58 701.62,-1829.79 701.62,-1829.79 701.62,-1836.21 701.62,-1836.21 701.62,-1839.42 698.42,-1842.62 695.21,-1842.62"/>
+<text xml:space="preserve" text-anchor="start" x="567.62" y="-1829.62" font-family="Helvetica,sans-Serif" font-size="9.00">preparation&#45;manifest.test.ts</text>
 </a>
 </g>
 </g>
@@ -632,16 +632,16 @@
 <g id="node33" class="node">
 <title>src/server/pipeline/03&#45;repo&#45;preparation/preparation&#45;manifest.ts</title>
 <g id="a_node33"><a xlink:href="src/server/pipeline/03-repo-preparation/preparation-manifest.ts" xlink:title="preparation&#45;manifest.ts">
-<path fill="#ddfeff" stroke="black" d="M944.21,-1762.62C944.21,-1762.62 835.29,-1762.62 835.29,-1762.62 832.08,-1762.62 828.88,-1759.42 828.88,-1756.21 828.88,-1756.21 828.88,-1749.79 828.88,-1749.79 828.88,-1746.58 832.08,-1743.38 835.29,-1743.38 835.29,-1743.38 944.21,-1743.38 944.21,-1743.38 947.42,-1743.38 950.62,-1746.58 950.62,-1749.79 950.62,-1749.79 950.62,-1756.21 950.62,-1756.21 950.62,-1759.42 947.42,-1762.62 944.21,-1762.62"/>
-<text xml:space="preserve" text-anchor="start" x="836.88" y="-1749.62" font-family="Helvetica,sans-Serif" font-size="9.00">preparation&#45;manifest.ts</text>
+<path fill="#ddfeff" stroke="black" d="M944.21,-1810.62C944.21,-1810.62 835.29,-1810.62 835.29,-1810.62 832.08,-1810.62 828.88,-1807.42 828.88,-1804.21 828.88,-1804.21 828.88,-1797.79 828.88,-1797.79 828.88,-1794.58 832.08,-1791.38 835.29,-1791.38 835.29,-1791.38 944.21,-1791.38 944.21,-1791.38 947.42,-1791.38 950.62,-1794.58 950.62,-1797.79 950.62,-1797.79 950.62,-1804.21 950.62,-1804.21 950.62,-1807.42 947.42,-1810.62 944.21,-1810.62"/>
+<text xml:space="preserve" text-anchor="start" x="836.88" y="-1797.62" font-family="Helvetica,sans-Serif" font-size="9.00">preparation&#45;manifest.ts</text>
 </a>
 </g>
 </g>
 <!-- src/server/pipeline/03&#45;repo&#45;preparation/preparation&#45;manifest.test.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/preparation&#45;manifest.ts -->
 <g id="edge25" class="edge">
 <title>src/server/pipeline/03&#45;repo&#45;preparation/preparation&#45;manifest.test.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/preparation&#45;manifest.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M688.5,-1758.92C688.5,-1756.76 688.5,-1755.12 688.5,-1755.12 688.5,-1755.12 819.52,-1755.12 819.52,-1755.12"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="819.52,-1757.23 825.52,-1755.13 819.52,-1753.03 819.52,-1757.23"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M688.5,-1822.88C688.5,-1815.15 688.5,-1805.81 688.5,-1805.81 688.5,-1805.81 819.52,-1805.81 819.52,-1805.81"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="819.52,-1807.91 825.52,-1805.81 819.52,-1803.71 819.52,-1807.91"/>
 </g>
 <!-- src/server/pipeline/03&#45;repo&#45;preparation/preparation&#45;workspace&#45;runner.test.ts -->
 <g id="node34" class="node">
@@ -713,8 +713,8 @@
 <g id="node40" class="node">
 <title>src/server/pipeline/03&#45;repo&#45;preparation/repo&#45;preparer.test.ts</title>
 <g id="a_node40"><a xlink:href="src/server/pipeline/03-repo-preparation/repo-preparer.test.ts" xlink:title="repo&#45;preparer.test.ts">
-<path fill="#ddfeff" stroke="black" d="M429.71,-1746.62C429.71,-1746.62 332.79,-1746.62 332.79,-1746.62 329.58,-1746.62 326.38,-1743.42 326.38,-1740.21 326.38,-1740.21 326.38,-1733.79 326.38,-1733.79 326.38,-1730.58 329.58,-1727.38 332.79,-1727.38 332.79,-1727.38 429.71,-1727.38 429.71,-1727.38 432.92,-1727.38 436.12,-1730.58 436.12,-1733.79 436.12,-1733.79 436.12,-1740.21 436.12,-1740.21 436.12,-1743.42 432.92,-1746.62 429.71,-1746.62"/>
-<text xml:space="preserve" text-anchor="start" x="334.38" y="-1733.62" font-family="Helvetica,sans-Serif" font-size="9.00">repo&#45;preparer.test.ts</text>
+<path fill="#ddfeff" stroke="black" d="M429.71,-1778.62C429.71,-1778.62 332.79,-1778.62 332.79,-1778.62 329.58,-1778.62 326.38,-1775.42 326.38,-1772.21 326.38,-1772.21 326.38,-1765.79 326.38,-1765.79 326.38,-1762.58 329.58,-1759.38 332.79,-1759.38 332.79,-1759.38 429.71,-1759.38 429.71,-1759.38 432.92,-1759.38 436.12,-1762.58 436.12,-1765.79 436.12,-1765.79 436.12,-1772.21 436.12,-1772.21 436.12,-1775.42 432.92,-1778.62 429.71,-1778.62"/>
+<text xml:space="preserve" text-anchor="start" x="334.38" y="-1765.62" font-family="Helvetica,sans-Serif" font-size="9.00">repo&#45;preparer.test.ts</text>
 </a>
 </g>
 </g>
@@ -722,28 +722,28 @@
 <g id="node41" class="node">
 <title>src/server/pipeline/03&#45;repo&#45;preparation/repo&#45;preparer.ts</title>
 <g id="a_node41"><a xlink:href="src/server/pipeline/03-repo-preparation/repo-preparer.ts" xlink:title="repo&#45;preparer.ts">
-<path fill="#ddfeff" stroke="black" d="M668.96,-1746.62C668.96,-1746.62 592.29,-1746.62 592.29,-1746.62 589.08,-1746.62 585.88,-1743.42 585.88,-1740.21 585.88,-1740.21 585.88,-1733.79 585.88,-1733.79 585.88,-1730.58 589.08,-1727.38 592.29,-1727.38 592.29,-1727.38 668.96,-1727.38 668.96,-1727.38 672.17,-1727.38 675.38,-1730.58 675.38,-1733.79 675.38,-1733.79 675.38,-1740.21 675.38,-1740.21 675.38,-1743.42 672.17,-1746.62 668.96,-1746.62"/>
-<text xml:space="preserve" text-anchor="start" x="593.88" y="-1733.62" font-family="Helvetica,sans-Serif" font-size="9.00">repo&#45;preparer.ts</text>
+<path fill="#ddfeff" stroke="black" d="M668.96,-1810.62C668.96,-1810.62 592.29,-1810.62 592.29,-1810.62 589.08,-1810.62 585.88,-1807.42 585.88,-1804.21 585.88,-1804.21 585.88,-1797.79 585.88,-1797.79 585.88,-1794.58 589.08,-1791.38 592.29,-1791.38 592.29,-1791.38 668.96,-1791.38 668.96,-1791.38 672.17,-1791.38 675.38,-1794.58 675.38,-1797.79 675.38,-1797.79 675.38,-1804.21 675.38,-1804.21 675.38,-1807.42 672.17,-1810.62 668.96,-1810.62"/>
+<text xml:space="preserve" text-anchor="start" x="593.88" y="-1797.62" font-family="Helvetica,sans-Serif" font-size="9.00">repo&#45;preparer.ts</text>
 </a>
 </g>
 </g>
 <!-- src/server/pipeline/03&#45;repo&#45;preparation/repo&#45;preparer.test.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/repo&#45;preparer.ts -->
 <g id="edge28" class="edge">
 <title>src/server/pipeline/03&#45;repo&#45;preparation/repo&#45;preparer.test.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/repo&#45;preparer.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M436.59,-1740.21C436.59,-1740.21 576.4,-1740.21 576.4,-1740.21"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="576.4,-1742.31 582.4,-1740.21 576.4,-1738.11 576.4,-1742.31"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M436.41,-1769C458.8,-1769 479.5,-1769 479.5,-1769 479.5,-1769 479.5,-1804.21 479.5,-1804.21 479.5,-1804.21 576.66,-1804.21 576.66,-1804.21"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="576.66,-1806.31 582.66,-1804.21 576.66,-1802.11 576.66,-1806.31"/>
 </g>
 <!-- src/server/pipeline/03&#45;repo&#45;preparation/repo&#45;preparer.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/preparation&#45;fallback&#45;prompt.ts -->
 <g id="edge29" class="edge">
 <title>src/server/pipeline/03&#45;repo&#45;preparation/repo&#45;preparer.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/preparation&#45;fallback&#45;prompt.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M675.61,-1735.38C732.32,-1735.38 822.5,-1735.38 822.5,-1735.38 822.5,-1735.38 822.5,-1731.91 822.5,-1731.91"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="824.6,-1731.91 822.5,-1725.91 820.4,-1731.91 824.6,-1731.91"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M675.85,-1796.19C732.85,-1796.19 823.5,-1796.19 823.5,-1796.19 823.5,-1796.19 823.5,-1788.15 823.5,-1788.15"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="825.6,-1788.15 823.5,-1782.15 821.4,-1788.15 825.6,-1788.15"/>
 </g>
 <!-- src/server/pipeline/03&#45;repo&#45;preparation/repo&#45;preparer.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/preparation&#45;manifest.ts -->
 <g id="edge30" class="edge">
 <title>src/server/pipeline/03&#45;repo&#45;preparation/repo&#45;preparer.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/preparation&#45;manifest.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M630.5,-1747.08C630.5,-1749.24 630.5,-1750.88 630.5,-1750.88 630.5,-1750.88 819.61,-1750.88 819.61,-1750.88"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="819.61,-1752.98 825.61,-1750.88 819.61,-1748.78 819.61,-1752.98"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M675.76,-1801C675.76,-1801 819.6,-1801 819.6,-1801"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="819.6,-1803.1 825.6,-1801 819.6,-1798.9 819.6,-1803.1"/>
 </g>
 <!-- src/server/pipeline/03&#45;repo&#45;preparation/runtime&#45;network&#45;lockdown.test.ts -->
 <g id="node42" class="node">
@@ -773,16 +773,16 @@
 <g id="node44" class="node">
 <title>src/server/pipeline/03&#45;repo&#45;preparation/security&#45;review&#45;policy.test.ts</title>
 <g id="a_node44"><a xlink:href="src/server/pipeline/03-repo-preparation/security-review-policy.test.ts" xlink:title="security&#45;review&#45;policy.test.ts">
-<path fill="#ddfeff" stroke="black" d="M955.08,-1858.62C955.08,-1858.62 824.42,-1858.62 824.42,-1858.62 821.21,-1858.62 818,-1855.42 818,-1852.21 818,-1852.21 818,-1845.79 818,-1845.79 818,-1842.58 821.21,-1839.38 824.42,-1839.38 824.42,-1839.38 955.08,-1839.38 955.08,-1839.38 958.29,-1839.38 961.5,-1842.58 961.5,-1845.79 961.5,-1845.79 961.5,-1852.21 961.5,-1852.21 961.5,-1855.42 958.29,-1858.62 955.08,-1858.62"/>
-<text xml:space="preserve" text-anchor="start" x="826" y="-1845.62" font-family="Helvetica,sans-Serif" font-size="9.00">security&#45;review&#45;policy.test.ts</text>
+<path fill="#ddfeff" stroke="black" d="M955.08,-1842.62C955.08,-1842.62 824.42,-1842.62 824.42,-1842.62 821.21,-1842.62 818,-1839.42 818,-1836.21 818,-1836.21 818,-1829.79 818,-1829.79 818,-1826.58 821.21,-1823.38 824.42,-1823.38 824.42,-1823.38 955.08,-1823.38 955.08,-1823.38 958.29,-1823.38 961.5,-1826.58 961.5,-1829.79 961.5,-1829.79 961.5,-1836.21 961.5,-1836.21 961.5,-1839.42 958.29,-1842.62 955.08,-1842.62"/>
+<text xml:space="preserve" text-anchor="start" x="826" y="-1829.62" font-family="Helvetica,sans-Serif" font-size="9.00">security&#45;review&#45;policy.test.ts</text>
 </a>
 </g>
 </g>
 <!-- src/server/pipeline/03&#45;repo&#45;preparation/security&#45;review&#45;policy.test.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/security&#45;review&#45;policy.ts -->
 <g id="edge32" class="edge">
 <title>src/server/pipeline/03&#45;repo&#45;preparation/security&#45;review&#45;policy.test.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/security&#45;review&#45;policy.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M961.98,-1850.62C1025.7,-1850.62 1108.5,-1850.62 1108.5,-1850.62 1108.5,-1850.62 1108.5,-1849.87 1108.5,-1849.87"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1110.6,-1852.08 1108.5,-1846.08 1106.4,-1852.08 1110.6,-1852.08"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M956.5,-1823.29C956.5,-1809.26 956.5,-1785 956.5,-1785 956.5,-1785 1037.57,-1785 1037.57,-1785"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1037.57,-1787.1 1043.57,-1785 1037.57,-1782.9 1037.57,-1787.1"/>
 </g>
 <!-- src/server/pipeline/04&#45;project&#45;validation/browser&#45;validator.interface.ts -->
 <g id="node45" class="node">
@@ -1222,8 +1222,8 @@
 <!-- src/server/pipeline/07&#45;compositing/cli.mts&#45;&gt;src/server/shared/integrations/email/resend&#45;final&#45;video&#45;email&#45;notifier.ts -->
 <g id="edge51" class="edge">
 <title>src/server/pipeline/07&#45;compositing/cli.mts&#45;&gt;src/server/shared/integrations/email/resend&#45;final&#45;video&#45;email&#45;notifier.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M408.46,-2659.07C444.21,-2659.07 502.5,-2659.07 502.5,-2659.07 502.5,-2659.07 502.5,-1265.21 502.5,-1265.21 502.5,-1265.21 536.49,-1265.21 536.49,-1265.21"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="536.49,-1267.31 542.49,-1265.21 536.49,-1263.11 536.49,-1267.31"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M408.54,-2659.07C444.02,-2659.07 501.5,-2659.07 501.5,-2659.07 501.5,-2659.07 501.5,-1265.21 501.5,-1265.21 501.5,-1265.21 536.55,-1265.21 536.55,-1265.21"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="536.55,-1267.31 542.55,-1265.21 536.55,-1263.11 536.55,-1267.31"/>
 </g>
 <!-- src/server/shared/integrations/storage/r2&#45;final&#45;video&#45;storage.ts -->
 <g id="node80" class="node">
@@ -1430,22 +1430,28 @@
 <g id="node97" class="node">
 <title>src/server/shared/integrations/agents/daytona&#45;opencode&#45;repo&#45;preparation&#45;agent.ts</title>
 <g id="a_node97"><a xlink:href="src/server/shared/integrations/agents/daytona-opencode-repo-preparation-agent.ts" xlink:title="daytona&#45;opencode&#45;repo&#45;preparation&#45;agent.ts">
-<path fill="#ddfeff" stroke="black" d="M993.71,-1172.62C993.71,-1172.62 785.79,-1172.62 785.79,-1172.62 782.58,-1172.62 779.38,-1169.42 779.38,-1166.21 779.38,-1166.21 779.38,-1159.79 779.38,-1159.79 779.38,-1156.58 782.58,-1153.38 785.79,-1153.38 785.79,-1153.38 993.71,-1153.38 993.71,-1153.38 996.92,-1153.38 1000.12,-1156.58 1000.12,-1159.79 1000.12,-1159.79 1000.12,-1166.21 1000.12,-1166.21 1000.12,-1169.42 996.92,-1172.62 993.71,-1172.62"/>
-<text xml:space="preserve" text-anchor="start" x="787.38" y="-1159.62" font-family="Helvetica,sans-Serif" font-size="9.00">daytona&#45;opencode&#45;repo&#45;preparation&#45;agent.ts</text>
+<path fill="#ddfeff" stroke="black" d="M993.71,-1176.62C993.71,-1176.62 785.79,-1176.62 785.79,-1176.62 782.58,-1176.62 779.38,-1173.42 779.38,-1170.21 779.38,-1170.21 779.38,-1163.79 779.38,-1163.79 779.38,-1160.58 782.58,-1157.38 785.79,-1157.38 785.79,-1157.38 993.71,-1157.38 993.71,-1157.38 996.92,-1157.38 1000.12,-1160.58 1000.12,-1163.79 1000.12,-1163.79 1000.12,-1170.21 1000.12,-1170.21 1000.12,-1173.42 996.92,-1176.62 993.71,-1176.62"/>
+<text xml:space="preserve" text-anchor="start" x="787.38" y="-1163.62" font-family="Helvetica,sans-Serif" font-size="9.00">daytona&#45;opencode&#45;repo&#45;preparation&#45;agent.ts</text>
 </a>
 </g>
 </g>
 <!-- src/server/shared/integrations/agents/daytona&#45;opencode&#45;repo&#45;preparation&#45;agent.test.ts&#45;&gt;src/server/shared/integrations/agents/daytona&#45;opencode&#45;repo&#45;preparation&#45;agent.ts -->
 <g id="edge62" class="edge">
 <title>src/server/shared/integrations/agents/daytona&#45;opencode&#45;repo&#45;preparation&#45;agent.test.ts&#45;&gt;src/server/shared/integrations/agents/daytona&#45;opencode&#45;repo&#45;preparation&#45;agent.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M751.46,-1165C751.46,-1165 770.13,-1165 770.13,-1165"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="770.13,-1167.1 776.13,-1165 770.13,-1162.9 770.13,-1167.1"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M751.46,-1167C751.46,-1167 770.13,-1167 770.13,-1167"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="770.13,-1169.1 776.13,-1167 770.13,-1164.9 770.13,-1169.1"/>
+</g>
+<!-- src/server/shared/integrations/agents/daytona&#45;opencode&#45;repo&#45;preparation&#45;agent.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/dependency&#45;install&#45;network&#45;window.ts -->
+<g id="edge63" class="edge">
+<title>src/server/shared/integrations/agents/daytona&#45;opencode&#45;repo&#45;preparation&#45;agent.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/dependency&#45;install&#45;network&#45;window.ts</title>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M799.5,-1176.8C799.5,-1249.71 799.5,-1705 799.5,-1705 799.5,-1705 734.46,-1705 734.46,-1705"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="734.46,-1702.9 728.46,-1705 734.46,-1707.1 734.46,-1702.9"/>
 </g>
 <!-- src/server/shared/integrations/agents/daytona&#45;opencode&#45;repo&#45;preparation&#45;agent.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/preparation&#45;workspace&#45;runner.ts -->
-<g id="edge63" class="edge">
+<g id="edge64" class="edge">
 <title>src/server/shared/integrations/agents/daytona&#45;opencode&#45;repo&#45;preparation&#45;agent.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/preparation&#45;workspace&#45;runner.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M794.5,-1172.73C794.5,-1243.24 794.5,-1673 794.5,-1673 794.5,-1673 721.59,-1673 721.59,-1673"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="721.59,-1670.9 715.59,-1673 721.59,-1675.1 721.59,-1670.9"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M789.5,-1177.11C789.5,-1248.42 789.5,-1673 789.5,-1673 789.5,-1673 721.88,-1673 721.88,-1673"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="721.88,-1670.9 715.88,-1673 721.88,-1675.1 721.88,-1670.9"/>
 </g>
 <!-- src/server/shared/integrations/agents/dockerized&#45;opencode&#45;server.test.ts -->
 <g id="node98" class="node">
@@ -1466,7 +1472,7 @@
 </g>
 </g>
 <!-- src/server/shared/integrations/agents/dockerized&#45;opencode&#45;server.test.ts&#45;&gt;src/server/shared/integrations/agents/dockerized&#45;opencode&#45;server.ts -->
-<g id="edge64" class="edge">
+<g id="edge65" class="edge">
 <title>src/server/shared/integrations/agents/dockerized&#45;opencode&#45;server.test.ts&#45;&gt;src/server/shared/integrations/agents/dockerized&#45;opencode&#45;server.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M977.15,-1124.88C1038.08,-1124.88 1108.5,-1124.88 1108.5,-1124.88 1108.5,-1124.88 1108.5,-1124.5 1108.5,-1124.5"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1110.6,-1130.11 1108.5,-1124.11 1106.4,-1130.11 1110.6,-1130.11"/>
@@ -1481,7 +1487,7 @@
 </g>
 </g>
 <!-- src/server/shared/integrations/agents/dockerized&#45;opencode&#45;server.ts&#45;&gt;src/server/shared/integrations/agents/prepared&#45;opencode&#45;config.ts -->
-<g id="edge65" class="edge">
+<g id="edge66" class="edge">
 <title>src/server/shared/integrations/agents/dockerized&#45;opencode&#45;server.ts&#45;&gt;src/server/shared/integrations/agents/prepared&#45;opencode&#45;config.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M1185.73,-1109.38C1233.8,-1109.38 1286.5,-1109.38 1286.5,-1109.38 1286.5,-1109.38 1286.5,-1110.13 1286.5,-1110.13"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1284.4,-1107.92 1286.5,-1113.92 1288.6,-1107.92 1284.4,-1107.92"/>
@@ -1505,7 +1511,7 @@
 </g>
 </g>
 <!-- src/server/shared/integrations/agents/llm&#45;project&#45;explorer.test.ts&#45;&gt;src/server/shared/integrations/agents/llm&#45;project&#45;explorer.ts -->
-<g id="edge66" class="edge">
+<g id="edge67" class="edge">
 <title>src/server/shared/integrations/agents/llm&#45;project&#45;explorer.test.ts&#45;&gt;src/server/shared/integrations/agents/llm&#45;project&#45;explorer.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M448.73,-1195.79C448.73,-1195.79 564.21,-1195.79 564.21,-1195.79"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="564.21,-1197.89 570.21,-1195.79 564.21,-1193.69 564.21,-1197.89"/>
@@ -1529,13 +1535,13 @@
 </g>
 </g>
 <!-- src/server/shared/integrations/agents/opencode&#45;repo&#45;preparation&#45;agent.test.ts&#45;&gt;src/server/shared/integrations/agents/opencode&#45;repo&#45;preparation&#45;agent.ts -->
-<g id="edge67" class="edge">
+<g id="edge68" class="edge">
 <title>src/server/shared/integrations/agents/opencode&#45;repo&#45;preparation&#45;agent.test.ts&#45;&gt;src/server/shared/integrations/agents/opencode&#45;repo&#45;preparation&#45;agent.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M722.5,-1081.04C722.5,-1085.69 722.5,-1090.19 722.5,-1090.19 722.5,-1090.19 790.24,-1090.19 790.24,-1090.19"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="790.24,-1092.29 796.24,-1090.19 790.24,-1088.09 790.24,-1092.29"/>
 </g>
 <!-- src/server/shared/integrations/agents/opencode&#45;repo&#45;preparation&#45;agent.ts&#45;&gt;src/server/shared/integrations/agents/dockerized&#45;opencode&#45;server.ts -->
-<g id="edge68" class="edge">
+<g id="edge69" class="edge">
 <title>src/server/shared/integrations/agents/opencode&#45;repo&#45;preparation&#45;agent.ts&#45;&gt;src/server/shared/integrations/agents/dockerized&#45;opencode&#45;server.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M980.3,-1093.38C1040.48,-1093.38 1108.5,-1093.38 1108.5,-1093.38 1108.5,-1093.38 1108.5,-1094.13 1108.5,-1094.13"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1106.4,-1091.92 1108.5,-1097.92 1110.6,-1091.92 1106.4,-1091.92"/>
@@ -1550,7 +1556,7 @@
 </g>
 </g>
 <!-- src/server/shared/integrations/agents/prepared&#45;opencode&#45;config.test.ts&#45;&gt;src/server/shared/integrations/agents/prepared&#45;opencode&#45;config.ts -->
-<g id="edge69" class="edge">
+<g id="edge70" class="edge">
 <title>src/server/shared/integrations/agents/prepared&#45;opencode&#45;config.test.ts&#45;&gt;src/server/shared/integrations/agents/prepared&#45;opencode&#45;config.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M1188.5,-1132.92C1188.5,-1130.76 1188.5,-1129.12 1188.5,-1129.12 1188.5,-1129.12 1203.2,-1129.12 1203.2,-1129.12"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1203.2,-1131.23 1209.2,-1129.13 1203.2,-1127.03 1203.2,-1131.23"/>
@@ -1565,13 +1571,13 @@
 </g>
 </g>
 <!-- src/server/shared/integrations/agents/repo&#45;preparation&#45;agent&#45;factory.test.ts&#45;&gt;src/server/shared/integrations/agents/daytona&#45;opencode&#45;repo&#45;preparation&#45;agent.ts -->
-<g id="edge70" class="edge">
+<g id="edge71" class="edge">
 <title>src/server/shared/integrations/agents/repo&#45;preparation&#45;agent&#45;factory.test.ts&#45;&gt;src/server/shared/integrations/agents/daytona&#45;opencode&#45;repo&#45;preparation&#45;agent.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M461.5,-1128.9C461.5,-1131.02 461.5,-1132.62 461.5,-1132.62 461.5,-1132.62 789.5,-1132.62 789.5,-1132.62 789.5,-1132.62 789.5,-1144.03 789.5,-1144.03"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="787.4,-1144.03 789.5,-1150.03 791.6,-1144.03 787.4,-1144.03"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M461.5,-1128.9C461.5,-1131.02 461.5,-1132.62 461.5,-1132.62 461.5,-1132.62 789.5,-1132.62 789.5,-1132.62 789.5,-1132.62 789.5,-1148.21 789.5,-1148.21"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="787.4,-1148.21 789.5,-1154.21 791.6,-1148.21 787.4,-1148.21"/>
 </g>
 <!-- src/server/shared/integrations/agents/repo&#45;preparation&#45;agent&#45;factory.test.ts&#45;&gt;src/server/shared/integrations/agents/opencode&#45;repo&#45;preparation&#45;agent.ts -->
-<g id="edge71" class="edge">
+<g id="edge72" class="edge">
 <title>src/server/shared/integrations/agents/repo&#45;preparation&#45;agent&#45;factory.test.ts&#45;&gt;src/server/shared/integrations/agents/opencode&#45;repo&#45;preparation&#45;agent.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M462.5,-1108.96C462.5,-1102.38 462.5,-1095 462.5,-1095 462.5,-1095 790.11,-1095 790.11,-1095"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="790.11,-1097.1 796.11,-1095 790.11,-1092.9 790.11,-1097.1"/>
@@ -1586,19 +1592,19 @@
 </g>
 </g>
 <!-- src/server/shared/integrations/agents/repo&#45;preparation&#45;agent&#45;factory.test.ts&#45;&gt;src/server/shared/integrations/agents/repo&#45;preparation&#45;agent&#45;factory.ts -->
-<g id="edge72" class="edge">
+<g id="edge73" class="edge">
 <title>src/server/shared/integrations/agents/repo&#45;preparation&#45;agent&#45;factory.test.ts&#45;&gt;src/server/shared/integrations/agents/repo&#45;preparation&#45;agent&#45;factory.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M474.82,-1115.79C474.82,-1115.79 538.18,-1115.79 538.18,-1115.79"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="538.18,-1117.89 544.18,-1115.79 538.17,-1113.69 538.18,-1117.89"/>
 </g>
 <!-- src/server/shared/integrations/agents/repo&#45;preparation&#45;agent&#45;factory.ts&#45;&gt;src/server/shared/integrations/agents/daytona&#45;opencode&#45;repo&#45;preparation&#45;agent.ts -->
-<g id="edge74" class="edge">
+<g id="edge75" class="edge">
 <title>src/server/shared/integrations/agents/repo&#45;preparation&#45;agent&#45;factory.ts&#45;&gt;src/server/shared/integrations/agents/daytona&#45;opencode&#45;repo&#45;preparation&#45;agent.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M714,-1123C754.49,-1123 794.5,-1123 794.5,-1123 794.5,-1123 794.5,-1143.88 794.5,-1143.88"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="792.4,-1143.88 794.5,-1149.88 796.6,-1143.88 792.4,-1143.88"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M714,-1123C754.49,-1123 794.5,-1123 794.5,-1123 794.5,-1123 794.5,-1148.21 794.5,-1148.21"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="792.4,-1148.21 794.5,-1154.21 796.6,-1148.21 792.4,-1148.21"/>
 </g>
 <!-- src/server/shared/integrations/agents/repo&#45;preparation&#45;agent&#45;factory.ts&#45;&gt;src/server/shared/integrations/agents/opencode&#45;repo&#45;preparation&#45;agent.ts -->
-<g id="edge75" class="edge">
+<g id="edge76" class="edge">
 <title>src/server/shared/integrations/agents/repo&#45;preparation&#45;agent&#45;factory.ts&#45;&gt;src/server/shared/integrations/agents/opencode&#45;repo&#45;preparation&#45;agent.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M630.5,-1108.96C630.5,-1104.31 630.5,-1099.81 630.5,-1099.81 630.5,-1099.81 790.41,-1099.81 790.41,-1099.81"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="790.41,-1101.91 796.41,-1099.81 790.41,-1097.71 790.41,-1101.91"/>
@@ -1613,7 +1619,7 @@
 </g>
 </g>
 <!-- src/server/shared/integrations/agents/repo&#45;preparation&#45;agent&#45;factory.ts&#45;&gt;src/server/shared/integrations/daytona/daytona&#45;sdk&#45;preparation&#45;workspace&#45;provider.ts -->
-<g id="edge73" class="edge">
+<g id="edge74" class="edge">
 <title>src/server/shared/integrations/agents/repo&#45;preparation&#45;agent&#45;factory.ts&#45;&gt;src/server/shared/integrations/daytona/daytona&#45;sdk&#45;preparation&#45;workspace&#45;provider.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M713.87,-1113.38C750.12,-1113.38 784.5,-1113.38 784.5,-1113.38 784.5,-1113.38 784.5,-552.1 784.5,-552.1"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="786.6,-552.1 784.5,-546.1 782.4,-552.1 786.6,-552.1"/>
@@ -1637,7 +1643,7 @@
 </g>
 </g>
 <!-- src/server/shared/integrations/browser/playwright&#45;browser&#45;validator.test.ts&#45;&gt;src/server/shared/integrations/browser/playwright&#45;browser&#45;validator.ts -->
-<g id="edge76" class="edge">
+<g id="edge77" class="edge">
 <title>src/server/shared/integrations/browser/playwright&#45;browser&#45;validator.test.ts&#45;&gt;src/server/shared/integrations/browser/playwright&#45;browser&#45;validator.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M469.17,-814.79C469.17,-814.79 544.01,-814.79 544.01,-814.79"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="544.01,-816.89 550.01,-814.79 544.01,-812.69 544.01,-816.89"/>
@@ -1661,7 +1667,7 @@
 </g>
 </g>
 <!-- src/server/shared/integrations/daytona/daytona&#45;preparation&#45;workspace&#45;provider.test.ts&#45;&gt;src/server/shared/integrations/daytona/daytona&#45;preparation&#45;workspace&#45;provider.ts -->
-<g id="edge77" class="edge">
+<g id="edge78" class="edge">
 <title>src/server/shared/integrations/daytona/daytona&#45;preparation&#45;workspace&#45;provider.test.ts&#45;&gt;src/server/shared/integrations/daytona/daytona&#45;preparation&#45;workspace&#45;provider.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M746.17,-501C746.17,-501 775.25,-501 775.25,-501"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="775.25,-503.1 781.25,-501 775.25,-498.9 775.25,-503.1"/>
@@ -1676,7 +1682,7 @@
 </g>
 </g>
 <!-- src/server/shared/integrations/daytona/daytona&#45;sdk&#45;preparation&#45;workspace&#45;provider.test.ts&#45;&gt;src/server/shared/integrations/daytona/daytona&#45;sdk&#45;preparation&#45;workspace&#45;provider.ts -->
-<g id="edge78" class="edge">
+<g id="edge79" class="edge">
 <title>src/server/shared/integrations/daytona/daytona&#45;sdk&#45;preparation&#45;workspace&#45;provider.test.ts&#45;&gt;src/server/shared/integrations/daytona/daytona&#45;sdk&#45;preparation&#45;workspace&#45;provider.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M755.63,-533C755.63,-533 766,-533 766,-533"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="766,-535.1 772,-533 766,-530.9 766,-535.1"/>
@@ -1691,7 +1697,7 @@
 </g>
 </g>
 <!-- src/server/shared/integrations/email/resend&#45;final&#45;video&#45;email&#45;notifier.test.ts&#45;&gt;src/server/shared/integrations/email/resend&#45;final&#45;video&#45;email&#45;notifier.ts -->
-<g id="edge79" class="edge">
+<g id="edge80" class="edge">
 <title>src/server/shared/integrations/email/resend&#45;final&#45;video&#45;email&#45;notifier.test.ts&#45;&gt;src/server/shared/integrations/email/resend&#45;final&#45;video&#45;email&#45;notifier.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M476.6,-1258.79C476.6,-1258.79 536.51,-1258.79 536.51,-1258.79"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="536.51,-1260.89 542.51,-1258.79 536.51,-1256.69 536.51,-1260.89"/>
@@ -1706,7 +1712,7 @@
 </g>
 </g>
 <!-- src/server/shared/integrations/github/github&#45;app.test.ts&#45;&gt;src/server/shared/integrations/github/github&#45;app.ts -->
-<g id="edge80" class="edge">
+<g id="edge81" class="edge">
 <title>src/server/shared/integrations/github/github&#45;app.test.ts&#45;&gt;src/server/shared/integrations/github/github&#45;app.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M430.52,-599.21C430.52,-599.21 582.66,-599.21 582.66,-599.21"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="582.66,-601.31 588.66,-599.21 582.66,-597.11 582.66,-601.31"/>
@@ -1730,7 +1736,7 @@
 </g>
 </g>
 <!-- src/server/shared/integrations/remotion/makeademo&#45;video.test.ts&#45;&gt;src/server/shared/integrations/remotion/makeademo&#45;video.tsx -->
-<g id="edge81" class="edge">
+<g id="edge82" class="edge">
 <title>src/server/shared/integrations/remotion/makeademo&#45;video.test.ts&#45;&gt;src/server/shared/integrations/remotion/makeademo&#45;video.tsx</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M438.5,-954.08C438.5,-956.24 438.5,-957.88 438.5,-957.88 438.5,-957.88 563.43,-957.88 563.43,-957.88"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="563.43,-959.98 569.43,-957.88 563.43,-955.78 563.43,-959.98"/>
@@ -1745,7 +1751,7 @@
 </g>
 </g>
 <!-- src/server/shared/integrations/remotion/remotion&#45;entry.tsx&#45;&gt;src/server/shared/integrations/remotion/makeademo&#45;video.tsx -->
-<g id="edge82" class="edge">
+<g id="edge83" class="edge">
 <title>src/server/shared/integrations/remotion/remotion&#45;entry.tsx&#45;&gt;src/server/shared/integrations/remotion/makeademo&#45;video.tsx</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M381.5,-965.92C381.5,-963.76 381.5,-962.12 381.5,-962.12 381.5,-962.12 563.5,-962.12 563.5,-962.12"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="563.5,-964.23 569.5,-962.13 563.5,-960.03 563.5,-964.23"/>
@@ -1769,13 +1775,13 @@
 </g>
 </g>
 <!-- src/server/shared/integrations/sandbox/docker&#45;sandbox&#45;runner.test.ts&#45;&gt;src/server/shared/integrations/sandbox/docker&#45;sandbox&#45;runner.ts -->
-<g id="edge83" class="edge">
+<g id="edge84" class="edge">
 <title>src/server/shared/integrations/sandbox/docker&#45;sandbox&#45;runner.test.ts&#45;&gt;src/server/shared/integrations/sandbox/docker&#45;sandbox&#45;runner.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M457.43,-877.79C457.43,-877.79 555.58,-877.79 555.58,-877.79"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="555.58,-879.89 561.58,-877.79 555.58,-875.69 555.58,-879.89"/>
 </g>
 <!-- src/server/shared/integrations/sandbox/docker&#45;sandbox&#45;runner.ts&#45;&gt;src/server/pipeline/04&#45;project&#45;validation/install&#45;plan.ts -->
-<g id="edge84" class="edge">
+<g id="edge85" class="edge">
 <title>src/server/shared/integrations/sandbox/docker&#45;sandbox&#45;runner.ts&#45;&gt;src/server/pipeline/04&#45;project&#45;validation/install&#45;plan.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M696.48,-881C730.72,-881 765.5,-881 765.5,-881 765.5,-881 765.5,-1955.19 765.5,-1955.19 765.5,-1955.19 842.43,-1955.19 842.43,-1955.19"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="842.43,-1957.29 848.43,-1955.19 842.43,-1953.09 842.43,-1957.29"/>
@@ -1799,7 +1805,7 @@
 </g>
 </g>
 <!-- src/server/shared/integrations/storage/local&#45;artifact&#45;store.test.ts&#45;&gt;src/server/shared/integrations/storage/local&#45;artifact&#45;store.ts -->
-<g id="edge85" class="edge">
+<g id="edge86" class="edge">
 <title>src/server/shared/integrations/storage/local&#45;artifact&#45;store.test.ts&#45;&gt;src/server/shared/integrations/storage/local&#45;artifact&#45;store.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M445.79,-723C445.79,-723 567.03,-723 567.03,-723"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="567.03,-725.1 573.03,-723 567.03,-720.9 567.03,-725.1"/>
@@ -1814,7 +1820,7 @@
 </g>
 </g>
 <!-- src/server/shared/integrations/storage/r2&#45;final&#45;video&#45;storage.test.ts&#45;&gt;src/server/shared/integrations/storage/r2&#45;final&#45;video&#45;storage.ts -->
-<g id="edge86" class="edge">
+<g id="edge87" class="edge">
 <title>src/server/shared/integrations/storage/r2&#45;final&#45;video&#45;storage.test.ts&#45;&gt;src/server/shared/integrations/storage/r2&#45;final&#45;video&#45;storage.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M453.71,-751.79C453.71,-751.79 559.1,-751.79 559.1,-751.79"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="559.11,-753.89 565.1,-751.79 559.1,-749.69 559.11,-753.89"/>
@@ -1829,7 +1835,7 @@
 </g>
 </g>
 <!-- src/server/shared/integrations/storage/r2&#45;upload&#45;presigner.test.ts&#45;&gt;src/server/shared/integrations/storage/r2&#45;upload&#45;presigner.ts -->
-<g id="edge87" class="edge">
+<g id="edge88" class="edge">
 <title>src/server/shared/integrations/storage/r2&#45;upload&#45;presigner.test.ts&#45;&gt;src/server/shared/integrations/storage/r2&#45;upload&#45;presigner.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M449.72,-691C449.72,-691 563.42,-691 563.42,-691"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="563.42,-693.1 569.42,-691 563.42,-688.9 563.42,-693.1"/>
@@ -1844,7 +1850,7 @@
 </g>
 </g>
 <!-- src/server/shared/persistence/neon&#45;demo&#45;request&#45;final&#45;video&#45;store.test.ts&#45;&gt;src/server/shared/persistence/neon&#45;demo&#45;request&#45;final&#45;video&#45;store.ts -->
-<g id="edge90" class="edge">
+<g id="edge91" class="edge">
 <title>src/server/shared/persistence/neon&#45;demo&#45;request&#45;final&#45;video&#45;store.test.ts&#45;&gt;src/server/shared/persistence/neon&#45;demo&#45;request&#45;final&#45;video&#45;store.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M252.75,-430C252.75,-430 275.79,-430 275.79,-430"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="275.79,-432.1 281.79,-430 275.79,-427.9 275.79,-432.1"/>
@@ -1877,7 +1883,7 @@
 </g>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/pipeline&#45;orchestrator.test.ts&#45;&gt;src/server/shared/pipeline&#45;runner/pipeline&#45;orchestrator.ts -->
-<g id="edge92" class="edge">
+<g id="edge93" class="edge">
 <title>src/server/shared/pipeline&#45;runner/pipeline&#45;orchestrator.test.ts&#45;&gt;src/server/shared/pipeline&#45;runner/pipeline&#45;orchestrator.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M217.08,-1516.81C217.08,-1516.81 311.47,-1516.81 311.47,-1516.81"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="311.47,-1518.91 317.47,-1516.81 311.47,-1514.71 311.47,-1518.91"/>
@@ -1901,7 +1907,7 @@
 </g>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/stage1&#45;cli&#45;interactive.test.ts&#45;&gt;src/server/shared/pipeline&#45;runner/stage1&#45;cli&#45;interactive.ts -->
-<g id="edge93" class="edge">
+<g id="edge94" class="edge">
 <title>src/server/shared/pipeline&#45;runner/stage1&#45;cli&#45;interactive.test.ts&#45;&gt;src/server/shared/pipeline&#45;runner/stage1&#45;cli&#45;interactive.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M217.71,-1388C217.71,-1388 311.02,-1388 311.02,-1388"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="311.02,-1390.1 317.02,-1388 311.02,-1385.9 311.02,-1390.1"/>
@@ -1925,7 +1931,7 @@
 </g>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/stage1&#45;cli&#45;options.test.ts&#45;&gt;src/server/shared/pipeline&#45;runner/stage1&#45;cli&#45;options.ts -->
-<g id="edge94" class="edge">
+<g id="edge95" class="edge">
 <title>src/server/shared/pipeline&#45;runner/stage1&#45;cli&#45;options.test.ts&#45;&gt;src/server/shared/pipeline&#45;runner/stage1&#45;cli&#45;options.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M195.5,-1426.05C195.5,-1430.34 195.5,-1434.38 195.5,-1434.38 195.5,-1434.38 318,-1434.38 318,-1434.38"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="318,-1436.48 324,-1434.38 318,-1432.28 318,-1436.48"/>
@@ -1940,43 +1946,43 @@
 </g>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/stage1&#45;cli.mts&#45;&gt;src/server/pipeline/01&#45;context&#45;gathering/intake/project&#45;intake.ts -->
-<g id="edge95" class="edge">
+<g id="edge96" class="edge">
 <title>src/server/shared/pipeline&#45;runner/stage1&#45;cli.mts&#45;&gt;src/server/pipeline/01&#45;context&#45;gathering/intake/project&#45;intake.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M146.5,-1457.86C146.5,-1461.15 146.5,-1464 146.5,-1464 146.5,-1464 492.5,-1464 492.5,-1464 492.5,-1464 492.5,-3135.79 492.5,-3135.79 492.5,-3135.79 576.37,-3135.79 576.37,-3135.79"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="576.37,-3137.89 582.37,-3135.79 576.37,-3133.69 576.37,-3137.89"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M146.5,-1457.86C146.5,-1461.15 146.5,-1464 146.5,-1464 146.5,-1464 491.5,-1464 491.5,-1464 491.5,-1464 491.5,-3135.79 491.5,-3135.79 491.5,-3135.79 576.43,-3135.79 576.43,-3135.79"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="576.43,-3137.89 582.43,-3135.79 576.43,-3133.69 576.43,-3137.89"/>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/stage1&#45;cli.mts&#45;&gt;src/server/pipeline/01&#45;context&#45;gathering/supporting&#45;documents.ts -->
-<g id="edge96" class="edge">
+<g id="edge97" class="edge">
 <title>src/server/shared/pipeline&#45;runner/stage1&#45;cli.mts&#45;&gt;src/server/pipeline/01&#45;context&#45;gathering/supporting&#45;documents.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M186.41,-1447.38C218.28,-1447.38 257.5,-1447.38 257.5,-1447.38 257.5,-1447.38 257.5,-3103.79 257.5,-3103.79 257.5,-3103.79 575.5,-3103.79 575.5,-3103.79 575.5,-3103.79 575.5,-3174.97 575.5,-3174.97"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="573.4,-3174.97 575.5,-3180.97 577.6,-3174.97 573.4,-3174.97"/>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/stage1&#45;cli.mts&#45;&gt;src/server/shared/integrations/agents/repo&#45;preparation&#45;agent&#45;factory.ts -->
-<g id="edge97" class="edge">
+<g id="edge98" class="edge">
 <title>src/server/shared/pipeline&#45;runner/stage1&#45;cli.mts&#45;&gt;src/server/shared/integrations/agents/repo&#45;preparation&#45;agent&#45;factory.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M186.45,-1451.62C275.08,-1451.62 479.5,-1451.62 479.5,-1451.62 479.5,-1451.62 479.5,-1122.21 479.5,-1122.21 479.5,-1122.21 538.52,-1122.21 538.52,-1122.21"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="538.52,-1124.31 544.52,-1122.21 538.52,-1120.11 538.52,-1124.31"/>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/stage1&#45;cli.mts&#45;&gt;src/server/shared/integrations/sandbox/docker&#45;sandbox&#45;runner.ts -->
-<g id="edge98" class="edge">
+<g id="edge99" class="edge">
 <title>src/server/shared/pipeline&#45;runner/stage1&#45;cli.mts&#45;&gt;src/server/shared/integrations/sandbox/docker&#45;sandbox&#45;runner.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M186.58,-1442.88C220.16,-1442.88 262.5,-1442.88 262.5,-1442.88 262.5,-1442.88 262.5,-1039.5 262.5,-1039.5 262.5,-1039.5 568.5,-1039.5 568.5,-1039.5 568.5,-1039.5 568.5,-899.94 568.5,-899.94"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="570.6,-899.94 568.5,-893.94 566.4,-899.94 570.6,-899.94"/>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/stage1&#45;cli.mts&#45;&gt;src/server/shared/pipeline&#45;runner/pipeline&#45;orchestrator.ts -->
-<g id="edge99" class="edge">
+<g id="edge100" class="edge">
 <title>src/server/shared/pipeline&#45;runner/stage1&#45;cli.mts&#45;&gt;src/server/shared/pipeline&#45;runner/pipeline&#45;orchestrator.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M186.41,-1455.62C207.29,-1455.62 228.5,-1455.62 228.5,-1455.62 228.5,-1455.62 228.5,-1512 228.5,-1512 228.5,-1512 311.41,-1512 311.41,-1512"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="311.41,-1514.1 317.41,-1512 311.41,-1509.9 311.41,-1514.1"/>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/stage1&#45;cli.mts&#45;&gt;src/server/shared/pipeline&#45;runner/stage1&#45;cli&#45;interactive.ts -->
-<g id="edge100" class="edge">
+<g id="edge101" class="edge">
 <title>src/server/shared/pipeline&#45;runner/stage1&#45;cli.mts&#45;&gt;src/server/shared/pipeline&#45;runner/stage1&#45;cli&#45;interactive.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M186.49,-1440.62C212.11,-1440.62 240.5,-1440.62 240.5,-1440.62 240.5,-1440.62 240.5,-1397.62 240.5,-1397.62 240.5,-1397.62 310.9,-1397.62 310.9,-1397.62"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="310.9,-1399.73 316.9,-1397.63 310.9,-1395.53 310.9,-1399.73"/>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/stage1&#45;cli.mts&#45;&gt;src/server/shared/pipeline&#45;runner/stage1&#45;cli&#45;options.ts -->
-<g id="edge101" class="edge">
+<g id="edge102" class="edge">
 <title>src/server/shared/pipeline&#45;runner/stage1&#45;cli.mts&#45;&gt;src/server/shared/pipeline&#45;runner/stage1&#45;cli&#45;options.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M186.38,-1445.12C186.38,-1445.12 318.16,-1445.12 318.16,-1445.12"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="318.16,-1447.23 324.16,-1445.13 318.16,-1443.03 318.16,-1447.23"/>
@@ -1991,61 +1997,61 @@
 </g>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/stage1&#45;cli.mts&#45;&gt;src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.ts -->
-<g id="edge102" class="edge">
+<g id="edge103" class="edge">
 <title>src/server/shared/pipeline&#45;runner/stage1&#45;cli.mts&#45;&gt;src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M186.42,-1453.62C253.61,-1453.62 381.5,-1453.62 381.5,-1453.62 381.5,-1453.62 381.5,-1460.85 381.5,-1460.85"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="379.4,-1460.85 381.5,-1466.85 383.6,-1460.85 379.4,-1460.85"/>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.ts&#45;&gt;src/server/pipeline/02&#45;repo&#45;security&#45;screen/repo&#45;security&#45;screen.ts -->
-<g id="edge105" class="edge">
+<g id="edge106" class="edge">
 <title>src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.ts&#45;&gt;src/server/pipeline/02&#45;repo&#45;security&#45;screen/repo&#45;security&#45;screen.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M429.6,-1478.08C502.09,-1478.08 630.5,-1478.08 630.5,-1478.08 630.5,-1478.08 630.5,-1591.06 630.5,-1591.06"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="628.4,-1591.06 630.5,-1597.06 632.6,-1591.06 628.4,-1591.06"/>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/repo&#45;preparer.ts -->
-<g id="edge106" class="edge">
+<g id="edge107" class="edge">
 <title>src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.ts&#45;&gt;src/server/pipeline/03&#45;repo&#45;preparation/repo&#45;preparer.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M429.85,-1487.7C456.63,-1487.7 484.5,-1487.7 484.5,-1487.7 484.5,-1487.7 484.5,-1733.79 484.5,-1733.79 484.5,-1733.79 576.56,-1733.79 576.56,-1733.79"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="576.56,-1735.89 582.56,-1733.79 576.56,-1731.69 576.56,-1735.89"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M429.61,-1480C464.14,-1480 504.5,-1480 504.5,-1480 504.5,-1480 504.5,-1797.79 504.5,-1797.79 504.5,-1797.79 576.42,-1797.79 576.42,-1797.79"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="576.42,-1799.89 582.42,-1797.79 576.42,-1795.69 576.42,-1799.89"/>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.ts&#45;&gt;src/server/pipeline/04&#45;project&#45;validation/project&#45;validator.ts -->
-<g id="edge107" class="edge">
+<g id="edge108" class="edge">
 <title>src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.ts&#45;&gt;src/server/pipeline/04&#45;project&#45;validation/project&#45;validator.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M429.61,-1480C464.14,-1480 504.5,-1480 504.5,-1480 504.5,-1480 504.5,-1988.79 504.5,-1988.79 504.5,-1988.79 571.39,-1988.79 571.39,-1988.79"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="571.39,-1990.89 577.39,-1988.79 571.39,-1986.69 571.39,-1990.89"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M429.57,-1481.92C463.74,-1481.92 503.5,-1481.92 503.5,-1481.92 503.5,-1481.92 503.5,-1988.79 503.5,-1988.79 503.5,-1988.79 571.35,-1988.79 571.35,-1988.79"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="571.35,-1990.89 577.35,-1988.79 571.35,-1986.69 571.35,-1990.89"/>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.ts&#45;&gt;src/server/pipeline/05&#45;script&#45;generation/demo&#45;planning/default&#45;demo&#45;planner.ts -->
-<g id="edge108" class="edge">
+<g id="edge109" class="edge">
 <title>src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.ts&#45;&gt;src/server/pipeline/05&#45;script&#45;generation/demo&#45;planning/default&#45;demo&#45;planner.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M429.62,-1481.92C461.91,-1481.92 498.5,-1481.92 498.5,-1481.92 498.5,-1481.92 498.5,-2155.79 498.5,-2155.79 498.5,-2155.79 559.02,-2155.79 559.02,-2155.79"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="559.02,-2157.89 565.02,-2155.79 559.02,-2153.69 559.02,-2157.89"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M429.54,-1483.85C461.48,-1483.85 497.5,-1483.85 497.5,-1483.85 497.5,-1483.85 497.5,-2155.79 497.5,-2155.79 497.5,-2155.79 558.93,-2155.79 558.93,-2155.79"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="558.93,-2157.89 564.93,-2155.79 558.93,-2153.69 558.93,-2157.89"/>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.ts&#45;&gt;src/server/pipeline/05&#45;script&#45;generation/script&#45;composition/default&#45;script&#45;composer.ts -->
-<g id="edge109" class="edge">
+<g id="edge110" class="edge">
 <title>src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.ts&#45;&gt;src/server/pipeline/05&#45;script&#45;generation/script&#45;composition/default&#45;script&#45;composer.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M429.54,-1483.85C461.48,-1483.85 497.5,-1483.85 497.5,-1483.85 497.5,-1483.85 497.5,-2377.79 497.5,-2377.79 497.5,-2377.79 554.26,-2377.79 554.26,-2377.79"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="554.26,-2379.89 560.26,-2377.79 554.26,-2375.69 554.26,-2379.89"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M429.79,-1485.78C461.29,-1485.78 496.5,-1485.78 496.5,-1485.78 496.5,-1485.78 496.5,-2377.79 496.5,-2377.79 496.5,-2377.79 554.54,-2377.79 554.54,-2377.79"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="554.54,-2379.89 560.54,-2377.79 554.54,-2375.69 554.54,-2379.89"/>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.ts&#45;&gt;src/server/pipeline/05&#45;script&#45;generation/script&#45;generation&#45;orchestrator.ts -->
-<g id="edge110" class="edge">
+<g id="edge111" class="edge">
 <title>src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.ts&#45;&gt;src/server/pipeline/05&#45;script&#45;generation/script&#45;generation&#45;orchestrator.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M429.7,-1485.78C460.84,-1485.78 495.5,-1485.78 495.5,-1485.78 495.5,-1485.78 495.5,-2496.79 495.5,-2496.79 495.5,-2496.79 539.88,-2496.79 539.88,-2496.79"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M429.7,-1487.7C460.84,-1487.7 495.5,-1487.7 495.5,-1487.7 495.5,-1487.7 495.5,-2496.79 495.5,-2496.79 495.5,-2496.79 539.88,-2496.79 539.88,-2496.79"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="539.88,-2498.89 545.88,-2496.79 539.88,-2494.69 539.88,-2498.89"/>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.ts&#45;&gt;src/server/shared/integrations/agents/llm&#45;project&#45;explorer.ts -->
-<g id="edge111" class="edge">
+<g id="edge112" class="edge">
 <title>src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.ts&#45;&gt;src/server/shared/integrations/agents/llm&#45;project&#45;explorer.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M429.8,-1472.3C455.78,-1472.3 482.5,-1472.3 482.5,-1472.3 482.5,-1472.3 482.5,-1202.21 482.5,-1202.21 482.5,-1202.21 564.33,-1202.21 564.33,-1202.21"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="564.33,-1204.31 570.33,-1202.21 564.33,-1200.11 564.33,-1204.31"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M429.68,-1472.3C456.11,-1472.3 483.5,-1472.3 483.5,-1472.3 483.5,-1472.3 483.5,-1202.21 483.5,-1202.21 483.5,-1202.21 564.29,-1202.21 564.29,-1202.21"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="564.29,-1204.31 570.29,-1202.21 564.29,-1200.11 564.29,-1204.31"/>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.ts&#45;&gt;src/server/shared/integrations/browser/playwright&#45;browser&#45;validator.ts -->
-<g id="edge112" class="edge">
+<g id="edge113" class="edge">
 <title>src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.ts&#45;&gt;src/server/shared/integrations/browser/playwright&#45;browser&#45;validator.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M429.69,-1474.22C462.34,-1474.22 499.5,-1474.22 499.5,-1474.22 499.5,-1474.22 499.5,-821.21 499.5,-821.21 499.5,-821.21 543.81,-821.21 543.81,-821.21"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="543.81,-823.31 549.81,-821.21 543.81,-819.11 543.81,-823.31"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M429.62,-1474.22C461.91,-1474.22 498.5,-1474.22 498.5,-1474.22 498.5,-1474.22 498.5,-821.21 498.5,-821.21 498.5,-821.21 543.98,-821.21 543.98,-821.21"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="543.98,-823.31 549.98,-821.21 543.98,-819.11 543.98,-823.31"/>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.ts&#45;&gt;src/server/shared/integrations/sandbox/docker&#45;sandbox&#45;runner.ts -->
-<g id="edge113" class="edge">
+<g id="edge114" class="edge">
 <title>src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.ts&#45;&gt;src/server/shared/integrations/sandbox/docker&#45;sandbox&#45;runner.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M429.75,-1476.15C462.77,-1476.15 500.5,-1476.15 500.5,-1476.15 500.5,-1476.15 500.5,-884.21 500.5,-884.21 500.5,-884.21 555.39,-884.21 555.39,-884.21"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="555.39,-886.31 561.39,-884.21 555.39,-882.11 555.39,-886.31"/>
@@ -2060,13 +2066,13 @@
 </g>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.test.ts&#45;&gt;src/server/shared/pipeline&#45;runner/pipeline&#45;orchestrator.ts -->
-<g id="edge103" class="edge">
+<g id="edge104" class="edge">
 <title>src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.test.ts&#45;&gt;src/server/shared/pipeline&#45;runner/pipeline&#45;orchestrator.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M204.84,-1483.21C237.44,-1483.21 271.5,-1483.21 271.5,-1483.21 271.5,-1483.21 271.5,-1507.19 271.5,-1507.19 271.5,-1507.19 311.25,-1507.19 311.25,-1507.19"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="311.25,-1509.29 317.25,-1507.19 311.25,-1505.09 311.25,-1509.29"/>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.test.ts&#45;&gt;src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.ts -->
-<g id="edge104" class="edge">
+<g id="edge105" class="edge">
 <title>src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.test.ts&#45;&gt;src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M204.94,-1476.79C204.94,-1476.79 323.76,-1476.79 323.76,-1476.79"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="323.76,-1478.89 329.76,-1476.79 323.76,-1474.69 323.76,-1478.89"/>
