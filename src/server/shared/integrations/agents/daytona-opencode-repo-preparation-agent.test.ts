@@ -62,9 +62,71 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
       await rm(sourceDirectory, { force: true, recursive: true });
     }
   });
+
+  it("handles dependency install network-window requests in the backend", async () => {
+    const sourceDirectory = await mkdtemp(join(tmpdir(), "makeademo-source-"));
+    await writeFile(join(sourceDirectory, "package.json"), "{}", "utf8");
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparationAgent({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, [
+        JSON.stringify({
+          command: "bun install",
+          securityReviewOutcomes: [
+            accept("dependency-reviewer"),
+            accept("runtime-security-reviewer"),
+            accept("obfuscation-deception-auditor"),
+            accept("prompt-injection-reviewer"),
+          ],
+          status: "needs-dependency-install",
+        }),
+        "installed",
+        JSON.stringify(successResult()),
+      ]),
+      providerID: "openai",
+      sourceDirectory,
+      timeoutMs: 1_000,
+    });
+
+    try {
+      const result = await agent.prepare({
+        normalizedSupportingDocuments: [],
+        repoUrl: "https://github.com/example/app",
+        structuredDemoIntent: { keyProductFeatures: ["validation"] },
+        workspaceId: "workspace_123",
+      });
+
+      expect(result).toMatchObject({
+        manifest: { demoCommand: "npm run demo:makeademo" },
+        status: "succeeded",
+      });
+      expect(events).toEqual([
+        { network: false },
+        {
+          upload: [
+            {
+              destinationPath: "/workspace/package.json",
+              sourcePath: join(sourceDirectory, "package.json"),
+            },
+          ],
+        },
+        { execute: expect.stringContaining("opencode run") },
+        { network: true },
+        { execute: "bun install" },
+        { network: false },
+        { execute: expect.stringContaining("Continue Repo Preparation") },
+        { destroy: "daytona_workspace" },
+      ]);
+    } finally {
+      await rm(sourceDirectory, { force: true, recursive: true });
+    }
+  });
 });
 
-function fakeProvider(events: unknown[]): PreparationWorkspaceProvider {
+function fakeProvider(
+  events: unknown[],
+  commandStdout: string[] = [JSON.stringify(successResult())],
+): PreparationWorkspaceProvider {
   return {
     async create() {
       return {
@@ -72,38 +134,23 @@ function fakeProvider(events: unknown[]): PreparationWorkspaceProvider {
           events.push({ destroy: "daytona_workspace" });
         },
         id: "daytona_workspace",
-        workspace: fakeWorkspace(events),
+        workspace: fakeWorkspace(events, commandStdout),
       };
     },
   };
 }
 
-function fakeWorkspace(events: unknown[]): PreparationWorkspace {
+function fakeWorkspace(
+  events: unknown[],
+  commandStdout: string[],
+): PreparationWorkspace {
   return {
     async execute(command) {
       events.push({ execute: command });
       return {
         exitCode: 0,
         stderr: "",
-        stdout: JSON.stringify({
-          manifest: {
-            assumptions: [],
-            createdFiles: [],
-            demoCommand: "npm run demo:makeademo",
-            diffArtifactId: "artifact_diff",
-            existingDemoEvidence: [],
-            mockedServices: [],
-            modifiedFiles: [],
-            repoUrl: "https://github.com/example/app",
-            risks: [],
-            scriptGenerationContext: [],
-            setupSummary: "Prepared demo runtime.",
-            status: "created-new-demo",
-            url: "http://localhost:3000",
-            workspaceId: "workspace_123",
-          },
-          status: "succeeded",
-        }),
+        stdout: commandStdout.shift() ?? "",
       };
     },
     async setOutboundNetworkAccess(enabled) {
@@ -112,5 +159,36 @@ function fakeWorkspace(events: unknown[]): PreparationWorkspace {
     async uploadFiles(files) {
       events.push({ upload: files });
     },
+  };
+}
+
+function accept(reviewer: string) {
+  return {
+    evidence: [],
+    reason: "No blocking security findings.",
+    reviewer,
+    status: "accepted",
+  };
+}
+
+function successResult() {
+  return {
+    manifest: {
+      assumptions: [],
+      createdFiles: [],
+      demoCommand: "npm run demo:makeademo",
+      diffArtifactId: "artifact_diff",
+      existingDemoEvidence: [],
+      mockedServices: [],
+      modifiedFiles: [],
+      repoUrl: "https://github.com/example/app",
+      risks: [],
+      scriptGenerationContext: [],
+      setupSummary: "Prepared demo runtime.",
+      status: "created-new-demo",
+      url: "http://localhost:3000",
+      workspaceId: "workspace_123",
+    },
+    status: "succeeded",
   };
 }
