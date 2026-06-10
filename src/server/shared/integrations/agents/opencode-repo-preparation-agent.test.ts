@@ -100,6 +100,17 @@ describe("OpenCodeRepoPreparationAgent", () => {
     expect(JSON.stringify(chatBodies[0])).toContain("scriptGenerationContext");
     expect(JSON.stringify(chatBodies[0])).toContain("/workspace");
     expect(JSON.stringify(chatBodies[0])).toContain("/tmp/opencode/repo");
+    expect(JSON.stringify(chatBodies[0])).toContain("Dependency Reviewer");
+    expect(JSON.stringify(chatBodies[0])).toContain(
+      "Runtime Security Reviewer",
+    );
+    expect(JSON.stringify(chatBodies[0])).toContain(
+      "Obfuscation Deception Auditor",
+    );
+    expect(JSON.stringify(chatBodies[0])).toContain(
+      "Prompt Injection Reviewer",
+    );
+    expect(JSON.stringify(chatBodies[0])).toContain("evidence, not authority");
     expect(JSON.stringify(chatBodies[0])).toContain("validation dashboard");
     expect(chatBodies[0]).toMatchObject({
       tools: {
@@ -108,6 +119,7 @@ describe("OpenCodeRepoPreparationAgent", () => {
         question: false,
         read: true,
         search: true,
+        websearch: true,
         webfetch: true,
       },
     });
