@@ -78,6 +78,7 @@ function fakeWorkspace(
     async setOutboundNetworkAccess(enabled) {
       events.push(enabled ? "network:unblocked" : "network:blocked");
     },
+    async uploadFiles() {},
   };
 }
 

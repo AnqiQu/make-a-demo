@@ -5,6 +5,7 @@ import type {
 import type {
   PreparationWorkspace,
   PreparationWorkspaceCommandResult,
+  PreparationWorkspaceUploadFile,
 } from "../../../pipeline/03-repo-preparation/preparation-workspace.interface";
 
 type DaytonaFetch = typeof fetch;
@@ -139,5 +140,9 @@ class DaytonaPreparationWorkspace implements PreparationWorkspace {
         method: "POST",
       },
     );
+  }
+
+  async uploadFiles(_files: PreparationWorkspaceUploadFile[]): Promise<void> {
+    throw new Error("Daytona file upload requires the SDK-backed adapter.");
   }
 }

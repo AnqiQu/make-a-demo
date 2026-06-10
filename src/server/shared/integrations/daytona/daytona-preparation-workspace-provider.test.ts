@@ -71,6 +71,23 @@ describe("DaytonaPreparationWorkspaceProvider", () => {
       },
     ]);
   });
+
+  it("reports that file upload needs the Daytona SDK-backed adapter", async () => {
+    const provider = new DaytonaPreparationWorkspaceProvider({
+      apiKey: "daytona_key",
+      fetch: fakeFetch([], [{ id: "sandbox_123" }]),
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.uploadFiles([
+        {
+          destinationPath: "/workspace/package.json",
+          sourcePath: "/tmp/repo/package.json",
+        },
+      ]),
+    ).rejects.toThrow("Daytona file upload requires the SDK-backed adapter.");
+  });
 });
 
 type RecordedRequest = {
