@@ -4,6 +4,11 @@ export type PreparationWorkspaceCommandResult = {
   stdout: string;
 };
 
+export type PreparationWorkspaceUploadFile = {
+  destinationPath: string;
+  sourcePath: string;
+};
+
 /**
  * Executes commands and network-policy changes inside a Repo Preparation workspace.
  * Implementations must scope destructive work to the ephemeral workspace copy and
@@ -12,4 +17,5 @@ export type PreparationWorkspaceCommandResult = {
 export interface PreparationWorkspace {
   execute(command: string): Promise<PreparationWorkspaceCommandResult>;
   setOutboundNetworkAccess(enabled: boolean): Promise<void>;
+  uploadFiles(files: PreparationWorkspaceUploadFile[]): Promise<void>;
 }
