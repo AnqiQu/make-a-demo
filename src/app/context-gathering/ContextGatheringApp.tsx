@@ -551,7 +551,9 @@ export function ContextDetailsForm({
       >
         <div className="details-field-grid">
           <label className="details-field">
-            <span>Name</span>
+            <span>
+              Name <span className="required-marker">*</span>
+            </span>
             <input
               autoComplete="name"
               onChange={(event) =>
@@ -562,7 +564,9 @@ export function ContextDetailsForm({
             />
           </label>
           <label className="details-field">
-            <span>Email</span>
+            <span>
+              Email <span className="required-marker">*</span>
+            </span>
             <input
               autoComplete="email"
               onChange={(event) =>

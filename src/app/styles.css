@@ -491,6 +491,10 @@ button:disabled {
   font-weight: 900;
 }
 
+.required-marker {
+  color: #1f2933;
+}
+
 .details-field input,
 .details-field select {
   background: transparent;

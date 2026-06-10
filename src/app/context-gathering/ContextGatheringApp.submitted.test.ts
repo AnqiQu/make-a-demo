@@ -55,6 +55,7 @@ describe("ContextDetailsForm", () => {
     expect(html).toContain('role="progressbar"');
     expect(html).toContain('aria-valuenow="50"');
     expect(html).toContain('aria-label="Back to repository"');
+    expect(html).toContain('class="required-marker"');
     expect(html).toContain(
       "Optional supporting docs (e.g. pitch decks, styling guides, manifestos...)",
     );
