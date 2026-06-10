@@ -5,6 +5,8 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { writePreparedOpenCodeFiles } from "./prepared-opencode-config";
+
 export type DockerizedOpencodeServerCommandInput = {
   containerPort: number;
   hostPort: number;
@@ -130,6 +132,7 @@ async function createTemporaryOpencodeHome(): Promise<string> {
   if (await fileExists(hostAuthFile)) {
     await copyFile(hostAuthFile, join(authDirectory, "auth.json"));
   }
+  await writePreparedOpenCodeFiles(homeDirectory);
 
   return homeDirectory;
 }
