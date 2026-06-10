@@ -57,6 +57,8 @@ export function createDockerizedOpencodeServerCommand(
       "HOME=/tmp/opencode-home",
       "--env",
       `OPENCODE_CONFIG_CONTENT=${JSON.stringify(createOpencodeConfig())}`,
+      "--env",
+      "OPENCODE_ENABLE_EXA=1",
       ...envArgs,
       ...(user === undefined ? [] : ["--user", user]),
       "--publish",
@@ -143,14 +145,7 @@ async function fileExists(path: string): Promise<boolean> {
 
 function createOpencodeConfig() {
   return {
-    permission: {
-      bash: "allow",
-      doom_loop: "allow",
-      edit: "allow",
-      external_directory: "allow",
-      question: "deny",
-      webfetch: "allow",
-    },
+    permission: "allow",
     tools: {
       question: false,
     },

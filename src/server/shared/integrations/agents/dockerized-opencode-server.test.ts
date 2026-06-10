@@ -27,7 +27,7 @@ describe("createDockerizedOpencodeServerCommand", () => {
     expect(command.args.join(" ")).not.toContain("/home/milo:/");
   });
 
-  it("configures OpenCode to allow tool permissions without questions", () => {
+  it("configures OpenCode to allow all permissions without questions", () => {
     const command = createDockerizedOpencodeServerCommand({
       containerPort: 4096,
       hostPort: 49152,
@@ -42,14 +42,19 @@ describe("createDockerizedOpencodeServerCommand", () => {
       configEnv?.replace("OPENCODE_CONFIG_CONTENT=", "") ?? "{}",
     );
 
-    expect(config.permission).toMatchObject({
-      bash: "allow",
-      doom_loop: "allow",
-      edit: "allow",
-      external_directory: "allow",
-      question: "deny",
-      webfetch: "allow",
-    });
+    expect(config.permission).toBe("allow");
     expect(config.tools.question).toBe(false);
+  });
+
+  it("enables OpenCode web search through the Exa feature flag", () => {
+    const command = createDockerizedOpencodeServerCommand({
+      containerPort: 4096,
+      hostPort: 49152,
+      opencodeBinaryPath: "/home/milo/.opencode/bin/opencode",
+      opencodeHomeDirectory: "/tmp/makeademo-opencode-home-abc123",
+      workspaceDirectory: "/tmp/makeademo-workspaces/workspace-123",
+    });
+
+    expect(command.args).toContain("OPENCODE_ENABLE_EXA=1");
   });
 });
