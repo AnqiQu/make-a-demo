@@ -11,3 +11,4 @@ artifacts/
 demo/artifacts/
 .env
 .DS_Store
+.agents
