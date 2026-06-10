@@ -35,6 +35,7 @@ type DaytonaSdkSandbox = {
 };
 
 export type DaytonaSdkPreparationWorkspaceProviderOptions = {
+  apiKey?: string;
   client?: DaytonaSdkClient;
   snapshot?: string;
 };
@@ -46,7 +47,11 @@ export class DaytonaSdkPreparationWorkspaceProvider
   private readonly snapshot: string | undefined;
 
   constructor(options: DaytonaSdkPreparationWorkspaceProviderOptions = {}) {
-    this.client = options.client ?? (new Daytona() as DaytonaSdkClient);
+    this.client =
+      options.client ??
+      (new Daytona(
+        options.apiKey === undefined ? undefined : { apiKey: options.apiKey },
+      ) as DaytonaSdkClient);
     this.snapshot = options.snapshot;
   }
 

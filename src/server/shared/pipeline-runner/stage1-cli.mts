@@ -9,7 +9,7 @@ import {
   readSupportingDocumentUpload,
 } from "../../pipeline/01-context-gathering/supporting-documents";
 import type { RepoSecurityInput } from "../../pipeline/02-repo-security-screen/repo-security-screen";
-import { OpenCodeRepoPreparationAgent } from "../integrations/agents/opencode-repo-preparation-agent";
+import { createRepoPreparationAgent } from "../integrations/agents/repo-preparation-agent-factory";
 import { DockerSandboxRunner } from "../integrations/sandbox/docker-sandbox-runner";
 import { runPipelineJob } from "./pipeline-orchestrator";
 import { collectStage1CliOptions } from "./stage1-cli-interactive";
@@ -47,11 +47,18 @@ const normalizedSupportingDocuments = await Promise.all(
   }),
 );
 
-const repoPreparationAgent = new OpenCodeRepoPreparationAgent({
-  directory: workspaceDirectory,
+const repoPreparationAgent = createRepoPreparationAgent({
+  ...(process.env.DAYTONA_API_KEY === undefined
+    ? {}
+    : { daytonaApiKey: process.env.DAYTONA_API_KEY }),
+  ...(options.daytonaSnapshot === undefined
+    ? {}
+    : { daytonaSnapshot: options.daytonaSnapshot }),
   modelID: options.modelID,
   onProgress: (line) => process.stderr.write(`${line}\n`),
   providerID: options.providerID,
+  runtime: options.repoPreparationRuntime,
+  sourceDirectory: workspaceDirectory,
 });
 
 const result = await runPipelineJob(
