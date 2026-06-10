@@ -21,8 +21,9 @@ describe("ContextGatheringApp", () => {
     const html = renderToStaticMarkup(createElement(ContextGatheringApp));
 
     expect(html).toContain("MakeADemo");
-    expect(html).toContain("By Owlet");
+    expect(html).toContain("by Owlet");
     expect(html).toContain("Make me a demo");
+    expect(html).not.toContain("A peak into our personalised demo machine");
     expect(html).not.toContain("Let&#x27;s Hoot");
   });
 });
@@ -40,7 +41,6 @@ describe("ContextDetailsForm", () => {
           supplementaryInformation: "",
           targetUsers: "",
         },
-        isDraggingSupportingFile: false,
         isSubmitting: false,
         isUploading: false,
         onBack: () => undefined,
@@ -55,15 +55,62 @@ describe("ContextDetailsForm", () => {
     expect(html).toContain('role="progressbar"');
     expect(html).toContain('aria-valuenow="50"');
     expect(html).toContain('aria-label="Back to repository"');
-    expect(html).toContain("Any supplementary information?");
-    expect(html).toContain("E.g. pitch decks, styling guides, manifestos...");
+    expect(html).toContain(
+      "Optional supporting docs (e.g. pitch decks, styling guides, manifestos...)",
+    );
+    expect(html).toContain("click to upload...");
+    expect(html).toContain(
+      'aria-label="Accepted file types: PDF, PPTX, DOCX, TXT, MD"',
+    );
     expect(html).toContain("Let&#x27;s go");
     expect(html.match(/required=""/g)?.length).toBe(2);
     expect(html).not.toContain("Tell us what the demo should show");
     expect(html).not.toContain("Supporting Documents");
     expect(html).not.toContain("<h2>Supporting documents</h2>");
+    expect(html).not.toContain("Drop anything relevant here");
+    expect(html).not.toContain("ZIP");
+    expect(html).not.toContain("Any supplementary information?");
     expect(html).not.toContain("Chat response");
     expect(html).not.toContain("<textarea");
+  });
+
+  it("keeps selected Supporting Documents inside the upload field", () => {
+    const html = renderToStaticMarkup(
+      createElement(ContextDetailsForm, {
+        form: {
+          email: "",
+          importantFeatures: "",
+          name: "",
+          productSummary: "",
+          requestedDurationSeconds: 60,
+          supplementaryInformation: "",
+          targetUsers: "",
+        },
+        isSubmitting: false,
+        isUploading: false,
+        onBack: () => undefined,
+        onFieldChange: () => undefined,
+        onRemovePendingFile: () => undefined,
+        onStageFiles: () => undefined,
+        onSubmit: () => undefined,
+        pendingSupportingFiles: [
+          {
+            file: new File(["deck"], "Launch Deck.pdf", {
+              type: "application/pdf",
+            }),
+            fileName: "Launch Deck.pdf",
+            id: "file-1",
+            mimeType: "application/pdf",
+            sizeBytes: 4,
+          },
+        ],
+      }),
+    );
+
+    expect(html).toContain("Launch Deck.pdf");
+    expect(html).toContain("click to upload again");
+    expect(html).toContain('aria-label="Remove Launch Deck.pdf"');
+    expect(html).not.toContain("1 file selected");
   });
 });
 
