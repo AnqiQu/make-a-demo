@@ -24,6 +24,7 @@ describe("collectStage1CliOptions", () => {
       features: ["validation dashboard", "script package"],
       modelID: "gpt-5.5",
       providerID: "openai",
+      repoPreparationRuntime: "docker",
       repoUrl: "https://github.com/example/app",
       workspaceId: "workspace-demo",
       workspaceRoot: "/tmp/makeademo-workspaces",

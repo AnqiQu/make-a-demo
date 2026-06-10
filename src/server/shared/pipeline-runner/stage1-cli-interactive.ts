@@ -50,6 +50,7 @@ export async function collectStage1CliOptions(
     features,
     modelID,
     providerID,
+    repoPreparationRuntime: "docker",
     repoUrl,
     workspaceId,
     workspaceRoot,

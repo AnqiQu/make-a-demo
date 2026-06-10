@@ -1,8 +1,10 @@
 export type Stage1CliOptions = {
+  daytonaSnapshot?: string;
   docs: string[];
   features: string[];
   modelID: string;
   providerID: string;
+  repoPreparationRuntime: "daytona" | "docker";
   repoUrl: string;
   workspaceId: string;
   workspaceRoot: string;
@@ -13,9 +15,12 @@ export function parseStage1CliArgs(args: string[]): Stage1CliOptions {
   const features: string[] = [];
   let modelID = "gpt-5.5";
   let providerID = "openai";
+  let repoPreparationRuntime: Stage1CliOptions["repoPreparationRuntime"] =
+    "docker";
   let repoUrl: string | undefined;
   let workspaceId: string | undefined;
   let workspaceRoot = "/tmp/makeademo-workspaces";
+  let daytonaSnapshot: string | undefined;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -35,6 +40,16 @@ export function parseStage1CliArgs(args: string[]): Stage1CliOptions {
         break;
       case "--provider":
         providerID = readValue(args, index, arg);
+        index += 1;
+        break;
+      case "--repo-preparation-runtime":
+        repoPreparationRuntime = readRepoPreparationRuntime(
+          readValue(args, index, arg),
+        );
+        index += 1;
+        break;
+      case "--daytona-snapshot":
+        daytonaSnapshot = readValue(args, index, arg);
         index += 1;
         break;
       case "--repo":
@@ -63,14 +78,26 @@ export function parseStage1CliArgs(args: string[]): Stage1CliOptions {
   }
 
   return {
+    ...(daytonaSnapshot === undefined ? {} : { daytonaSnapshot }),
     docs,
     features,
     modelID,
     providerID,
+    repoPreparationRuntime,
     repoUrl,
     workspaceId: workspaceId ?? createWorkspaceId(repoUrl),
     workspaceRoot,
   };
+}
+
+function readRepoPreparationRuntime(
+  value: string,
+): Stage1CliOptions["repoPreparationRuntime"] {
+  if (value === "daytona" || value === "docker") {
+    return value;
+  }
+
+  throw new Error("--repo-preparation-runtime must be daytona or docker");
 }
 
 function readValue(args: string[], index: number, flag: string): string {
