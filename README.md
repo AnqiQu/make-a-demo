@@ -22,6 +22,27 @@ bun run dev
 
 Open `http://localhost:5173`.
 
+## Agent Skills
+
+Agent skills are pinned in `skills-lock.json` but installed copies are not committed. `.agents/` is local generated state and is ignored by git.
+
+Agent-facing CLI tools are pinned in `tools-lock.json`. Railway is installed through the pinned `@railway/cli` package in `package.json`/`bun.lock`; Daytona is pinned to exact GitHub release assets and checksums because it is not distributed as an npm CLI.
+
+Restore the repo-level skills locally before using OpenCode in this repo:
+
+```bash
+npx skills experimental_install
+```
+
+Restart OpenCode after installation. The restored skills should take precedence over global skills with the same names; use global skills only when they are not duplicated by the repo lockfile.
+
+Verify the tool versions before using infrastructure skills:
+
+```bash
+bunx railway --version
+daytona --version
+```
+
 ## App Commands
 
 Run both frontend and backend in development:

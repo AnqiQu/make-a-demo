@@ -1,6 +1,12 @@
 {
   "version": 1,
   "skills": {
+    "daytona": {
+      "source": "daytona/skills",
+      "sourceType": "github",
+      "skillPath": "skills/daytona/SKILL.md",
+      "computedHash": "d4c0da50085f7a145edb4c3cbc384e5f3deb5ede24be5cfa2ad83b332d71ff57"
+    },
     "diagnose": {
       "source": "mattpocock/skills",
       "sourceType": "github",
@@ -42,6 +48,12 @@
       "sourceType": "github",
       "skillPath": "skills/engineering/to-prd/SKILL.md",
       "computedHash": "a6d6d475f1d01c201937fa0c306e55b7056b02023ad615bc92f57514e831dd31"
+    },
+    "use-railway": {
+      "source": "railwayapp/railway-skills",
+      "sourceType": "github",
+      "skillPath": "plugins/railway/skills/use-railway/SKILL.md",
+      "computedHash": "1e78c049bd5ef7009947d72d7a2a84aa92e2f97223524edec65d8919f1dd7450"
     }
   }
 }

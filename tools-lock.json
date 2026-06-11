@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "tools": {
+    "railway": {
+      "command": "railway",
+      "sourceType": "npm",
+      "package": "@railway/cli",
+      "version": "5.8.0",
+      "lockedBy": "bun.lock"
+    },
+    "daytona": {
+      "command": "daytona",
+      "sourceType": "github-release",
+      "repository": "daytonaio/daytona",
+      "version": "0.186.0",
+      "tag": "v0.186.0",
+      "assets": {
+        "darwin-amd64": {
+          "url": "https://github.com/daytonaio/daytona/releases/download/v0.186.0/daytona-darwin-amd64",
+          "sha256": "ca1291f43d759958ec29e9f1e6731e7b281226e5e9372e014c377491b89eec0d"
+        },
+        "darwin-arm64": {
+          "url": "https://github.com/daytonaio/daytona/releases/download/v0.186.0/daytona-darwin-arm64",
+          "sha256": "007f49c1dff049f0280864ed022ea2c3cec5de66dc4079965fdff1fed68eef09"
+        },
+        "linux-amd64": {
+          "url": "https://github.com/daytonaio/daytona/releases/download/v0.186.0/daytona-linux-amd64",
+          "sha256": "dfbe465f4f01c45d15845a9865269f0918bbc144ae2b4bbaf09d1e83e577b9c7"
+        },
+        "linux-arm64": {
+          "url": "https://github.com/daytonaio/daytona/releases/download/v0.186.0/daytona-linux-arm64",
+          "sha256": "062018b4e7c05b50c3f2604bd269985b9c4b84f118020e0f6ab4fb30761fd57b"
+        },
+        "windows-amd64": {
+          "url": "https://github.com/daytonaio/daytona/releases/download/v0.186.0/daytona-windows-amd64.exe",
+          "sha256": "329ddb4472aedb4a1749f6d0d470f4f7b5e5a5860154905e33a4e34f1255c69e"
+        },
+        "windows-arm64": {
+          "url": "https://github.com/daytonaio/daytona/releases/download/v0.186.0/daytona-windows-arm64.exe",
+          "sha256": "3e46f36578eab59c1ff4775e05bbe7975be511dea31797ebf2330215af3c3269"
+        }
+      }
+    }
+  }
+}
