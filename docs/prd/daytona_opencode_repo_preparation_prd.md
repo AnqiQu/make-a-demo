@@ -10,9 +10,9 @@ The current product direction requires a Daytona-hosted OpenCode agent that can 
 
 MakeADemo will introduce Daytona as a backend External Seam for Repo Preparation. The backend will provision Daytona workspaces, run an autonomous OpenCode agent, stream command logs, update network policy, collect redacted audit artifacts, enforce timeout cleanup, and destroy the workspace.
 
-Daytona workspaces will use a prepared agent image or template. The image will include OpenCode, Context7 CLI, Context7 OpenCode skill configuration, predefined security-review subagents, Docker-in-Docker support, and non-secret agent tooling. Secrets will not be baked into the image. LLM provider credentials and any future agent-only secrets will be injected only into the OpenCode agent process at runtime. OpenCode web search will be enabled with `OPENCODE_ENABLE_EXA=1`, which does not require an EXA API key for the built-in OpenCode web search path.
+Daytona workspaces will use a prepared agent image or template. The image will include OpenCode, Context7 CLI, Context7 OpenCode skill configuration, predefined security-review subagents, and non-secret agent tooling. Secrets will not be baked into the image. LLM provider credentials and any future agent-only secrets will be injected only into the OpenCode agent process at runtime. OpenCode web search will be enabled with `OPENCODE_ENABLE_EXA=1`, which does not require an EXA API key for the built-in OpenCode web search path.
 
-The OpenCode agent will have all OpenCode permissions enabled inside the disposable Daytona workspace copy, so it can operate autonomously without permission prompts. That autonomy is bounded by product-controlled seams: submitted app build and runtime commands run in nested Docker-in-Docker containers by default, receive a scrubbed environment, and have outbound network blocked except during mechanically approved dependency-install-only windows.
+The OpenCode agent will have all OpenCode permissions enabled inside the disposable Daytona workspace copy, so it can operate autonomously without permission prompts. That autonomy is bounded by product-controlled seams: submitted app build and runtime commands run in Daytona sandboxes, receive a scrubbed environment, and have outbound network blocked except during mechanically approved dependency-install-only windows.
 
 After the deterministic Repo Security Screen passes, the preparation agent will run a deeper agentic security review before demo build work begins. The review uses four predefined OpenCode subagents: Dependency Reviewer, Runtime Security Reviewer, Obfuscation Deception Auditor, and Prompt Injection Reviewer. Each reviewer must return a structured accept or reject result. Any rejection hard-fails Repo Preparation and produces a Preparation Fallback Prompt. Missing, malformed, or inconclusive reviewer output is logged as a preparation error and fails the run.
 
@@ -42,7 +42,7 @@ The Daytona/OpenCode run still produces the existing Preparation Manifest and wo
 18. As a MakeADemo operator, I want OpenCode web search enabled with `OPENCODE_ENABLE_EXA=1`, so that the agent can research without needing an EXA API key.
 19. As a MakeADemo operator, I want secrets excluded from the prepared image, so that image distribution does not leak credentials.
 20. As a MakeADemo operator, I want LLM provider credentials injected only into the agent process, so that submitted repo code cannot read them.
-21. As a MakeADemo operator, I want nested Docker-in-Docker runtime execution by default, so that submitted app commands are separated from the agent shell.
+21. As a MakeADemo operator, I want submitted app commands to run inside Daytona sandbox execution, so that the pipeline does not depend on a second container runtime.
 22. As a MakeADemo operator, I want submitted app build and runtime commands to receive a scrubbed environment, so that agent-only secrets are not inherited.
 23. As a MakeADemo operator, I want OpenCode permissions set to allow all inside the disposable workspace copy, so that autonomous preparation avoids permission blockers.
 24. As a MakeADemo operator, I want destructive agent operations limited to the ephemeral workspace copy, so that maker source repos, host infrastructure, and persisted artifacts are protected.
@@ -76,8 +76,7 @@ The Daytona/OpenCode run still produces the existing Preparation Manifest and wo
 - Daytona workspaces will start from a prepared image or template rather than installing agent tooling on every run.
 - The prepared image will include OpenCode, Context7 CLI, Context7 OpenCode skill configuration, and required non-secret agent tooling.
 - The prepared image will include predefined OpenCode subagent configurations for the Dependency Reviewer, Runtime Security Reviewer, Obfuscation Deception Auditor, and Prompt Injection Reviewer.
-- The prepared image will use Daytona Docker-in-Docker capability by default.
-- Submitted app build and runtime commands will run in nested containers by default.
+- Submitted app build and runtime commands will run inside Daytona sandbox execution.
 - Secrets will not be baked into the prepared image.
 - OpenCode web search will be enabled with `OPENCODE_ENABLE_EXA=1`.
 - EXA API keys are not required for the built-in OpenCode web search path.
@@ -117,7 +116,7 @@ The Daytona/OpenCode run still produces the existing Preparation Manifest and wo
 - Timeout behavior should be tested to close outbound network access and tear down the workspace.
 - Secret scoping should be tested by verifying submitted app command environments exclude LLM provider credentials and future agent-only secrets.
 - Audit persistence should be tested through public artifact write/read behavior with redacted transcripts, command logs, review summaries, network events, diffs, and Preparation Manifests.
-- Prepared image behavior should be covered by build or smoke tests that verify OpenCode, Context7 CLI, Context7 skill config, reviewer subagent configs, `OPENCODE_ENABLE_EXA=1`, and Docker-in-Docker availability.
+- Prepared image behavior should be covered by build or smoke tests that verify OpenCode, Context7 CLI, Context7 skill config, reviewer subagent configs, and `OPENCODE_ENABLE_EXA=1`.
 - Integration-style tests should cover successful preparation, reviewer rejection, malformed reviewer output, denied network access, dependency-install network window, timeout cleanup, and final manifest/diff production.
 
 ## Out of Scope
@@ -139,5 +138,5 @@ The Daytona/OpenCode run still produces the existing Preparation Manifest and wo
 - This PRD follows ADRs 0012 through 0016.
 - Daytona is the execution substrate for Repo Preparation, not a replacement for the MakeADemo Pipeline contracts.
 - OpenCode can be unrestricted inside the disposable workspace because network access, runtime isolation, secret scoping, timeout cleanup, and downstream validation are enforced outside OpenCode.
-- Daytona docs indicate outbound sandbox policy can be updated at runtime and Docker-in-Docker is supported through Daytona snapshots. A smoke test should verify command/log streaming remains operational when outbound sandbox network is blocked.
+- Daytona docs indicate outbound sandbox policy can be updated at runtime. A smoke test should verify command/log streaming remains operational when outbound sandbox network is blocked.
 - The implementation should keep stack-specific Daytona, OpenCode, and Context7 details behind clear seams and avoid scattering vendor calls through pipeline orchestration.

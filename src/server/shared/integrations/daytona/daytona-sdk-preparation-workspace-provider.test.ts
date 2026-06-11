@@ -3,11 +3,11 @@ import { describe, expect, it } from "vitest";
 import { DaytonaSdkPreparationWorkspaceProvider } from "./daytona-sdk-preparation-workspace-provider";
 
 describe("DaytonaSdkPreparationWorkspaceProvider", () => {
-  it("creates a network-blocked sandbox from the configured snapshot", async () => {
+  it("creates a sandbox from the configured snapshot", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
       client: fakeClient(calls),
-      snapshot: "makeademo-opencode-dind",
+      snapshot: "makeademo-opencode",
     });
 
     const handle = await provider.create();
@@ -15,8 +15,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     expect(handle.id).toBe("sandbox_123");
     expect(calls[0]).toEqual({
       create: {
-        networkBlockAll: true,
-        snapshot: "makeademo-opencode-dind",
+        snapshot: "makeademo-opencode",
       },
     });
   });
@@ -63,9 +62,33 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       { delete: "sandbox_123" },
     ]);
   });
+
+  it("continues when Daytona org policy rejects sandbox-level network overrides", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, {
+        networkError: new Error(
+          "Network access is restricted and cannot be overridden at the sandbox level.",
+        ),
+      }),
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.setOutboundNetworkAccess(true),
+    ).resolves.toBeUndefined();
+    await expect(
+      handle.workspace.setOutboundNetworkAccess(false),
+    ).resolves.toBeUndefined();
+
+    expect(calls.slice(1)).toEqual([
+      { updateNetworkSettings: { networkBlockAll: false } },
+      { updateNetworkSettings: { networkBlockAll: true } },
+    ]);
+  });
 });
 
-function fakeClient(calls: unknown[]) {
+function fakeClient(calls: unknown[], options: { networkError?: Error } = {}) {
   const sandbox = {
     fs: {
       async uploadFiles(files: unknown[]) {
@@ -81,6 +104,9 @@ function fakeClient(calls: unknown[]) {
     },
     async updateNetworkSettings(settings: unknown) {
       calls.push({ updateNetworkSettings: settings });
+      if (options.networkError !== undefined) {
+        throw options.networkError;
+      }
     },
   };
 

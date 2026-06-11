@@ -57,7 +57,6 @@ export class DaytonaSdkPreparationWorkspaceProvider
 
   async create(): Promise<PreparationWorkspaceHandle> {
     const sandbox = await this.client.create({
-      networkBlockAll: true,
       ...(this.snapshot === undefined ? {} : { snapshot: this.snapshot }),
     });
     const id = sandbox.id ?? sandbox.name;
@@ -91,7 +90,15 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
   }
 
   async setOutboundNetworkAccess(enabled: boolean): Promise<void> {
-    await this.sandbox.updateNetworkSettings({ networkBlockAll: !enabled });
+    try {
+      await this.sandbox.updateNetworkSettings({ networkBlockAll: !enabled });
+    } catch (error) {
+      if (isRestrictedNetworkPolicyError(error)) {
+        return;
+      }
+
+      throw error;
+    }
   }
 
   async uploadFiles(files: PreparationWorkspaceUploadFile[]): Promise<void> {
@@ -102,4 +109,13 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
       })),
     );
   }
+}
+
+function isRestrictedNetworkPolicyError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes(
+      "Network access is restricted and cannot be overridden at the sandbox level",
+    )
+  );
 }

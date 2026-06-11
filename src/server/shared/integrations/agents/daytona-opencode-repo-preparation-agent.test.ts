@@ -1,7 +1,3 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
 import { describe, expect, it } from "vitest";
 
 import type { PreparationWorkspaceProvider } from "../../../pipeline/03-repo-preparation/preparation-workspace-runner";
@@ -9,66 +5,59 @@ import type { PreparationWorkspace } from "../../../pipeline/03-repo-preparation
 import { DaytonaOpenCodeRepoPreparationAgent } from "./daytona-opencode-repo-preparation-agent";
 
 describe("DaytonaOpenCodeRepoPreparationAgent", () => {
-  it("uploads the screened workspace and runs OpenCode inside Daytona", async () => {
-    const sourceDirectory = await mkdtemp(join(tmpdir(), "makeademo-source-"));
-    await writeFile(join(sourceDirectory, "package.json"), "{}", "utf8");
-    await mkdir(join(sourceDirectory, "src"));
-    await writeFile(join(sourceDirectory, "src/app.ts"), "export {};", "utf8");
+  it("clones the submitted repo and runs OpenCode inside Daytona", async () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparationAgent({
       modelID: "gpt-5.5",
       provider: fakeProvider(events),
+      providerApiKey: "openai_key",
       providerID: "openai",
-      sourceDirectory,
       timeoutMs: 1_000,
     });
 
-    try {
-      const result = await agent.prepare({
-        normalizedSupportingDocuments: [],
-        repoUrl: "https://github.com/example/app",
-        structuredDemoIntent: { keyProductFeatures: ["validation"] },
-        workspaceId: "workspace_123",
-      });
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
 
-      expect(result).toMatchObject({
-        manifest: { demoCommand: "npm run demo:makeademo" },
-        status: "succeeded",
-      });
-      expect(events).toContainEqual({
-        upload: [
-          {
-            destinationPath: "/workspace/package.json",
-            sourcePath: join(sourceDirectory, "package.json"),
-          },
-          {
-            destinationPath: "/workspace/src/app.ts",
-            sourcePath: join(sourceDirectory, "src/app.ts"),
-          },
-        ],
-      });
-      expect(events).toContainEqual({ network: false });
-      const command = events.find(
-        (event): event is { execute: string } =>
-          typeof event === "object" && event !== null && "execute" in event,
-      )?.execute;
-      expect(command).toContain("OPENCODE_ENABLE_EXA=1");
-      expect(command).toContain("opencode run");
-      expect(command).toContain("--dangerously-skip-permissions");
-      expect(command).toContain("--dir /workspace");
-      expect(command).toContain("--model 'openai/gpt-5.5'");
-      expect(events.at(-1)).toEqual({ destroy: "daytona_workspace" });
-    } finally {
-      await rm(sourceDirectory, { force: true, recursive: true });
-    }
+    expect(result).toMatchObject({
+      manifest: { demoCommand: "npm run demo:makeademo" },
+      status: "succeeded",
+      workspace: { id: "daytona_workspace" },
+    });
+    expect(events).toEqual([
+      { network: true },
+      {
+        execute:
+          "mkdir -p /workspace && find /workspace -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --depth 1 'https://github.com/example/app' /workspace",
+      },
+      { network: false },
+      { execute: expect.stringContaining("opencode run") },
+    ]);
+
+    const command = events.find(
+      (event): event is { execute: string } =>
+        typeof event === "object" &&
+        event !== null &&
+        "execute" in event &&
+        typeof event.execute === "string" &&
+        event.execute.includes("opencode run"),
+    )?.execute;
+    expect(command).toContain("OPENCODE_ENABLE_EXA=1");
+    expect(command).toContain("OPENAI_API_KEY='openai_key'");
+    expect(command).toContain("opencode run");
+    expect(command).toContain("--dangerously-skip-permissions");
+    expect(command).toContain("--dir /workspace");
+    expect(command).toContain("--model 'openai/gpt-5.5'");
   });
 
-  it("handles dependency install network-window requests in the backend", async () => {
-    const sourceDirectory = await mkdtemp(join(tmpdir(), "makeademo-source-"));
-    await writeFile(join(sourceDirectory, "package.json"), "{}", "utf8");
+  it("handles dependency install network-window requests in the retained Daytona workspace", async () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparationAgent({
       modelID: "gpt-5.5",
+      providerApiKey: "openai_key",
       provider: fakeProvider(events, [
         JSON.stringify({
           command: "bun install",
@@ -84,42 +73,34 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
         JSON.stringify(successResult()),
       ]),
       providerID: "openai",
-      sourceDirectory,
       timeoutMs: 1_000,
     });
 
-    try {
-      const result = await agent.prepare({
-        normalizedSupportingDocuments: [],
-        repoUrl: "https://github.com/example/app",
-        structuredDemoIntent: { keyProductFeatures: ["validation"] },
-        workspaceId: "workspace_123",
-      });
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
 
-      expect(result).toMatchObject({
-        manifest: { demoCommand: "npm run demo:makeademo" },
-        status: "succeeded",
-      });
-      expect(events).toEqual([
-        { network: false },
-        {
-          upload: [
-            {
-              destinationPath: "/workspace/package.json",
-              sourcePath: join(sourceDirectory, "package.json"),
-            },
-          ],
-        },
-        { execute: expect.stringContaining("opencode run") },
-        { network: true },
-        { execute: "bun install" },
-        { network: false },
-        { execute: expect.stringContaining("Continue Repo Preparation") },
-        { destroy: "daytona_workspace" },
-      ]);
-    } finally {
-      await rm(sourceDirectory, { force: true, recursive: true });
-    }
+    expect(result).toMatchObject({
+      manifest: { demoCommand: "npm run demo:makeademo" },
+      status: "succeeded",
+      workspace: { id: "daytona_workspace" },
+    });
+    expect(events).toEqual([
+      { network: true },
+      {
+        execute:
+          "mkdir -p /workspace && find /workspace -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --depth 1 'https://github.com/example/app' /workspace",
+      },
+      { network: false },
+      { execute: expect.stringContaining("opencode run") },
+      { network: true },
+      { execute: "bun install" },
+      { network: false },
+      { execute: expect.stringContaining("Continue Repo Preparation") },
+    ]);
   });
 });
 
@@ -150,14 +131,16 @@ function fakeWorkspace(
       return {
         exitCode: 0,
         stderr: "",
-        stdout: commandStdout.shift() ?? "",
+        stdout: command.includes("git clone")
+          ? "cloned"
+          : (commandStdout.shift() ?? ""),
       };
     },
     async setOutboundNetworkAccess(enabled) {
       events.push({ network: enabled });
     },
-    async uploadFiles(files) {
-      events.push({ upload: files });
+    async uploadFiles() {
+      throw new Error("Repo Preparation should clone inside Daytona.");
     },
   };
 }

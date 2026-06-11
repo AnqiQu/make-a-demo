@@ -39,21 +39,13 @@ export async function collectStage1CliOptions(
     "Workspace ID",
     createWorkspaceId(repoUrl),
   );
-  const workspaceRoot = await promptWithDefault(
-    io,
-    "Workspace root",
-    "/tmp/makeademo-workspaces",
-  );
-
   return {
     docs,
     features,
     modelID,
     providerID,
-    repoPreparationRuntime: "docker",
     repoUrl,
     workspaceId,
-    workspaceRoot,
   };
 }
 

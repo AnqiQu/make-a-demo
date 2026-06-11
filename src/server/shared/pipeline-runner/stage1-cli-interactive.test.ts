@@ -11,7 +11,6 @@ describe("collectStage1CliOptions", () => {
       "openai",
       "gpt-5.5",
       "workspace-demo",
-      "/tmp/makeademo-workspaces",
     ];
 
     const options = await collectStage1CliOptions({
@@ -24,10 +23,8 @@ describe("collectStage1CliOptions", () => {
       features: ["validation dashboard", "script package"],
       modelID: "gpt-5.5",
       providerID: "openai",
-      repoPreparationRuntime: "docker",
       repoUrl: "https://github.com/example/app",
       workspaceId: "workspace-demo",
-      workspaceRoot: "/tmp/makeademo-workspaces",
     });
   });
 
@@ -37,7 +34,6 @@ describe("collectStage1CliOptions", () => {
       "https://github.com/example/app",
       "",
       "validation dashboard",
-      "",
       "",
       "",
       "",

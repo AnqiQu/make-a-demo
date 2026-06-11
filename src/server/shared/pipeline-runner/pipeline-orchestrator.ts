@@ -71,6 +71,9 @@ export async function runPipelineJob(
   options.onProgress?.({ stage: "project-validation", status: "started" });
   const validation = await dependencies.validateProject({
     preparationManifest: preparation.manifest,
+    ...(preparation.workspace === undefined
+      ? {}
+      : { preparationWorkspace: preparation.workspace }),
   });
 
   if (validation.status === "failed") {
