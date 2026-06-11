@@ -174,13 +174,13 @@ Optional flags:
 ```bash
 --provider openai
 --model gpt-5.5
---workspace-root /tmp/makeademo-workspaces
+--daytona-snapshot makeademo-opencode
 --workspace-id workspace-test
 ```
 
-OpenCode Repo Preparation runs through the `@opencode-ai/sdk` by starting `opencode serve` inside a Docker container that bind-mounts the prepared workspace. The host `opencode` executable must be installed on `PATH`.
+Stage 1 requires `DAYTONA_API_KEY`. Repo Security Screen, Repo Preparation, and Project Validation run through Daytona-backed sandboxes using the backend Daytona seam.
 
-Current limitation: Repo Preparation has Docker-backed filesystem isolation, but runtime network lockdown is not production-ready yet. Do not treat submitted repos as safely sandboxed in production until validation/capture sandbox hardening is complete.
+Repo Preparation retains its Daytona workspace for Project Validation, then validation cleanup destroys it after the browser check completes.
 
 ## Demo Tooling
 

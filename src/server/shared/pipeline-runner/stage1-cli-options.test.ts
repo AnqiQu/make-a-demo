@@ -20,22 +20,44 @@ describe("parseStage1CliArgs", () => {
         "gpt-5.5",
         "--workspace-id",
         "workspace_test",
-        "--repo-preparation-runtime",
-        "daytona",
         "--daytona-snapshot",
-        "makeademo-opencode-dind",
+        "makeademo-opencode",
       ]),
     ).toEqual({
-      daytonaSnapshot: "makeademo-opencode-dind",
+      daytonaSnapshot: "makeademo-opencode",
       docs: ["./brief.md"],
       features: ["validation dashboard", "script package"],
       modelID: "gpt-5.5",
       providerID: "openai",
-      repoPreparationRuntime: "daytona",
       repoUrl: "https://github.com/example/app",
       workspaceId: "workspace_test",
-      workspaceRoot: "/tmp/makeademo-workspaces",
     });
+  });
+
+  it("rejects the legacy local workspace root option", () => {
+    expect(() =>
+      parseStage1CliArgs([
+        "--repo",
+        "https://github.com/example/app",
+        "--feature",
+        "validation dashboard",
+        "--workspace-root",
+        "/tmp/makeademo-workspaces",
+      ]),
+    ).toThrowError("Unknown option: --workspace-root");
+  });
+
+  it("rejects the legacy Repo Preparation runtime selector", () => {
+    expect(() =>
+      parseStage1CliArgs([
+        "--repo",
+        "https://github.com/example/app",
+        "--feature",
+        "validation dashboard",
+        "--repo-preparation-runtime",
+        "docker",
+      ]),
+    ).toThrowError("Unknown option: --repo-preparation-runtime");
   });
 
   it("requires a repo and at least one feature", () => {

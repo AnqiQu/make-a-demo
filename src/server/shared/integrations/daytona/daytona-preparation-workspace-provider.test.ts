@@ -8,7 +8,7 @@ describe("DaytonaPreparationWorkspaceProvider", () => {
     const provider = new DaytonaPreparationWorkspaceProvider({
       apiKey: "daytona_key",
       fetch: fakeFetch(requests, [{ id: "sandbox_123" }]),
-      snapshot: "makeademo-opencode-dind",
+      snapshot: "makeademo-opencode",
     });
 
     const handle = await provider.create();
@@ -18,7 +18,7 @@ describe("DaytonaPreparationWorkspaceProvider", () => {
       {
         body: {
           networkBlockAll: true,
-          snapshot: "makeademo-opencode-dind",
+          snapshot: "makeademo-opencode",
         },
         method: "POST",
         url: "https://app.daytona.io/api/sandbox",

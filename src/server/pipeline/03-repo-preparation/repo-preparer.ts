@@ -28,6 +28,9 @@ export async function prepareRepo(
     return {
       manifest: readPreparationManifest(result.manifest),
       status: "succeeded",
+      ...(result.workspace === undefined
+        ? {}
+        : { workspace: result.workspace }),
     };
   } catch (error) {
     return {
