@@ -1,5 +1,19 @@
 ## Agent skills
 
+Repo skills are pinned in `skills-lock.json`. Do not commit installed skill copies under `.agents/`; that directory is local generated state and is ignored by git.
+
+Agent-facing CLI tools are pinned separately in `tools-lock.json`. `railway` is installed from the pinned `@railway/cli` package in `package.json`/`bun.lock`; `daytona` is pinned to an exact GitHub release asset and checksum because it is not distributed as an npm CLI.
+
+Before using repo-level skills in OpenCode, restore them locally:
+
+```bash
+npx skills experimental_install
+```
+
+Restart OpenCode after restoring skills so the newly installed local skills are loaded. Use global skills only when they are not duplicates of a skill pinned in `skills-lock.json`.
+
+Before using the Railway or Daytona skills, verify their CLIs against `tools-lock.json` with `bunx railway --version` and `daytona --version`.
+
 ### Issue tracker
 
 Issues and PRDs for this repo live in GitHub Issues. See `docs/agents/issue-tracker.md`.
