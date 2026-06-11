@@ -58,9 +58,9 @@ export type ContextGatheringSubmitResult = {
 };
 
 /**
- * Persists Context Gathering intake and creates the initial queued demo request.
+ * Persists Context Gathering intake and places the Project on the demo queue.
  * Implementations must perform the user, Project, and Demo Request writes in one
- * durable transaction and leave downstream pipeline work queued, not started.
+ * durable transaction and store queue status only on the Project.
  */
 export interface ContextGatheringStore {
   createQueuedProject(

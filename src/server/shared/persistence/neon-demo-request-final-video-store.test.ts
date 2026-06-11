@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { NeonDemoRequestFinalVideoStore } from "./neon-demo-request-final-video-store";
 
 describe("NeonDemoRequestFinalVideoStore", () => {
-  it("links the generated final video to the Demo Request", async () => {
+  it("links the generated final video to the Demo Request without writing queue status", async () => {
     const updates: unknown[] = [];
     const db = {
       select() {
@@ -66,7 +66,6 @@ describe("NeonDemoRequestFinalVideoStore", () => {
     expect(updates).toEqual([
       {
         generatedDemoUrl: "r2://owlet/demo-videos/demo-request-123/video.mp4",
-        status: "completed",
       },
     ]);
   });
@@ -141,15 +140,19 @@ describe("NeonDemoRequestFinalVideoStore", () => {
         return {
           from() {
             return {
-              where() {
+              innerJoin() {
                 return {
-                  limit: async () => [
-                    {
-                      generatedDemoUrl:
-                        "r2://owlet/demo-videos/demo-request-123/video.mp4",
-                      status: "completed",
-                    },
-                  ],
+                  where() {
+                    return {
+                      limit: async () => [
+                        {
+                          generatedDemoUrl:
+                            "r2://owlet/demo-videos/demo-request-123/video.mp4",
+                          status: "completed",
+                        },
+                      ],
+                    };
+                  },
                 };
               },
             };
@@ -170,20 +173,24 @@ describe("NeonDemoRequestFinalVideoStore", () => {
     });
   });
 
-  it("maps queued Demo Requests to processing status", async () => {
+  it("maps queued Projects to processing status", async () => {
     const db = {
       select() {
         return {
           from() {
             return {
-              where() {
+              innerJoin() {
                 return {
-                  limit: async () => [
-                    {
-                      generatedDemoUrl: null,
-                      status: "queued",
-                    },
-                  ],
+                  where() {
+                    return {
+                      limit: async () => [
+                        {
+                          generatedDemoUrl: null,
+                          status: "queued",
+                        },
+                      ],
+                    };
+                  },
                 };
               },
             };

@@ -42,5 +42,4 @@ export const demoRequests = pgTable("demo_requests", {
     .notNull()
     .references(() => projects.id),
   script: jsonb("script"),
-  status: text("status").notNull().default("queued"),
 });

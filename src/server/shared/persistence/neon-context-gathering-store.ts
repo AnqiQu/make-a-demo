@@ -60,7 +60,6 @@ export class NeonContextGatheringStore implements ContextGatheringStore {
           generatedDemoUrl: null,
           projectId: project.id,
           script: null,
-          status: "queued",
         })
         .returning({ id: demoRequests.id });
 
