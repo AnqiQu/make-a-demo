@@ -1,4 +1,5 @@
 import type { PreparationManifest } from "../03-repo-preparation/preparation-manifest";
+import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
 import type { NetworkAttempt } from "./network-isolation-policy";
 
 export type SandboxValidationInput = {
@@ -24,6 +25,7 @@ export interface SandboxRunner {
   runValidation(
     input: SandboxValidationInput & {
       preparationManifest: PreparationManifest;
+      preparationWorkspace?: PreparationWorkspaceHandle;
     },
   ): Promise<SandboxValidationOutput>;
 }
