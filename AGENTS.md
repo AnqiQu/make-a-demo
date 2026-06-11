@@ -10,8 +10,6 @@ Before using repo-level skills in OpenCode, restore them locally:
 npx skills experimental_install
 ```
 
-Restart OpenCode after restoring skills so the newly installed local skills are loaded. Use global skills only when they are not duplicates of a skill pinned in `skills-lock.json`.
-
 Before using the Railway or Daytona skills, verify their CLIs against `tools-lock.json` with `bunx railway --version` and `daytona --version`.
 
 ### Issue tracker
