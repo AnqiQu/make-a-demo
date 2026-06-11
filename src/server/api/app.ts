@@ -20,6 +20,8 @@ type ApiGithubDependencies = {
   >;
 };
 
+const MAX_SUPPORTING_DOCUMENT_UPLOAD_BYTES = 10 * 1024 * 1024;
+
 export type ApiAppDependencies = {
   demoRequests: DemoRequestStatusStore;
   frontend?: FrontendAssetReader;
@@ -203,12 +205,14 @@ function parseR2Url(value: string) {
 
 function readUploadRequest(value: unknown) {
   const record = readRecord(value, "upload request");
+  const sizeBytes = readNumber(record, "sizeBytes");
+  assertSupportingDocumentSize(sizeBytes);
 
   return {
     draftId: readString(record, "draftId"),
     fileName: readString(record, "fileName"),
     mimeType: readString(record, "mimeType"),
-    sizeBytes: readNumber(record, "sizeBytes"),
+    sizeBytes,
   };
 }
 
@@ -224,6 +228,8 @@ async function readMultipartUploadRequest(request: Request) {
   if (!(file instanceof File)) {
     throw new Error("file must be provided");
   }
+
+  assertSupportingDocumentSize(file.size);
 
   return {
     body: new Uint8Array(await file.arrayBuffer()),
@@ -249,6 +255,12 @@ function readString(record: Record<string, unknown>, key: string) {
   }
 
   return value;
+}
+
+function assertSupportingDocumentSize(sizeBytes: number): void {
+  if (sizeBytes > MAX_SUPPORTING_DOCUMENT_UPLOAD_BYTES) {
+    throw new Error("Supporting Document uploads must be 10 MB or smaller");
+  }
 }
 
 function readNumber(record: Record<string, unknown>, key: string) {
