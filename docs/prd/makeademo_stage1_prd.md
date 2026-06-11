@@ -79,7 +79,7 @@ After Project Validation succeeds, MakeADemo generates a read-only Video Script 
 - Dependency installation may use network access.
 - After dependency installation, all inbound and outbound communication across the sandbox boundary is blocked and treated as a hard validation failure.
 - Project Validation is programmatic and does not use LLM API calls.
-- Project Validation runs in backend Docker sandboxes, not in the web server process, the maker's browser, or a local-only CLI architecture.
+- Project Validation runs in backend Daytona sandboxes, not in the web server process, the maker's browser, Docker-specific infrastructure, or a local-only CLI architecture.
 - Playwright validation runs inside the Sandbox rather than from the backend host.
 - Artifacts such as screenshots, logs, normalized documents, preparation manifests, diffs, and Video Script Packages are stored as pipeline artifacts.
 - V1 supports JavaScript/TypeScript web apps with `package.json` and standard JS package managers.

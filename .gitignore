@@ -1,5 +1,6 @@
 node_modules/
 .agent/
+.agents/
 coverage/
 dist/
 *.tsbuildinfo
@@ -10,3 +11,4 @@ dist/
 artifacts/
 demo/artifacts/
 .env
+.DS_Store

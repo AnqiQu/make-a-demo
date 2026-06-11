@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   answerCurrentPrompt,
   canContinueFromRepoStep,
+  collectIntakeDetails,
   connectGitHubInstallation,
   createInitialContextGatheringDraft,
   rejectUnsupportedSupportingFile,
@@ -47,9 +48,10 @@ describe("Context Gathering draft", () => {
       importantFeatures: "Repo validation and script generation.",
       productSummary: "Owlet turns apps into demo videos.",
       requestedDurationSeconds: 120,
+      supplementaryInformation: "",
       targetUsers: "Founders and hackathon builders.",
     });
-    expect(draft.chatStep).toBe("documents");
+    expect(draft.chatStep).toBe("details");
     expect(draft.contextTranscript.at(-1)?.text).toBe("2 minutes");
   });
 
@@ -62,6 +64,93 @@ describe("Context Gathering draft", () => {
     expect(() => selectDemoDuration(draft, 240)).toThrow(
       "Demo duration must be between 30 seconds and 3 minutes",
     );
+  });
+
+  it("collects the combined intake form into structured context and transcript", () => {
+    const draft = setRepoDetails(createInitialContextGatheringDraft(), {
+      repoUrl: "https://github.com/example/app",
+      repoVisibility: "public",
+    });
+
+    const collected = collectIntakeDetails(
+      draft,
+      {
+        email: "founder@example.com",
+        importantFeatures: "Context gathering and video rendering.",
+        name: "Anqi",
+        productSummary: "MakeADemo creates demo videos from runnable apps.",
+        requestedDurationSeconds: 60,
+        supplementaryInformation: "Use the launch deck tone.",
+        targetUsers: "Founders and product teams.",
+      },
+      { now: () => "2026-06-07T17:05:00.000Z" },
+    );
+
+    expect(collected.contact).toEqual({
+      email: "founder@example.com",
+      name: "Anqi",
+    });
+    expect(collected.structuredContext).toEqual({
+      importantFeatures: "Context gathering and video rendering.",
+      productSummary: "MakeADemo creates demo videos from runnable apps.",
+      requestedDurationSeconds: 60,
+      supplementaryInformation: "Use the launch deck tone.",
+      targetUsers: "Founders and product teams.",
+    });
+    expect(collected.chatStep).toBe("details");
+    expect(collected.contextTranscript.map((message) => message.text)).toEqual([
+      "What is your name and email address",
+      "Anqi, founder@example.com",
+      "Tell us about your product in a few sentences",
+      "MakeADemo creates demo videos from runnable apps.",
+      "Tell us more about your target users",
+      "Founders and product teams.",
+      "What are the most important features",
+      "Context gathering and video rendering.",
+      "How long do you want the demo video to be? Choose between 30s-3min.",
+      "1 minute",
+      "Any supplementary information?",
+      "Use the launch deck tone.",
+    ]);
+  });
+
+  it("only requires name and email when collecting the combined intake form", () => {
+    const draft = setRepoDetails(createInitialContextGatheringDraft(), {
+      repoUrl: "https://github.com/example/app",
+      repoVisibility: "public",
+    });
+
+    const collected = collectIntakeDetails(
+      draft,
+      {
+        email: "founder@example.com",
+        importantFeatures: "",
+        name: "Anqi",
+        productSummary: "",
+        requestedDurationSeconds: 60,
+        supplementaryInformation: "",
+        targetUsers: "",
+      },
+      { now: () => "2026-06-07T17:05:00.000Z" },
+    );
+
+    expect(collected.contact).toEqual({
+      email: "founder@example.com",
+      name: "Anqi",
+    });
+    expect(collected.structuredContext).toEqual({
+      importantFeatures: "",
+      productSummary: "",
+      requestedDurationSeconds: 60,
+      supplementaryInformation: "",
+      targetUsers: "",
+    });
+    expect(collected.contextTranscript.map((message) => message.text)).toEqual([
+      "What is your name and email address",
+      "Anqi, founder@example.com",
+      "How long do you want the demo video to be? Choose between 30s-3min.",
+      "1 minute",
+    ]);
   });
 
   it("rejects image and video Supporting Documents", () => {
@@ -119,7 +208,7 @@ describe("Context Gathering draft", () => {
       repoUrl: draft.repoUrl,
       repoVisibility: draft.repoVisibility,
     });
-    expect(draft.chatStep).toBe("chat");
+    expect(draft.chatStep).toBe("details");
   });
 
   it("only allows the repo step to continue after a public URL is pasted or one GitHub repo is selected", () => {

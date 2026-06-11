@@ -46,6 +46,7 @@ describe("validateProject", () => {
   });
 
   it("fails validation when runtime network attempts cross the sandbox boundary", async () => {
+    let cleanedUp = false;
     const sandboxRunner: SandboxRunner = {
       async runValidation() {
         return {
@@ -57,6 +58,9 @@ describe("validateProject", () => {
             },
           ],
           logs: ["started demo"],
+          cleanup: async () => {
+            cleanedUp = true;
+          },
           repoFiles: ["package.json"],
           runtimeExitCode: 0,
         };
@@ -88,6 +92,40 @@ describe("validateProject", () => {
     expect(result.warnings).toEqual([
       "No lockfile found; npm install may be less deterministic.",
     ]);
+    expect(cleanedUp).toBe(true);
+  });
+
+  it("preserves browser validation errors when cleanup also fails", async () => {
+    const sandboxRunner: SandboxRunner = {
+      async runValidation() {
+        return {
+          blockedNetworkAttempts: [],
+          cleanup: async () => {
+            throw new Error("cleanup failed");
+          },
+          logs: ["started demo"],
+          repoFiles: ["package.json", "package-lock.json"],
+          runtimeExitCode: 0,
+        };
+      },
+    };
+    const browserValidator: BrowserValidator = {
+      async validate() {
+        throw new Error("browser failed");
+      },
+    };
+
+    await expect(
+      validateProject(
+        {
+          preparationManifest: manifest({
+            demoCommand: "npm run demo",
+            url: "http://localhost:5173",
+          }),
+        },
+        { browserValidator, sandboxRunner },
+      ),
+    ).rejects.toThrow("browser failed");
   });
 
   it("fails validation when browser runtime requests leave the local boundary", async () => {

@@ -21,16 +21,18 @@
     "lsp:typescript": "typescript-language-server --stdio",
     "preview": "vite preview",
     "stage1:run": "bun src/server/shared/pipeline-runner/stage1-cli.mts",
+    "start": "bun src/server/api/server.mts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1063.0",
     "@aws-sdk/s3-request-presigner": "^3.1063.0",
-    "@opencode-ai/sdk": "^1.16.2",
+    "@daytona/sdk": "^0.185.0",
     "@remotion/bundler": "^4.0.473",
     "@remotion/renderer": "^4.0.473",
     "drizzle-orm": "^0.45.2",
+    "lucide-react": "^1.17.0",
     "postgres": "^3.4.9",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -39,6 +41,7 @@
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "@playwright/test": "^1.60.0",
+    "@railway/cli": "5.8.0",
     "@types/node": "^22.15.3",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",

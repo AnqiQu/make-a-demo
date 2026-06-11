@@ -25,7 +25,7 @@
 - **Scene Description**: A script item that summarizes one web-based scene and lists the browser actions needed to capture it.
 - **Browser Action**: One explicit interaction or wait condition in a Scene Description, such as clicking a button, typing into an input, or waiting for streamed output to finish.
 - **Capture Script**: A Playwright script generated from a Scene Description that performs the Browser Actions needed to record its Scene.
-- **Scene**: The raw captured video clip produced by running a Scene Description's Capture Script in a Docker sandbox.
+- **Scene**: The raw captured video clip produced by running a Scene Description's Capture Script in a Sandbox.
 - **Companion Video**: The user-facing view of a Scene shown alongside its Scene Description during review.
 - **Footage Capture**: The stage where MakeADemo records raw browser footage needed by the approved script.
 - **Compositing**: The stage where MakeADemo assembles captured footage into the final demo video with text, transitions, and other presentation effects.

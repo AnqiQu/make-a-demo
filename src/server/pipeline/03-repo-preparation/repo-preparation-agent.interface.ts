@@ -1,6 +1,7 @@
 import type { DemoBrief } from "../01-context-gathering/intake/demo-brief.schema";
 import type { NormalizedSupportingDocument } from "../01-context-gathering/supporting-documents";
 import type { PreparationManifest } from "./preparation-manifest";
+import type { PreparationWorkspaceHandle } from "./preparation-workspace-runner";
 
 export type RepoPreparationInput = {
   normalizedSupportingDocuments: NormalizedSupportingDocument[];
@@ -13,6 +14,7 @@ type RepoPreparationAgentResult =
   | {
       manifest: unknown;
       status: "succeeded";
+      workspace?: PreparationWorkspaceHandle;
     }
   | {
       assumptions: string[];
@@ -34,6 +36,7 @@ export type RepoPreparationResult =
   | {
       manifest: PreparationManifest;
       status: "succeeded";
+      workspace?: PreparationWorkspaceHandle;
     }
   | {
       fallbackPrompt: string;

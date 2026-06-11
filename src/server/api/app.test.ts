@@ -3,6 +3,66 @@ import { describe, expect, it } from "vitest";
 import { createApiApp } from "./app";
 
 describe("Context Gathering API", () => {
+  it("serves the frontend fallback for browser routes while keeping API routes explicit", async () => {
+    const app = createApiApp({
+      frontend: {
+        async readAsset(pathname) {
+          if (pathname === "/dashboard") {
+            return new Response('<div id="root"></div>', {
+              headers: { "Content-Type": "text/html" },
+            });
+          }
+
+          return null;
+        },
+      },
+      github: {
+        createInstallUrl: () =>
+          "https://github.com/apps/owlet/installations/select_target",
+        listRepositories: async () => [],
+      },
+      demoRequests: {
+        async readDemoRequestStatus() {
+          throw new Error("demoRequests should not be called");
+        },
+      },
+      store: {
+        async createQueuedProject() {
+          throw new Error("store should not be called");
+        },
+      },
+      uploads: {
+        bucket: "owlet",
+        putObject: async () => {
+          throw new Error("putObject should not be called");
+        },
+        presignGet: async () => {
+          throw new Error("presignGet should not be called");
+        },
+        presignPut: async () => "https://uploads.example.test/file",
+      },
+    });
+
+    const browserRouteResponse = await app.fetch(
+      new Request("http://localhost/dashboard"),
+    );
+    expect(browserRouteResponse.status).toBe(200);
+    expect(browserRouteResponse.headers.get("Content-Type")).toContain(
+      "text/html",
+    );
+    await expect(browserRouteResponse.text()).resolves.toContain(
+      '<div id="root"></div>',
+    );
+
+    const apiRouteResponse = await app.fetch(
+      new Request("http://localhost/api/not-found"),
+    );
+    expect(apiRouteResponse.status).toBe(404);
+    await expect(apiRouteResponse.json()).resolves.toEqual({
+      error: "Not found",
+    });
+  });
+
   it("presigns Supporting Document uploads", async () => {
     const app = createApiApp({
       github: {
@@ -50,6 +110,27 @@ describe("Context Gathering API", () => {
       key: "uploads/draft-1/file-1-product-brief.md",
       method: "PUT",
       r2Url: "r2://owlet/uploads/draft-1/file-1-product-brief.md",
+    });
+  });
+
+  it("rejects oversized Supporting Document presign requests", async () => {
+    const app = createApiApp(createDefaultDependencies());
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/uploads/presign", {
+        body: JSON.stringify({
+          draftId: "draft-1",
+          fileName: "Huge Brief.md",
+          mimeType: "text/markdown",
+          sizeBytes: 10 * 1024 * 1024 + 1,
+        }),
+        method: "POST",
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Supporting Document uploads must be 10 MB or smaller",
     });
   });
 
@@ -106,6 +187,30 @@ describe("Context Gathering API", () => {
       fileName: "Product Brief.md",
       key: "uploads/draft-1/file-1-product-brief.md",
       r2Url: "r2://owlet/uploads/draft-1/file-1-product-brief.md",
+    });
+  });
+
+  it("rejects oversized multipart Supporting Document uploads before storage", async () => {
+    const app = createApiApp(createDefaultDependencies());
+    const body = new FormData();
+    body.set("draftId", "draft-1");
+    body.set(
+      "file",
+      new File([new Uint8Array(10 * 1024 * 1024 + 1)], "Huge Brief.md", {
+        type: "text/markdown",
+      }),
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/uploads", {
+        body,
+        method: "POST",
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Supporting Document uploads must be 10 MB or smaller",
     });
   });
 
@@ -328,3 +433,34 @@ describe("Context Gathering API", () => {
     });
   });
 });
+
+function createDefaultDependencies() {
+  return {
+    github: {
+      createInstallUrl: () =>
+        "https://github.com/apps/owlet/installations/select_target",
+      listRepositories: async () => [],
+    },
+    demoRequests: {
+      async readDemoRequestStatus() {
+        throw new Error("demoRequests should not be called");
+      },
+    },
+    store: {
+      async createQueuedProject() {
+        throw new Error("store should not be called");
+      },
+    },
+    uploads: {
+      bucket: "owlet",
+      createId: () => "file-1",
+      putObject: async () => {
+        throw new Error("putObject should not be called");
+      },
+      presignGet: async () => {
+        throw new Error("presignGet should not be called");
+      },
+      presignPut: async () => "https://uploads.example.test/file",
+    },
+  };
+}

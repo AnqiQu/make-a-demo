@@ -37,14 +37,16 @@ describe("runPipelineJob", () => {
           return {
             manifest: manifest(),
             status: "succeeded",
+            workspace: fakeWorkspaceHandle(),
           };
         },
         screenRepoSecurity() {
           calls.push("repo-security-screen");
           return { rejections: [], status: "passed", warnings: [] };
         },
-        async validateProject() {
+        async validateProject(input) {
           calls.push("project-validation");
+          expect(input.preparationWorkspace?.id).toBe("daytona_workspace");
           return {
             blockedNetworkAttempts: [],
             logs: ["validated"],
@@ -96,6 +98,7 @@ describe("runPipelineJob", () => {
           return {
             manifest: manifest(),
             status: "succeeded",
+            workspace: fakeWorkspaceHandle(),
           };
         },
         screenRepoSecurity() {
@@ -183,5 +186,19 @@ function manifest() {
     status: "created-new-demo" as const,
     url: "http://localhost:3000",
     workspaceId: "workspace_123",
+  };
+}
+
+function fakeWorkspaceHandle() {
+  return {
+    async destroy() {},
+    id: "daytona_workspace",
+    workspace: {
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async setOutboundNetworkAccess() {},
+      async uploadFiles() {},
+    },
   };
 }

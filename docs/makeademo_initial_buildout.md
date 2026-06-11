@@ -57,10 +57,10 @@ Repo execution contract:
 
 Execution capabilities:
 
-- Docker sandbox  
+- Daytona sandbox  
 - PreMotion  
 - Playwright
-- Repo validation should run as a backend job in an isolated Docker sandbox
+- Repo validation should run as a backend job in an isolated Daytona sandbox
 
 ### Frontend
 
@@ -108,7 +108,7 @@ Stage 1 intentionally stops before footage capture, final compositing, and user 
 #### 3. Validate Repo Runnability
 - MakeADemo programmatically checks whether the repo can be installed and started with the demo run command.
 - MakeADemo infers the dependency install command from standard lockfiles and installs dependencies with network access allowed.
-- MakeADemo runs the demo command in a backend Docker sandbox without LLM API calls.
+- MakeADemo runs the demo command in a backend Daytona sandbox without LLM API calls.
 - Any inbound or outbound network communication across the sandbox boundary after dependency installation fails validation.
 - MakeADemo runs Playwright inside the same isolated sandbox and opens the running app locally inside that sandbox.
 - Validation succeeds when the app is responsive, interactable, and capturable in a browser.

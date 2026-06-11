@@ -1,5 +1,25 @@
 ## Agent skills
 
+Repo skills are pinned in `skills-lock.json`. Do not commit installed skill copies under `.agents/`; that directory is local generated state and is ignored by git.
+
+Agent-facing CLI tools are pinned separately in `tools-lock.json`. `railway` is installed from the pinned `@railway/cli` package in `package.json`/`bun.lock`; `daytona` is pinned to an exact GitHub release asset and checksum because it is not distributed as an npm CLI.
+
+Before using repo-level skills in OpenCode, restore them locally:
+
+```bash
+npx skills experimental_install
+```
+
+Before using the Railway or Daytona skills, verify their CLIs against `tools-lock.json` with `bunx railway --version` and `daytona --version`.
+
+### Issue tracker
+
+Issues and PRDs for this repo live in GitHub Issues. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+This repo uses the default triage label vocabulary. See `docs/agents/triage-labels.md`.
+
 ### Domain docs
 
 This is a single-context repo. See `docs/agents/domain.md`. You should always take a look at this info BEFORE DOING ANYTHING to facilitate better communication. 

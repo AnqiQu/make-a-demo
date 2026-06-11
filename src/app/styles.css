@@ -43,7 +43,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -73,58 +74,10 @@ button:disabled {
   position: relative;
 }
 
-.ambient-glow {
-  background: radial-gradient(
-      circle at top left,
-      rgba(245, 158, 11, 0.22),
-      transparent 28%
-    ),
-    radial-gradient(
-      circle at bottom right,
-      rgba(185, 130, 91, 0.2),
-      transparent 32%
-    );
-  inset: 0;
-  pointer-events: none;
-  position: absolute;
-}
-
-.owlet-shell::before {
-  background: radial-gradient(
-    ellipse at center,
-    rgba(255, 247, 237, 0) 22%,
-    rgba(255, 247, 237, 0.78) 70%
-  );
-  content: "";
-  height: 12rem;
-  left: 10%;
-  pointer-events: none;
-  position: absolute;
-  right: 10%;
-  top: 30%;
-}
-
-.dot-field {
-  background-image: radial-gradient(
-    circle,
-    rgba(245, 158, 11, 0.15) 1.5px,
-    transparent 2px
-  );
-  background-size: 28px 28px;
-  height: 12rem;
-  pointer-events: none;
-  position: absolute;
-  width: 12rem;
-}
-
-.dot-field-left {
-  left: clamp(1rem, 4vw, 5rem);
-  top: 2rem;
-}
-
-.dot-field-right {
-  bottom: 2rem;
-  right: clamp(1rem, 4vw, 5rem);
+.owlet-shell-repo {
+  display: flex;
+  flex-direction: column;
+  overflow-y: hidden;
 }
 
 .brand {
@@ -132,40 +85,51 @@ button:disabled {
   display: flex;
   gap: clamp(0.25rem, 0.9vw, 0.75rem);
   justify-content: center;
-  margin: 0 auto 0.25rem;
+  margin: 0 auto clamp(2.25rem, 5vw, 3.25rem);
+  padding: clamp(1.5rem, 4vw, 2.5rem) 0 clamp(1.1rem, 3vw, 2rem);
   position: relative;
+  width: max-content;
   z-index: 1;
-}
-
-.brand-logo-frame {
-  align-items: center;
-  display: grid;
-  height: clamp(9.35rem, 23.8vw, 18.7rem);
-  justify-content: center;
-  position: relative;
-  width: clamp(9.35rem, 23.8vw, 18.7rem);
-}
-
-.brand-logo-image {
-  display: block;
-  height: 100%;
-  object-fit: contain;
-  position: relative;
-  width: 100%;
 }
 
 .brand-name {
   color: #1f2933;
   font-family: "Owlet Serif", Georgia, serif;
-  font-size: clamp(3.25rem, 9vw, 6rem);
+  font-size: clamp(3rem, 8vw, 5.75rem);
   font-weight: 600;
   letter-spacing: 0;
   line-height: 1;
 }
 
+.brand-attribution {
+  align-items: center;
+  color: #3a2118;
+  display: flex;
+  font-size: 0.9rem;
+  font-weight: 800;
+  gap: 0.35rem;
+  padding: 0;
+  position: absolute;
+  right: 0;
+  top: calc(100% - 1.25rem);
+  width: max-content;
+  z-index: 2;
+}
+
+.owlet-shell-details .brand-attribution,
+.owlet-shell-submitted .brand-attribution {
+  top: calc(100% - 1rem);
+}
+
+.brand-attribution img {
+  display: block;
+  height: 1.65rem;
+  object-fit: contain;
+  width: 1.65rem;
+}
+
 .repo-step,
-.chat-step,
-.documents-step,
+.details-step,
 .submitted-step {
   margin: 0 auto;
   max-width: 64rem;
@@ -177,13 +141,16 @@ button:disabled {
   align-items: center;
   display: flex;
   flex-direction: column;
+  flex: 1;
+  max-width: 96rem;
+  min-height: 0;
 }
 
 .repo-step h1,
 .submitted-step h1 {
   color: #1f2933;
   font-family: "Owlet Serif", Georgia, serif;
-  font-size: clamp(2rem, 4vw, 2.9rem);
+  font-size: clamp(1.7rem, 3.2vw, 2.35rem);
   font-weight: 600;
   letter-spacing: 0;
   line-height: 1.16;
@@ -192,7 +159,7 @@ button:disabled {
 }
 
 .context-step-heading,
-.documents-step h1 {
+.details-supporting-documents h2 {
   color: #1f2933;
   font-family: "Owlet Serif", Georgia, serif;
   font-size: clamp(1rem, 2vw, 1.45rem);
@@ -205,15 +172,17 @@ button:disabled {
 }
 
 .repo-panel {
-  margin-top: clamp(2.8rem, 7vw, 5.25rem);
-  width: 100%;
+  margin-top: clamp(1.5rem, 7vh, 5rem);
+  width: min(100%, 64rem);
 }
 
 .repo-connect-row {
   align-items: center;
   display: grid;
   gap: 1rem;
-  grid-template-columns: minmax(0, 1fr) auto minmax(11.5rem, 13.5rem);
+  grid-template-columns:
+    minmax(43.5rem, 1fr) auto
+    minmax(13.8rem, 16.2rem);
 }
 
 .repo-url-input,
@@ -243,6 +212,12 @@ button:disabled {
   width: 1.45rem;
 }
 
+.button-icon,
+.link-icon svg {
+  height: 1.45rem;
+  width: 1.45rem;
+}
+
 .repo-url-input input {
   background: transparent;
   border: 0;
@@ -265,10 +240,8 @@ button:disabled {
 
 .github-button,
 .primary-hoot,
-.chat-composer button,
-.duration-grid button,
 .repo-picker button {
-  border-radius: 1.25rem;
+  border-radius: 0.75rem;
   font-weight: 800;
   transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms
     ease, background 160ms ease;
@@ -295,9 +268,7 @@ button:disabled {
 
 .github-button:hover,
 .repo-picker button:hover,
-.primary-hoot:hover,
-.duration-grid button:hover,
-.chat-composer button:hover {
+.primary-hoot:hover {
   transform: translateY(-2px);
 }
 
@@ -329,17 +300,16 @@ button:disabled {
   font-size: clamp(0.95rem, 1.8vw, 1.1rem);
   font-weight: 600;
   line-height: 1.5;
-  margin: 2.2rem auto 0;
+  margin: clamp(1.25rem, 3vh, 2rem) auto 0;
   max-width: 58rem;
   text-align: center;
 }
 
-.documents-step p,
 .submitted-step p {
   color: #64748b;
-  font-size: clamp(1rem, 2vw, 1.35rem);
+  font-size: 0.95rem;
   line-height: 1.6;
-  margin: 2.2rem auto 0;
+  margin: 0.65rem auto 0;
   max-width: 58rem;
   text-align: center;
 }
@@ -351,7 +321,7 @@ button:disabled {
   color: #ffffff;
   display: block;
   font-size: 1.22rem;
-  margin: clamp(3rem, 7vw, 5.5rem) auto 0;
+  margin: clamp(2rem, 5vh, 4rem) auto 0;
   min-height: 3.9rem;
   min-width: 13.5rem;
   padding: 0 1.05rem;
@@ -371,8 +341,7 @@ button:disabled {
 }
 
 .repo-picker button,
-.duration-grid button,
-.chat-composer button {
+.details-form button {
   background: #f59e0b;
   border: 0;
   color: #ffffff;
@@ -403,13 +372,7 @@ button:disabled {
 }
 
 .repo-select-field select {
-  appearance: none;
   background-color: rgba(255, 255, 255, 0.92);
-  background-image: linear-gradient(45deg, transparent 50%, #3a2118 50%),
-    linear-gradient(135deg, #3a2118 50%, transparent 50%);
-  background-position: calc(100% - 1.35rem) 50%, calc(100% - 0.95rem) 50%;
-  background-repeat: no-repeat;
-  background-size: 0.42rem 0.42rem, 0.42rem 0.42rem;
   border: 1px solid #dccfc1;
   border-radius: 1.25rem;
   box-shadow: 0 12px 26px rgba(58, 33, 24, 0.1);
@@ -437,243 +400,272 @@ button:disabled {
   margin: 0;
 }
 
-.chat-step {
-  max-width: 56rem;
-}
-
-.progress-pill {
-  background: rgba(255, 255, 255, 0.78);
-  border: 1px solid #e7ddd2;
-  border-radius: 999px;
-  box-shadow: 0 12px 26px rgba(58, 33, 24, 0.1);
-  color: #b9825b;
-  font-size: 0.8rem;
-  font-weight: 900;
-  letter-spacing: 0.08em;
-  margin: 1.25rem auto 1rem;
-  padding: 0.65rem 1.1rem;
-  text-align: center;
-  text-transform: uppercase;
-  width: max-content;
-}
-
-.chat-card {
-  background: rgba(255, 255, 255, 0.82);
-  border-radius: 1.25rem;
-  padding: clamp(1rem, 3vw, 1.4rem);
-}
-
-.chat-window {
-  align-content: start;
-  display: grid;
-  gap: 1rem;
-  height: clamp(14rem, 36vh, 22rem);
-  overflow-y: auto;
-  padding: 0.25rem;
-}
-
-.chat-bubble {
-  border-radius: 1.25rem;
-  box-shadow: 0 12px 26px rgba(58, 33, 24, 0.1);
-  line-height: 1.5;
-  max-width: min(78%, 38rem);
-  padding: 1rem 1.15rem;
-}
-
-.chat-bubble-assistant {
-  background: #fff7ed;
-  border: 1px solid #e7ddd2;
-  color: #3a2118;
-  justify-self: start;
-}
-
-.chat-bubble-user {
-  background: linear-gradient(180deg, #ff8c00, #ff6b00);
-  color: #ffffff;
-  justify-self: end;
-}
-
-.chat-composer {
-  display: grid;
-  gap: 0.8rem;
-  grid-template-columns: minmax(0, 1fr) auto;
-  margin-top: 1rem;
-}
-
-.chat-composer input {
-  background: rgba(255, 255, 255, 0.92);
-  border: 1px solid #dccfc1;
-  border-radius: 1rem;
-  box-shadow: 0 12px 26px rgba(58, 33, 24, 0.1);
-  color: #3a2118;
-  font-size: 1rem;
-  font-weight: 600;
-  min-height: 3.5rem;
-  min-width: 0;
-  outline: 0;
-  padding: 0 1.3rem;
-}
-
-.chat-composer input:focus,
 .repo-url-input:focus-within {
   border-color: rgba(245, 158, 11, 0.72);
   box-shadow: 0 12px 26px rgba(58, 33, 24, 0.1), 0 0 0 4px
     rgba(245, 158, 11, 0.15);
 }
 
-.duration-grid {
+.details-step {
+  max-width: 54rem;
+  padding-bottom: 4rem;
+}
+
+.back-arrow-button {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid #e7ddd2;
+  border-radius: 999px;
+  box-shadow: 0 12px 26px rgba(58, 33, 24, 0.1);
+  color: #3a2118;
   display: grid;
-  gap: 0.75rem;
-  grid-template-columns: repeat(4, 1fr);
-  margin-top: 1rem;
+  height: 3rem;
+  justify-content: center;
+  position: fixed;
+  left: 1rem;
+  top: 1rem;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+  width: 3rem;
+  z-index: 3;
 }
 
-.documents-step {
-  max-width: 48rem;
+.back-arrow-button:hover {
+  box-shadow: 0 15px 34px rgba(58, 33, 24, 0.16);
+  transform: translateY(-2px);
 }
 
-.document-card,
+.back-arrow-button svg {
+  height: 1.45rem;
+  width: 1.45rem;
+}
+
+.progress-track-shell {
+  left: 0;
+  margin: 0;
+  max-width: none;
+  position: fixed;
+  top: 0;
+  width: 100%;
+  z-index: 4;
+}
+
+.progress-track {
+  background: rgba(255, 255, 255, 0.72);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  height: 0.2rem;
+  overflow: hidden;
+  width: 100%;
+}
+
+.progress-track-fill {
+  background: #f59e0b;
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+  width: 50%;
+}
+
+.details-form {
+  display: grid;
+  gap: clamp(1rem, 2.4vw, 1.5rem);
+  /* padding: clamp(0.75rem, 2vw, 1.25rem) 0; */
+}
+
+.details-field-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.details-field {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.details-field > span,
+.details-supporting-documents h2,
+.upload-field-heading > span:first-child {
+  color: #1f2933;
+  font-weight: 900;
+}
+
+.required-marker {
+  color: #1f2933;
+}
+
+.details-field input,
+.details-field select {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid rgba(58, 33, 24, 0.26);
+  border-radius: 0;
+  box-shadow: none;
+  color: #3a2118;
+  font-size: 1rem;
+  font-weight: 600;
+  min-width: 0;
+  outline: 0;
+  padding: 0.55rem 0 0.6rem;
+}
+
+.details-field input,
+.details-field select {
+  min-height: 2.75rem;
+}
+
+.details-field input:focus,
+.details-field select:focus {
+  border-bottom-color: #f59e0b;
+}
+
 .submitted-step {
   background: rgba(255, 255, 255, 0.82);
   border-radius: 1.25rem;
   padding: clamp(1.4rem, 4vw, 2rem);
 }
 
-.documents-step h1,
+.details-supporting-documents {
+  margin-top: 0;
+  padding-top: 0;
+  text-align: left;
+}
+
+.details-supporting-documents h2,
 .submitted-step h1 {
   margin-bottom: 0;
 }
 
-.upload-zone {
+.upload-field-heading {
   align-items: center;
-  background: rgba(255, 247, 237, 0.45);
-  border: 1px dashed #f59e0b;
-  border-radius: 1rem;
-  cursor: pointer;
   display: flex;
-  flex-direction: column;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.details-form .file-type-tooltip {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  color: #1f2933;
+  cursor: help;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 1rem;
+  font-weight: 800;
+  height: auto;
   justify-content: center;
-  margin-top: 2rem;
-  min-height: 13rem;
-  padding: 1.5rem;
+  min-height: 0;
+  padding: 0;
+  position: relative;
+  width: auto;
+}
+
+.file-type-tooltip svg {
+  height: 1rem;
+  width: 1rem;
+}
+
+.file-type-tooltip-panel {
+  background: #111827;
+  border-radius: 0.6rem;
+  bottom: calc(100% + 0.45rem);
+  box-shadow: 0 12px 26px rgba(58, 33, 24, 0.16);
+  color: #ffffff;
+  font-size: 0.78rem;
+  font-weight: 800;
+  left: 50%;
+  line-height: 1.35;
+  opacity: 0;
+  padding: 0.55rem 0.7rem;
+  pointer-events: none;
+  position: absolute;
   text-align: center;
-  transition: background 160ms ease, border-color 160ms ease;
+  transform: translateX(-50%);
+  transition: opacity 160ms ease;
+  width: 13.5rem;
+  z-index: 5;
 }
 
-.upload-zone:hover,
-.upload-zone:focus-within,
-.upload-zone-active {
-  background: #fff7ed;
-  border-color: #ea8500;
+.file-type-tooltip:hover .file-type-tooltip-panel,
+.file-type-tooltip:focus .file-type-tooltip-panel {
+  opacity: 1;
 }
 
-.upload-zone input {
+.upload-input-shell {
+  align-items: center;
+  border-bottom: 2px solid rgba(58, 33, 24, 0.26);
+  color: #3a2118;
+  display: block;
+  margin-top: 0.5rem;
+  min-height: 2.75rem;
+  padding: 0.55rem 0 0.6rem;
+}
+
+.upload-input-shell:focus-within {
+  border-bottom-color: #f59e0b;
+}
+
+.upload-input-shell input {
   height: 1px;
   opacity: 0;
   position: absolute;
   width: 1px;
 }
 
-.upload-icon {
+.upload-placeholder {
   align-items: center;
-  background: #ffead5;
-  border-radius: 999px;
-  color: #f59e0b;
-  display: grid;
-  height: 4rem;
-  justify-content: center;
-  width: 4rem;
-}
-
-.upload-icon svg {
-  height: 2.2rem;
-  width: 2.2rem;
-}
-
-.upload-zone strong {
-  color: #111827;
-  font-family: "Owlet Serif", Georgia, serif;
-  font-size: 1.3rem;
+  color: rgba(58, 33, 24, 0.26);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 1rem;
   font-weight: 600;
-  letter-spacing: 0;
-  margin-top: 1rem;
+  gap: 0.7rem;
 }
 
-.upload-action {
-  align-items: center;
-  background: #f59e0b;
-  border-radius: 1.25rem;
-  box-shadow: 0 12px 26px rgba(245, 158, 11, 0.22);
-  color: #ffffff;
-  display: inline-flex;
-  font-size: 0.92rem;
-  font-weight: 900;
-  justify-content: center;
-  margin-top: 1rem;
-  min-height: 2.5rem;
-  padding: 0 1.2rem;
+.upload-placeholder svg {
+  color: #3a2118;
+  flex: 0 0 auto;
+  height: 1.25rem;
+  width: 1.25rem;
 }
 
-.upload-zone small {
-  align-items: center;
-  background: #ffffff;
-  border: 1px solid #e7ddd2;
-  border-radius: 999px;
-  box-shadow: 0 12px 26px rgba(58, 33, 24, 0.1);
-  color: #64748b;
-  display: inline-flex;
-  font-size: 0.72rem;
-  font-weight: 900;
-  letter-spacing: 0.04em;
-  margin-top: 1rem;
-  min-height: 2.4rem;
-  padding: 0 1rem;
-}
-
-.pending-file-dock {
-  margin-top: 1rem;
-}
-
-.pending-file-dock p {
-  color: #64748b;
-  font-size: 0.9rem;
-  font-weight: 800;
-  line-height: 1.4;
-  margin: 0 0 0.45rem;
-  text-align: left;
-}
-
-.file-list {
-  background: rgba(255, 255, 255, 0.82);
-  border: 1px solid #e7ddd2;
-  border-radius: 1rem;
-  box-shadow: 0 12px 26px rgba(58, 33, 24, 0.1);
-  color: #64748b;
-  list-style: none;
-  margin: 1rem 0 0;
-  padding: 0.55rem;
-}
-
-.file-list li {
-  align-items: center;
-  background: #ffffff;
-  border-radius: 999px;
+.upload-file-list {
+  color: #3a2118;
   display: grid;
-  gap: 0.75rem;
-  grid-template-columns: minmax(0, 1fr) auto;
-  padding: 0.45rem 0.55rem 0.45rem 0.9rem;
+  gap: 0.35rem;
+  list-style: none;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
 }
 
-.file-list span {
+.upload-field-content {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.upload-file-list li {
+  align-items: center;
+  display: grid;
+  gap: 0.6rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-width: 0;
+}
+
+.upload-file-list span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.file-list button {
+.upload-file-list button {
   align-items: center;
-  background: #fff7ed;
-  border: 1px solid #e7ddd2;
+  background: transparent;
+  border: 0;
   border-radius: 999px;
   color: #3a2118;
   display: inline-flex;
@@ -685,14 +677,9 @@ button:disabled {
   width: 1.65rem;
 }
 
-.file-list button:hover {
-  background: #f59e0b;
-  border-color: #f59e0b;
-  color: #ffffff;
-}
-
-.file-list li + li {
-  margin-top: 0.4rem;
+.upload-file-list button svg {
+  height: 0.95rem;
+  width: 0.95rem;
 }
 
 .submitted-step {
@@ -756,12 +743,10 @@ button:disabled {
     padding: 1rem;
   }
 
-  .dot-field {
-    display: none;
-  }
-
   .brand {
     gap: 1rem;
+    max-width: calc(100vw - 2rem);
+    width: max-content;
   }
 
   .repo-panel {
@@ -786,19 +771,14 @@ button:disabled {
     width: min(100%, 18rem);
   }
 
-  .duration-grid {
-    grid-template-columns: repeat(2, 1fr);
+  .details-field-grid {
+    grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 560px) {
-  .brand-logo-frame {
-    height: 8.15rem;
-    width: 8.15rem;
-  }
-
   .brand-name {
-    font-size: 3rem;
+    font-size: 2.7rem;
   }
 
   .repo-step h1,
@@ -807,7 +787,7 @@ button:disabled {
   }
 
   .context-step-heading,
-  .documents-step h1 {
+  .details-supporting-documents h2 {
     font-size: 1.1rem;
   }
 
@@ -816,12 +796,15 @@ button:disabled {
     min-height: 3.9rem;
   }
 
-  .chat-composer {
-    grid-template-columns: 1fr;
+  .brand-attribution {
+    top: calc(100% - 0.95rem);
+    transform: scale(0.9);
+    transform-origin: right center;
   }
 
-  .chat-composer button {
-    width: 100%;
+  .back-arrow-button {
+    left: 0.75rem;
+    top: 0.75rem;
   }
 }
 

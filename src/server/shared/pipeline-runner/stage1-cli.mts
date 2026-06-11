@@ -1,6 +1,5 @@
-import { spawn } from "node:child_process";
-import { mkdir, readFile, readdir, rm, stat } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { readFile, stat } from "node:fs/promises";
+import { basename } from "node:path";
 import { createInterface } from "node:readline/promises";
 
 import { readDemoBrief } from "../../pipeline/01-context-gathering/intake/project-intake";
@@ -9,29 +8,32 @@ import {
   readSupportingDocumentUpload,
 } from "../../pipeline/01-context-gathering/supporting-documents";
 import type { RepoSecurityInput } from "../../pipeline/02-repo-security-screen/repo-security-screen";
-import { OpenCodeRepoPreparationAgent } from "../integrations/agents/opencode-repo-preparation-agent";
-import { DockerSandboxRunner } from "../integrations/sandbox/docker-sandbox-runner";
+import type { PreparationWorkspaceProvider } from "../../pipeline/03-repo-preparation/preparation-workspace-runner";
+import { createRepoPreparationAgent } from "../integrations/agents/repo-preparation-agent-factory";
+import { DaytonaSdkPreparationWorkspaceProvider } from "../integrations/daytona/daytona-sdk-preparation-workspace-provider";
+import { DaytonaSandboxRunner } from "../integrations/sandbox/daytona-sandbox-runner";
 import { runPipelineJob } from "./pipeline-orchestrator";
 import { collectStage1CliOptions } from "./stage1-cli-interactive";
 import { parseStage1CliArgs } from "./stage1-cli-options";
 import { createStage1PipelineDependencies } from "./stage1-pipeline";
 
 const options = await readOptions(process.argv.slice(2));
-const workspaceDirectory = join(options.workspaceRoot, options.workspaceId);
+const daytonaApiKey = process.env.DAYTONA_API_KEY;
 
-process.stderr.write("[pipeline] clone: started\n");
-await rm(workspaceDirectory, { force: true, recursive: true });
-await mkdir(options.workspaceRoot, { recursive: true });
-await runCommand("git", [
-  "clone",
-  "--depth",
-  "1",
+if (daytonaApiKey === undefined || daytonaApiKey === "") {
+  throw new Error("DAYTONA_API_KEY is required for Daytona Stage 1 runs.");
+}
+
+const sandboxProvider = new DaytonaSdkPreparationWorkspaceProvider({
+  apiKey: daytonaApiKey,
+  ...(options.daytonaSnapshot === undefined
+    ? {}
+    : { snapshot: options.daytonaSnapshot }),
+});
+const repoSecurity = await readRepoSecurityInput(
+  sandboxProvider,
   options.repoUrl,
-  workspaceDirectory,
-]);
-process.stderr.write("[pipeline] clone: succeeded\n");
-
-const repoSecurity = await readRepoSecurityInput(workspaceDirectory);
+);
 const normalizedSupportingDocuments = await Promise.all(
   options.docs.map(async (docPath) => {
     const contents = await readFile(docPath, "utf8");
@@ -47,10 +49,13 @@ const normalizedSupportingDocuments = await Promise.all(
   }),
 );
 
-const repoPreparationAgent = new OpenCodeRepoPreparationAgent({
-  directory: workspaceDirectory,
+const repoPreparationAgent = createRepoPreparationAgent({
+  daytonaApiKey,
+  ...(options.daytonaSnapshot === undefined
+    ? {}
+    : { daytonaSnapshot: options.daytonaSnapshot }),
   modelID: options.modelID,
-  onProgress: (line) => process.stderr.write(`${line}\n`),
+  providerApiKey: readProviderApiKey(options.providerID),
   providerID: options.providerID,
 });
 
@@ -64,9 +69,7 @@ const result = await runPipelineJob(
   },
   createStage1PipelineDependencies({
     repoPreparationAgent,
-    sandboxRunner: new DockerSandboxRunner({
-      workspaceRoot: options.workspaceRoot,
-    }),
+    sandboxRunner: new DaytonaSandboxRunner(),
   }),
   {
     onProgress: (event) =>
@@ -101,55 +104,67 @@ async function readOptions(args: string[]) {
 }
 
 async function readRepoSecurityInput(
-  workspaceDirectory: string,
+  provider: PreparationWorkspaceProvider,
+  repoUrl: string,
 ): Promise<RepoSecurityInput> {
-  const entries = await readdir(workspaceDirectory, { withFileTypes: true });
-  const files = await Promise.all(
-    entries
-      .filter((entry) => entry.isFile())
-      .map(async (entry) => {
-        const path = entry.name;
-        const fullPath = join(workspaceDirectory, path);
-        const stats = await stat(fullPath);
-        const text = shouldReadForSecurity(path)
-          ? await readFile(fullPath, "utf8")
-          : undefined;
+  const handle = await provider.create();
 
-        return text === undefined
-          ? { path }
-          : { path, text, sizeBytes: stats.size };
-      }),
-  );
-  const repoStats = await calculateRepoStats(workspaceDirectory);
-
-  return { files, repoStats };
-}
-
-async function calculateRepoStats(directory: string) {
-  let fileCount = 0;
-  let sizeBytes = 0;
-
-  async function walk(currentDirectory: string) {
-    const entries = await readdir(currentDirectory, { withFileTypes: true });
-
-    for (const entry of entries) {
-      if (entry.name === ".git" || entry.name === "node_modules") {
-        continue;
-      }
-
-      const fullPath = join(currentDirectory, entry.name);
-      if (entry.isDirectory()) {
-        await walk(fullPath);
-      } else if (entry.isFile()) {
-        const stats = await stat(fullPath);
-        fileCount += 1;
-        sizeBytes += stats.size;
-      }
+  try {
+    process.stderr.write("[pipeline] daytona clone: started\n");
+    await handle.workspace.setOutboundNetworkAccess(true);
+    const cloneResult = await handle.workspace.execute(
+      `mkdir -p /workspace && find /workspace -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --depth 1 ${shellQuote(repoUrl)} /workspace`,
+    );
+    await handle.workspace.setOutboundNetworkAccess(false);
+    if (cloneResult.exitCode !== 0) {
+      throw new Error(
+        `Daytona git clone failed: ${[cloneResult.stderr, cloneResult.stdout].filter((line) => line.length > 0).join("\n")}`,
+      );
     }
-  }
+    process.stderr.write("[pipeline] daytona clone: succeeded\n");
 
-  await walk(directory);
-  return { fileCount, sizeBytes };
+    const statsResult = await handle.workspace.execute(
+      "find /workspace -path /workspace/.git -prune -o -path /workspace/node_modules -prune -o -type f -printf '%P\\t%s\\n'",
+    );
+    if (statsResult.exitCode !== 0) {
+      throw new Error(`Daytona repo stats failed: ${statsResult.stderr}`);
+    }
+
+    const fileStats = statsResult.stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .map((line) => {
+        const [path = "", size = "0"] = line.split("\t");
+        return { path, sizeBytes: Number(size) };
+      });
+    const files = await Promise.all(
+      fileStats.map(async (file) => {
+        if (!shouldReadForSecurity(file.path)) {
+          return { path: file.path };
+        }
+
+        const textResult = await handle.workspace.execute(
+          `cat ${shellQuote(`/workspace/${file.path}`)}`,
+        );
+
+        return {
+          path: file.path,
+          text: textResult.stdout,
+        };
+      }),
+    );
+
+    return {
+      files,
+      repoStats: {
+        fileCount: fileStats.length,
+        sizeBytes: fileStats.reduce((sum, file) => sum + file.sizeBytes, 0),
+      },
+    };
+  } finally {
+    await handle.destroy();
+  }
 }
 
 function shouldReadForSecurity(path: string): boolean {
@@ -174,16 +189,19 @@ function inferTextMimeType(path: string): string {
   return "text/plain";
 }
 
-async function runCommand(command: string, args: string[]): Promise<void> {
-  const child = spawn(command, args, {
-    stdio: "inherit",
-  });
-
-  const exitCode = await new Promise<number | null>((resolve) => {
-    child.on("exit", resolve);
-  });
-
-  if (exitCode !== 0) {
-    throw new Error(`${command} ${args.join(" ")} failed with ${exitCode}`);
+function readProviderApiKey(providerID: string): string {
+  if (providerID !== "openai") {
+    throw new Error(`Unsupported Repo Preparation provider: ${providerID}`);
   }
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (apiKey === undefined || apiKey === "") {
+    throw new Error("OPENAI_API_KEY is required for OpenAI Repo Preparation.");
+  }
+
+  return apiKey;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }

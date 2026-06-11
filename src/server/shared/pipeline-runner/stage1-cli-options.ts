@@ -1,11 +1,11 @@
 export type Stage1CliOptions = {
+  daytonaSnapshot?: string;
   docs: string[];
   features: string[];
   modelID: string;
   providerID: string;
   repoUrl: string;
   workspaceId: string;
-  workspaceRoot: string;
 };
 
 export function parseStage1CliArgs(args: string[]): Stage1CliOptions {
@@ -15,7 +15,7 @@ export function parseStage1CliArgs(args: string[]): Stage1CliOptions {
   let providerID = "openai";
   let repoUrl: string | undefined;
   let workspaceId: string | undefined;
-  let workspaceRoot = "/tmp/makeademo-workspaces";
+  let daytonaSnapshot: string | undefined;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -37,16 +37,16 @@ export function parseStage1CliArgs(args: string[]): Stage1CliOptions {
         providerID = readValue(args, index, arg);
         index += 1;
         break;
+      case "--daytona-snapshot":
+        daytonaSnapshot = readValue(args, index, arg);
+        index += 1;
+        break;
       case "--repo":
         repoUrl = readValue(args, index, arg);
         index += 1;
         break;
       case "--workspace-id":
         workspaceId = readValue(args, index, arg);
-        index += 1;
-        break;
-      case "--workspace-root":
-        workspaceRoot = readValue(args, index, arg);
         index += 1;
         break;
       default:
@@ -63,13 +63,13 @@ export function parseStage1CliArgs(args: string[]): Stage1CliOptions {
   }
 
   return {
+    ...(daytonaSnapshot === undefined ? {} : { daytonaSnapshot }),
     docs,
     features,
     modelID,
     providerID,
     repoUrl,
     workspaceId: workspaceId ?? createWorkspaceId(repoUrl),
-    workspaceRoot,
   };
 }
 
