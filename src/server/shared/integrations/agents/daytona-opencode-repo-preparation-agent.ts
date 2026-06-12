@@ -12,6 +12,8 @@ import type { SecurityReviewOutcome } from "../../../pipeline/03-repo-preparatio
 
 export type DaytonaOpenCodeRepoPreparationAgentOptions = {
   modelID: string;
+  onStderr?: (chunk: string) => void;
+  onStdout?: (chunk: string) => void;
   providerApiKey: string;
   provider: PreparationWorkspaceProvider;
   providerID: string;
@@ -22,6 +24,8 @@ export class DaytonaOpenCodeRepoPreparationAgent
   implements RepoPreparationAgent
 {
   private readonly modelID: string;
+  private readonly onStderr: ((chunk: string) => void) | undefined;
+  private readonly onStdout: ((chunk: string) => void) | undefined;
   private readonly providerApiKey: string;
   private readonly provider: PreparationWorkspaceProvider;
   private readonly providerID: string;
@@ -29,6 +33,8 @@ export class DaytonaOpenCodeRepoPreparationAgent
 
   constructor(options: DaytonaOpenCodeRepoPreparationAgentOptions) {
     this.modelID = options.modelID;
+    this.onStderr = options.onStderr;
+    this.onStdout = options.onStdout;
     this.providerApiKey = options.providerApiKey;
     this.provider = options.provider;
     this.providerID = options.providerID;
@@ -76,14 +82,12 @@ export class DaytonaOpenCodeRepoPreparationAgent
       return cloneResult;
     }
 
-    const firstResult = await handle.workspace.execute(
-      createOpenCodeRunCommand({
-        model: `${this.providerID}/${this.modelID}`,
-        prompt: createDaytonaRepoPreparationPrompt(input),
-        providerApiKey: this.providerApiKey,
-        providerID: this.providerID,
-      }),
-    );
+    const firstResult = await this.executeOpenCode(handle, {
+      model: `${this.providerID}/${this.modelID}`,
+      prompt: createDaytonaRepoPreparationPrompt(input),
+      providerApiKey: this.providerApiKey,
+      providerID: this.providerID,
+    });
     const signal = readDependencyInstallSignal(firstResult.stdout);
 
     if (signal === undefined) {
@@ -96,13 +100,32 @@ export class DaytonaOpenCodeRepoPreparationAgent
       workspace: handle.workspace,
     });
 
+    return this.executeOpenCode(handle, {
+      model: `${this.providerID}/${this.modelID}`,
+      prompt: createContinueRepoPreparationPrompt(input),
+      providerApiKey: this.providerApiKey,
+      providerID: this.providerID,
+    });
+  }
+
+  private executeOpenCode(
+    handle: PreparationWorkspaceHandle,
+    input: {
+      model: string;
+      prompt: string;
+      providerApiKey: string;
+      providerID: string;
+    },
+  ): Promise<PreparationWorkspaceCommandResult> {
+    const options = {
+      env: createOpenCodeEnv(input),
+      ...(this.onStderr === undefined ? {} : { onStderr: this.onStderr }),
+      ...(this.onStdout === undefined ? {} : { onStdout: this.onStdout }),
+    };
+
     return handle.workspace.execute(
-      createOpenCodeRunCommand({
-        model: `${this.providerID}/${this.modelID}`,
-        prompt: createContinueRepoPreparationPrompt(input),
-        providerApiKey: this.providerApiKey,
-        providerID: this.providerID,
-      }),
+      createOpenCodeRunCommand(input),
+      Object.keys(options).length === 0 ? undefined : options,
     );
   }
 }
@@ -182,9 +205,6 @@ function createOpenCodeRunCommand(input: {
   providerID: string;
 }): string {
   return [
-    `${readProviderApiKeyEnvName(input.providerID)}=${shellQuote(input.providerApiKey)}`,
-    "OPENCODE_ENABLE_EXA=1",
-    `OPENCODE_CONFIG_CONTENT=${shellQuote(JSON.stringify({ permission: "allow" }))}`,
     "opencode run",
     "--dangerously-skip-permissions",
     "--format json",
@@ -192,6 +212,17 @@ function createOpenCodeRunCommand(input: {
     `--model ${shellQuote(input.model)}`,
     shellQuote(input.prompt),
   ].join(" ");
+}
+
+function createOpenCodeEnv(input: {
+  providerApiKey: string;
+  providerID: string;
+}): Record<string, string> {
+  return {
+    [readProviderApiKeyEnvName(input.providerID)]: input.providerApiKey,
+    OPENCODE_CONFIG_CONTENT: JSON.stringify({ permission: "allow" }),
+    OPENCODE_ENABLE_EXA: "1",
+  };
 }
 
 function readProviderApiKeyEnvName(providerID: string): string {

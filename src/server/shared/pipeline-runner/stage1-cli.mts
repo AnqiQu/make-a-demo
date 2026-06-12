@@ -12,6 +12,7 @@ import type { PreparationWorkspaceProvider } from "../../pipeline/03-repo-prepar
 import { createRepoPreparationAgent } from "../integrations/agents/repo-preparation-agent-factory";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import { DaytonaSandboxRunner } from "../integrations/sandbox/daytona-sandbox-runner";
+import { createOpenCodeOutputStream } from "./opencode-output-stream";
 import { runPipelineJob } from "./pipeline-orchestrator";
 import { collectStage1CliOptions } from "./stage1-cli-interactive";
 import { parseStage1CliArgs } from "./stage1-cli-options";
@@ -48,6 +49,9 @@ const normalizedSupportingDocuments = await Promise.all(
     return normalizeSupportingDocument({ contents, source });
   }),
 );
+const openCodeOutput = createOpenCodeOutputStream({
+  write: (text) => process.stdout.write(text),
+});
 
 const repoPreparationAgent = createRepoPreparationAgent({
   daytonaApiKey,
@@ -55,6 +59,8 @@ const repoPreparationAgent = createRepoPreparationAgent({
     ? {}
     : { daytonaSnapshot: options.daytonaSnapshot }),
   modelID: options.modelID,
+  onStderr: (chunk) => process.stderr.write(chunk),
+  onStdout: (chunk) => openCodeOutput.write(chunk),
   providerApiKey: readProviderApiKey(options.providerID),
   providerID: options.providerID,
 });

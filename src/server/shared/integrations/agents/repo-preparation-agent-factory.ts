@@ -6,6 +6,8 @@ export type RepoPreparationAgentFactoryOptions = {
   daytonaApiKey?: string;
   daytonaSnapshot?: string;
   modelID: string;
+  onStderr?: (chunk: string) => void;
+  onStdout?: (chunk: string) => void;
   providerApiKey: string;
   providerID: string;
 };
@@ -21,6 +23,8 @@ export function createRepoPreparationAgent(
 
   return new DaytonaOpenCodeRepoPreparationAgent({
     modelID: options.modelID,
+    ...(options.onStderr === undefined ? {} : { onStderr: options.onStderr }),
+    ...(options.onStdout === undefined ? {} : { onStdout: options.onStdout }),
     providerApiKey: options.providerApiKey,
     provider: new DaytonaSdkPreparationWorkspaceProvider({
       apiKey: options.daytonaApiKey,

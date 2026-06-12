@@ -7,8 +7,11 @@ import { DaytonaOpenCodeRepoPreparationAgent } from "./daytona-opencode-repo-pre
 describe("DaytonaOpenCodeRepoPreparationAgent", () => {
   it("clones the submitted repo and runs OpenCode inside Daytona", async () => {
     const events: unknown[] = [];
+    const streamed: string[] = [];
     const agent = new DaytonaOpenCodeRepoPreparationAgent({
       modelID: "gpt-5.5",
+      onStderr: (chunk) => streamed.push(`stderr:${chunk}`),
+      onStdout: (chunk) => streamed.push(`stdout:${chunk}`),
       provider: fakeProvider(events),
       providerApiKey: "openai_key",
       providerID: "openai",
@@ -34,8 +37,12 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
           "mkdir -p /workspace && find /workspace -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --depth 1 'https://github.com/example/app' /workspace",
       },
       { network: false },
-      { execute: expect.stringContaining("opencode run") },
+      {
+        execute: expect.stringContaining("opencode run"),
+        streaming: true,
+      },
     ]);
+    expect(streamed).toEqual(["stdout:opencode output"]);
 
     const command = events.find(
       (event): event is { execute: string } =>
@@ -45,8 +52,8 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
         typeof event.execute === "string" &&
         event.execute.includes("opencode run"),
     )?.execute;
-    expect(command).toContain("OPENCODE_ENABLE_EXA=1");
-    expect(command).toContain("OPENAI_API_KEY='openai_key'");
+    expect(command).not.toContain("OPENCODE_ENABLE_EXA");
+    expect(command).not.toContain("OPENAI_API_KEY");
     expect(command).toContain("opencode run");
     expect(command).toContain("--dangerously-skip-permissions");
     expect(command).toContain("--dir /workspace");
@@ -95,11 +102,17 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
           "mkdir -p /workspace && find /workspace -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --depth 1 'https://github.com/example/app' /workspace",
       },
       { network: false },
-      { execute: expect.stringContaining("opencode run") },
+      {
+        execute: expect.stringContaining("opencode run"),
+        streaming: false,
+      },
       { network: true },
       { execute: "bun install" },
       { network: false },
-      { execute: expect.stringContaining("Continue Repo Preparation") },
+      {
+        execute: expect.stringContaining("Continue Repo Preparation"),
+        streaming: false,
+      },
     ]);
   });
 });
@@ -126,8 +139,18 @@ function fakeWorkspace(
   commandStdout: string[],
 ): PreparationWorkspace {
   return {
-    async execute(command) {
-      events.push({ execute: command });
+    async execute(command, options) {
+      events.push({
+        execute: command,
+        ...(command.includes("opencode run")
+          ? {
+              streaming:
+                options?.onStdout !== undefined ||
+                options?.onStderr !== undefined,
+            }
+          : {}),
+      });
+      options?.onStdout?.("opencode output");
       return {
         exitCode: 0,
         stderr: "",

@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { Daytona } from "@daytona/sdk";
 
 import type {
@@ -7,6 +9,7 @@ import type {
 import type {
   PreparationWorkspace,
   PreparationWorkspaceCommandResult,
+  PreparationWorkspaceExecuteOptions,
   PreparationWorkspaceUploadFile,
 } from "../../../pipeline/03-repo-preparation/preparation-workspace.interface";
 
@@ -24,12 +27,53 @@ type DaytonaSdkSandbox = {
   id?: string;
   name?: string;
   process: {
-    executeCommand(command: string): Promise<{
+    createPty(options: {
+      id: string;
+      cwd?: string;
+      envs?: Record<string, string>;
+      cols?: number;
+      rows?: number;
+      onData: (data: Uint8Array) => void | Promise<void>;
+    }): Promise<{
+      disconnect(): Promise<void>;
+      sendInput(data: string | Uint8Array): Promise<void>;
+      wait(): Promise<{ error?: string; exitCode?: number }>;
+      waitForConnection(): Promise<void>;
+    }>;
+    createSession(sessionId: string): Promise<void>;
+    deleteSession(sessionId: string): Promise<void>;
+    executeCommand(
+      command: string,
+      cwd?: string,
+      env?: Record<string, string>,
+    ): Promise<{
       exitCode?: number;
       result?: string;
       stderr?: string;
       stdout?: string;
     }>;
+    executeSessionCommand(
+      sessionId: string,
+      request: {
+        command: string;
+        runAsync?: boolean;
+        suppressInputEcho?: boolean;
+      },
+    ): Promise<{ cmdId?: string }>;
+    getSessionCommand(
+      sessionId: string,
+      commandId: string,
+    ): Promise<{ exitCode?: number }>;
+    getSessionCommandLogs(
+      sessionId: string,
+      commandId: string,
+    ): Promise<{ stderr?: string; stdout?: string } | undefined>;
+    getSessionCommandLogs(
+      sessionId: string,
+      commandId: string,
+      onStdout: (chunk: string) => void,
+      onStderr: (chunk: string) => void,
+    ): Promise<{ stderr?: string; stdout?: string } | undefined>;
   };
   updateNetworkSettings(settings: { networkBlockAll: boolean }): Promise<void>;
 };
@@ -79,14 +123,66 @@ export class DaytonaSdkPreparationWorkspaceProvider
 class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
   constructor(private readonly sandbox: DaytonaSdkSandbox) {}
 
-  async execute(command: string): Promise<PreparationWorkspaceCommandResult> {
-    const response = await this.sandbox.process.executeCommand(command);
+  async execute(
+    command: string,
+    options: PreparationWorkspaceExecuteOptions = {},
+  ): Promise<PreparationWorkspaceCommandResult> {
+    if (options.onStdout !== undefined || options.onStderr !== undefined) {
+      return this.executeStreaming(command, options);
+    }
+
+    const response = await this.sandbox.process.executeCommand(
+      command,
+      undefined,
+      options.env,
+    );
 
     return {
       exitCode: response.exitCode ?? 0,
       stderr: response.stderr ?? "",
       stdout: response.stdout ?? response.result ?? "",
     };
+  }
+
+  private async executeStreaming(
+    command: string,
+    options: PreparationWorkspaceExecuteOptions,
+  ): Promise<PreparationWorkspaceCommandResult> {
+    const output: string[] = [];
+    const decoder = new TextDecoder();
+    const pty = await this.sandbox.process.createPty({
+      cols: 120,
+      cwd: "/workspace",
+      envs: options.env ?? {},
+      id: `makeademo-${randomUUID()}`,
+      onData: (data) => {
+        const chunk = decoder.decode(data);
+        output.push(chunk);
+        const visibleChunk = removeExitMarker(chunk);
+        if (visibleChunk.length > 0) {
+          options.onStdout?.(visibleChunk);
+        }
+      },
+      rows: 30,
+    });
+
+    try {
+      await pty.waitForConnection();
+      await pty.sendInput(
+        `stty -echo\n${command}\nprintf '\\n__MAKEADEMO_EXIT__:%s\\n' $?\nexit\n`,
+      );
+      const result = await pty.wait();
+      const stdout = output.join("");
+      const exitCode = readExitCode(stdout) ?? result.exitCode ?? 0;
+
+      return {
+        exitCode,
+        stderr: result.error ?? "",
+        stdout: removeExitMarker(stdout),
+      };
+    } finally {
+      await pty.disconnect();
+    }
   }
 
   async setOutboundNetworkAccess(enabled: boolean): Promise<void> {
@@ -109,6 +205,19 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
       })),
     );
   }
+}
+
+function readExitCode(output: string): number | undefined {
+  const match = output.match(/__MAKEADEMO_EXIT__:(\d+)/);
+  if (match?.[1] === undefined) {
+    return undefined;
+  }
+
+  return Number(match[1]);
+}
+
+function removeExitMarker(output: string): string {
+  return output.replace(/\n?__MAKEADEMO_EXIT__:\d+\n?/g, "");
 }
 
 function isRestrictedNetworkPolicyError(error: unknown): boolean {
