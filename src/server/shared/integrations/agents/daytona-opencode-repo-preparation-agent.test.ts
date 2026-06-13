@@ -127,7 +127,7 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
       },
       {
         configDir: "/workspace/.makeademo/opencode",
-        execute: expect.stringContaining("Continue Repo Preparation"),
+        execute: expect.stringContaining("opencode run"),
         streaming: false,
       },
     ]);
