@@ -19,7 +19,7 @@ describe("DaytonaSandboxRunner", () => {
     expect(workspace.commands).toEqual([
       "find /workspace -maxdepth 1 -mindepth 1 -printf '%f\\n' | sort",
       "npm ci",
-      "npm run demo",
+      "sh -lc 'cd /workspace && nohup npm run demo > /tmp/makeademo-demo.log 2>&1 & echo $!'",
     ]);
     expect(workspace.networkAccess).toEqual([true, false]);
     expect(result).toMatchObject({
@@ -27,7 +27,7 @@ describe("DaytonaSandboxRunner", () => {
       logs: [
         "package-lock.json\npackage.json\n",
         "ran npm ci",
-        "ran npm run demo",
+        "ran sh -lc 'cd /workspace && nohup npm run demo > /tmp/makeademo-demo.log 2>&1 & echo $!'",
       ],
       repoFiles: ["package-lock.json", "package.json"],
       runtimeExitCode: 0,
@@ -89,6 +89,27 @@ describe("DaytonaSandboxRunner", () => {
 
     expect(workspace.networkAccess).toEqual([true, false]);
     expect(workspace.destroyed).toBe(true);
+  });
+
+  it("starts long-running demo commands without waiting for the server to exit", async () => {
+    const workspace = new FakePreparationWorkspaceHandle(
+      new Map([["npm run demo", 124]]),
+    );
+    const runner = new DaytonaSandboxRunner();
+
+    const result = await runner.runValidation({
+      demoCommand: "npm run demo",
+      preparationManifest: manifest("workspace_123"),
+      preparationWorkspace: workspace,
+      repoUrl: "https://github.com/example/app",
+      url: "http://localhost:3000",
+    });
+
+    expect(workspace.commands).not.toContain("npm run demo");
+    expect(workspace.commands).toContain(
+      "sh -lc 'cd /workspace && nohup npm run demo > /tmp/makeademo-demo.log 2>&1 & echo $!'",
+    );
+    expect(result.runtimeExitCode).toBe(0);
   });
 });
 

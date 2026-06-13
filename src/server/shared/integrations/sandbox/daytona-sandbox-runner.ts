@@ -52,7 +52,9 @@ export class DaytonaSandboxRunner implements SandboxRunner {
         };
       }
 
-      const runtimeResult = await handle.workspace.execute(input.demoCommand);
+      const runtimeResult = await handle.workspace.execute(
+        createStartDemoCommand(input.demoCommand),
+      );
 
       return {
         blockedNetworkAttempts: [],
@@ -74,6 +76,14 @@ export class DaytonaSandboxRunner implements SandboxRunner {
 
 function collectLogs(result: { stderr: string; stdout: string }): string[] {
   return [result.stdout, result.stderr].filter((line) => line.length > 0);
+}
+
+function createStartDemoCommand(demoCommand: string): string {
+  return `sh -lc ${shellQuote(`cd /workspace && nohup ${demoCommand} > /tmp/makeademo-demo.log 2>&1 & echo $!`)}`;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 async function destroyQuietly(
