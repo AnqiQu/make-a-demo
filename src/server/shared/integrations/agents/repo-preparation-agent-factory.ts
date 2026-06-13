@@ -1,5 +1,8 @@
 import type { RepoPreparationAgent } from "../../../pipeline/03-repo-preparation/repo-preparation-agent.interface";
+import { validateProject } from "../../../pipeline/04-project-validation/project-validator";
+import { PlaywrightBrowserValidator } from "../browser/playwright-browser-validator";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../daytona/daytona-sdk-preparation-workspace-provider";
+import { DaytonaSandboxRunner } from "../sandbox/daytona-sandbox-runner";
 import { DaytonaOpenCodeRepoPreparationAgent } from "./daytona-opencode-repo-preparation-agent";
 
 export type RepoPreparationAgentFactoryOptions = {
@@ -33,5 +36,15 @@ export function createRepoPreparationAgent(
         : { snapshot: options.daytonaSnapshot }),
     }),
     providerID: options.providerID,
+    validatePreparation: ({ manifest, workspace }) =>
+      validateProject(
+        { preparationManifest: manifest, preparationWorkspace: workspace },
+        {
+          browserValidator: new PlaywrightBrowserValidator(),
+          sandboxRunner: new DaytonaSandboxRunner({
+            destroyWorkspaceOnCleanup: false,
+          }),
+        },
+      ),
   });
 }

@@ -82,6 +82,10 @@ type DaytonaSdkSandbox = {
   updateNetworkSettings(settings: { networkBlockAll: boolean }): Promise<void>;
 };
 
+type DaytonaSdkPty = Awaited<
+  ReturnType<DaytonaSdkSandbox["process"]["createPty"]>
+>;
+
 export type DaytonaSdkPreparationWorkspaceProviderOptions = {
   apiKey?: string;
   client?: DaytonaSdkClient;
@@ -114,17 +118,22 @@ export class DaytonaSdkPreparationWorkspaceProvider
 
     const client = this.client;
 
+    const workspace = new DaytonaSdkPreparationWorkspace(sandbox);
+
     return {
       async destroy() {
+        await workspace.cancelActiveCommands();
         await client.delete(sandbox);
       },
       id,
-      workspace: new DaytonaSdkPreparationWorkspace(sandbox),
+      workspace,
     };
   }
 }
 
 class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
+  private readonly activePtys = new Set<ManagedPty>();
+
   constructor(private readonly sandbox: DaytonaSdkSandbox) {}
 
   async execute(
@@ -154,7 +163,7 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
   ): Promise<PreparationWorkspaceCommandResult> {
     const output: string[] = [];
     const decoder = new TextDecoder();
-    const pty = await this.sandbox.process.createPty({
+    const rawPty = await this.sandbox.process.createPty({
       cols: 120,
       cwd: "/workspace",
       envs: options.env ?? {},
@@ -169,6 +178,8 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
       },
       rows: 30,
     });
+    const pty = new ManagedPty(rawPty);
+    this.activePtys.add(pty);
 
     try {
       await pty.waitForConnection();
@@ -185,8 +196,15 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
         stdout: removeExitMarker(stdout),
       };
     } finally {
+      this.activePtys.delete(pty);
       await pty.disconnect();
     }
+  }
+
+  async cancelActiveCommands(): Promise<void> {
+    await Promise.allSettled(
+      [...this.activePtys].map((pty) => pty.disconnect()),
+    );
   }
 
   async setOutboundNetworkAccess(enabled: boolean): Promise<void> {
@@ -217,6 +235,32 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
         source: file.sourcePath,
       })),
     );
+  }
+}
+
+class ManagedPty {
+  private disconnected = false;
+
+  constructor(private readonly pty: DaytonaSdkPty) {}
+
+  async disconnect(): Promise<void> {
+    if (this.disconnected) {
+      return;
+    }
+    this.disconnected = true;
+    await this.pty.disconnect();
+  }
+
+  sendInput(data: string | Uint8Array): Promise<void> {
+    return this.pty.sendInput(data);
+  }
+
+  wait(): Promise<{ error?: string; exitCode?: number }> {
+    return this.pty.wait();
+  }
+
+  waitForConnection(): Promise<void> {
+    return this.pty.waitForConnection();
   }
 }
 

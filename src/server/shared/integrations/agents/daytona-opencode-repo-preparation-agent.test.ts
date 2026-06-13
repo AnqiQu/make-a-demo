@@ -15,6 +15,7 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
       provider: fakeProvider(events, {
         commandStdout: ["Submitted preparation result."],
         preparationResult: successResult(),
+        validationResult: validationArtifact(),
       }),
       providerApiKey: "openai_key",
       providerID: "openai",
@@ -33,32 +34,34 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
       status: "succeeded",
       workspace: { id: "daytona_workspace" },
     });
-    expect(events).toEqual([
-      { network: true },
-      {
-        execute:
-          "mkdir -p /workspace && find /workspace -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --depth 1 'https://github.com/example/app' /workspace",
-      },
-      { network: false },
-      {
-        execute: expect.stringContaining("plugins/makeademo-tools.ts"),
-      },
-      {
-        configDir: "/workspace/.makeademo/opencode",
-        execute: expect.stringContaining("opencode run"),
-        streaming: true,
-      },
-      {
-        execute: expect.stringContaining(
-          "/workspace/.makeademo/dependency-install-request.json",
-        ),
-      },
-      {
-        execute: expect.stringContaining(
-          "/workspace/.makeademo/repo-preparation-result.json",
-        ),
-      },
-    ]);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        { network: true },
+        {
+          execute:
+            "mkdir -p /workspace && find /workspace -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --depth 1 'https://github.com/example/app' /workspace",
+        },
+        { network: false },
+        {
+          execute: expect.stringContaining("plugins/makeademo-tools.ts"),
+        },
+        {
+          configDir: "/workspace/.makeademo/opencode",
+          execute: expect.stringContaining("opencode run"),
+          streaming: true,
+        },
+        {
+          execute: expect.stringContaining(
+            "/workspace/.makeademo/dependency-install-request.json",
+          ),
+        },
+        {
+          execute: expect.stringContaining(
+            "/workspace/.makeademo/repo-preparation-result.json",
+          ),
+        },
+      ]),
+    );
     expect(streamed).toEqual(["stdout:opencode output"]);
 
     const command = events.find(
@@ -89,6 +92,7 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
         ],
         dependencyInstallRequest: { command: "bun install" },
         preparationResult: successResult(),
+        validationResult: validationArtifact(),
       }),
       providerID: "openai",
       timeoutMs: 1_000,
@@ -106,45 +110,184 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
       status: "succeeded",
       workspace: { id: "daytona_workspace" },
     });
-    expect(events).toEqual([
-      { network: true },
-      {
-        execute:
-          "mkdir -p /workspace && find /workspace -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --depth 1 'https://github.com/example/app' /workspace",
+    expect(events).toEqual(
+      expect.arrayContaining([
+        { network: true },
+        {
+          execute:
+            "mkdir -p /workspace && find /workspace -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --depth 1 'https://github.com/example/app' /workspace",
+        },
+        { network: false },
+        {
+          execute: expect.stringContaining("plugins/makeademo-tools.ts"),
+        },
+        {
+          configDir: "/workspace/.makeademo/opencode",
+          execute: expect.stringContaining("opencode run"),
+          streaming: false,
+        },
+        {
+          execute: expect.stringContaining(
+            "/workspace/.makeademo/dependency-install-request.json",
+          ),
+        },
+        { network: true },
+        { execute: "bun install" },
+        { network: false },
+        {
+          execute: expect.stringContaining(
+            "/workspace/.makeademo/dependency-install-request.json",
+          ),
+        },
+        {
+          configDir: "/workspace/.makeademo/opencode",
+          execute: expect.stringContaining("opencode run"),
+          streaming: false,
+        },
+        {
+          execute: expect.stringContaining(
+            "/workspace/.makeademo/repo-preparation-result.json",
+          ),
+        },
+      ]),
+    );
+  });
+
+  it("runs backend validation requests before accepting the submitted result", async () => {
+    const events: unknown[] = [];
+    const validations: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparationAgent({
+      modelID: "gpt-5.5",
+      providerApiKey: "openai_key",
+      provider: fakeProvider(events, {
+        commandStdout: [
+          "Validation requested.",
+          "Submitted preparation result.",
+        ],
+        preparationResult: successResult(),
+        validationRequest: { manifest: successResult().manifest },
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+      validatePreparation: async (input) => {
+        validations.push(input);
+        return {
+          blockedNetworkAttempts: [],
+          logs: ["loaded preview"],
+          screenshotArtifactId: "artifact_screenshot",
+          status: "succeeded",
+          warnings: [],
+        };
       },
-      { network: false },
-      {
-        execute: expect.stringContaining("plugins/makeademo-tools.ts"),
-      },
-      {
-        configDir: "/workspace/.makeademo/opencode",
-        execute: expect.stringContaining("opencode run"),
-        streaming: false,
-      },
-      {
-        execute: expect.stringContaining(
-          "/workspace/.makeademo/dependency-install-request.json",
-        ),
-      },
-      { network: true },
-      { execute: "bun install" },
-      { network: false },
-      {
-        execute: expect.stringContaining(
-          "/workspace/.makeademo/dependency-install-request.json",
-        ),
-      },
-      {
-        configDir: "/workspace/.makeademo/opencode",
-        execute: expect.stringContaining("opencode run"),
-        streaming: false,
-      },
-      {
-        execute: expect.stringContaining(
-          "/workspace/.makeademo/repo-preparation-result.json",
-        ),
-      },
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      manifest: { demoCommand: "npm run demo:makeademo" },
+      status: "succeeded",
+      validation: { status: "succeeded" },
+    });
+    expect(validations).toEqual([
+      expect.objectContaining({
+        manifest: expect.objectContaining({ url: "http://localhost:3000" }),
+        workspace: expect.objectContaining({ id: "daytona_workspace" }),
+      }),
     ]);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          execute: expect.stringContaining(
+            "/workspace/.makeademo/validation-request.json",
+          ),
+        },
+        {
+          execute: expect.stringContaining(
+            "/workspace/.makeademo/validation-result.json",
+          ),
+        },
+      ]),
+    );
+  });
+
+  it("writes a Daytona-side preparation debug log during the agent loop", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparationAgent({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandStdout: ["Submitted preparation result."],
+        preparationResult: successResult(),
+        validationResult: validationArtifact(),
+      }),
+      providerApiKey: "openai_key",
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          execute: expect.stringContaining(
+            "/workspace/.makeademo/repo-preparation-debug.jsonl",
+          ),
+        },
+        {
+          execute: expect.stringContaining('"event":"opencode-started"'),
+        },
+        {
+          execute: expect.stringContaining(
+            '"event":"preparation-result-found"',
+          ),
+        },
+      ]),
+    );
+  });
+
+  it("fails fast instead of starting backend validation when the preparation deadline is nearly exhausted", async () => {
+    const events: unknown[] = [];
+    let validationStarted = false;
+    const agent = new DaytonaOpenCodeRepoPreparationAgent({
+      modelID: "gpt-5.5",
+      providerApiKey: "openai_key",
+      provider: fakeProvider(events, {
+        commandDelayMs: 920,
+        commandStdout: ["Validation requested."],
+        validationRequest: { manifest: successResult().manifest },
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+      validatePreparation: async () => {
+        validationStarted = true;
+        return validationArtifact().validation;
+      },
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      blockers: [
+        "Repo Preparation ran out of time before backend validation could start.",
+      ],
+      status: "failed",
+    });
+    expect(validationStarted).toBe(false);
   });
 });
 
@@ -154,8 +297,13 @@ function fakeProvider(
     | string[]
     | {
         commandStdout?: string[];
+        commandDelayMs?: number;
         dependencyInstallRequest?: { command: string };
         preparationResult?: ReturnType<typeof successResult>;
+        validationRequest?: {
+          manifest: ReturnType<typeof successResult>["manifest"];
+        };
+        validationResult?: ReturnType<typeof validationArtifact>;
       } = [JSON.stringify(successResult())],
 ): PreparationWorkspaceProvider {
   const workspaceInput = Array.isArray(input)
@@ -179,16 +327,32 @@ function fakeWorkspace(
   events: unknown[],
   input: {
     commandStdout?: string[];
+    commandDelayMs?: number;
     dependencyInstallRequest?: { command: string };
     preparationResult?: ReturnType<typeof successResult>;
+    validationRequest?: {
+      manifest: ReturnType<typeof successResult>["manifest"];
+    };
+    validationResult?: ReturnType<typeof validationArtifact>;
   },
 ): PreparationWorkspace {
   const commandStdout = input.commandStdout ?? [
     JSON.stringify(successResult()),
   ];
+  let dependencyInstallRequest = input.dependencyInstallRequest;
+  let validationRequest = input.validationRequest;
+  let validationResult = input.validationResult;
 
   return {
     async execute(command, options) {
+      if (
+        command.includes("opencode run") &&
+        input.commandDelayMs !== undefined
+      ) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, input.commandDelayMs),
+        );
+      }
       events.push({
         execute: command,
         ...(command.includes("opencode run")
@@ -201,18 +365,54 @@ function fakeWorkspace(
           : {}),
       });
       options?.onStdout?.("opencode output");
+      if (command.includes("repo-preparation-debug.jsonl")) {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      }
       if (
         command.startsWith("if test -f") &&
         command.includes("dependency-install-request.json")
       ) {
         return {
-          exitCode: input.dependencyInstallRequest === undefined ? 1 : 0,
+          exitCode: dependencyInstallRequest === undefined ? 1 : 0,
           stderr: "",
           stdout:
-            input.dependencyInstallRequest === undefined
+            dependencyInstallRequest === undefined
               ? ""
-              : JSON.stringify(input.dependencyInstallRequest),
+              : JSON.stringify(dependencyInstallRequest),
         };
+      }
+      if (
+        command.startsWith("if test -f") &&
+        command.includes("validation-request.json")
+      ) {
+        return {
+          exitCode: validationRequest === undefined ? 1 : 0,
+          stderr: "",
+          stdout:
+            validationRequest === undefined
+              ? ""
+              : JSON.stringify(validationRequest),
+        };
+      }
+      if (
+        command.startsWith("if test -f") &&
+        command.includes("validation-result.json")
+      ) {
+        return {
+          exitCode: validationResult === undefined ? 1 : 0,
+          stderr: "",
+          stdout:
+            validationResult === undefined
+              ? ""
+              : JSON.stringify(validationResult),
+        };
+      }
+      if (
+        command.startsWith("mkdir -p") &&
+        command.includes("validation-result.json")
+      ) {
+        validationResult = validationArtifact();
+        return { exitCode: 0, stderr: "", stdout: "" };
       }
       if (
         command.startsWith("if test -f") &&
@@ -231,6 +431,12 @@ function fakeWorkspace(
         command.includes("plugins/makeademo-tools.ts") ||
         command.startsWith("rm -f")
       ) {
+        if (command.includes("dependency-install-request.json")) {
+          dependencyInstallRequest = undefined;
+        }
+        if (command.includes("validation-request.json")) {
+          validationRequest = undefined;
+        }
         return { exitCode: 0, stderr: "", stdout: "" };
       }
       if (command === "bun install") {
@@ -252,6 +458,19 @@ function fakeWorkspace(
     },
     async uploadFiles() {
       throw new Error("Repo Preparation should clone inside Daytona.");
+    },
+  };
+}
+
+function validationArtifact() {
+  return {
+    manifest: successResult().manifest,
+    status: "succeeded",
+    validation: {
+      blockedNetworkAttempts: [],
+      logs: ["validated"],
+      status: "succeeded" as const,
+      warnings: [],
     },
   };
 }

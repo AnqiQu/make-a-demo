@@ -19,6 +19,7 @@ describe("createMakeADemoOpenCodeConfigFiles", () => {
     expect(config.tools).toEqual({
       makeademo_dependency_request_install: true,
       makeademo_submit_preparation_result: true,
+      makeademo_validate_preparation: true,
     });
     expect(files.some((file) => file.path.startsWith("agents/"))).toBe(false);
     expect(files.map((file) => file.path).sort()).toEqual([

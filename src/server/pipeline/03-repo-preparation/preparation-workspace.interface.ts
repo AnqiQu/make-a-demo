@@ -21,6 +21,7 @@ export type PreparationWorkspaceExecuteOptions = {
  * must not expose agent-only secrets to submitted app build or runtime commands.
  */
 export interface PreparationWorkspace {
+  cancelActiveCommands?(): Promise<void>;
   execute(
     command: string,
     options?: PreparationWorkspaceExecuteOptions,

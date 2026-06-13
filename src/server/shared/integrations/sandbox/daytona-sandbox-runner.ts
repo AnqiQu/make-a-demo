@@ -8,15 +8,18 @@ import type {
 } from "../../../pipeline/04-project-validation/sandbox-runner.interface";
 
 export class DaytonaSandboxRunner implements SandboxRunner {
+  private readonly destroyWorkspaceOnCleanup: boolean;
   private readonly readinessPollIntervalMs: number;
   private readonly readinessTimeoutMs: number;
 
   constructor(
     options: {
+      destroyWorkspaceOnCleanup?: boolean;
       readinessPollIntervalMs?: number;
       readinessTimeoutMs?: number;
     } = {},
   ) {
+    this.destroyWorkspaceOnCleanup = options.destroyWorkspaceOnCleanup ?? true;
     this.readinessPollIntervalMs = options.readinessPollIntervalMs ?? 1_000;
     this.readinessTimeoutMs = options.readinessTimeoutMs ?? 30_000;
   }
@@ -81,7 +84,7 @@ export class DaytonaSandboxRunner implements SandboxRunner {
 
         return {
           blockedNetworkAttempts: [],
-          cleanup: () => handle.destroy(),
+          cleanup: () => this.cleanup(handle),
           logs: [
             ...collectLogs(repoFilesResult),
             ...collectLogs(installResult),
@@ -101,7 +104,7 @@ export class DaytonaSandboxRunner implements SandboxRunner {
       return {
         blockedNetworkAttempts: [],
         browserUrl,
-        cleanup: () => handle.destroy(),
+        cleanup: () => this.cleanup(handle),
         logs: [
           ...collectLogs(repoFilesResult),
           ...collectLogs(installResult),
@@ -114,6 +117,12 @@ export class DaytonaSandboxRunner implements SandboxRunner {
     } catch (error) {
       await destroyQuietly(handle);
       throw error;
+    }
+  }
+
+  private async cleanup(handle: PreparationWorkspaceHandle): Promise<void> {
+    if (this.destroyWorkspaceOnCleanup) {
+      await handle.destroy();
     }
   }
 }

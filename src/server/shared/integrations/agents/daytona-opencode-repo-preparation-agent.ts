@@ -1,6 +1,7 @@
 import { posix } from "node:path";
 
 import { runDependencyInstallWithNetworkWindow } from "../../../pipeline/03-repo-preparation/dependency-install-network-window";
+import { readPreparationManifest } from "../../../pipeline/03-repo-preparation/preparation-manifest";
 import type {
   PreparationWorkspaceHandle,
   PreparationWorkspaceProvider,
@@ -13,12 +14,17 @@ import type {
   RepoPreparationAgent,
   RepoPreparationInput,
 } from "../../../pipeline/03-repo-preparation/repo-preparation-agent.interface";
+import type { ProjectValidationResult } from "../../../pipeline/04-project-validation/validation-result";
 import { createMakeADemoOpenCodeConfigFiles } from "./prepared-opencode-config";
 
 const makeADemoArtifactDirectory = "/workspace/.makeademo";
 const makeADemoOpenCodeConfigDirectory = `${makeADemoArtifactDirectory}/opencode`;
 const dependencyInstallRequestPath = `${makeADemoArtifactDirectory}/dependency-install-request.json`;
 const preparationResultPath = `${makeADemoArtifactDirectory}/repo-preparation-result.json`;
+const preparationDebugLogPath = `${makeADemoArtifactDirectory}/repo-preparation-debug.jsonl`;
+const validationRequestPath = `${makeADemoArtifactDirectory}/validation-request.json`;
+const validationResultPath = `${makeADemoArtifactDirectory}/validation-result.json`;
+const minimumBackendToolBudgetMs = 100;
 
 export type DaytonaOpenCodeRepoPreparationAgentOptions = {
   modelID: string;
@@ -28,6 +34,10 @@ export type DaytonaOpenCodeRepoPreparationAgentOptions = {
   provider: PreparationWorkspaceProvider;
   providerID: string;
   timeoutMs?: number;
+  validatePreparation?: (input: {
+    manifest: ReturnType<typeof readPreparationManifest>;
+    workspace: PreparationWorkspaceHandle;
+  }) => Promise<ProjectValidationResult>;
 };
 
 export class DaytonaOpenCodeRepoPreparationAgent
@@ -40,6 +50,12 @@ export class DaytonaOpenCodeRepoPreparationAgent
   private readonly provider: PreparationWorkspaceProvider;
   private readonly providerID: string;
   private readonly timeoutMs: number;
+  private readonly validatePreparation:
+    | ((input: {
+        manifest: ReturnType<typeof readPreparationManifest>;
+        workspace: PreparationWorkspaceHandle;
+      }) => Promise<ProjectValidationResult>)
+    | undefined;
 
   constructor(options: DaytonaOpenCodeRepoPreparationAgentOptions) {
     this.modelID = options.modelID;
@@ -49,17 +65,28 @@ export class DaytonaOpenCodeRepoPreparationAgent
     this.provider = options.provider;
     this.providerID = options.providerID;
     this.timeoutMs = options.timeoutMs ?? 10 * 60 * 1_000;
+    this.validatePreparation = options.validatePreparation;
   }
 
   async prepare(input: RepoPreparationInput) {
     const handle = await this.provider.create();
+    const deadlineAt = Date.now() + this.timeoutMs;
+    await appendPreparationDebugLog(handle.workspace, {
+      event: "workspace-created",
+      timeoutMs: this.timeoutMs,
+      workspaceId: handle.id,
+    });
     let result: TimedRunResult<RawPreparationRunResult>;
     try {
       result = await raceWithTimeout(
-        this.runPreparation(handle, input),
+        this.runPreparation(handle, input, deadlineAt),
         this.timeoutMs,
       );
     } catch (error) {
+      await appendPreparationDebugLog(handle.workspace, {
+        error: readErrorMessage(error),
+        event: "preparation-error",
+      });
       await destroyQuietly(handle);
       return {
         assumptions: [],
@@ -72,12 +99,21 @@ export class DaytonaOpenCodeRepoPreparationAgent
     }
 
     if (result.status !== "succeeded") {
-      await destroyQuietly(handle);
+      await appendPreparationDebugLog(handle.workspace, {
+        event: "preparation-timeout",
+        reason: result.reason,
+        workspaceId: handle.id,
+      });
+      await cancelActiveCommandsQuietly(handle);
       return {
         assumptions: [],
-        blockers: [result.reason],
+        blockers: [
+          result.reason,
+          `Debug log retained in Daytona workspace ${handle.id}: ${preparationDebugLogPath}`,
+        ],
         status: "failed" as const,
         suggestedChanges: [
+          "Inspect the retained Daytona workspace debug log, then delete the workspace when finished.",
           "Retry Repo Preparation in a fresh Daytona workspace.",
         ],
       };
@@ -94,50 +130,152 @@ export class DaytonaOpenCodeRepoPreparationAgent
   private async runPreparation(
     handle: PreparationWorkspaceHandle,
     input: RepoPreparationInput,
+    deadlineAt: number,
   ): Promise<RawPreparationRunResult> {
+    await appendPreparationDebugLog(handle.workspace, {
+      event: "clone-started",
+    });
     await handle.workspace.setOutboundNetworkAccess(true);
     const cloneResult = await handle.workspace.execute(
       createCloneCommand(input.repoUrl),
     );
     await handle.workspace.setOutboundNetworkAccess(false);
+    await appendPreparationDebugLog(handle.workspace, {
+      event: "clone-finished",
+      exitCode: cloneResult.exitCode,
+      stderrLength: cloneResult.stderr.length,
+      stdoutLength: cloneResult.stdout.length,
+    });
 
     if (cloneResult.exitCode !== 0) {
       return cloneResult;
     }
 
     await installMakeADemoOpenCodeConfig(handle.workspace);
-
-    const firstResult = await this.executeOpenCode(handle, {
-      model: `${this.providerID}/${this.modelID}`,
-      prompt: createDaytonaRepoPreparationPrompt(input),
-      providerApiKey: this.providerApiKey,
-      providerID: this.providerID,
+    await appendPreparationDebugLog(handle.workspace, {
+      event: "opencode-config-installed",
     });
-    const dependencyInstallRequest = await readDependencyInstallRequest(
-      handle.workspace,
-    );
 
-    if (dependencyInstallRequest === undefined) {
-      return readPreparationResultOrParseStdout(handle.workspace, firstResult);
+    return this.runOpenCodeLoop(
+      handle,
+      input,
+      createDaytonaRepoPreparationPrompt(input),
+      deadlineAt,
+    );
+  }
+
+  private async runOpenCodeLoop(
+    handle: PreparationWorkspaceHandle,
+    input: RepoPreparationInput,
+    initialPrompt: string,
+    deadlineAt: number,
+  ): Promise<RawPreparationRunResult> {
+    let prompt = initialPrompt;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      await appendPreparationDebugLog(handle.workspace, {
+        attempt: attempt + 1,
+        event: "opencode-started",
+        remainingMs: deadlineAt - Date.now(),
+      });
+      const openCodeResult = await this.executeOpenCode(handle, {
+        model: `${this.providerID}/${this.modelID}`,
+        prompt,
+        providerApiKey: this.providerApiKey,
+        providerID: this.providerID,
+      });
+      await appendPreparationDebugLog(handle.workspace, {
+        attempt: attempt + 1,
+        event: "opencode-finished",
+        exitCode: openCodeResult.exitCode,
+        stderrLength: openCodeResult.stderr.length,
+        stdoutLength: openCodeResult.stdout.length,
+      });
+
+      const dependencyInstallRequest = await readDependencyInstallRequest(
+        handle.workspace,
+      );
+      if (dependencyInstallRequest !== undefined) {
+        await appendPreparationDebugLog(handle.workspace, {
+          command: dependencyInstallRequest.command,
+          event: "dependency-install-requested",
+        });
+        if (deadlineAt - Date.now() < minimumBackendToolBudgetMs) {
+          return backendToolDeadlineFailure("dependency installation");
+        }
+        await runDependencyInstallWithNetworkWindow({
+          command: dependencyInstallRequest.command,
+          workspace: handle.workspace,
+        });
+        await clearDependencyInstallRequest(handle.workspace);
+        await appendPreparationDebugLog(handle.workspace, {
+          event: "dependency-install-finished",
+        });
+        prompt = createContinueRepoPreparationPrompt(input);
+        continue;
+      }
+
+      const validationRequest = await readValidationRequest(handle.workspace);
+      if (validationRequest !== undefined) {
+        await appendPreparationDebugLog(handle.workspace, {
+          event: "validation-requested",
+          remainingMs: deadlineAt - Date.now(),
+        });
+        if (deadlineAt - Date.now() < minimumBackendToolBudgetMs) {
+          return backendToolDeadlineFailure("backend validation");
+        }
+        if (this.validatePreparation === undefined) {
+          throw new Error(
+            "Repo Preparation validation tool is not configured.",
+          );
+        }
+        const manifest = readPreparationManifest(validationRequest.manifest);
+        const validation = await this.validatePreparation({
+          manifest,
+          workspace: handle,
+        });
+        await appendPreparationDebugLog(handle.workspace, {
+          event: "validation-finished",
+          status: validation.status,
+        });
+        await writeValidationResult(handle.workspace, {
+          manifest,
+          validation,
+        });
+        await clearValidationRequest(handle.workspace);
+        prompt = createValidationFeedbackPrompt({ manifest, validation });
+        continue;
+      }
+
+      const preparationResult = await readPreparationResult(handle.workspace);
+      if (preparationResult !== undefined) {
+        await appendPreparationDebugLog(handle.workspace, {
+          event: "preparation-result-found",
+          status: preparationResult.status,
+        });
+        const validation = await readValidationResult(handle.workspace);
+        if (
+          preparationResult.status === "succeeded" &&
+          validation?.status === "succeeded"
+        ) {
+          return { ...preparationResult, validation };
+        }
+
+        return preparationResult;
+      }
+
+      return parseOpenCodeJsonResult(openCodeResult.stdout);
     }
 
-    await runDependencyInstallWithNetworkWindow({
-      command: dependencyInstallRequest.command,
-      workspace: handle.workspace,
-    });
-    await clearDependencyInstallRequest(handle.workspace);
-
-    const continuedResult = await this.executeOpenCode(handle, {
-      model: `${this.providerID}/${this.modelID}`,
-      prompt: createContinueRepoPreparationPrompt(input),
-      providerApiKey: this.providerApiKey,
-      providerID: this.providerID,
-    });
-
-    return readPreparationResultOrParseStdout(
-      handle.workspace,
-      continuedResult,
-    );
+    return {
+      assumptions: [],
+      blockers: [
+        "Repo Preparation exceeded the validation/dependency repair loop limit.",
+      ],
+      status: "failed" as const,
+      suggestedChanges: [
+        "Reduce demo setup complexity or fix validation blockers manually.",
+      ],
+    };
   }
 
   private executeOpenCode(
@@ -195,6 +333,16 @@ type RawPreparationRunResult =
   | PreparationWorkspaceCommandResult
   | Awaited<ReturnType<RepoPreparationAgent["prepare"]>>;
 
+type ValidationRequest = {
+  manifest: unknown;
+};
+
+type ValidationResultArtifact = {
+  manifest: ReturnType<typeof readPreparationManifest>;
+  status: ProjectValidationResult["status"];
+  validation: ProjectValidationResult;
+};
+
 type TimedRunResult<T> =
   | { status: "succeeded"; value: T }
   | { reason: string; status: "failed" | "timed-out" };
@@ -232,6 +380,45 @@ async function destroyQuietly(
   } catch {
     // Preserve the original Repo Preparation failure.
   }
+}
+
+async function cancelActiveCommandsQuietly(
+  handle: PreparationWorkspaceHandle,
+): Promise<void> {
+  try {
+    await handle.workspace.cancelActiveCommands?.();
+  } catch {
+    // Preserve the timeout failure while still letting the caller return.
+  }
+}
+
+async function appendPreparationDebugLog(
+  workspace: PreparationWorkspace,
+  event: Record<string, unknown>,
+): Promise<void> {
+  const payload = {
+    ...event,
+    timestamp: new Date().toISOString(),
+  };
+  const result = await workspace.execute(
+    `mkdir -p ${shellQuote(makeADemoArtifactDirectory)} && printf '%s\n' ${shellQuote(JSON.stringify(payload))} >> ${shellQuote(preparationDebugLogPath)}`,
+  );
+  if (result.exitCode !== 0) {
+    throw new Error("Failed to write Repo Preparation debug log.");
+  }
+}
+
+function backendToolDeadlineFailure(toolName: string) {
+  return {
+    assumptions: [],
+    blockers: [
+      `Repo Preparation ran out of time before ${toolName} could start.`,
+    ],
+    status: "failed" as const,
+    suggestedChanges: [
+      "Retry Repo Preparation with a fresh Daytona workspace or a longer preparation timeout.",
+    ],
+  };
 }
 
 function createCloneCommand(repoUrl: string): string {
@@ -298,6 +485,9 @@ function createDaytonaRepoPreparationPrompt(
     "- Prefer local mock data, fixture data, or frontend-only demo modes over hosted services.",
     "- Keep existing project conventions where practical.",
     "- If the repo already has a suitable demo command, use it rather than creating a new one.",
+    "- When you believe the demo is ready, call `makeademo_validate_preparation` with the draft manifest and stop for backend validation feedback.",
+    "- If validation fails, repair the repo using the feedback and call `makeademo_validate_preparation` again.",
+    "- Call `makeademo_submit_preparation_result` only after the latest validation passes.",
     "",
     "## Few-Shot Examples",
     "### Example: dependencies missing",
@@ -306,14 +496,14 @@ function createDaytonaRepoPreparationPrompt(
     "",
     "### Example: frontend needs mock API",
     "Observation: the app calls a hosted API at runtime.",
-    "Action: add a local mock-data/demo mode, configure the demo command to use it, and return a success manifest.",
+    "Action: add a local mock-data/demo mode, configure the demo command to use it, then call `makeademo_validate_preparation` with the draft manifest.",
     "",
     "### Example: unsupported dependency command",
     "Observation: the repo asks for `npm install some-package && npm run build`.",
     "Action: do not request that command. Choose an allowlisted install command if one fits, otherwise return a failed result with a clear blocker.",
     "",
     "## Final Response Contract",
-    "When Repo Preparation is complete or blocked, call `makeademo_submit_preparation_result` exactly once. Do not print final JSON in plain text.",
+    "When backend validation has passed, call `makeademo_submit_preparation_result` exactly once. Do not print final JSON in plain text.",
     "",
     'For success, call the tool with `status: "succeeded"` and a `manifest` matching this shape:',
     "",
@@ -368,7 +558,8 @@ function createContinueRepoPreparationPrompt(
     "Action: do not request that shell command. Return a blocker explaining that the required install command is outside the current network allowlist.",
     "",
     "## Final Response Contract",
-    "When Repo Preparation is complete or blocked, call `makeademo_submit_preparation_result` exactly once. Do not print final JSON in plain text.",
+    "When backend validation has passed, call `makeademo_submit_preparation_result` exactly once. Do not print final JSON in plain text.",
+    "If validation has not passed yet, call `makeademo_validate_preparation` with the draft manifest and stop for feedback.",
     'For success, pass `status: "succeeded"` and a complete `manifest`. For failure, pass `status: "failed"`, `blockers`, `assumptions`, and `suggestedChanges`.',
     "",
     "## Submission Context",
@@ -429,6 +620,107 @@ async function readPreparationResult(
   }
 
   return payload as Awaited<ReturnType<RepoPreparationAgent["prepare"]>>;
+}
+
+async function readValidationRequest(
+  workspace: PreparationWorkspace,
+): Promise<ValidationRequest | undefined> {
+  const result = await workspace.execute(
+    `if test -f ${shellQuote(validationRequestPath)}; then cat ${shellQuote(validationRequestPath)}; else exit 1; fi`,
+  );
+
+  if (result.exitCode !== 0) {
+    return undefined;
+  }
+
+  const payload = tryParseJson(result.stdout);
+  if (
+    typeof payload !== "object" ||
+    payload === null ||
+    !("manifest" in payload)
+  ) {
+    throw new Error("Validation tool wrote an invalid request.");
+  }
+
+  return payload as ValidationRequest;
+}
+
+async function writeValidationResult(
+  workspace: PreparationWorkspace,
+  input: {
+    manifest: ReturnType<typeof readPreparationManifest>;
+    validation: ProjectValidationResult;
+  },
+): Promise<void> {
+  const artifact: ValidationResultArtifact = {
+    manifest: input.manifest,
+    status: input.validation.status,
+    validation: input.validation,
+  };
+  const result = await workspace.execute(
+    `mkdir -p ${shellQuote(makeADemoArtifactDirectory)} && cat > ${shellQuote(validationResultPath)} <<'MAKEADEMO_VALIDATION_RESULT'\n${JSON.stringify(artifact, null, 2)}\nMAKEADEMO_VALIDATION_RESULT`,
+  );
+
+  if (result.exitCode !== 0) {
+    throw new Error("Failed to write validation result artifact.");
+  }
+}
+
+async function readValidationResult(
+  workspace: PreparationWorkspace,
+): Promise<ProjectValidationResult | undefined> {
+  const result = await workspace.execute(
+    `if test -f ${shellQuote(validationResultPath)}; then cat ${shellQuote(validationResultPath)}; else exit 1; fi`,
+  );
+
+  if (result.exitCode !== 0) {
+    return undefined;
+  }
+
+  const payload = tryParseJson(result.stdout) as
+    | ValidationResultArtifact
+    | undefined;
+  return payload?.validation;
+}
+
+async function clearValidationRequest(
+  workspace: PreparationWorkspace,
+): Promise<void> {
+  const result = await workspace.execute(
+    `rm -f ${shellQuote(validationRequestPath)}`,
+  );
+  if (result.exitCode !== 0) {
+    throw new Error("Failed to clear validation request artifact.");
+  }
+}
+
+function createValidationFeedbackPrompt(input: {
+  manifest: ReturnType<typeof readPreparationManifest>;
+  validation: ProjectValidationResult;
+}): string {
+  return [
+    "# MakeADemo Validation Feedback",
+    "",
+    "Backend-owned Project Validation ran against your prepared workspace.",
+    "Use this deterministic feedback to repair the repo, then call `makeademo_validate_preparation` again.",
+    "Call `makeademo_submit_preparation_result` only after validation passes.",
+    "",
+    "## Validation Result",
+    "```json",
+    JSON.stringify(input.validation, null, 2),
+    "```",
+    "",
+    "## Validated Manifest Draft",
+    "```json",
+    JSON.stringify(input.manifest, null, 2),
+    "```",
+    "",
+    "## Debugging Guidance",
+    "- If `blockedNetworkAttempts` is non-empty, remove or replace every listed external runtime request with local mocks, bundled assets, or system defaults.",
+    "- If the page is not interactable, inspect the validation logs and demo server logs, then fix the route, demo command, or browser runtime error.",
+    "- If the demo URL did not become ready, make the submitted `demoCommand` start a long-running local server on the manifest `url` port.",
+    "- Do not request dependency installation unless a new dependency install is strictly required and the command is allowlisted.",
+  ].join("\n");
 }
 
 function parseOpenCodeJsonPayload(stdout: string): unknown | undefined {

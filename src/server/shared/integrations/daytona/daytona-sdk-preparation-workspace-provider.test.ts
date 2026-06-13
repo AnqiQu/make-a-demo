@@ -117,6 +117,28 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ]);
   });
 
+  it("disconnects active streaming commands before deleting the sandbox", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { ptyWaitsForDisconnect: true }),
+    });
+    const handle = await provider.create();
+
+    const execution = handle.workspace.execute("opencode run slow", {
+      onStdout: () => {},
+    });
+    await Promise.resolve();
+    await handle.destroy();
+
+    await expect(execution).resolves.toMatchObject({ exitCode: 7 });
+    expect(calls).toEqual(
+      expect.arrayContaining([{ disconnect: true }, { delete: "sandbox_123" }]),
+    );
+    expect(
+      calls.findIndex((call) => "disconnect" in Object(call)),
+    ).toBeLessThan(calls.findIndex((call) => "delete" in Object(call)));
+  });
+
   it("passes streaming command environment variables through PTY options", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -161,7 +183,10 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
   });
 });
 
-function fakeClient(calls: unknown[], options: { networkError?: Error } = {}) {
+function fakeClient(
+  calls: unknown[],
+  options: { networkError?: Error; ptyWaitsForDisconnect?: boolean } = {},
+) {
   const sandbox = {
     fs: {
       async uploadFiles(files: unknown[]) {
@@ -174,7 +199,7 @@ function fakeClient(calls: unknown[], options: { networkError?: Error } = {}) {
       return { url: `https://preview.example.test:${port}` };
     },
     process: {
-      async createPty(options: {
+      async createPty(ptyOptions: {
         id: string;
         cwd?: string;
         envs?: Record<string, string>;
@@ -184,26 +209,39 @@ function fakeClient(calls: unknown[], options: { networkError?: Error } = {}) {
       }) {
         calls.push({
           createPty: {
-            cols: options.cols,
-            cwd: options.cwd,
-            envs: options.envs,
-            id: options.id,
-            rows: options.rows,
+            cols: ptyOptions.cols,
+            cwd: ptyOptions.cwd,
+            envs: ptyOptions.envs,
+            id: ptyOptions.id,
+            rows: ptyOptions.rows,
           },
+        });
+        let disconnected = false;
+        let resolveDisconnect: (() => void) | undefined;
+        const disconnectedPromise = new Promise<void>((resolve) => {
+          resolveDisconnect = resolve;
         });
         return {
           async disconnect() {
+            if (disconnected) {
+              return;
+            }
+            disconnected = true;
             calls.push({ disconnect: true });
+            resolveDisconnect?.();
           },
           async sendInput(data: string | Uint8Array) {
             calls.push({ sendInput: data });
-            options.onData(new TextEncoder().encode("hello\n"));
-            options.onData(
+            ptyOptions.onData(new TextEncoder().encode("hello\n"));
+            ptyOptions.onData(
               new TextEncoder().encode("\n__MAKEADEMO_EXIT__:7\n"),
             );
           },
           async wait() {
             calls.push({ wait: true });
+            if (options.ptyWaitsForDisconnect === true) {
+              await disconnectedPromise;
+            }
             return { exitCode: 0 };
           },
           async waitForConnection() {

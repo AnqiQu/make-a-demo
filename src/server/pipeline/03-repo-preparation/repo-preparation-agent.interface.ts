@@ -1,5 +1,6 @@
 import type { DemoBrief } from "../01-context-gathering/intake/demo-brief.schema";
 import type { NormalizedSupportingDocument } from "../01-context-gathering/supporting-documents";
+import type { ProjectValidationResult } from "../04-project-validation/validation-result";
 import type { PreparationManifest } from "./preparation-manifest";
 import type { PreparationWorkspaceHandle } from "./preparation-workspace-runner";
 
@@ -14,6 +15,7 @@ type RepoPreparationAgentResult =
   | {
       manifest: unknown;
       status: "succeeded";
+      validation?: ProjectValidationResult;
       workspace?: PreparationWorkspaceHandle;
     }
   | {
@@ -36,6 +38,7 @@ export type RepoPreparationResult =
   | {
       manifest: PreparationManifest;
       status: "succeeded";
+      validation?: ProjectValidationResult;
       workspace?: PreparationWorkspaceHandle;
     }
   | {

@@ -68,19 +68,21 @@ export async function runPipelineJob(
   }
   options.onProgress?.({ stage: "repo-preparation", status: "succeeded" });
 
-  options.onProgress?.({ stage: "project-validation", status: "started" });
-  const validation = await dependencies.validateProject({
-    preparationManifest: preparation.manifest,
-    ...(preparation.workspace === undefined
-      ? {}
-      : { preparationWorkspace: preparation.workspace }),
-  });
+  const validation =
+    preparation.validation ??
+    (await validatePreparedProject({
+      dependencies,
+      options,
+      preparation,
+    }));
 
   if (validation.status === "failed") {
     options.onProgress?.({ stage: "project-validation", status: "failed" });
     return { status: "validation-failed", validation };
   }
-  options.onProgress?.({ stage: "project-validation", status: "succeeded" });
+  if (preparation.validation === undefined) {
+    options.onProgress?.({ stage: "project-validation", status: "succeeded" });
+  }
 
   options.onProgress?.({ stage: "script-generation", status: "started" });
   const videoScriptPackage = await dependencies.generateScriptPackage({
@@ -97,4 +99,26 @@ export async function runPipelineJob(
     status: "succeeded",
     videoScriptPackage,
   };
+}
+
+async function validatePreparedProject(input: {
+  dependencies: PipelineOrchestratorDependencies;
+  options: PipelineOrchestratorOptions;
+  preparation: Extract<
+    Awaited<ReturnType<PipelineOrchestratorDependencies["prepareRepo"]>>,
+    { status: "succeeded" }
+  >;
+}) {
+  input.options.onProgress?.({
+    stage: "project-validation",
+    status: "started",
+  });
+  const validation = await input.dependencies.validateProject({
+    preparationManifest: input.preparation.manifest,
+    ...(input.preparation.workspace === undefined
+      ? {}
+      : { preparationWorkspace: input.preparation.workspace }),
+  });
+
+  return validation;
 }
