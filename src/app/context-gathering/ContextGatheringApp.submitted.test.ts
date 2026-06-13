@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -25,6 +26,26 @@ describe("ContextGatheringApp", () => {
     expect(html).toContain("Make me a demo");
     expect(html).not.toContain("A peak into our personalised demo machine");
     expect(html).not.toContain("Let&#x27;s Hoot");
+  });
+
+  it("keeps the Owlet attribution in one stable brand position across Context Gathering pages", () => {
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+
+    expect(styles).not.toContain(".owlet-shell-details .brand-attribution");
+    expect(styles).not.toContain(".owlet-shell-submitted .brand-attribution");
+  });
+
+  it("stacks repository entry choices beside the circular demo submit button", () => {
+    const html = renderToStaticMarkup(createElement(ContextGatheringApp));
+
+    expect(html).toContain('class="repo-actions"');
+    expect(html).toContain('class="repo-input-stack"');
+    expect(html).toContain("OR");
+    expect(html).toContain('class="primary-hoot repo-submit-arrow"');
+    expect(html).toContain('aria-label="Make me a demo"');
   });
 });
 

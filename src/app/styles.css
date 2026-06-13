@@ -116,11 +116,6 @@ button:disabled {
   z-index: 2;
 }
 
-.owlet-shell-details .brand-attribution,
-.owlet-shell-submitted .brand-attribution {
-  top: calc(100% - 1rem);
-}
-
 .brand-attribution img {
   display: block;
   height: 1.65rem;
@@ -173,16 +168,20 @@ button:disabled {
 
 .repo-panel {
   margin-top: clamp(1.5rem, 7vh, 5rem);
-  width: min(100%, 64rem);
+  width: min(100%, 58rem);
 }
 
-.repo-connect-row {
+.repo-actions {
   align-items: center;
   display: grid;
-  gap: 1rem;
-  grid-template-columns:
-    minmax(43.5rem, 1fr) auto
-    minmax(13.8rem, 16.2rem);
+  gap: clamp(1.5rem, 4vw, 3rem);
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.repo-input-stack {
+  display: grid;
+  gap: 0.95rem;
+  min-width: 0;
 }
 
 .repo-url-input,
@@ -234,8 +233,10 @@ button:disabled {
 
 .or-label {
   color: #6b7280;
+  display: block;
   font-size: 1rem;
   font-weight: 700;
+  text-align: center;
 }
 
 .github-button,
@@ -327,6 +328,24 @@ button:disabled {
   padding: 0 1.05rem;
 }
 
+.repo-submit-arrow {
+  align-items: center;
+  border-radius: 999px;
+  display: grid;
+  height: clamp(5.5rem, 10vw, 7rem);
+  justify-content: center;
+  margin: 0;
+  min-height: 0;
+  min-width: 0;
+  padding: 0;
+  width: clamp(5.5rem, 10vw, 7rem);
+}
+
+.repo-submit-arrow svg {
+  height: 2.5rem;
+  width: 2.5rem;
+}
+
 .primary-hoot:hover {
   background: #ea8500;
   box-shadow: 0 18px 38px rgba(245, 158, 11, 0.4);
@@ -356,11 +375,9 @@ button:disabled {
 .repo-select-field {
   display: grid;
   gap: 0.55rem;
-  grid-column: 2 / 4;
-  justify-self: end;
   margin: 0;
   min-width: 0;
-  width: min(100%, 15.75rem);
+  width: 100%;
 }
 
 .repo-select-field span,
@@ -396,7 +413,6 @@ button:disabled {
 }
 
 .repo-selected-note {
-  grid-column: 2 / 4;
   margin: 0;
 }
 
@@ -753,12 +769,8 @@ button:disabled {
     margin-top: 2rem;
   }
 
-  .repo-connect-row {
+  .repo-actions {
     grid-template-columns: 1fr;
-  }
-
-  .or-label {
-    text-align: center;
   }
 
   .repo-select-field,
@@ -769,6 +781,14 @@ button:disabled {
   .primary-hoot {
     margin-top: 3.5rem;
     width: min(100%, 18rem);
+  }
+
+  .repo-submit-arrow {
+    height: 5.75rem;
+    justify-self: center;
+    margin: 1rem 0 0;
+    min-width: 0;
+    width: 5.75rem;
   }
 
   .details-field-grid {
