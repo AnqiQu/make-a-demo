@@ -432,6 +432,7 @@ describe("Context Gathering API", () => {
       ],
     });
   });
+
 });
 
 function createDefaultDependencies() {

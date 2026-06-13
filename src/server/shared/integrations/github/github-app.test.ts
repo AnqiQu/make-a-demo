@@ -6,7 +6,7 @@ import {
 } from "./github-app";
 
 describe("GitHub App integration", () => {
-  it("creates the GitHub App target selection URL so existing installations return after updates", () => {
+  it("creates the GitHub App target selection URL with the callback redirect URI", () => {
     expect(
       createGitHubInstallUrl({
         appSlug: "owlet-demo",
@@ -14,7 +14,7 @@ describe("GitHub App integration", () => {
         state: "draft-123",
       }),
     ).toBe(
-      "https://github.com/apps/owlet-demo/installations/select_target?state=draft-123&redirect_url=https%3A%2F%2Fapp.example.com%2Fgithub%2Fcallback",
+      "https://github.com/apps/owlet-demo/installations/select_target?state=draft-123&redirect_uri=https%3A%2F%2Fapp.example.com%2Fgithub%2Fcallback",
     );
   });
 
@@ -50,4 +50,5 @@ describe("GitHub App integration", () => {
       },
     ]);
   });
+
 });

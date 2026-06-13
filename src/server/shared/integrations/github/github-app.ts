@@ -32,7 +32,7 @@ export function createGitHubInstallUrl(input: {
 }): string {
   const params = new URLSearchParams();
   params.set("state", input.state);
-  params.set("redirect_url", input.redirectUrl);
+  params.set("redirect_uri", input.redirectUrl);
 
   return `https://github.com/apps/${input.appSlug}/installations/select_target?${params.toString()}`;
 }
