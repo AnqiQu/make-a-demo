@@ -381,86 +381,71 @@ export function ContextGatheringApp() {
       {draft.chatStep === "repo" ? (
         <section className="repo-step" aria-label="GitHub repository">
           <article className="repo-panel">
-            <div className="repo-actions">
-              <div className="repo-input-stack">
-                <label className="repo-url-input">
-                  <span className="link-icon" aria-hidden="true">
-                    <LinkIcon strokeWidth={2.4} />
-                  </span>
-                  <input
-                    aria-label="GitHub repository URL"
-                    onChange={(event) =>
-                      setRepoInput(event.currentTarget.value)
-                    }
-                    placeholder="https://github.com/your-org/your-repo"
-                    value={repoInput}
-                  />
-                </label>
-                <span className="or-label">OR</span>
-                <button
-                  className={`github-button ${
-                    draft.githubInstallationId ? "github-button-connected" : ""
-                  }`}
-                  onClick={() =>
-                    draft.githubInstallationId
-                      ? undefined
-                      : void connectGitHub()
-                  }
-                  type="button"
-                >
-                  <span className="github-logo-frame" aria-hidden="true">
-                    <img
-                      alt=""
-                      className="github-logo-image"
-                      src={githubLogoUrl}
-                    />
-                  </span>
-                  {draft.githubInstallationId ? (
-                    <>
-                      <Check aria-hidden="true" className="button-icon" />
-                      GitHub connected
-                    </>
-                  ) : (
-                    "Connect GitHub"
-                  )}
-                </button>
-                {repositories.length > 1 ? (
-                  <label className="repo-select-field">
-                    <span>Select one repository to demo</span>
-                    <select
-                      aria-label="Select one GitHub repository to demo"
-                      onChange={(event) =>
-                        selectRepositoryFromDropdown(event.currentTarget.value)
-                      }
-                      value={draft.repoUrl}
-                    >
-                      <option value="">Choose a repository</option>
-                      {repositories.map((repository) => (
-                        <option
-                          key={repository.repoUrl}
-                          value={repository.repoUrl}
-                        >
-                          {repository.fullName}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
-                {repositories.length === 1 && draft.repoUrl ? (
-                  <p className="repo-selected-note">
-                    ✓ Selected {repositories[0]?.fullName}
-                  </p>
-                ) : null}
-              </div>
+            <div className="repo-connect-row">
+              <label className="repo-url-input">
+                <span className="link-icon" aria-hidden="true">
+                  <LinkIcon strokeWidth={2.4} />
+                </span>
+                <input
+                  aria-label="GitHub repository URL"
+                  onChange={(event) => setRepoInput(event.currentTarget.value)}
+                  placeholder="https://github.com/org/repo"
+                  value={repoInput}
+                />
+              </label>
+              <span className="or-label">OR</span>
               <button
-                aria-label="Make me a demo"
-                className="primary-hoot repo-submit-arrow"
-                disabled={!canContinueRepoStep}
-                onClick={continueFromRepo}
+                className={`github-button ${
+                  draft.githubInstallationId ? "github-button-connected" : ""
+                }`}
+                onClick={() =>
+                  draft.githubInstallationId ? undefined : void connectGitHub()
+                }
                 type="button"
               >
-                <ArrowRight aria-hidden="true" strokeWidth={2.4} />
+                <span className="github-logo-frame" aria-hidden="true">
+                  <img
+                    alt=""
+                    className="github-logo-image"
+                    src={githubLogoUrl}
+                  />
+                </span>
+                {draft.githubInstallationId ? (
+                  <>
+                    <Check aria-hidden="true" className="button-icon" />
+                    GitHub connected
+                  </>
+                ) : (
+                  "Connect GitHub"
+                )}
               </button>
+              {repositories.length > 1 ? (
+                <label className="repo-select-field">
+                  <span>Select one repository to demo</span>
+                  <select
+                    aria-label="Select one GitHub repository to demo"
+                    onChange={(event) =>
+                      selectRepositoryFromDropdown(event.currentTarget.value)
+                    }
+                    value={draft.repoUrl}
+                  >
+                    <option value="">Choose a repository</option>
+                    {repositories.map((repository) => (
+                      <option
+                        key={repository.repoUrl}
+                        value={repository.repoUrl}
+                      >
+                        {repository.fullName}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              {repositories.length === 1 && draft.repoUrl ? (
+                <p className="repo-selected-note">
+                  ✓ Selected {repositories[0]?.fullName}
+                </p>
+              ) : null}
             </div>
           </article>
           <p className="repo-help">
@@ -469,6 +454,15 @@ export function ContextGatheringApp() {
             <br />
             We currently support web apps built with JavaScript or TypeScript.
           </p>
+          <button
+            aria-label="Make me a demo"
+            className="primary-hoot repo-submit-button"
+            disabled={!canContinueRepoStep}
+            onClick={continueFromRepo}
+            type="button"
+          >
+            <ArrowRight aria-hidden="true" strokeWidth={2.4} />
+          </button>
         </section>
       ) : null}
 

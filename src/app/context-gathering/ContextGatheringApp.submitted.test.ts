@@ -38,14 +38,20 @@ describe("ContextGatheringApp", () => {
     expect(styles).not.toContain(".owlet-shell-submitted .brand-attribution");
   });
 
-  it("stacks repository entry choices beside the circular demo submit button", () => {
+  it("keeps repository entry choices on one row above the compact demo submit button", () => {
     const html = renderToStaticMarkup(createElement(ContextGatheringApp));
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
 
-    expect(html).toContain('class="repo-actions"');
-    expect(html).toContain('class="repo-input-stack"');
+    expect(html).toContain('class="repo-connect-row"');
     expect(html).toContain("OR");
-    expect(html).toContain('class="primary-hoot repo-submit-arrow"');
+    expect(html).toContain('class="primary-hoot repo-submit-button"');
     expect(html).toContain('aria-label="Make me a demo"');
+    expect(styles).toContain("width: min(100%, 68rem);");
+    expect(styles).toContain("width: max-content;");
+    expect(styles).toContain("min-width: 0;");
   });
 });
 
