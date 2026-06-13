@@ -21,13 +21,18 @@ export function createOpenCodeOutputStream(
 }
 
 function writeOpenCodeLine(line: string, write: (text: string) => void): void {
-  const trimmed = line.trim();
+  const trimmed = stripTerminalControls(line).trim();
   if (trimmed.length === 0) {
     return;
   }
 
   const event = tryParseJson(trimmed);
   if (event === undefined) {
+    const fallback = readDependencyInstallFallback(trimmed);
+    if (fallback !== undefined) {
+      write(`${fallback}\n`);
+    }
+
     return;
   }
 
@@ -165,16 +170,8 @@ function readResultEvent(event: unknown): string | undefined {
   if (record.status === "needs-dependency-install") {
     const command =
       typeof record.command === "string" ? record.command : "install command";
-    const reviewerSummary = Array.isArray(record.securityReviewOutcomes)
-      ? record.securityReviewOutcomes
-          .map(readReviewerSummary)
-          .filter((summary) => summary.length > 0)
-      : [];
 
-    return [
-      `[opencode] dependency install requested: ${command}`,
-      ...reviewerSummary.map((summary) => `[opencode:review] ${summary}`),
-    ].join("\n");
+    return `[opencode] dependency install requested: ${command}`;
   }
 
   if (record.status === "succeeded") {
@@ -195,28 +192,39 @@ function readResultEvent(event: unknown): string | undefined {
   return undefined;
 }
 
-function readReviewerSummary(value: unknown): string {
-  if (typeof value !== "object" || value === null) {
-    return "";
+function readDependencyInstallFallback(line: string): string | undefined {
+  if (!line.includes('"status":"needs-dependency-install"')) {
+    return undefined;
   }
 
-  const record = value as Record<string, unknown>;
-  const reviewer =
-    typeof record.reviewer === "string" ? record.reviewer : "reviewer";
-  const outcome =
-    typeof record.outcome === "string"
-      ? record.outcome
-      : typeof record.status === "string"
-        ? record.status
-        : "reviewed";
-  const findings = Array.isArray(record.findings)
-    ? record.findings.filter(
-        (finding): finding is string => typeof finding === "string",
-      )
-    : [];
-  const suffix = findings.length > 0 ? ` (${findings.length} findings)` : "";
+  const command = line.match(/"command":"([^"]+)"/)?.[1] ?? "install command";
+  return `[opencode] dependency install requested: ${command}`;
+}
 
-  return `${reviewer}: ${outcome}${suffix}`;
+function stripTerminalControls(text: string): string {
+  let stripped = "";
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "\r") {
+      continue;
+    }
+
+    if (char !== String.fromCharCode(27)) {
+      stripped += char;
+      continue;
+    }
+
+    while (index < text.length && !isAnsiTerminator(text[index] ?? "")) {
+      index += 1;
+    }
+  }
+
+  return stripped;
+}
+
+function isAnsiTerminator(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return code >= 64 && code <= 126;
 }
 
 function tryParseJson(text: string): unknown | undefined {

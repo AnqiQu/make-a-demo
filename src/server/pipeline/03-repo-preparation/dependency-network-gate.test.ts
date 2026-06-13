@@ -4,14 +4,12 @@ import {
   createSubmittedRuntimeEnv,
   evaluateDependencyNetworkRequest,
 } from "./dependency-network-gate";
-import type { SecurityReviewOutcome } from "./security-review-policy";
 
 describe("evaluateDependencyNetworkRequest", () => {
-  it("allows a dependency-install-only network window after all reviewers accept", () => {
+  it("allows a dependency-install-only network window without reviewer approval", () => {
     const result = evaluateDependencyNetworkRequest({
       command: "bun install",
       reason: "dependency-install",
-      securityReviewOutcomes: acceptedSecurityReview(),
     });
 
     expect(result).toEqual({ status: "allowed" });
@@ -21,33 +19,11 @@ describe("evaluateDependencyNetworkRequest", () => {
     const result = evaluateDependencyNetworkRequest({
       command: "bun run build",
       reason: "demo-build",
-      securityReviewOutcomes: acceptedSecurityReview(),
     });
 
     expect(result).toEqual({
       reason:
         "Outbound network access is only allowed for dependency installation.",
-      status: "denied",
-    });
-  });
-
-  it("denies network access when any security reviewer rejects", () => {
-    const outcomes = acceptedSecurityReview();
-    outcomes[0] = {
-      evidence: ["postinstall downloads an opaque binary"],
-      reason: "Dependency install hook is suspicious.",
-      reviewer: "dependency-reviewer",
-      status: "rejected",
-    };
-
-    const result = evaluateDependencyNetworkRequest({
-      command: "npm install",
-      reason: "dependency-install",
-      securityReviewOutcomes: outcomes,
-    });
-
-    expect(result).toEqual({
-      reason: "Dependency install hook is suspicious.",
       status: "denied",
     });
   });
@@ -73,23 +49,3 @@ describe("createSubmittedRuntimeEnv", () => {
     });
   });
 });
-
-function acceptedSecurityReview(): SecurityReviewOutcome[] {
-  return [
-    accept("dependency-reviewer"),
-    accept("runtime-security-reviewer"),
-    accept("obfuscation-deception-auditor"),
-    accept("prompt-injection-reviewer"),
-  ];
-}
-
-function accept(
-  reviewer: SecurityReviewOutcome["reviewer"],
-): SecurityReviewOutcome {
-  return {
-    evidence: [],
-    reason: "No blocking security findings.",
-    reviewer,
-    status: "accepted",
-  };
-}

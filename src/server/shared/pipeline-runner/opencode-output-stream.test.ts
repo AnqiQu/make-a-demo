@@ -80,19 +80,27 @@ describe("createOpenCodeOutputStream", () => {
     stream.write(
       `${JSON.stringify({
         command: "npm ci",
-        securityReviewOutcomes: [
-          {
-            findings: ["Pinned lockfile present", "Native package install"],
-            outcome: "passed-with-cautions",
-            reviewer: "Dependency Reviewer",
-          },
-        ],
         status: "needs-dependency-install",
       })}\n`,
     );
 
     expect(output).toEqual([
-      "[opencode] dependency install requested: npm ci\n[opencode:review] Dependency Reviewer: passed-with-cautions (2 findings)\n",
+      "[opencode] dependency install requested: npm ci\n",
+    ]);
+  });
+
+  it("formats dependency install JSON wrapped in PTY control characters", () => {
+    const output: string[] = [];
+    const stream = createOpenCodeOutputStream({
+      write: (text) => output.push(text),
+    });
+
+    stream.write(
+      `\u001b[0m{\"status\":\"needs-dependency-install\",\"command\":\"npm ci\"}\r\n`,
+    );
+
+    expect(output).toEqual([
+      "[opencode] dependency install requested: npm ci\n",
     ]);
   });
 });

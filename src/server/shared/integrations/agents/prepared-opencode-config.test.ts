@@ -5,42 +5,33 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  createMakeADemoOpenCodeConfigFiles,
   createPreparedOpenCodeFiles,
   writePreparedOpenCodeFiles,
 } from "./prepared-opencode-config";
 
-describe("createPreparedOpenCodeFiles", () => {
-  it("defines the four security reviewer subagents with structured accept/reject contracts", () => {
-    const files = createPreparedOpenCodeFiles();
-    const agents = Object.fromEntries(
-      files
-        .filter((file) => file.path.startsWith(".config/opencode/agents/"))
-        .map((file) => [file.path, file.content]),
+describe("createMakeADemoOpenCodeConfigFiles", () => {
+  it("exposes only the backend-controlled dependency install tool", () => {
+    const files = createMakeADemoOpenCodeConfigFiles();
+    const byPath = Object.fromEntries(
+      files.map((file) => [file.path, file.content]),
     );
 
-    expect(Object.keys(agents).sort()).toEqual([
-      ".config/opencode/agents/dependency-reviewer.md",
-      ".config/opencode/agents/obfuscation-deception-auditor.md",
-      ".config/opencode/agents/prompt-injection-reviewer.md",
-      ".config/opencode/agents/runtime-security-reviewer.md",
-    ]);
-    expect(agents[".config/opencode/agents/dependency-reviewer.md"]).toContain(
-      "mode: subagent",
+    expect(byPath["opencode.json"]).toContain(
+      '"makeademo_dependency_request_install": true',
     );
-    expect(agents[".config/opencode/agents/dependency-reviewer.md"]).toContain(
-      "permission: allow",
-    );
-    expect(agents[".config/opencode/agents/dependency-reviewer.md"]).toContain(
-      "dependency manifests and install lifecycle hooks",
-    );
+    expect(byPath["opencode.json"]).not.toContain("makeademo_review_conclude");
+    expect(files.some((file) => file.path.startsWith("agents/"))).toBe(false);
 
-    for (const content of Object.values(agents)) {
-      expect(content).toContain('"status":"accepted"');
-      expect(content).toContain('"status":"rejected"');
-      expect(content).toContain("Return only JSON");
-    }
+    const plugin = byPath["plugins/makeademo-tools.ts"];
+    expect(plugin).toContain("makeademo_dependency_request_install");
+    expect(plugin).toContain("dependency-install-request.json");
+    expect(plugin).not.toContain("makeademo_review_conclude");
+    expect(plugin).not.toContain("review-outcomes.jsonl");
   });
+});
 
+describe("createPreparedOpenCodeFiles", () => {
   it("writes prepared OpenCode files relative to an OpenCode home directory", async () => {
     const homeDirectory = await mkdtemp(join(tmpdir(), "makeademo-test-home-"));
 
@@ -49,10 +40,10 @@ describe("createPreparedOpenCodeFiles", () => {
 
       await expect(
         readFile(
-          join(homeDirectory, ".config/opencode/agents/dependency-reviewer.md"),
+          join(homeDirectory, ".config/opencode/skills/find-docs/SKILL.md"),
           "utf8",
         ),
-      ).resolves.toContain("dependency manifests and install lifecycle hooks");
+      ).resolves.toContain("Context7");
     } finally {
       await rm(homeDirectory, { force: true, recursive: true });
     }

@@ -6,11 +6,9 @@ import type {
   PreparationWorkspace,
   PreparationWorkspaceCommandResult,
 } from "./preparation-workspace.interface";
-import type { SecurityReviewOutcome } from "./security-review-policy";
 
 export type DependencyInstallNetworkWindowInput = {
   command: string;
-  securityReviewOutcomes: SecurityReviewOutcome[];
   workspace: PreparationWorkspace;
 };
 
@@ -20,7 +18,6 @@ export async function runDependencyInstallWithNetworkWindow(
   const decision = evaluateDependencyNetworkRequest({
     command: input.command,
     reason: "dependency-install",
-    securityReviewOutcomes: input.securityReviewOutcomes,
   });
   assertNetworkAllowed(decision);
 

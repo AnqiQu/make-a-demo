@@ -1,12 +1,6 @@
-import {
-  type SecurityReviewOutcome,
-  evaluateSecurityReview,
-} from "./security-review-policy";
-
 export type DependencyNetworkRequest = {
   command: string;
   reason: string;
-  securityReviewOutcomes: SecurityReviewOutcome[];
 };
 
 export type DependencyNetworkDecision =
@@ -27,8 +21,8 @@ const agentOnlyEnvKeys = new Set([
 
 /**
  * Decides whether Repo Preparation may temporarily unblock outbound network.
- * Network access is limited to dependency installation after all security
- * reviewers have accepted the repo.
+ * Network access is limited to backend-controlled dependency installation;
+ * deterministic Repo Security Screen runs before this stage.
  */
 export function evaluateDependencyNetworkRequest(
   request: DependencyNetworkRequest,
@@ -41,15 +35,7 @@ export function evaluateDependencyNetworkRequest(
     };
   }
 
-  const review = evaluateSecurityReview(request.securityReviewOutcomes);
-  if (review.status === "accepted") {
-    return { status: "allowed" };
-  }
-
-  return {
-    reason: review.blockers.join(" "),
-    status: "denied",
-  };
+  return { status: "allowed" };
 }
 
 export function createSubmittedRuntimeEnv(

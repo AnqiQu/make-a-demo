@@ -38,8 +38,17 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
       },
       { network: false },
       {
+        execute: expect.stringContaining("plugins/makeademo-tools.ts"),
+      },
+      {
+        configDir: "/workspace/.makeademo/opencode",
         execute: expect.stringContaining("opencode run"),
         streaming: true,
+      },
+      {
+        execute: expect.stringContaining(
+          "/workspace/.makeademo/dependency-install-request.json",
+        ),
       },
     ]);
     expect(streamed).toEqual(["stdout:opencode output"]);
@@ -60,25 +69,18 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
     expect(command).toContain("--model 'openai/gpt-5.5'");
   });
 
-  it("handles dependency install network-window requests in the retained Daytona workspace", async () => {
+  it("handles custom tool dependency install requests in the retained Daytona workspace", async () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparationAgent({
       modelID: "gpt-5.5",
       providerApiKey: "openai_key",
-      provider: fakeProvider(events, [
-        JSON.stringify({
-          command: "bun install",
-          securityReviewOutcomes: [
-            accept("dependency-reviewer"),
-            accept("runtime-security-reviewer"),
-            accept("obfuscation-deception-auditor"),
-            accept("prompt-injection-reviewer"),
-          ],
-          status: "needs-dependency-install",
-        }),
-        "installed",
-        JSON.stringify(successResult()),
-      ]),
+      provider: fakeProvider(events, {
+        commandStdout: [
+          "Dependency install requested.",
+          JSON.stringify(successResult()),
+        ],
+        dependencyInstallRequest: { command: "bun install" },
+      }),
       providerID: "openai",
       timeoutMs: 1_000,
     });
@@ -103,13 +105,28 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
       },
       { network: false },
       {
+        execute: expect.stringContaining("plugins/makeademo-tools.ts"),
+      },
+      {
+        configDir: "/workspace/.makeademo/opencode",
         execute: expect.stringContaining("opencode run"),
         streaming: false,
+      },
+      {
+        execute: expect.stringContaining(
+          "/workspace/.makeademo/dependency-install-request.json",
+        ),
       },
       { network: true },
       { execute: "bun install" },
       { network: false },
       {
+        execute: expect.stringContaining(
+          "/workspace/.makeademo/dependency-install-request.json",
+        ),
+      },
+      {
+        configDir: "/workspace/.makeademo/opencode",
         execute: expect.stringContaining("Continue Repo Preparation"),
         streaming: false,
       },
@@ -119,8 +136,17 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
 
 function fakeProvider(
   events: unknown[],
-  commandStdout: string[] = [JSON.stringify(successResult())],
+  input:
+    | string[]
+    | {
+        commandStdout?: string[];
+        dependencyInstallRequest?: { command: string };
+      } = [JSON.stringify(successResult())],
 ): PreparationWorkspaceProvider {
+  const workspaceInput = Array.isArray(input)
+    ? { commandStdout: input }
+    : input;
+
   return {
     async create() {
       return {
@@ -128,7 +154,7 @@ function fakeProvider(
           events.push({ destroy: "daytona_workspace" });
         },
         id: "daytona_workspace",
-        workspace: fakeWorkspace(events, commandStdout),
+        workspace: fakeWorkspace(events, workspaceInput),
       };
     },
   };
@@ -136,14 +162,22 @@ function fakeProvider(
 
 function fakeWorkspace(
   events: unknown[],
-  commandStdout: string[],
+  input: {
+    commandStdout?: string[];
+    dependencyInstallRequest?: { command: string };
+  },
 ): PreparationWorkspace {
+  const commandStdout = input.commandStdout ?? [
+    JSON.stringify(successResult()),
+  ];
+
   return {
     async execute(command, options) {
       events.push({
         execute: command,
         ...(command.includes("opencode run")
           ? {
+              configDir: options?.env?.OPENCODE_CONFIG_DIR,
               streaming:
                 options?.onStdout !== undefined ||
                 options?.onStderr !== undefined,
@@ -151,6 +185,28 @@ function fakeWorkspace(
           : {}),
       });
       options?.onStdout?.("opencode output");
+      if (
+        command.startsWith("if test -f") &&
+        command.includes("dependency-install-request.json")
+      ) {
+        return {
+          exitCode: input.dependencyInstallRequest === undefined ? 1 : 0,
+          stderr: "",
+          stdout:
+            input.dependencyInstallRequest === undefined
+              ? ""
+              : JSON.stringify(input.dependencyInstallRequest),
+        };
+      }
+      if (
+        command.includes("plugins/makeademo-tools.ts") ||
+        command.startsWith("rm -f")
+      ) {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      }
+      if (command === "bun install") {
+        return { exitCode: 0, stderr: "", stdout: "installed" };
+      }
       return {
         exitCode: 0,
         stderr: "",
@@ -165,15 +221,6 @@ function fakeWorkspace(
     async uploadFiles() {
       throw new Error("Repo Preparation should clone inside Daytona.");
     },
-  };
-}
-
-function accept(reviewer: string) {
-  return {
-    evidence: [],
-    reason: "No blocking security findings.",
-    reviewer,
-    status: "accepted",
   };
 }
 
