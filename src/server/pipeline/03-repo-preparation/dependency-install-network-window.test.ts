@@ -52,6 +52,9 @@ function fakeWorkspace(
       events.push(`execute:${command}`);
       return { stdout: "", ...result };
     },
+    async getPreviewUrl(port) {
+      return `https://preview.example.test:${port}`;
+    },
     async setOutboundNetworkAccess(enabled) {
       events.push(enabled ? "network:unblocked" : "network:blocked");
     },

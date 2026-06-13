@@ -142,6 +142,10 @@ class DaytonaPreparationWorkspace implements PreparationWorkspace {
     );
   }
 
+  async getPreviewUrl(_port: number): Promise<string> {
+    throw new Error("Daytona preview URLs require the SDK-backed adapter.");
+  }
+
   async uploadFiles(_files: PreparationWorkspaceUploadFile[]): Promise<void> {
     throw new Error("Daytona file upload requires the SDK-backed adapter.");
   }

@@ -197,6 +197,9 @@ function fakeWorkspaceHandle() {
       async execute() {
         return { exitCode: 0, stderr: "", stdout: "" };
       },
+      async getPreviewUrl(port: number) {
+        return `https://preview.example.test:${port}`;
+      },
       async setOutboundNetworkAccess() {},
       async uploadFiles() {},
     },

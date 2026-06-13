@@ -8,6 +8,19 @@ import type {
 } from "../../../pipeline/04-project-validation/sandbox-runner.interface";
 
 export class DaytonaSandboxRunner implements SandboxRunner {
+  private readonly readinessPollIntervalMs: number;
+  private readonly readinessTimeoutMs: number;
+
+  constructor(
+    options: {
+      readinessPollIntervalMs?: number;
+      readinessTimeoutMs?: number;
+    } = {},
+  ) {
+    this.readinessPollIntervalMs = options.readinessPollIntervalMs ?? 1_000;
+    this.readinessTimeoutMs = options.readinessTimeoutMs ?? 30_000;
+  }
+
   async runValidation(
     input: SandboxValidationInput & {
       preparationManifest: PreparationManifest;
@@ -55,14 +68,44 @@ export class DaytonaSandboxRunner implements SandboxRunner {
       const runtimeResult = await handle.workspace.execute(
         createStartDemoCommand(input.demoCommand),
       );
+      const readinessResult = await waitForDemoReadiness({
+        pollIntervalMs: this.readinessPollIntervalMs,
+        timeoutMs: this.readinessTimeoutMs,
+        url: input.url,
+        workspace: handle.workspace,
+      });
+      if (readinessResult.exitCode !== 0) {
+        const demoLogsResult = await handle.workspace.execute(
+          "if test -f /tmp/makeademo-demo.log; then cat /tmp/makeademo-demo.log; fi",
+        );
+
+        return {
+          blockedNetworkAttempts: [],
+          cleanup: () => handle.destroy(),
+          logs: [
+            ...collectLogs(repoFilesResult),
+            ...collectLogs(installResult),
+            ...collectLogs(runtimeResult),
+            ...collectLogs(readinessResult),
+            ...collectLogs(demoLogsResult),
+          ],
+          repoFiles,
+          runtimeExitCode: 1,
+        };
+      }
+      const browserUrl = await handle.workspace.getPreviewUrl(
+        readPortFromLocalUrl(input.url),
+      );
 
       return {
         blockedNetworkAttempts: [],
+        browserUrl,
         cleanup: () => handle.destroy(),
         logs: [
           ...collectLogs(repoFilesResult),
           ...collectLogs(installResult),
           ...collectLogs(runtimeResult),
+          ...collectLogs(readinessResult),
         ],
         repoFiles,
         runtimeExitCode: runtimeResult.exitCode,
@@ -80,6 +123,62 @@ function collectLogs(result: { stderr: string; stdout: string }): string[] {
 
 function createStartDemoCommand(demoCommand: string): string {
   return `sh -lc ${shellQuote(`cd /workspace && nohup ${demoCommand} > /tmp/makeademo-demo.log 2>&1 & echo $!`)}`;
+}
+
+async function waitForDemoReadiness(input: {
+  pollIntervalMs: number;
+  timeoutMs: number;
+  url: string;
+  workspace: PreparationWorkspaceHandle["workspace"];
+}) {
+  const attempts = Math.max(
+    1,
+    Math.ceil(input.timeoutMs / Math.max(1, input.pollIntervalMs)),
+  );
+  let lastResult = {
+    exitCode: 1,
+    stderr: "",
+    stdout: `Demo URL did not become ready: ${input.url}`,
+  };
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    lastResult = await input.workspace.execute(
+      createDemoReadinessCommand(input.url),
+    );
+    if (lastResult.exitCode === 0) {
+      return lastResult;
+    }
+
+    if (input.pollIntervalMs > 0 && attempt < attempts - 1) {
+      await delay(input.pollIntervalMs);
+    }
+  }
+
+  return {
+    exitCode: 1,
+    stderr: lastResult.stderr,
+    stdout:
+      lastResult.stdout.length > 0
+        ? lastResult.stdout
+        : `Demo URL did not become ready: ${input.url}`,
+  };
+}
+
+function createDemoReadinessCommand(url: string): string {
+  return `node -e ${shellQuote("fetch(process.argv[1]).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));")} ${shellQuote(url)}`;
+}
+
+function readPortFromLocalUrl(url: string): number {
+  const parsedUrl = new URL(url);
+  if (parsedUrl.port.length > 0) {
+    return Number(parsedUrl.port);
+  }
+
+  return parsedUrl.protocol === "https:" ? 443 : 80;
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function shellQuote(value: string): string {

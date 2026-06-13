@@ -63,6 +63,21 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ]);
   });
 
+  it("resolves signed preview URLs for browser validation", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls),
+    });
+    const handle = await provider.create();
+
+    await expect(handle.workspace.getPreviewUrl(4173)).resolves.toBe(
+      "https://preview.example.test:4173",
+    );
+    expect(calls[1]).toEqual({
+      getSignedPreviewUrl: { port: 4173, ttl: 3600 },
+    });
+  });
+
   it("streams command output through a Daytona PTY when callbacks are provided", async () => {
     const calls: unknown[] = [];
     const streamed: string[] = [];
@@ -154,6 +169,10 @@ function fakeClient(calls: unknown[], options: { networkError?: Error } = {}) {
       },
     },
     id: "sandbox_123",
+    async getSignedPreviewUrl(port: number, ttl?: number) {
+      calls.push({ getSignedPreviewUrl: { port, ttl } });
+      return { url: `https://preview.example.test:${port}` };
+    },
     process: {
       async createPty(options: {
         id: string;

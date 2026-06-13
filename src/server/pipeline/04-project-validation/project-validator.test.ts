@@ -6,9 +6,11 @@ import type { SandboxRunner } from "./sandbox-runner.interface";
 
 describe("validateProject", () => {
   it("returns validation artifacts when the prepared repo satisfies the Demo Run Contract", async () => {
+    const browserUrls: string[] = [];
     const sandboxRunner: SandboxRunner = {
       async runValidation() {
         return {
+          browserUrl: "https://preview.example.test",
           blockedNetworkAttempts: [],
           logs: ["installed", "started demo"],
           repoFiles: ["package.json", "bun.lock"],
@@ -17,7 +19,8 @@ describe("validateProject", () => {
       },
     };
     const browserValidator: BrowserValidator = {
-      async validate() {
+      async validate(input) {
+        browserUrls.push(input.url);
         return {
           interactable: true,
           logs: ["loaded app"],
@@ -43,6 +46,7 @@ describe("validateProject", () => {
       status: "succeeded",
       warnings: [],
     });
+    expect(browserUrls).toEqual(["https://preview.example.test"]);
   });
 
   it("fails validation when runtime network attempts cross the sandbox boundary", async () => {

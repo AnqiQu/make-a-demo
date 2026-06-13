@@ -247,6 +247,9 @@ function fakeWorkspace(
     async setOutboundNetworkAccess(enabled) {
       events.push({ network: enabled });
     },
+    async getPreviewUrl(port) {
+      return `https://preview.example.test:${port}`;
+    },
     async uploadFiles() {
       throw new Error("Repo Preparation should clone inside Daytona.");
     },

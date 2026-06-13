@@ -24,6 +24,10 @@ type DaytonaSdkSandbox = {
       files: Array<{ destination: string; source: string }>,
     ): Promise<void>;
   };
+  getSignedPreviewUrl(
+    port: number,
+    expiresInSeconds?: number,
+  ): Promise<{ url?: string }>;
   id?: string;
   name?: string;
   process: {
@@ -195,6 +199,15 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
 
       throw error;
     }
+  }
+
+  async getPreviewUrl(port: number): Promise<string> {
+    const preview = await this.sandbox.getSignedPreviewUrl(port, 60 * 60);
+    if (preview.url === undefined || preview.url.trim().length === 0) {
+      throw new Error("Daytona did not return a preview URL.");
+    }
+
+    return preview.url;
   }
 
   async uploadFiles(files: PreparationWorkspaceUploadFile[]): Promise<void> {

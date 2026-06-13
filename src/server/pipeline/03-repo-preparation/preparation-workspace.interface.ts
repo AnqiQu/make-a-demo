@@ -25,6 +25,7 @@ export interface PreparationWorkspace {
     command: string,
     options?: PreparationWorkspaceExecuteOptions,
   ): Promise<PreparationWorkspaceCommandResult>;
+  getPreviewUrl(port: number): Promise<string>;
   setOutboundNetworkAccess(enabled: boolean): Promise<void>;
   uploadFiles(files: PreparationWorkspaceUploadFile[]): Promise<void>;
 }

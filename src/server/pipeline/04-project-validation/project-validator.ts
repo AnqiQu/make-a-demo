@@ -57,7 +57,7 @@ export async function validateProject(
     }
 
     const browserResult = await dependencies.browserValidator.validate({
-      url: input.preparationManifest.url,
+      url: sandboxResult.browserUrl ?? input.preparationManifest.url,
     });
     const browserNetworkAttempts = findRuntimeBoundaryViolations(
       browserResult.blockedNetworkAttempts ?? [],

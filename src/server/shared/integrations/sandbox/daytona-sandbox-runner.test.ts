@@ -20,9 +20,11 @@ describe("DaytonaSandboxRunner", () => {
       "find /workspace -maxdepth 1 -mindepth 1 -printf '%f\\n' | sort",
       "npm ci",
       "sh -lc 'cd /workspace && nohup npm run demo > /tmp/makeademo-demo.log 2>&1 & echo $!'",
+      "node -e 'fetch(process.argv[1]).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));' 'http://localhost:3000'",
     ]);
     expect(workspace.networkAccess).toEqual([true, false]);
     expect(result).toMatchObject({
+      browserUrl: "https://preview.example.test:3000",
       blockedNetworkAttempts: [],
       logs: [
         "package-lock.json\npackage.json\n",
@@ -111,6 +113,61 @@ describe("DaytonaSandboxRunner", () => {
     );
     expect(result.runtimeExitCode).toBe(0);
   });
+
+  it("waits for the prepared demo URL before browser validation can run", async () => {
+    const workspace = new FakePreparationWorkspaceHandle();
+    workspace.readinessResults = [1, 0];
+    const runner = new DaytonaSandboxRunner({ readinessPollIntervalMs: 0 });
+
+    const result = await runner.runValidation({
+      demoCommand: "npm run demo",
+      preparationManifest: manifest("workspace_123"),
+      preparationWorkspace: workspace,
+      repoUrl: "https://github.com/example/app",
+      url: "http://localhost:3000",
+    });
+
+    expect(
+      workspace.commands.filter((command) => command.includes("fetch")),
+    ).toHaveLength(2);
+    expect(result.runtimeExitCode).toBe(0);
+  });
+
+  it("returns demo logs when the prepared demo URL never becomes ready", async () => {
+    const workspace = new FakePreparationWorkspaceHandle();
+    workspace.readinessResults = [1, 1, 1];
+    const runner = new DaytonaSandboxRunner({
+      readinessPollIntervalMs: 0,
+      readinessTimeoutMs: 3,
+    });
+
+    const result = await runner.runValidation({
+      demoCommand: "npm run demo",
+      preparationManifest: manifest("workspace_123"),
+      preparationWorkspace: workspace,
+      repoUrl: "https://github.com/example/app",
+      url: "http://localhost:3000",
+    });
+
+    expect(result.runtimeExitCode).toBe(1);
+    expect(result.logs).toContain("demo server failed");
+  });
+
+  it("uses the manifest URL port when resolving a browser preview URL", async () => {
+    const workspace = new FakePreparationWorkspaceHandle();
+    const runner = new DaytonaSandboxRunner();
+
+    const result = await runner.runValidation({
+      demoCommand: "npm run demo",
+      preparationManifest: manifest("workspace_123"),
+      preparationWorkspace: workspace,
+      repoUrl: "https://github.com/example/app",
+      url: "http://localhost:4173",
+    });
+
+    expect(workspace.previewPorts).toEqual([4173]);
+    expect(result.browserUrl).toBe("https://preview.example.test:4173");
+  });
 });
 
 class FakePreparationWorkspaceHandle implements PreparationWorkspaceHandle {
@@ -118,6 +175,8 @@ class FakePreparationWorkspaceHandle implements PreparationWorkspaceHandle {
   destroyed = false;
   id = "daytona_workspace";
   networkAccess: boolean[] = [];
+  previewPorts: number[] = [];
+  readinessResults: number[] = [];
 
   constructor(
     private readonly exitCodesByCommand = new Map<string, number>(),
@@ -131,6 +190,24 @@ class FakePreparationWorkspaceHandle implements PreparationWorkspaceHandle {
         throw new Error(`${command} exploded`);
       }
 
+      if (command.includes("fetch")) {
+        return {
+          exitCode: this.readinessResults.shift() ?? 0,
+          stderr: "",
+          stdout: "",
+        };
+      }
+
+      if (command.includes("/tmp/makeademo-demo.log")) {
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout: command.startsWith("if test -f")
+            ? "demo server failed"
+            : `ran ${command}`,
+        };
+      }
+
       return {
         exitCode: this.exitCodesByCommand.get(command) ?? 0,
         stderr: "",
@@ -141,6 +218,10 @@ class FakePreparationWorkspaceHandle implements PreparationWorkspaceHandle {
     },
     setOutboundNetworkAccess: async (enabled: boolean) => {
       this.networkAccess.push(enabled);
+    },
+    getPreviewUrl: async (port: number) => {
+      this.previewPorts.push(port);
+      return `https://preview.example.test:${port}`;
     },
     uploadFiles: async () => {
       throw new Error("Project Validation should use the retained workspace.");
