@@ -124,7 +124,7 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
         {
           configDir: "/workspace/.makeademo/opencode",
           execute: expect.stringContaining("opencode run"),
-          streaming: false,
+          streaming: true,
         },
         {
           execute: expect.stringContaining(
@@ -142,7 +142,7 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
         {
           configDir: "/workspace/.makeademo/opencode",
           execute: expect.stringContaining("opencode run"),
-          streaming: false,
+          streaming: true,
         },
         {
           execute: expect.stringContaining(
@@ -255,6 +255,55 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
     );
   });
 
+  it("mirrors streamed OpenCode output into Daytona attempt log files", async () => {
+    const events: unknown[] = [];
+    const streamed: string[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparationAgent({
+      modelID: "gpt-5.5",
+      onStderr: (chunk) => streamed.push(`stderr:${chunk}`),
+      onStdout: (chunk) => streamed.push(`stdout:${chunk}`),
+      provider: fakeProvider(events, {
+        commandStderrChunks: ["agent warning"],
+        commandStdout: ["Submitted preparation result."],
+        commandStdoutChunks: ["agent output"],
+        preparationResult: successResult(),
+        validationResult: validationArtifact(),
+      }),
+      providerApiKey: "openai_key",
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(streamed).toEqual(["stdout:agent output", "stderr:agent warning"]);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          execute: expect.stringContaining(
+            "/workspace/.makeademo/opencode-attempt-1.stdout.log",
+          ),
+        },
+        {
+          execute: expect.stringContaining("agent output"),
+        },
+        {
+          execute: expect.stringContaining(
+            "/workspace/.makeademo/opencode-attempt-1.stderr.log",
+          ),
+        },
+        {
+          execute: expect.stringContaining("agent warning"),
+        },
+      ]),
+    );
+  });
+
   it("fails fast instead of starting backend validation when the preparation deadline is nearly exhausted", async () => {
     const events: unknown[] = [];
     let validationStarted = false;
@@ -297,6 +346,8 @@ function fakeProvider(
     | string[]
     | {
         commandStdout?: string[];
+        commandStderrChunks?: string[];
+        commandStdoutChunks?: string[];
         commandDelayMs?: number;
         dependencyInstallRequest?: { command: string };
         preparationResult?: ReturnType<typeof successResult>;
@@ -327,6 +378,8 @@ function fakeWorkspace(
   events: unknown[],
   input: {
     commandStdout?: string[];
+    commandStderrChunks?: string[];
+    commandStdoutChunks?: string[];
     commandDelayMs?: number;
     dependencyInstallRequest?: { command: string };
     preparationResult?: ReturnType<typeof successResult>;
@@ -364,8 +417,16 @@ function fakeWorkspace(
             }
           : {}),
       });
-      options?.onStdout?.("opencode output");
+      for (const chunk of input.commandStdoutChunks ?? ["opencode output"]) {
+        options?.onStdout?.(chunk);
+      }
+      for (const chunk of input.commandStderrChunks ?? []) {
+        options?.onStderr?.(chunk);
+      }
       if (command.includes("repo-preparation-debug.jsonl")) {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      }
+      if (command.includes("opencode-attempt-") && command.includes(".log")) {
         return { exitCode: 0, stderr: "", stdout: "" };
       }
       if (

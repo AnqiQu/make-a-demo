@@ -178,6 +178,7 @@ export class DaytonaOpenCodeRepoPreparationAgent
         remainingMs: deadlineAt - Date.now(),
       });
       const openCodeResult = await this.executeOpenCode(handle, {
+        attempt: attempt + 1,
         model: `${this.providerID}/${this.modelID}`,
         prompt,
         providerApiKey: this.providerApiKey,
@@ -278,25 +279,50 @@ export class DaytonaOpenCodeRepoPreparationAgent
     };
   }
 
-  private executeOpenCode(
+  private async executeOpenCode(
     handle: PreparationWorkspaceHandle,
     input: {
+      attempt: number;
       model: string;
       prompt: string;
       providerApiKey: string;
       providerID: string;
     },
   ): Promise<PreparationWorkspaceCommandResult> {
+    const outputWrites: Promise<void>[] = [];
+    const onStdout = (chunk: string) => {
+      this.onStdout?.(chunk);
+      outputWrites.push(
+        appendOpenCodeAttemptOutput(handle.workspace, {
+          attempt: input.attempt,
+          channel: "stdout",
+          chunk,
+        }),
+      );
+    };
+    const onStderr = (chunk: string) => {
+      this.onStderr?.(chunk);
+      outputWrites.push(
+        appendOpenCodeAttemptOutput(handle.workspace, {
+          attempt: input.attempt,
+          channel: "stderr",
+          chunk,
+        }),
+      );
+    };
     const options = {
       env: createOpenCodeEnv(input),
-      ...(this.onStderr === undefined ? {} : { onStderr: this.onStderr }),
-      ...(this.onStdout === undefined ? {} : { onStdout: this.onStdout }),
+      onStderr,
+      onStdout,
     };
 
-    return handle.workspace.execute(
+    const result = await handle.workspace.execute(
       createOpenCodeRunCommand(input),
-      Object.keys(options).length === 0 ? undefined : options,
+      options,
     );
+    await Promise.all(outputWrites);
+
+    return result;
   }
 }
 
@@ -405,6 +431,23 @@ async function appendPreparationDebugLog(
   );
   if (result.exitCode !== 0) {
     throw new Error("Failed to write Repo Preparation debug log.");
+  }
+}
+
+async function appendOpenCodeAttemptOutput(
+  workspace: PreparationWorkspace,
+  input: { attempt: number; channel: "stderr" | "stdout"; chunk: string },
+): Promise<void> {
+  if (input.chunk.length === 0) {
+    return;
+  }
+
+  const path = `${makeADemoArtifactDirectory}/opencode-attempt-${input.attempt}.${input.channel}.log`;
+  const result = await workspace.execute(
+    `mkdir -p ${shellQuote(makeADemoArtifactDirectory)} && printf '%s' ${shellQuote(input.chunk)} >> ${shellQuote(path)}`,
+  );
+  if (result.exitCode !== 0) {
+    throw new Error("Failed to write OpenCode attempt output log.");
   }
 }
 
