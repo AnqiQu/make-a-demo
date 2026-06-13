@@ -3,6 +3,9 @@ strict digraph "dependency-cruiser output"{
     node [shape="box" style="rounded, filled" height="0.2" color="black" fillcolor="#ffffcc" fontcolor="black" fontname="Helvetica" fontsize="9"]
     edge [arrowhead="normal" arrowsize="0.6" penwidth="2.0" color="#00000033" fontname="Helvetica" fontsize="9"]
 
+    subgraph "cluster_src" {label="src" subgraph "cluster_src/app" {label="app" "src/app/analytics.test.ts" [label=<analytics.test.ts> tooltip="analytics.test.ts" URL="src/app/analytics.test.ts" fillcolor="#ddfeff"] } }
+    "src/app/analytics.test.ts" -> "src/app/analytics.ts"
+    subgraph "cluster_src" {label="src" subgraph "cluster_src/app" {label="app" "src/app/analytics.ts" [label=<analytics.ts> tooltip="analytics.ts" URL="src/app/analytics.ts" fillcolor="#ddfeff"] } }
     subgraph "cluster_src" {label="src" subgraph "cluster_src/app" {label="app" subgraph "cluster_src/app/context-gathering" {label="context-gathering" "src/app/context-gathering/ContextGatheringApp.submitted.test.ts" [label=<ContextGatheringApp.submitted.test.ts> tooltip="ContextGatheringApp.submitted.test.ts" URL="src/app/context-gathering/ContextGatheringApp.submitted.test.ts" fillcolor="#ddfeff"] } } }
     "src/app/context-gathering/ContextGatheringApp.submitted.test.ts" -> "src/app/context-gathering/ContextGatheringApp.tsx"
     subgraph "cluster_src" {label="src" subgraph "cluster_src/app" {label="app" subgraph "cluster_src/app/context-gathering" {label="context-gathering" "src/app/context-gathering/ContextGatheringApp.tsx" [label=<ContextGatheringApp.tsx> tooltip="ContextGatheringApp.tsx" URL="src/app/context-gathering/ContextGatheringApp.tsx" fillcolor="#bbfeff"] } } }
@@ -11,6 +14,7 @@ strict digraph "dependency-cruiser output"{
     "src/app/context-gathering/draft.test.ts" -> "src/app/context-gathering/draft.ts"
     subgraph "cluster_src" {label="src" subgraph "cluster_src/app" {label="app" subgraph "cluster_src/app/context-gathering" {label="context-gathering" "src/app/context-gathering/draft.ts" [label=<draft.ts> tooltip="draft.ts" URL="src/app/context-gathering/draft.ts" fillcolor="#ddfeff"] } } }
     subgraph "cluster_src" {label="src" subgraph "cluster_src/app" {label="app" "src/app/main.tsx" [label=<main.tsx> tooltip="main.tsx" URL="src/app/main.tsx" fillcolor="#bbfeff"] } }
+    "src/app/main.tsx" -> "src/app/analytics.ts"
     "src/app/main.tsx" -> "src/app/context-gathering/ContextGatheringApp.tsx"
     "src/app/main.tsx" -> "src/app/styles.css"
     subgraph "cluster_src" {label="src" subgraph "cluster_src/app" {label="app" "src/app/styles.css" [label=<styles.css> tooltip="styles.css" URL="src/app/styles.css" ] } }
