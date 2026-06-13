@@ -23,6 +23,5 @@ CREATE TABLE IF NOT EXISTS demo_requests (
   script jsonb,
   generated_demo_url text,
   final_video_email_sent_at timestamptz,
-  status text NOT NULL DEFAULT 'queued',
   created_at timestamptz NOT NULL DEFAULT now()
 );

@@ -6,7 +6,7 @@ import {
 } from "./context-gathering-submission";
 
 describe("submitContextGathering", () => {
-  it("stores the maker, queued Project, and queued Demo Request from a public repo intake", async () => {
+  it("stores the maker, Demo Request, and queued Project from a public repo intake", async () => {
     const calls: string[] = [];
     const store: ContextGatheringStore = {
       async createQueuedProject(input) {

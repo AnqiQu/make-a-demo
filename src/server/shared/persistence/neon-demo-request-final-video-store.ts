@@ -35,6 +35,19 @@ type SelectWhereQuery = {
   };
 };
 
+type SelectStatusQuery = {
+  from(table: unknown): {
+    innerJoin(
+      table: unknown,
+      condition: unknown,
+    ): {
+      where(condition: unknown): {
+        limit(count: number): Promise<Array<Record<string, unknown>>>;
+      };
+    };
+  };
+};
+
 type SelectMakerEmailQuery = {
   from(table: unknown): {
     innerJoin(
@@ -69,7 +82,6 @@ export class NeonDemoRequestFinalVideoStore
     const [demoRequest] = await updateQuery
       .set({
         generatedDemoUrl: input.generatedDemoUrl,
-        status: "completed",
       })
       .where(eq(demoRequests.id, input.demoRequestId))
       .returning({
@@ -124,10 +136,11 @@ export class NeonDemoRequestFinalVideoStore
   ): Promise<DemoRequestStatus | undefined> {
     const statusQuery = this.db.select({
       generatedDemoUrl: demoRequests.generatedDemoUrl,
-      status: demoRequests.status,
-    }) as SelectWhereQuery;
+      status: projects.status,
+    }) as SelectStatusQuery;
     const [demoRequest] = await statusQuery
       .from(demoRequests)
+      .innerJoin(projects, eq(demoRequests.projectId, projects.id))
       .where(eq(demoRequests.id, demoRequestId))
       .limit(1);
 
