@@ -18,6 +18,7 @@ import { createMakeADemoOpenCodeConfigFiles } from "./prepared-opencode-config";
 const makeADemoArtifactDirectory = "/workspace/.makeademo";
 const makeADemoOpenCodeConfigDirectory = `${makeADemoArtifactDirectory}/opencode`;
 const dependencyInstallRequestPath = `${makeADemoArtifactDirectory}/dependency-install-request.json`;
+const preparationResultPath = `${makeADemoArtifactDirectory}/repo-preparation-result.json`;
 
 export type DaytonaOpenCodeRepoPreparationAgentOptions = {
   modelID: string;
@@ -52,7 +53,7 @@ export class DaytonaOpenCodeRepoPreparationAgent
 
   async prepare(input: RepoPreparationInput) {
     const handle = await this.provider.create();
-    let result: WorkspaceCommandRunResult;
+    let result: TimedRunResult<RawPreparationRunResult>;
     try {
       result = await raceWithTimeout(
         this.runPreparation(handle, input),
@@ -93,7 +94,7 @@ export class DaytonaOpenCodeRepoPreparationAgent
   private async runPreparation(
     handle: PreparationWorkspaceHandle,
     input: RepoPreparationInput,
-  ): Promise<PreparationWorkspaceCommandResult> {
+  ): Promise<RawPreparationRunResult> {
     await handle.workspace.setOutboundNetworkAccess(true);
     const cloneResult = await handle.workspace.execute(
       createCloneCommand(input.repoUrl),
@@ -117,7 +118,7 @@ export class DaytonaOpenCodeRepoPreparationAgent
     );
 
     if (dependencyInstallRequest === undefined) {
-      return firstResult;
+      return readPreparationResultOrParseStdout(handle.workspace, firstResult);
     }
 
     await runDependencyInstallWithNetworkWindow({
@@ -126,12 +127,17 @@ export class DaytonaOpenCodeRepoPreparationAgent
     });
     await clearDependencyInstallRequest(handle.workspace);
 
-    return this.executeOpenCode(handle, {
+    const continuedResult = await this.executeOpenCode(handle, {
       model: `${this.providerID}/${this.modelID}`,
       prompt: createContinueRepoPreparationPrompt(input),
       providerApiKey: this.providerApiKey,
       providerID: this.providerID,
     });
+
+    return readPreparationResultOrParseStdout(
+      handle.workspace,
+      continuedResult,
+    );
   }
 
   private executeOpenCode(
@@ -157,9 +163,13 @@ export class DaytonaOpenCodeRepoPreparationAgent
 }
 
 function parseCommandResult(
-  result: PreparationWorkspaceCommandResult,
+  result: RawPreparationRunResult,
   workspace: PreparationWorkspaceHandle,
 ) {
+  if (!("exitCode" in result)) {
+    return result.status === "succeeded" ? { ...result, workspace } : result;
+  }
+
   if (result.exitCode !== 0) {
     return {
       assumptions: [],
@@ -181,14 +191,18 @@ function parseCommandResult(
   return { ...parsedResult, workspace };
 }
 
-type WorkspaceCommandRunResult =
-  | { status: "succeeded"; value: PreparationWorkspaceCommandResult }
+type RawPreparationRunResult =
+  | PreparationWorkspaceCommandResult
+  | Awaited<ReturnType<RepoPreparationAgent["prepare"]>>;
+
+type TimedRunResult<T> =
+  | { status: "succeeded"; value: T }
   | { reason: string; status: "failed" | "timed-out" };
 
-function raceWithTimeout(
-  promise: Promise<PreparationWorkspaceCommandResult>,
+function raceWithTimeout<T>(
+  promise: Promise<T>,
   timeoutMs: number,
-): Promise<WorkspaceCommandRunResult> {
+): Promise<TimedRunResult<T>> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       resolve({
@@ -299,7 +313,9 @@ function createDaytonaRepoPreparationPrompt(
     "Action: do not request that command. Choose an allowlisted install command if one fits, otherwise return a failed result with a clear blocker.",
     "",
     "## Final Response Contract",
-    "Return only JSON in one of these shapes:",
+    "When Repo Preparation is complete or blocked, call `makeademo_submit_preparation_result` exactly once. Do not print final JSON in plain text.",
+    "",
+    'For success, call the tool with `status: "succeeded"` and a `manifest` matching this shape:',
     "",
     "```json",
     '{"status":"succeeded","manifest":{"repoUrl":"...","workspaceId":"...","status":"created-new-demo","setupSummary":"...","createdFiles":[],"modifiedFiles":[],"demoCommand":"...","url":"http://localhost:3000","mockedServices":[],"assumptions":[],"risks":[],"existingDemoEvidence":[],"scriptGenerationContext":[],"diffArtifactId":"..."}}',
@@ -352,7 +368,8 @@ function createContinueRepoPreparationPrompt(
     "Action: do not request that shell command. Return a blocker explaining that the required install command is outside the current network allowlist.",
     "",
     "## Final Response Contract",
-    "Return only JSON matching either success with `manifest` or failure with `blockers`, `assumptions`, and `suggestedChanges`.",
+    "When Repo Preparation is complete or blocked, call `makeademo_submit_preparation_result` exactly once. Do not print final JSON in plain text.",
+    'For success, pass `status: "succeeded"` and a complete `manifest`. For failure, pass `status: "failed"`, `blockers`, `assumptions`, and `suggestedChanges`.',
     "",
     "## Submission Context",
     "```json",
@@ -381,6 +398,37 @@ function parseOpenCodeJsonResult(stdout: string) {
     status: "failed" as const,
     suggestedChanges: ["Retry Repo Preparation and require JSON-only output."],
   };
+}
+
+async function readPreparationResultOrParseStdout(
+  workspace: PreparationWorkspace,
+  commandResult: PreparationWorkspaceCommandResult,
+): Promise<Awaited<ReturnType<RepoPreparationAgent["prepare"]>>> {
+  const artifactResult = await readPreparationResult(workspace);
+  if (artifactResult !== undefined) {
+    return artifactResult;
+  }
+
+  return parseOpenCodeJsonResult(commandResult.stdout);
+}
+
+async function readPreparationResult(
+  workspace: PreparationWorkspace,
+): Promise<Awaited<ReturnType<RepoPreparationAgent["prepare"]>> | undefined> {
+  const result = await workspace.execute(
+    `if test -f ${shellQuote(preparationResultPath)}; then cat ${shellQuote(preparationResultPath)}; else exit 1; fi`,
+  );
+
+  if (result.exitCode !== 0) {
+    return undefined;
+  }
+
+  const payload = tryParseJson(result.stdout);
+  if (payload === undefined) {
+    throw new Error("Repo Preparation submit tool wrote invalid JSON.");
+  }
+
+  return payload as Awaited<ReturnType<RepoPreparationAgent["prepare"]>>;
 }
 
 function parseOpenCodeJsonPayload(stdout: string): unknown | undefined {

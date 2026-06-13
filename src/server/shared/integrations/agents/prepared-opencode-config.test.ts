@@ -11,13 +11,14 @@ import {
 } from "./prepared-opencode-config";
 
 describe("createMakeADemoOpenCodeConfigFiles", () => {
-  it("creates OpenCode config files with only the dependency install tool enabled", () => {
+  it("creates OpenCode config files with MakeADemo tools enabled", () => {
     const files = createMakeADemoOpenCodeConfigFiles();
     const configFile = files.find((file) => file.path === "opencode.json");
     const config = JSON.parse(configFile?.content ?? "{}");
 
     expect(config.tools).toEqual({
       makeademo_dependency_request_install: true,
+      makeademo_submit_preparation_result: true,
     });
     expect(files.some((file) => file.path.startsWith("agents/"))).toBe(false);
     expect(files.map((file) => file.path).sort()).toEqual([

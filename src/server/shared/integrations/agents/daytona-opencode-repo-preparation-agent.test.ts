@@ -12,7 +12,10 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
       modelID: "gpt-5.5",
       onStderr: (chunk) => streamed.push(`stderr:${chunk}`),
       onStdout: (chunk) => streamed.push(`stdout:${chunk}`),
-      provider: fakeProvider(events),
+      provider: fakeProvider(events, {
+        commandStdout: ["Submitted preparation result."],
+        preparationResult: successResult(),
+      }),
       providerApiKey: "openai_key",
       providerID: "openai",
       timeoutMs: 1_000,
@@ -50,6 +53,11 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
           "/workspace/.makeademo/dependency-install-request.json",
         ),
       },
+      {
+        execute: expect.stringContaining(
+          "/workspace/.makeademo/repo-preparation-result.json",
+        ),
+      },
     ]);
     expect(streamed).toEqual(["stdout:opencode output"]);
 
@@ -77,9 +85,10 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
       provider: fakeProvider(events, {
         commandStdout: [
           "Dependency install requested.",
-          JSON.stringify(successResult()),
+          "Submitted preparation result.",
         ],
         dependencyInstallRequest: { command: "bun install" },
+        preparationResult: successResult(),
       }),
       providerID: "openai",
       timeoutMs: 1_000,
@@ -130,6 +139,11 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
         execute: expect.stringContaining("opencode run"),
         streaming: false,
       },
+      {
+        execute: expect.stringContaining(
+          "/workspace/.makeademo/repo-preparation-result.json",
+        ),
+      },
     ]);
   });
 });
@@ -141,6 +155,7 @@ function fakeProvider(
     | {
         commandStdout?: string[];
         dependencyInstallRequest?: { command: string };
+        preparationResult?: ReturnType<typeof successResult>;
       } = [JSON.stringify(successResult())],
 ): PreparationWorkspaceProvider {
   const workspaceInput = Array.isArray(input)
@@ -165,6 +180,7 @@ function fakeWorkspace(
   input: {
     commandStdout?: string[];
     dependencyInstallRequest?: { command: string };
+    preparationResult?: ReturnType<typeof successResult>;
   },
 ): PreparationWorkspace {
   const commandStdout = input.commandStdout ?? [
@@ -196,6 +212,19 @@ function fakeWorkspace(
             input.dependencyInstallRequest === undefined
               ? ""
               : JSON.stringify(input.dependencyInstallRequest),
+        };
+      }
+      if (
+        command.startsWith("if test -f") &&
+        command.includes("repo-preparation-result.json")
+      ) {
+        return {
+          exitCode: input.preparationResult === undefined ? 1 : 0,
+          stderr: "",
+          stdout:
+            input.preparationResult === undefined
+              ? ""
+              : JSON.stringify(input.preparationResult),
         };
       }
       if (
