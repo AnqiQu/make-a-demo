@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { DemoRequestFinalVideoStore } from "../../pipeline/07-compositing/final-video-storage.interface";
 import type { VideoRenderer } from "../../pipeline/07-compositing/video-renderer.interface";
 import type { PipelineJobResult } from "./pipeline-job";
+import { createRecordingPipelineObserver } from "./pipeline-observer";
 import {
   CompositeProjectFinalVideoGenerator,
   type CompositeProjectFinalVideoGeneratorOptions,
@@ -66,6 +67,74 @@ describe("CompositeProjectFinalVideoGenerator", () => {
         demoRequestId: "demo-request-1",
         generatedDemoUrl:
           "r2://owlet/demo-videos/demo-request-1/composite-project-1/final-video.mp4",
+      },
+    ]);
+  });
+
+  it("reports structured Compositing observability events", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "makeademo-queue-video-"));
+    const observer = createRecordingPipelineObserver();
+    let now = 3_000;
+    const demoRequestStore: DemoRequestFinalVideoStore = {
+      async linkFinalVideo() {
+        return {
+          finalVideoEmailSentAt: null,
+          makerEmail: "maker@example.com",
+        };
+      },
+      async markFinalVideoEmailSent() {
+        throw new Error("email should not be marked without notifier");
+      },
+    };
+    const renderer: VideoRenderer = {
+      async renderVideo(input) {
+        now += 90;
+        await writeFile(input.outputPath, "rendered mp4");
+      },
+    };
+    const generator = new CompositeProjectFinalVideoGenerator({
+      demoRequestStore,
+      finalVideoStorage: {
+        async storeFinalVideo(input) {
+          return {
+            key: `demo-videos/${input.demoRequestId}/${input.runId}/final-video.mp4`,
+            r2Url: `r2://owlet/demo-videos/${input.demoRequestId}/${input.runId}/final-video.mp4`,
+          };
+        },
+      },
+      now: () => now,
+      observer,
+      outputRoot: join(workspace, "renders"),
+      renderer,
+      tempRoot: workspace,
+    } satisfies CompositeProjectFinalVideoGeneratorOptions);
+
+    await generator.generateFinalVideo({
+      demoRequestId: "demo-request-1",
+      pipelineResult: successfulPipelineResult(),
+      projectId: "project-1",
+    });
+
+    expect(observer.events).toEqual([
+      {
+        demoRequestId: "demo-request-1",
+        event: "stage.started",
+        projectId: "project-1",
+        runId: "composite-project-1",
+        stage: "compositing",
+        status: "started",
+        workspaceId: "project-1",
+      },
+      {
+        demoRequestId: "demo-request-1",
+        durationMs: 90,
+        event: "stage.succeeded",
+        projectId: "project-1",
+        runId: "composite-project-1",
+        sceneCount: 1,
+        stage: "compositing",
+        status: "succeeded",
+        workspaceId: "project-1",
       },
     ]);
   });

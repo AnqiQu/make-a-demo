@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PipelineJobResult } from "./pipeline-job";
+import { createRecordingPipelineObserver } from "./pipeline-observer";
 import { processNextProjectDemoGenerationJob } from "./project-demo-generation-queue";
 
 describe("processNextProjectDemoGenerationJob", () => {
@@ -54,6 +55,61 @@ describe("processNextProjectDemoGenerationJob", () => {
       "script-generation",
       "video-generation",
       "complete",
+    ]);
+  });
+
+  it("reports structured job observability events when a Project is claimed and completed", async () => {
+    const observer = createRecordingPipelineObserver();
+    let now = 2_000;
+
+    const result = await processNextProjectDemoGenerationJob(
+      {
+        async claimNextQueuedProject() {
+          return queuedProjectJob();
+        },
+        async markProjectCompleted() {},
+        async markProjectFailed() {
+          throw new Error("project should not fail");
+        },
+      },
+      {
+        async generateFinalVideo() {
+          now += 60;
+          return {
+            generatedDemoUrl: "r2://owlet/demo-videos/demo-request-1/final.mp4",
+          };
+        },
+        async runPipeline() {
+          now += 140;
+          return successfulPipelineResult();
+        },
+      },
+      {
+        now: () => now,
+        observer,
+      },
+    );
+
+    expect(result).toEqual({
+      projectId: "project-1",
+      status: "completed",
+    });
+    expect(observer.events).toEqual([
+      {
+        demoRequestId: "demo-request-1",
+        event: "job.claimed",
+        projectId: "project-1",
+        status: "claimed",
+        workspaceId: "project-1",
+      },
+      {
+        demoRequestId: "demo-request-1",
+        durationMs: 200,
+        event: "job.completed",
+        projectId: "project-1",
+        status: "completed",
+        workspaceId: "project-1",
+      },
     ]);
   });
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { createRecordingPipelineObserver } from "./pipeline-observer";
 import { runPipelineJob } from "./pipeline-orchestrator";
 
 describe("runPipelineJob", () => {
@@ -127,6 +128,239 @@ describe("runPipelineJob", () => {
       "project-validation:succeeded",
       "script-generation:started",
       "script-generation:succeeded",
+    ]);
+  });
+
+  it("reports structured stage observability events with durations and safe summary counts", async () => {
+    const observer = createRecordingPipelineObserver();
+    let now = 1_000;
+
+    await runPipelineJob(
+      {
+        demoBrief: { keyProductFeatures: ["validation"] },
+        normalizedSupportingDocuments: [],
+        repoSecurity: {
+          files: [{ path: "package.json", text: "{}" }],
+          repoStats: { fileCount: 1, sizeBytes: 1_000 },
+        },
+        repoUrl: "https://github.com/example/app",
+        workspaceId: "workspace_123",
+      },
+      {
+        async generateScriptPackage({ preparationManifest, validation }) {
+          now += 40;
+          return {
+            assumptions: preparationManifest.assumptions,
+            demoPlan: {
+              featureOrder: ["validation"],
+              narrative: "Demo it",
+              risks: ["copy risk"],
+            },
+            exploration: { assumptions: [], productSurfaces: [], summary: "" },
+            validation,
+            videoScript: {
+              sections: [
+                {
+                  id: "section-main",
+                  scenes: [
+                    {
+                      browserActions: ["Click primary action"],
+                      id: "scene-main",
+                      summary: "Show the primary action.",
+                    },
+                  ],
+                  title: "Main flow",
+                },
+              ],
+              title: "Demo",
+            },
+          };
+        },
+        async prepareRepo() {
+          now += 20;
+          return {
+            manifest: {
+              ...manifest(),
+              assumptions: ["Uses seeded demo data."],
+              createdFiles: ["makeademo.config.json"],
+              mockedServices: ["billing"],
+              risks: ["Needs deterministic auth fixture."],
+            },
+            status: "succeeded",
+            workspace: fakeWorkspaceHandle(),
+          };
+        },
+        screenRepoSecurity() {
+          now += 5;
+          return {
+            rejections: [],
+            status: "passed",
+            warnings: ["Uses postinstall script."],
+          };
+        },
+        async validateProject() {
+          now += 30;
+          return {
+            blockedNetworkAttempts: [
+              {
+                direction: "outbound",
+                host: "api.example.com",
+                phase: "runtime",
+              },
+            ],
+            logs: ["validated"],
+            status: "succeeded",
+            warnings: ["Viewport fallback used."],
+          };
+        },
+      },
+      {
+        context: {
+          demoRequestId: "demo-request-1",
+          projectId: "project-1",
+        },
+        now: () => now,
+        observer,
+      },
+    );
+
+    expect(
+      observer.events.map((event) => ({
+        blockedNetworkAttemptCount: event.blockedNetworkAttemptCount,
+        createdFileCount: event.createdFileCount,
+        demoRequestId: event.demoRequestId,
+        durationMs: event.durationMs,
+        event: event.event,
+        mockedServiceCount: event.mockedServiceCount,
+        projectId: event.projectId,
+        riskCount: event.riskCount,
+        sceneCount: event.sceneCount,
+        stage: event.stage,
+        status: event.status,
+        warningCount: event.warningCount,
+        workspaceId: event.workspaceId,
+      })),
+    ).toEqual([
+      {
+        blockedNetworkAttemptCount: undefined,
+        createdFileCount: undefined,
+        demoRequestId: "demo-request-1",
+        durationMs: undefined,
+        event: "stage.started",
+        mockedServiceCount: undefined,
+        projectId: "project-1",
+        riskCount: undefined,
+        sceneCount: undefined,
+        stage: "repo-security-screen",
+        status: "started",
+        warningCount: undefined,
+        workspaceId: "workspace_123",
+      },
+      {
+        blockedNetworkAttemptCount: undefined,
+        createdFileCount: undefined,
+        demoRequestId: "demo-request-1",
+        durationMs: 5,
+        event: "stage.succeeded",
+        mockedServiceCount: undefined,
+        projectId: "project-1",
+        riskCount: undefined,
+        sceneCount: undefined,
+        stage: "repo-security-screen",
+        status: "succeeded",
+        warningCount: 1,
+        workspaceId: "workspace_123",
+      },
+      {
+        blockedNetworkAttemptCount: undefined,
+        createdFileCount: undefined,
+        demoRequestId: "demo-request-1",
+        durationMs: undefined,
+        event: "stage.started",
+        mockedServiceCount: undefined,
+        projectId: "project-1",
+        riskCount: undefined,
+        sceneCount: undefined,
+        stage: "repo-preparation",
+        status: "started",
+        warningCount: undefined,
+        workspaceId: "workspace_123",
+      },
+      {
+        blockedNetworkAttemptCount: undefined,
+        createdFileCount: 1,
+        demoRequestId: "demo-request-1",
+        durationMs: 20,
+        event: "stage.succeeded",
+        mockedServiceCount: 1,
+        projectId: "project-1",
+        riskCount: 1,
+        sceneCount: undefined,
+        stage: "repo-preparation",
+        status: "succeeded",
+        warningCount: undefined,
+        workspaceId: "workspace_123",
+      },
+      {
+        blockedNetworkAttemptCount: undefined,
+        createdFileCount: undefined,
+        demoRequestId: "demo-request-1",
+        durationMs: undefined,
+        event: "stage.started",
+        mockedServiceCount: undefined,
+        projectId: "project-1",
+        riskCount: undefined,
+        sceneCount: undefined,
+        stage: "project-validation",
+        status: "started",
+        warningCount: undefined,
+        workspaceId: "workspace_123",
+      },
+      {
+        blockedNetworkAttemptCount: 1,
+        createdFileCount: undefined,
+        demoRequestId: "demo-request-1",
+        durationMs: 30,
+        event: "stage.succeeded",
+        mockedServiceCount: undefined,
+        projectId: "project-1",
+        riskCount: undefined,
+        sceneCount: undefined,
+        stage: "project-validation",
+        status: "succeeded",
+        warningCount: 1,
+        workspaceId: "workspace_123",
+      },
+      {
+        blockedNetworkAttemptCount: undefined,
+        createdFileCount: undefined,
+        demoRequestId: "demo-request-1",
+        durationMs: undefined,
+        event: "stage.started",
+        mockedServiceCount: undefined,
+        projectId: "project-1",
+        riskCount: undefined,
+        sceneCount: undefined,
+        stage: "script-generation",
+        status: "started",
+        warningCount: undefined,
+        workspaceId: "workspace_123",
+      },
+      {
+        blockedNetworkAttemptCount: undefined,
+        createdFileCount: undefined,
+        demoRequestId: "demo-request-1",
+        durationMs: 40,
+        event: "stage.succeeded",
+        mockedServiceCount: undefined,
+        projectId: "project-1",
+        riskCount: 1,
+        sceneCount: 1,
+        stage: "script-generation",
+        status: "succeeded",
+        warningCount: undefined,
+        workspaceId: "workspace_123",
+      },
     ]);
   });
 
