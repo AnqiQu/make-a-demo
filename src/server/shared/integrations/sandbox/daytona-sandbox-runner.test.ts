@@ -24,7 +24,7 @@ describe("DaytonaSandboxRunner", () => {
     ]);
     expect(workspace.networkAccess).toEqual([true, false]);
     expect(result).toMatchObject({
-      browserUrl: "https://preview.example.test:3000",
+      browserUrl: "https://preview.example.test:3000/",
       blockedNetworkAttempts: [],
       logs: [
         "package-lock.json\npackage.json\n",
@@ -166,7 +166,24 @@ describe("DaytonaSandboxRunner", () => {
     });
 
     expect(workspace.previewPorts).toEqual([4173]);
-    expect(result.browserUrl).toBe("https://preview.example.test:4173");
+    expect(result.browserUrl).toBe("https://preview.example.test:4173/");
+  });
+
+  it("preserves the manifest URL path, query, and hash on browser preview URLs", async () => {
+    const workspace = new FakePreparationWorkspaceHandle();
+    const runner = new DaytonaSandboxRunner();
+
+    const result = await runner.runValidation({
+      demoCommand: "npm run demo",
+      preparationManifest: manifest("workspace_123"),
+      preparationWorkspace: workspace,
+      repoUrl: "https://github.com/example/app",
+      url: "http://localhost:4173/articles?tab=global#/feed",
+    });
+
+    expect(result.browserUrl).toBe(
+      "https://preview.example.test:4173/articles?tab=global#/feed",
+    );
   });
 });
 

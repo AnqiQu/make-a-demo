@@ -93,9 +93,10 @@ export class DaytonaSandboxRunner implements SandboxRunner {
           runtimeExitCode: 1,
         };
       }
-      const browserUrl = await handle.workspace.getPreviewUrl(
-        readPortFromLocalUrl(input.url),
-      );
+      const browserUrl = await createBrowserPreviewUrl({
+        localUrl: input.url,
+        workspace: handle.workspace,
+      });
 
       return {
         blockedNetworkAttempts: [],
@@ -175,6 +176,21 @@ function readPortFromLocalUrl(url: string): number {
   }
 
   return parsedUrl.protocol === "https:" ? 443 : 80;
+}
+
+async function createBrowserPreviewUrl(input: {
+  localUrl: string;
+  workspace: PreparationWorkspaceHandle["workspace"];
+}): Promise<string> {
+  const localUrl = new URL(input.localUrl);
+  const previewUrl = new URL(
+    await input.workspace.getPreviewUrl(readPortFromLocalUrl(input.localUrl)),
+  );
+  previewUrl.pathname = localUrl.pathname;
+  previewUrl.search = localUrl.search;
+  previewUrl.hash = localUrl.hash;
+
+  return previewUrl.toString();
 }
 
 function delay(milliseconds: number): Promise<void> {
