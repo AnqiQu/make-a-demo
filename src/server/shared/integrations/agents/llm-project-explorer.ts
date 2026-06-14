@@ -15,14 +15,25 @@ export class LlmProjectExplorer implements ProjectExplorer {
     const productSurfaces = unique([
       ...input.demoBrief.keyProductFeatures,
       ...input.preparationManifest.existingDemoEvidence,
+      ...input.preparationManifest.scriptGenerationContext,
     ]);
+    const scriptContext = input.preparationManifest.scriptGenerationContext
+      .join(". ")
+      .trim();
+    const summaryParts = [
+      input.preparationManifest.setupSummary,
+      scriptContext.length === 0
+        ? ""
+        : `Script generation context: ${scriptContext}.`,
+      supportingContext.length === 0
+        ? ""
+        : `Supporting context: ${supportingContext}`,
+    ].filter((part) => part.length > 0);
 
     return {
       assumptions: input.preparationManifest.assumptions,
       productSurfaces,
-      summary: supportingContext
-        ? `${input.preparationManifest.setupSummary} Supporting context: ${supportingContext}`
-        : input.preparationManifest.setupSummary,
+      summary: summaryParts.join(" "),
     };
   }
 }

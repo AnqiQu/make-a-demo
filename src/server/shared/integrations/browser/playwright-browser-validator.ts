@@ -14,8 +14,18 @@ type BrowserValidationPage = {
     options?: { waitUntil?: "domcontentloaded"; timeout?: number },
   ): Promise<unknown>;
   screenshot(): Promise<string>;
+  route?(
+    pattern: string,
+    handler: (route: BrowserValidationRoute) => Promise<void>,
+  ): Promise<void>;
   textContent(selector: string): Promise<string | null>;
   requestedUrls?(): Promise<string[]>;
+};
+
+type BrowserValidationRoute = {
+  abort(errorCode?: "blockedbyclient"): Promise<void>;
+  continue(): Promise<void>;
+  request(): { url(): string };
 };
 
 type BrowserValidationPageFactory = () => Promise<BrowserValidationPage>;
@@ -37,6 +47,22 @@ export class PlaywrightBrowserValidator implements BrowserValidator {
     const page = await this.pageFactory();
 
     try {
+      const localHost = new URL(input.url).hostname;
+      const blockedRequests: NetworkAttempt[] = [];
+      await page.route?.("**/*", async (route) => {
+        const blockedRequest = readForbiddenBrowserRequest(
+          route.request().url(),
+          localHost,
+        );
+        if (blockedRequest !== undefined) {
+          blockedRequests.push(blockedRequest);
+          await route.abort("blockedbyclient");
+          return;
+        }
+
+        await route.continue();
+      });
+
       try {
         await page.goto(input.url, {
           timeout: 15_000,
@@ -46,6 +72,16 @@ export class PlaywrightBrowserValidator implements BrowserValidator {
         return {
           interactable: false,
           logs: [`Failed to load ${input.url}: ${formatError(error)}`],
+          screenshotArtifactId: "",
+        };
+      }
+      if (blockedRequests.length > 0) {
+        return {
+          blockedNetworkAttempts: dedupeNetworkAttempts(blockedRequests),
+          interactable: false,
+          logs: dedupeNetworkAttempts(blockedRequests).map(
+            (request) => `Blocked forbidden browser request to ${request.host}`,
+          ),
           screenshotArtifactId: "",
         };
       }
@@ -97,6 +133,15 @@ async function createPlaywrightPage(): Promise<BrowserValidationPage> {
     async requestedUrls() {
       return requestedUrls;
     },
+    async route(pattern, handler) {
+      await page.route(pattern, async (route) => {
+        await handler({
+          abort: (errorCode) => route.abort(errorCode),
+          continue: () => route.continue(),
+          request: () => ({ url: () => route.request().url() }),
+        });
+      });
+    },
     async textContent(selector) {
       return page.textContent(selector);
     },
@@ -114,27 +159,48 @@ function findBlockedBrowserRequests(
   const localHost = new URL(localUrl).hostname;
 
   return requestedUrls.flatMap((requestedUrl) => {
-    try {
-      const url = new URL(requestedUrl);
-      if (isAllowedRuntimeHost(url.hostname, localHost)) {
-        return [];
-      }
+    const request = readForbiddenBrowserRequest(requestedUrl, localHost);
+    return request === undefined ? [] : [request];
+  });
+}
 
-      return [
-        {
-          direction: "outbound" as const,
-          host: url.hostname,
-          phase: "runtime" as const,
-        },
-      ];
-    } catch {
-      return [];
+function readForbiddenBrowserRequest(
+  requestedUrl: string,
+  localHost: string,
+): NetworkAttempt | undefined {
+  try {
+    const url = new URL(requestedUrl);
+    if (isAllowedRuntimeHost(url.hostname, localHost)) {
+      return undefined;
     }
+
+    return {
+      direction: "outbound",
+      host: url.hostname,
+      phase: "runtime",
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function dedupeNetworkAttempts(attempts: NetworkAttempt[]): NetworkAttempt[] {
+  const seen = new Set<string>();
+  return attempts.filter((attempt) => {
+    const key = `${attempt.direction}:${attempt.phase}:${attempt.host}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
   });
 }
 
 function isAllowedRuntimeHost(host: string, localHost: string): boolean {
-  return [localHost, "127.0.0.1", "localhost", "0.0.0.0"].includes(host);
+  return (
+    host.length === 0 ||
+    [localHost, "127.0.0.1", "localhost", "0.0.0.0"].includes(host)
+  );
 }
 
 function looksLikeRuntimeError(text: string): boolean {

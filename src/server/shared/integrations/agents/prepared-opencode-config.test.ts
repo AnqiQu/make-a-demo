@@ -1,71 +1,62 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 import {
+  createMakeADemoOpenCodeConfigFiles,
   createPreparedOpenCodeFiles,
   writePreparedOpenCodeFiles,
 } from "./prepared-opencode-config";
 
-describe("createPreparedOpenCodeFiles", () => {
-  it("defines the four security reviewer subagents with structured accept/reject contracts", () => {
-    const files = createPreparedOpenCodeFiles();
-    const agents = Object.fromEntries(
-      files
-        .filter((file) => file.path.startsWith(".config/opencode/agents/"))
-        .map((file) => [file.path, file.content]),
-    );
+describe("createMakeADemoOpenCodeConfigFiles", () => {
+  it("creates OpenCode config files with MakeADemo tools enabled", () => {
+    const files = createMakeADemoOpenCodeConfigFiles();
+    const configFile = files.find((file) => file.path === "opencode.json");
+    const config = JSON.parse(configFile?.content ?? "{}");
 
-    expect(Object.keys(agents).sort()).toEqual([
-      ".config/opencode/agents/dependency-reviewer.md",
-      ".config/opencode/agents/obfuscation-deception-auditor.md",
-      ".config/opencode/agents/prompt-injection-reviewer.md",
-      ".config/opencode/agents/runtime-security-reviewer.md",
+    expect(config.tools).toEqual({
+      makeademo_dependency_request_install: true,
+      makeademo_submit_preparation_result: true,
+      makeademo_validate_preparation: true,
+    });
+    expect(files.some((file) => file.path.startsWith("agents/"))).toBe(false);
+    expect(files.map((file) => file.path).sort()).toEqual([
+      "opencode.json",
+      "plugins/makeademo-tools.ts",
+      "skills/find-docs/SKILL.md",
     ]);
-    expect(agents[".config/opencode/agents/dependency-reviewer.md"]).toContain(
-      "mode: subagent",
-    );
-    expect(agents[".config/opencode/agents/dependency-reviewer.md"]).toContain(
-      "permission: allow",
-    );
-    expect(agents[".config/opencode/agents/dependency-reviewer.md"]).toContain(
-      "dependency manifests and install lifecycle hooks",
-    );
-
-    for (const content of Object.values(agents)) {
-      expect(content).toContain('"status":"accepted"');
-      expect(content).toContain('"status":"rejected"');
-      expect(content).toContain("Return only JSON");
-    }
+    const plugin = files.find(
+      (file) => file.path === "plugins/makeademo-tools.ts",
+    )?.content;
+    expect(plugin).toContain("preparationManifestPath");
+    expect(plugin).toContain("manifestPath: tool.schema.string()");
+    expect(plugin).toContain("manifest = await assertValidationPassed()");
+    expect(plugin).not.toContain("assertValidationPassed(args.manifest)");
   });
+});
 
+describe("createPreparedOpenCodeFiles", () => {
   it("writes prepared OpenCode files relative to an OpenCode home directory", async () => {
     const homeDirectory = await mkdtemp(join(tmpdir(), "makeademo-test-home-"));
 
     try {
       await writePreparedOpenCodeFiles(homeDirectory);
 
-      await expect(
-        readFile(
-          join(homeDirectory, ".config/opencode/agents/dependency-reviewer.md"),
-          "utf8",
-        ),
-      ).resolves.toContain("dependency manifests and install lifecycle hooks");
+      await access(
+        join(homeDirectory, ".config/opencode/skills/find-docs/SKILL.md"),
+      );
     } finally {
       await rm(homeDirectory, { force: true, recursive: true });
     }
   });
 
-  it("includes a Context7 skill that instructs the agent to use the ctx7 CLI", () => {
+  it("includes the expected prepared file paths", () => {
     const files = createPreparedOpenCodeFiles();
-    const skill = files.find(
-      (file) => file.path === ".config/opencode/skills/find-docs/SKILL.md",
-    );
 
-    expect(skill?.content).toContain("ctx7 library");
-    expect(skill?.content).toContain("ctx7 docs");
-    expect(skill?.content).toContain("Context7");
+    expect(files.map((file) => file.path)).toEqual([
+      ".config/opencode/skills/find-docs/SKILL.md",
+    ]);
   });
 });

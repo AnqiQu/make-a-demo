@@ -1,5 +1,5 @@
 import { readFile, stat } from "node:fs/promises";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 
 import { readDemoBrief } from "../../pipeline/01-context-gathering/intake/project-intake";
@@ -10,18 +10,26 @@ import {
 import { createRepoPreparationAgent } from "../integrations/agents/repo-preparation-agent-factory";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import { DaytonaSandboxRunner } from "../integrations/sandbox/daytona-sandbox-runner";
+import { runFullPipelineJob } from "./full-pipeline-runner";
 import { createOpenCodeOutputStream } from "./opencode-output-stream";
-import { runPipelineJob } from "./pipeline-orchestrator";
+import { createOpenCodeRawOutputLog } from "./opencode-raw-output-log";
 import { collectStage1CliOptions } from "./stage1-cli-interactive";
 import { parseStage1CliArgs } from "./stage1-cli-options";
 import { createStage1PipelineDependencies } from "./stage1-pipeline";
 import { readRepoSecurityInput } from "./stage1-repo-security";
 
-const options = await readOptions(process.argv.slice(2));
+const { outputRoot, stage1Args } = readFullPipelineArgs(process.argv.slice(2));
+const options = await readOptions(stage1Args);
 const daytonaApiKey = process.env.DAYTONA_API_KEY;
+const fullPipelineOutputRoot = outputRoot ?? ".makeademo-full-pipeline-runs";
+const runId = createRunId();
+const runDirectory = join(fullPipelineOutputRoot, runId);
+const rawOpenCodeLog = createOpenCodeRawOutputLog({
+  logPath: join(runDirectory, "opencode-raw-output.jsonl"),
+});
 
 if (daytonaApiKey === undefined || daytonaApiKey === "") {
-  throw new Error("DAYTONA_API_KEY is required for Daytona Stage 1 runs.");
+  throw new Error("DAYTONA_API_KEY is required for full pipeline runs.");
 }
 
 const sandboxProvider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -51,20 +59,25 @@ const normalizedSupportingDocuments = await Promise.all(
 const openCodeOutput = createOpenCodeOutputStream({
   write: (text) => process.stdout.write(text),
 });
-
 const repoPreparationAgent = createRepoPreparationAgent({
   daytonaApiKey,
   ...(options.daytonaSnapshot === undefined
     ? {}
     : { daytonaSnapshot: options.daytonaSnapshot }),
   modelID: options.modelID,
-  onStderr: (chunk) => process.stderr.write(chunk),
-  onStdout: (chunk) => openCodeOutput.write(chunk),
+  onStderr: (chunk) => {
+    rawOpenCodeLog.write("stderr", chunk);
+    process.stderr.write(chunk);
+  },
+  onStdout: (chunk) => {
+    rawOpenCodeLog.write("stdout", chunk);
+    openCodeOutput.write(chunk);
+  },
   providerApiKey: readProviderApiKey(options.providerID),
   providerID: options.providerID,
 });
 
-const result = await runPipelineJob(
+const result = await runFullPipelineJob(
   {
     demoBrief: readDemoBrief({ keyProductFeatures: options.features }),
     normalizedSupportingDocuments,
@@ -77,15 +90,45 @@ const result = await runPipelineJob(
     sandboxRunner: new DaytonaSandboxRunner(),
   }),
   {
-    onProgress: (event) =>
-      process.stderr.write(`[pipeline] ${event.stage}: ${event.status}\n`),
+    outputRoot: fullPipelineOutputRoot,
+    onLog: (entry) => process.stdout.write(`[pipeline] ${entry.message}\n`),
+    rawOpenCodeLogPath: rawOpenCodeLog.logPath,
+    runId,
   },
+).finally(async () => {
+  await rawOpenCodeLog.close();
+});
+
+process.stdout.write("\nFull pipeline complete.\n");
+process.stdout.write(
+  `Final video: ${result.finalVideo.outputVideoPath ?? result.finalVideo.viewUrl}\n`,
 );
+process.stdout.write(`Generated script: ${result.scriptPath}\n`);
+process.stdout.write(
+  `Capture manifest: ${result.captureManifest.manifestPath}\n`,
+);
+process.stdout.write(`Composite manifest: ${result.finalVideo.manifestPath}\n`);
+process.stdout.write(`Log: ${result.logPath}\n`);
+process.stdout.write(`Raw OpenCode log: ${rawOpenCodeLog.logPath}\n`);
+process.stdout.write(`Result JSON: ${result.resultPath}\n`);
 
-process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+function readFullPipelineArgs(args: string[]) {
+  const stage1Args: string[] = [];
+  let outputRoot: string | undefined;
 
-if (result.status !== "succeeded") {
-  process.exitCode = 1;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] as string;
+
+    if (arg === "--output-root") {
+      outputRoot = readFlagValue(args, index, arg);
+      index += 1;
+      continue;
+    }
+
+    stage1Args.push(arg);
+  }
+
+  return outputRoot === undefined ? { stage1Args } : { outputRoot, stage1Args };
 }
 
 async function readOptions(args: string[]) {
@@ -135,4 +178,17 @@ function readProviderApiKey(providerID: string): string {
   }
 
   return apiKey;
+}
+
+function readFlagValue(args: string[], index: number, flag: string): string {
+  const value = args[index + 1];
+  if (value === undefined || value.startsWith("--")) {
+    throw new Error(`${flag} must be followed by a value`);
+  }
+
+  return value;
+}
+
+function createRunId() {
+  return `full-pipeline-${new Date().toISOString().replaceAll(/[:.]/g, "-")}`;
 }

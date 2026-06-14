@@ -6,6 +6,65 @@ export type SceneDescription = {
   playwrightScript: string;
 };
 
+export type CaptureReadyVideoScriptPackage = {
+  audio?: { enabled: boolean; music?: { id: string } };
+  estimatedDurationSeconds: number;
+  format: string;
+  scriptId: string;
+  sections: Array<{
+    id: string;
+    scenes: CaptureReadyVideoScriptScene[];
+    title: string;
+  }>;
+  title: string;
+  version: number;
+};
+
+export type CaptureReadyVideoScriptScene =
+  | {
+      background: { colour: string; type: "solid" };
+      description: string;
+      durationSeconds: number;
+      id: string;
+      text?: CaptureReadySceneText;
+      transition?: CaptureReadySceneTransition;
+      type: "full-screen-text";
+    }
+  | {
+      description: string;
+      durationSeconds: number;
+      events: string[];
+      id: string;
+      playwrightSceneId: string;
+      playwrightScript: string;
+      text?: CaptureReadySceneText;
+      transition?: CaptureReadySceneTransition;
+      type: "playwright-recording";
+    }
+  | {
+      description: string;
+      durationSeconds: number;
+      id: string;
+      image: { alt: string; assetPath: string };
+      text?: CaptureReadySceneText;
+      transition?: CaptureReadySceneTransition;
+      type: "static-image";
+    };
+
+type CaptureReadySceneText = {
+  content: string;
+  font: string;
+  "text-colour": string;
+  "text-position": "bottom-left" | "center" | "top-left";
+  "text-size": "large" | "medium" | "small";
+};
+
+type CaptureReadySceneTransition = {
+  durationSeconds: number;
+  in: "cut" | "fade";
+  out: "cut" | "fade";
+};
+
 type ScriptSection = {
   id: string;
   title: string;

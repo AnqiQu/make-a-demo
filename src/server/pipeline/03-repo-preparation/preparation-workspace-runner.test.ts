@@ -67,6 +67,9 @@ function fakeWorkspace(events: string[]): PreparationWorkspace {
       events.push(`execute:${command}`);
       return { exitCode: 0, stderr: "", stdout: "" };
     },
+    async getPreviewUrl(port) {
+      return `https://preview.example.test:${port}`;
+    },
     async setOutboundNetworkAccess(enabled) {
       events.push(enabled ? "network:unblocked" : "network:blocked");
     },

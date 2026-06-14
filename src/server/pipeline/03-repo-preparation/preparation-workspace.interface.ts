@@ -9,13 +9,24 @@ export type PreparationWorkspaceUploadFile = {
   sourcePath: string;
 };
 
+export type PreparationWorkspaceExecuteOptions = {
+  env?: Record<string, string>;
+  onStderr?: (chunk: string) => void;
+  onStdout?: (chunk: string) => void;
+};
+
 /**
  * Executes commands and network-policy changes inside a Repo Preparation workspace.
  * Implementations must scope destructive work to the ephemeral workspace copy and
  * must not expose agent-only secrets to submitted app build or runtime commands.
  */
 export interface PreparationWorkspace {
-  execute(command: string): Promise<PreparationWorkspaceCommandResult>;
+  cancelActiveCommands?(): Promise<void>;
+  execute(
+    command: string,
+    options?: PreparationWorkspaceExecuteOptions,
+  ): Promise<PreparationWorkspaceCommandResult>;
+  getPreviewUrl(port: number): Promise<string>;
   setOutboundNetworkAccess(enabled: boolean): Promise<void>;
   uploadFiles(files: PreparationWorkspaceUploadFile[]): Promise<void>;
 }

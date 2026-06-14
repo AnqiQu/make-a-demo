@@ -42,9 +42,13 @@ describe("LlmProjectExplorer", () => {
       }),
     ).resolves.toEqual({
       assumptions: ["uses local fixtures"],
-      productSurfaces: ["validation", "package script demo"],
+      productSurfaces: [
+        "validation",
+        "package script demo",
+        "Start on the validation dashboard",
+      ],
       summary:
-        "Prepared demo runtime. Supporting context: The validation dashboard shows repo readiness.",
+        "Prepared demo runtime. Script generation context: Start on the validation dashboard. Supporting context: The validation dashboard shows repo readiness.",
     });
   });
 });

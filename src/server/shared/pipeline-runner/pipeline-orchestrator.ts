@@ -41,6 +41,7 @@ export type PipelineOrchestratorOptions = {
   now?: () => number;
   observer?: PipelineObserver;
   onProgress?: (event: PipelineProgressEvent) => void;
+  onProgress?: (event: PipelineProgressEvent) => Promise<unknown> | unknown;
 };
 
 export async function runPipelineJob(
@@ -75,6 +76,11 @@ export async function runPipelineJob(
     });
     throw error;
   }
+  await emitProgress(options, {
+    stage: "repo-security-screen",
+    status: "started",
+  });
+  const security = dependencies.screenRepoSecurity(input.repoSecurity);
   if (security.status === "rejected") {
     reportStageFinished("repo-security-screen", "failed", {
       context,
@@ -83,6 +89,10 @@ export async function runPipelineJob(
       onProgress: options.onProgress,
       startedAt: securityStartedAt,
       warningCount: security.warnings.length,
+    });
+    await emitProgress(options, {
+      stage: "repo-security-screen",
+      status: "failed",
     });
     return { security, status: "security-rejected" };
   }
@@ -94,12 +104,22 @@ export async function runPipelineJob(
     startedAt: securityStartedAt,
     warningCount: security.warnings.length,
   });
+  await emitProgress(options, {
+    stage: "repo-security-screen",
+    status: "succeeded",
+  });
 
   const preparationStartedAt = reportStageStarted("repo-preparation", {
     context,
     now,
     observer,
     onProgress: options.onProgress,
+  await emitProgress(options, { stage: "repo-preparation", status: "started" });
+  const preparation = await dependencies.prepareRepo({
+    normalizedSupportingDocuments: input.normalizedSupportingDocuments,
+    repoUrl: input.repoUrl,
+    structuredDemoIntent: input.demoBrief,
+    workspaceId: input.workspaceId,
   });
   let preparation: RepoPreparationResult;
   try {
@@ -129,6 +149,10 @@ export async function runPipelineJob(
       onProgress: options.onProgress,
       startedAt: preparationStartedAt,
     });
+    await emitProgress(options, {
+      stage: "repo-preparation",
+      status: "failed",
+    });
     return {
       fallbackPrompt: preparation.fallbackPrompt,
       status: "preparation-failed",
@@ -151,6 +175,9 @@ export async function runPipelineJob(
     now,
     observer,
     onProgress: options.onProgress,
+  await emitProgress(options, {
+    stage: "repo-preparation",
+    status: "succeeded",
   });
   let validation: ProjectValidationResult;
   try {
@@ -172,6 +199,14 @@ export async function runPipelineJob(
     throw error;
   }
 
+  const validation =
+    preparation.validation ??
+    (await validatePreparedProject({
+      dependencies,
+      options,
+      preparation,
+    }));
+
   if (validation.status === "failed") {
     reportStageFinished("project-validation", "failed", {
       blockedNetworkAttemptCount: validation.blockedNetworkAttempts.length,
@@ -181,6 +216,10 @@ export async function runPipelineJob(
       onProgress: options.onProgress,
       startedAt: validationStartedAt,
       warningCount: validation.warnings.length,
+    });
+    await emitProgress(options, {
+      stage: "project-validation",
+      status: "failed",
     });
     return { status: "validation-failed", validation };
   }
@@ -193,12 +232,28 @@ export async function runPipelineJob(
     startedAt: validationStartedAt,
     warningCount: validation.warnings.length,
   });
+  if (preparation.validation === undefined) {
+    await emitProgress(options, {
+      stage: "project-validation",
+      status: "succeeded",
+    });
+  }
 
   const scriptStartedAt = reportStageStarted("script-generation", {
     context,
     now,
     observer,
     onProgress: options.onProgress,
+  await emitProgress(options, {
+    stage: "script-generation",
+    status: "started",
+  });
+  const videoScriptPackage = await dependencies.generateScriptPackage({
+    demoBrief: input.demoBrief,
+    normalizedSupportingDocuments: input.normalizedSupportingDocuments,
+    preparationManifest: preparation.manifest,
+    repoUrl: input.repoUrl,
+    validation,
   });
   let videoScriptPackage: VideoScriptPackage;
   try {
@@ -229,10 +284,18 @@ export async function runPipelineJob(
     sceneCount: countScenes(videoScriptPackage),
     startedAt: scriptStartedAt,
   });
+  await emitProgress(options, {
+    stage: "script-generation",
+    status: "succeeded",
+  });
 
   return {
     preparationManifest: preparation.manifest,
+    ...(preparation.workspace === undefined
+      ? {}
+      : { preparationWorkspace: preparation.workspace }),
     status: "succeeded",
+    validation,
     videoScriptPackage,
   };
 }
@@ -291,4 +354,33 @@ function countScenes(videoScriptPackage: VideoScriptPackage) {
     (total, section) => total + section.scenes.length,
     0,
   );
+}
+
+async function validatePreparedProject(input: {
+  dependencies: PipelineOrchestratorDependencies;
+  options: PipelineOrchestratorOptions;
+  preparation: Extract<
+    Awaited<ReturnType<PipelineOrchestratorDependencies["prepareRepo"]>>,
+    { status: "succeeded" }
+  >;
+}) {
+  await emitProgress(input.options, {
+    stage: "project-validation",
+    status: "started",
+  });
+  const validation = await input.dependencies.validateProject({
+    preparationManifest: input.preparation.manifest,
+    ...(input.preparation.workspace === undefined
+      ? {}
+      : { preparationWorkspace: input.preparation.workspace }),
+  });
+
+  return validation;
+}
+
+async function emitProgress(
+  options: PipelineOrchestratorOptions,
+  event: PipelineProgressEvent,
+) {
+  await options.onProgress?.(event);
 }

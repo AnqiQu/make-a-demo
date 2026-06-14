@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { parseVideoScriptPackage } from "../06-capture/video-script-package.schema";
 import { generateVideoScriptPackage } from "./script-generation-orchestrator";
 
 describe("generateVideoScriptPackage", () => {
@@ -40,30 +41,43 @@ describe("generateVideoScriptPackage", () => {
         scriptComposer: {
           async composeScript() {
             return {
+              estimatedDurationSeconds: 8,
+              format: "16:9",
+              scriptId: "script_test",
               sections: [
                 {
                   id: "section_intro",
                   scenes: [
                     {
-                      browserActions: ["Open the validation dashboard"],
+                      description: "Show the validated project result.",
+                      durationSeconds: 8,
+                      events: ["Open the validation dashboard"],
                       id: "scene_validation",
-                      summary: "Show the validated project result.",
+                      playwrightSceneId: "scene_validation",
+                      playwrightScript: "await page.goto(baseUrl);",
+                      type: "playwright-recording",
                     },
                   ],
                   title: "Validation",
                 },
               ],
               title: "MakeADemo validation demo",
+              version: 1,
             };
           },
         },
       },
     );
 
-    expect(packageResult.videoScript.sections[0]?.scenes[0]).toEqual({
-      browserActions: ["Open the validation dashboard"],
+    expect(parseVideoScriptPackage(packageResult).scriptId).toBe("script_test");
+    expect(packageResult.sections[0]?.scenes[0]).toEqual({
+      description: "Show the validated project result.",
+      durationSeconds: 8,
+      events: ["Open the validation dashboard"],
       id: "scene_validation",
-      summary: "Show the validated project result.",
+      playwrightSceneId: "scene_validation",
+      playwrightScript: "await page.goto(baseUrl);",
+      type: "playwright-recording",
     });
     expect(packageResult.validation.logs).toEqual(["validated"]);
     expect(packageResult.assumptions).toEqual(["single page app"]);

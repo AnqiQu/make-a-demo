@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { RepoPreparationAgent } from "../../pipeline/03-repo-preparation/repo-preparation-agent.interface";
 import type { BrowserValidator } from "../../pipeline/04-project-validation/browser-validator.interface";
 import type { SandboxRunner } from "../../pipeline/04-project-validation/sandbox-runner.interface";
+import { parseVideoScriptPackage } from "../../pipeline/06-capture/video-script-package.schema";
 import { runPipelineJob } from "./pipeline-orchestrator";
 import { createStage1PipelineDependencies } from "./stage1-pipeline";
 
@@ -71,16 +72,19 @@ describe("createStage1PipelineDependencies", () => {
 
     expect(result.status).toBe("succeeded");
     if (result.status === "succeeded") {
-      expect(
-        result.videoScriptPackage.videoScript.sections[0]?.scenes[0],
-      ).toEqual({
-        browserActions: [
+      expect(parseVideoScriptPackage(result.videoScriptPackage).scriptId).toBe(
+        "generated-makeademo-script",
+      );
+      expect(result.videoScriptPackage.sections[0]?.scenes[0]).toMatchObject({
+        description: "Demonstrate validation.",
+        events: [
           "Open the prepared local demo URL",
           "Navigate to the validation area if it is not already visible",
           "Show the validation workflow and its result",
         ],
         id: "scene-validation",
-        summary: "Demonstrate validation.",
+        playwrightSceneId: "scene-validation",
+        type: "playwright-recording",
       });
     }
   });

@@ -1,16 +1,3 @@
-type SceneDescription = {
-  browserActions: string[];
-  id: string;
-  summary: string;
-};
+import type { CaptureReadyVideoScriptPackage } from "../../06-capture/video-script-package.schema";
 
-type ScriptSection = {
-  id: string;
-  scenes: SceneDescription[];
-  title: string;
-};
-
-export type VideoScript = {
-  sections: ScriptSection[];
-  title: string;
-};
+export type VideoScript = CaptureReadyVideoScriptPackage;

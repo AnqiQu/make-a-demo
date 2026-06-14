@@ -17,6 +17,7 @@ describe("DaytonaPreparationWorkspaceProvider", () => {
     expect(requests).toEqual([
       {
         body: {
+          disk: 3,
           networkBlockAll: true,
           snapshot: "makeademo-opencode",
         },

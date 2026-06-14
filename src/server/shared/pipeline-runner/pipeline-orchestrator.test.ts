@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { createRecordingPipelineObserver } from "./pipeline-observer";
+import type { ProjectValidationResult } from "../../pipeline/04-project-validation/validation-result";
 import { runPipelineJob } from "./pipeline-orchestrator";
 
 describe("runPipelineJob", () => {
@@ -21,17 +22,10 @@ describe("runPipelineJob", () => {
       {
         async generateScriptPackage({ preparationManifest, validation }) {
           calls.push("script-generation");
-          return {
+          return scriptPackage({
             assumptions: preparationManifest.assumptions,
-            demoPlan: {
-              featureOrder: ["validation"],
-              narrative: "Demo it",
-              risks: [],
-            },
-            exploration: { assumptions: [], productSurfaces: [], summary: "" },
             validation,
-            videoScript: { sections: [], title: "Demo" },
-          };
+          });
         },
         async prepareRepo() {
           calls.push("repo-preparation");
@@ -83,17 +77,10 @@ describe("runPipelineJob", () => {
       },
       {
         async generateScriptPackage({ preparationManifest, validation }) {
-          return {
+          return scriptPackage({
             assumptions: preparationManifest.assumptions,
-            demoPlan: {
-              featureOrder: ["validation"],
-              narrative: "Demo it",
-              risks: [],
-            },
-            exploration: { assumptions: [], productSurfaces: [], summary: "" },
             validation,
-            videoScript: { sections: [], title: "Demo" },
-          };
+          });
         },
         async prepareRepo() {
           return {
@@ -364,6 +351,58 @@ describe("runPipelineJob", () => {
     ]);
   });
 
+  it("uses validation produced during repo preparation without rerunning project validation", async () => {
+    const calls: string[] = [];
+
+    const result = await runPipelineJob(
+      {
+        demoBrief: { keyProductFeatures: ["validation"] },
+        normalizedSupportingDocuments: [],
+        repoSecurity: {
+          files: [{ path: "package.json", text: "{}" }],
+          repoStats: { fileCount: 1, sizeBytes: 1_000 },
+        },
+        repoUrl: "https://github.com/example/app",
+        workspaceId: "workspace_123",
+      },
+      {
+        async generateScriptPackage({ validation }) {
+          calls.push("script-generation");
+          expect(validation.logs).toEqual(["validated during preparation"]);
+          return scriptPackage({ assumptions: [], validation });
+        },
+        async prepareRepo() {
+          calls.push("repo-preparation");
+          return {
+            manifest: manifest(),
+            status: "succeeded",
+            validation: {
+              blockedNetworkAttempts: [],
+              logs: ["validated during preparation"],
+              status: "succeeded",
+              warnings: [],
+            },
+            workspace: fakeWorkspaceHandle(),
+          };
+        },
+        screenRepoSecurity() {
+          calls.push("repo-security-screen");
+          return { rejections: [], status: "passed", warnings: [] };
+        },
+        async validateProject() {
+          throw new Error("validation should not rerun after tool validation");
+        },
+      },
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(calls).toEqual([
+      "repo-security-screen",
+      "repo-preparation",
+      "script-generation",
+    ]);
+  });
+
   it("returns a fallback prompt and stops when Repo Preparation fails", async () => {
     const result = await runPipelineJob(
       {
@@ -423,6 +462,44 @@ function manifest() {
   };
 }
 
+function scriptPackage(input: {
+  assumptions: string[];
+  validation: ProjectValidationResult;
+}) {
+  return {
+    assumptions: input.assumptions,
+    demoPlan: {
+      featureOrder: ["validation"],
+      narrative: "Demo it",
+      risks: [],
+    },
+    estimatedDurationSeconds: 5,
+    exploration: { assumptions: [], productSurfaces: [], summary: "" },
+    format: "16:9",
+    scriptId: "script_test",
+    sections: [
+      {
+        id: "section_test",
+        scenes: [
+          {
+            description: "Show validation.",
+            durationSeconds: 5,
+            events: ["Open app"],
+            id: "scene_validation",
+            playwrightSceneId: "scene_validation",
+            playwrightScript: "await page.goto(baseUrl);",
+            type: "playwright-recording" as const,
+          },
+        ],
+        title: "Validation",
+      },
+    ],
+    title: "Demo",
+    validation: input.validation,
+    version: 1,
+  };
+}
+
 function fakeWorkspaceHandle() {
   return {
     async destroy() {},
@@ -430,6 +507,9 @@ function fakeWorkspaceHandle() {
     workspace: {
       async execute() {
         return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async getPreviewUrl(port: number) {
+        return `https://preview.example.test:${port}`;
       },
       async setOutboundNetworkAccess() {},
       async uploadFiles() {},

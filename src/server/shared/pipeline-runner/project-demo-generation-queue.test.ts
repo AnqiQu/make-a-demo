@@ -215,6 +215,13 @@ function successfulPipelineResult(): PipelineJobResult {
       workspaceId: "project-1",
     },
     status: "succeeded",
+    validation: {
+      blockedNetworkAttempts: [],
+      browserUrl: "https://preview.example.test/",
+      logs: ["validated"],
+      status: "succeeded",
+      warnings: [],
+    },
     videoScriptPackage: {
       assumptions: [],
       demoPlan: {
@@ -222,18 +229,40 @@ function successfulPipelineResult(): PipelineJobResult {
         narrative: "Demo script generation.",
         risks: [],
       },
+      estimatedDurationSeconds: 3,
       exploration: {
         assumptions: [],
         productSurfaces: [],
         summary: "A demo generator.",
       },
+      format: "16:9",
+      scriptId: "script-project-1",
+      sections: [
+        {
+          id: "section-main",
+          scenes: [
+            {
+              description: "Demonstrate script generation.",
+              durationSeconds: 3,
+              events: ["Open app"],
+              id: "scene-script-generation",
+              playwrightSceneId: "scene-script-generation",
+              playwrightScript: "await page.goto(baseUrl);",
+              type: "playwright-recording",
+            },
+          ],
+          title: "Main flow",
+        },
+      ],
+      title: "Demo",
       validation: {
         blockedNetworkAttempts: [],
+        browserUrl: "https://preview.example.test/",
         logs: ["validated"],
         status: "succeeded",
         warnings: [],
       },
-      videoScript: { sections: [], title: "Demo" },
+      version: 1,
     },
   };
 }

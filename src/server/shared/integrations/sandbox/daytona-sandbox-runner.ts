@@ -8,6 +8,22 @@ import type {
 } from "../../../pipeline/04-project-validation/sandbox-runner.interface";
 
 export class DaytonaSandboxRunner implements SandboxRunner {
+  private readonly destroyWorkspaceOnCleanup: boolean;
+  private readonly readinessPollIntervalMs: number;
+  private readonly readinessTimeoutMs: number;
+
+  constructor(
+    options: {
+      destroyWorkspaceOnCleanup?: boolean;
+      readinessPollIntervalMs?: number;
+      readinessTimeoutMs?: number;
+    } = {},
+  ) {
+    this.destroyWorkspaceOnCleanup = options.destroyWorkspaceOnCleanup ?? true;
+    this.readinessPollIntervalMs = options.readinessPollIntervalMs ?? 1_000;
+    this.readinessTimeoutMs = options.readinessTimeoutMs ?? 30_000;
+  }
+
   async runValidation(
     input: SandboxValidationInput & {
       preparationManifest: PreparationManifest;
@@ -52,15 +68,48 @@ export class DaytonaSandboxRunner implements SandboxRunner {
         };
       }
 
-      const runtimeResult = await handle.workspace.execute(input.demoCommand);
+      const runtimeResult = await handle.workspace.execute(
+        createStartDemoCommand(input.demoCommand),
+      );
+      const readinessResult = await waitForDemoReadiness({
+        pollIntervalMs: this.readinessPollIntervalMs,
+        timeoutMs: this.readinessTimeoutMs,
+        url: input.url,
+        workspace: handle.workspace,
+      });
+      if (readinessResult.exitCode !== 0) {
+        const demoLogsResult = await handle.workspace.execute(
+          "if test -f /tmp/makeademo-demo.log; then cat /tmp/makeademo-demo.log; fi",
+        );
+
+        return {
+          blockedNetworkAttempts: [],
+          cleanup: () => this.cleanup(handle),
+          logs: [
+            ...collectLogs(repoFilesResult),
+            ...collectLogs(installResult),
+            ...collectLogs(runtimeResult),
+            ...collectLogs(readinessResult),
+            ...collectLogs(demoLogsResult),
+          ],
+          repoFiles,
+          runtimeExitCode: 1,
+        };
+      }
+      const browserUrl = await createBrowserPreviewUrl({
+        localUrl: input.url,
+        workspace: handle.workspace,
+      });
 
       return {
         blockedNetworkAttempts: [],
-        cleanup: () => handle.destroy(),
+        browserUrl,
+        cleanup: () => this.cleanup(handle),
         logs: [
           ...collectLogs(repoFilesResult),
           ...collectLogs(installResult),
           ...collectLogs(runtimeResult),
+          ...collectLogs(readinessResult),
         ],
         repoFiles,
         runtimeExitCode: runtimeResult.exitCode,
@@ -70,10 +119,95 @@ export class DaytonaSandboxRunner implements SandboxRunner {
       throw error;
     }
   }
+
+  private async cleanup(handle: PreparationWorkspaceHandle): Promise<void> {
+    if (this.destroyWorkspaceOnCleanup) {
+      await handle.destroy();
+    }
+  }
 }
 
 function collectLogs(result: { stderr: string; stdout: string }): string[] {
   return [result.stdout, result.stderr].filter((line) => line.length > 0);
+}
+
+function createStartDemoCommand(demoCommand: string): string {
+  return `sh -lc ${shellQuote(`cd /workspace && nohup ${demoCommand} > /tmp/makeademo-demo.log 2>&1 & echo $!`)}`;
+}
+
+async function waitForDemoReadiness(input: {
+  pollIntervalMs: number;
+  timeoutMs: number;
+  url: string;
+  workspace: PreparationWorkspaceHandle["workspace"];
+}) {
+  const attempts = Math.max(
+    1,
+    Math.ceil(input.timeoutMs / Math.max(1, input.pollIntervalMs)),
+  );
+  let lastResult = {
+    exitCode: 1,
+    stderr: "",
+    stdout: `Demo URL did not become ready: ${input.url}`,
+  };
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    lastResult = await input.workspace.execute(
+      createDemoReadinessCommand(input.url),
+    );
+    if (lastResult.exitCode === 0) {
+      return lastResult;
+    }
+
+    if (input.pollIntervalMs > 0 && attempt < attempts - 1) {
+      await delay(input.pollIntervalMs);
+    }
+  }
+
+  return {
+    exitCode: 1,
+    stderr: lastResult.stderr,
+    stdout:
+      lastResult.stdout.length > 0
+        ? lastResult.stdout
+        : `Demo URL did not become ready: ${input.url}`,
+  };
+}
+
+function createDemoReadinessCommand(url: string): string {
+  return `node -e ${shellQuote("fetch(process.argv[1]).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));")} ${shellQuote(url)}`;
+}
+
+function readPortFromLocalUrl(url: string): number {
+  const parsedUrl = new URL(url);
+  if (parsedUrl.port.length > 0) {
+    return Number(parsedUrl.port);
+  }
+
+  return parsedUrl.protocol === "https:" ? 443 : 80;
+}
+
+async function createBrowserPreviewUrl(input: {
+  localUrl: string;
+  workspace: PreparationWorkspaceHandle["workspace"];
+}): Promise<string> {
+  const localUrl = new URL(input.localUrl);
+  const previewUrl = new URL(
+    await input.workspace.getPreviewUrl(readPortFromLocalUrl(input.localUrl)),
+  );
+  previewUrl.pathname = localUrl.pathname;
+  previewUrl.search = localUrl.search;
+  previewUrl.hash = localUrl.hash;
+
+  return previewUrl.toString();
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 async function destroyQuietly(

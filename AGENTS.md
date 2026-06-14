@@ -30,21 +30,6 @@ This is a single-context repo. See `docs/agents/domain.md`. You should always ta
 
 The codebase should remain minimal and adaptable while preserving clean seams between frontend UI, backend APIs, auth, persistence, integrations, and background processing.
 
-## Product Stack
-
-MakeADemo uses:
-
-- Vite + React + TypeScript for the frontend
-- Tailwind CSS for styling
-- TanStack Query for server state, caching, loading states, and mutations
-- TanStack Table for structured tables
-- FastAPI for the backend
-- Postgres for durable state
-- Redis-backed workers for async jobs
-- Clerk for authentication
-
-Keep stack-specific code behind clear seams where practical. Avoid scattering vendor SDK calls, database access, queue logic, or auth logic through unrelated product code.
-
 ## Main Objectives
 
 - Keep the codebase minimal: add the smallest correct module or interface that solves the current need.
@@ -66,7 +51,22 @@ For runtime-code changes, always use the `tdd` skill if you have to it. If you d
 - When exporting a new interface, add a docstring that explains what implementations should do and the invariants they must uphold.
 - Run `bun run lint`, `bun run typecheck`, `bun run test`, `bun run knip`, and `bun run graph:deps` before considering code changes complete.
 
-## Testing Guidelines
+### Commit Messages
+
+- Keep commit messages concise, easily readable, and very specific.
+- Use one of these prefixes: `feature:`, `bugfix:`, `refactor:`, `test:`, `docs:`, `chore:`, `infra:`, or `generated:`.
+- Use `feature:` for new user-visible product behavior, API capabilities, or pipeline functionality.
+- Use `bugfix:` for correcting broken behavior, regressions, data loss, incorrect output, crashes, or flaky runtime behavior.
+- Use `refactor:` for restructuring code without intentionally changing behavior.
+- Use `test:` for adding or changing tests, fixtures, or test-only helpers when runtime behavior is unchanged.
+- Use `docs:` for documentation-only changes, including agent instructions, ADRs, PRDs, and README updates.
+- Use `chore:` for routine maintenance that does not affect runtime behavior, such as package metadata, config cleanup, or repository housekeeping.
+- Use `infra:` for deployment, CI, environment, sandbox, cloud, or operational tooling changes.
+- Use `generated:` for regenerated artifacts such as dependency graphs, schemas, lockfiles, or other machine-generated outputs when committed separately.
+- Prefer a specific subject that explains the exact change, such as `bugfix: preserve Daytona preview paths` rather than `bugfix: fix pipeline`.
+- If a single very specific subject cannot clearly describe the staged changes, split the work into two or more commits.
+
+### Testing
 
 - Test behavior through public interfaces and real seams; avoid tests that depend on private functions, storage internals, or incidental implementation order.
 - Keep each test focused on one behavior. If a test needs many assertions, split it unless the assertions describe one observable flow.
