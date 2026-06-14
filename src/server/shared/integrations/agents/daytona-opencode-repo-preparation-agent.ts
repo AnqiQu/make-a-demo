@@ -247,6 +247,18 @@ export class DaytonaOpenCodeRepoPreparationAgent
           validation,
         });
         await clearValidationRequest(handle.workspace);
+        if (validation.status === "succeeded") {
+          await appendPreparationDebugLog(handle.workspace, {
+            event: "preparation-auto-succeeded-after-validation",
+            status: validation.status,
+          });
+          return {
+            manifest,
+            status: "succeeded" as const,
+            validation,
+            workspace: handle,
+          };
+        }
         prompt = createValidationFeedbackPrompt({ manifest, validation });
         continue;
       }

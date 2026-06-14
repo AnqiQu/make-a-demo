@@ -153,18 +153,14 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
     );
   });
 
-  it("runs backend validation requests before accepting the submitted result", async () => {
+  it("returns a successful preparation result as soon as backend validation passes", async () => {
     const events: unknown[] = [];
     const validations: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparationAgent({
       modelID: "gpt-5.5",
       providerApiKey: "openai_key",
       provider: fakeProvider(events, {
-        commandStdout: [
-          "Validation requested.",
-          "Submitted preparation result.",
-        ],
-        preparationResult: successResult(),
+        commandStdout: ["Validation requested."],
         validationRequest: {
           manifestPath: "/workspace/.makeademo/preparation-manifest.json",
         },
@@ -194,6 +190,7 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
       manifest: { demoCommand: "npm run demo:makeademo" },
       status: "succeeded",
       validation: { status: "succeeded" },
+      workspace: { id: "daytona_workspace" },
     });
     expect(validations).toEqual([
       expect.objectContaining({
@@ -215,6 +212,16 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
         },
       ]),
     );
+    expect(
+      events.filter(
+        (event): event is { execute: string } =>
+          typeof event === "object" &&
+          event !== null &&
+          "execute" in event &&
+          typeof event.execute === "string" &&
+          event.execute.includes("opencode run"),
+      ),
+    ).toHaveLength(1);
   });
 
   it("writes a Daytona-side preparation debug log during the agent loop", async () => {
