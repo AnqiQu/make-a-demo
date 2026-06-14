@@ -133,6 +133,15 @@ async function createPlaywrightPage(): Promise<BrowserValidationPage> {
     async requestedUrls() {
       return requestedUrls;
     },
+    async route(pattern, handler) {
+      await page.route(pattern, async (route) => {
+        await handler({
+          abort: (errorCode) => route.abort(errorCode),
+          continue: () => route.continue(),
+          request: () => ({ url: () => route.request().url() }),
+        });
+      });
+    },
     async textContent(selector) {
       return page.textContent(selector);
     },
