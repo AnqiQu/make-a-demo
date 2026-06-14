@@ -66,6 +66,21 @@ For runtime-code changes, always use the `tdd` skill if you have to it. If you d
 - When exporting a new interface, add a docstring that explains what implementations should do and the invariants they must uphold.
 - Run `bun run lint`, `bun run typecheck`, `bun run test`, `bun run knip`, and `bun run graph:deps` before considering code changes complete.
 
+### Commit Messages
+
+- Keep commit messages concise, easily readable, and very specific.
+- Use one of these prefixes: `feature:`, `bugfix:`, `refactor:`, `test:`, `docs:`, `chore:`, `infra:`, or `generated:`.
+- Use `feature:` for new user-visible product behavior, API capabilities, or pipeline functionality.
+- Use `bugfix:` for correcting broken behavior, regressions, data loss, incorrect output, crashes, or flaky runtime behavior.
+- Use `refactor:` for restructuring code without intentionally changing behavior.
+- Use `test:` for adding or changing tests, fixtures, or test-only helpers when runtime behavior is unchanged.
+- Use `docs:` for documentation-only changes, including agent instructions, ADRs, PRDs, and README updates.
+- Use `chore:` for routine maintenance that does not affect runtime behavior, such as package metadata, config cleanup, or repository housekeeping.
+- Use `infra:` for deployment, CI, environment, sandbox, cloud, or operational tooling changes.
+- Use `generated:` for regenerated artifacts such as dependency graphs, schemas, lockfiles, or other machine-generated outputs when committed separately.
+- Prefer a specific subject that explains the exact change, such as `bugfix: preserve Daytona preview paths` rather than `bugfix: fix pipeline`.
+- If a single very specific subject cannot clearly describe the staged changes, split the work into two or more commits.
+
 ## Testing Guidelines
 
 - Test behavior through public interfaces and real seams; avoid tests that depend on private functions, storage internals, or incidental implementation order.

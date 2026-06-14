@@ -1,0 +1,12 @@
+!**
+
+# Keep environment files hidden from OpenCode search/listing even though other
+# gitignored files are visible.
+.env
+.env.*
+*.env
+*.env.*
+**/.env
+**/.env.*
+**/*.env
+**/*.env.*
