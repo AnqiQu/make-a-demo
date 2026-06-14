@@ -20,6 +20,7 @@ import { createMakeADemoOpenCodeConfigFiles } from "./prepared-opencode-config";
 const makeADemoArtifactDirectory = "/workspace/.makeademo";
 const makeADemoOpenCodeConfigDirectory = `${makeADemoArtifactDirectory}/opencode`;
 const dependencyInstallRequestPath = `${makeADemoArtifactDirectory}/dependency-install-request.json`;
+const preparationManifestPath = `${makeADemoArtifactDirectory}/preparation-manifest.json`;
 const preparationResultPath = `${makeADemoArtifactDirectory}/repo-preparation-result.json`;
 const preparationDebugLogPath = `${makeADemoArtifactDirectory}/repo-preparation-debug.jsonl`;
 const validationRequestPath = `${makeADemoArtifactDirectory}/validation-request.json`;
@@ -229,7 +230,10 @@ export class DaytonaOpenCodeRepoPreparationAgent
             "Repo Preparation validation tool is not configured.",
           );
         }
-        const manifest = readPreparationManifest(validationRequest.manifest);
+        const manifest = await readPreparationManifestFile(
+          handle.workspace,
+          validationRequest.manifestPath,
+        );
         const validation = await this.validatePreparation({
           manifest,
           workspace: handle,
@@ -360,7 +364,7 @@ type RawPreparationRunResult =
   | Awaited<ReturnType<RepoPreparationAgent["prepare"]>>;
 
 type ValidationRequest = {
-  manifest: unknown;
+  manifestPath: string;
 };
 
 type ValidationResultArtifact = {
@@ -528,7 +532,7 @@ function createDaytonaRepoPreparationPrompt(
     "- Prefer local mock data, fixture data, or frontend-only demo modes over hosted services.",
     "- Keep existing project conventions where practical.",
     "- If the repo already has a suitable demo command, use it rather than creating a new one.",
-    "- When you believe the demo is ready, call `makeademo_validate_preparation` with the draft manifest and stop for backend validation feedback.",
+    `- Write the draft Preparation Manifest JSON to ${preparationManifestPath}, then call makeademo_validate_preparation with that manifest path and stop for backend validation feedback.`,
     "- If validation fails, repair the repo using the feedback and call `makeademo_validate_preparation` again.",
     "- Call `makeademo_submit_preparation_result` only after the latest validation passes.",
     "",
@@ -539,7 +543,7 @@ function createDaytonaRepoPreparationPrompt(
     "",
     "### Example: frontend needs mock API",
     "Observation: the app calls a hosted API at runtime.",
-    "Action: add a local mock-data/demo mode, configure the demo command to use it, then call `makeademo_validate_preparation` with the draft manifest.",
+    `Action: add a local mock-data/demo mode, configure the demo command to use it, write ${preparationManifestPath}, then call makeademo_validate_preparation with the manifest path.`,
     "",
     "### Example: unsupported dependency command",
     "Observation: the repo asks for `npm install some-package && npm run build`.",
@@ -548,10 +552,10 @@ function createDaytonaRepoPreparationPrompt(
     "## Final Response Contract",
     "When backend validation has passed, call `makeademo_submit_preparation_result` exactly once. Do not print final JSON in plain text.",
     "",
-    'For success, call the tool with `status: "succeeded"` and a `manifest` matching this shape:',
+    `For success, first write ${preparationManifestPath} with a manifest matching this shape, validate it, then call the submit tool with status "succeeded" only:`,
     "",
     "```json",
-    '{"status":"succeeded","manifest":{"repoUrl":"...","workspaceId":"...","status":"created-new-demo","setupSummary":"...","createdFiles":[],"modifiedFiles":[],"demoCommand":"...","url":"http://localhost:3000","mockedServices":[],"assumptions":[],"risks":[],"existingDemoEvidence":[],"scriptGenerationContext":[],"diffArtifactId":"..."}}',
+    '{"repoUrl":"...","workspaceId":"...","status":"created-new-demo","setupSummary":"...","createdFiles":[],"modifiedFiles":[],"demoCommand":"...","url":"http://localhost:3000","mockedServices":[],"assumptions":[],"risks":[],"existingDemoEvidence":[],"scriptGenerationContext":[],"diffArtifactId":"..."}',
     "```",
     "",
     "```json",
@@ -602,8 +606,8 @@ function createContinueRepoPreparationPrompt(
     "",
     "## Final Response Contract",
     "When backend validation has passed, call `makeademo_submit_preparation_result` exactly once. Do not print final JSON in plain text.",
-    "If validation has not passed yet, call `makeademo_validate_preparation` with the draft manifest and stop for feedback.",
-    'For success, pass `status: "succeeded"` and a complete `manifest`. For failure, pass `status: "failed"`, `blockers`, `assumptions`, and `suggestedChanges`.',
+    `If validation has not passed yet, write ${preparationManifestPath}, call makeademo_validate_preparation with that path, and stop for feedback.`,
+    'For success, pass only `status: "succeeded"`. The backend will submit the latest validated manifest file. For failure, pass `status: "failed"`, `blockers`, `assumptions`, and `suggestedChanges`.',
     "",
     "## Submission Context",
     "```json",
@@ -680,12 +684,38 @@ async function readValidationRequest(
   if (
     typeof payload !== "object" ||
     payload === null ||
-    !("manifest" in payload)
+    !("manifestPath" in payload) ||
+    typeof payload.manifestPath !== "string"
   ) {
     throw new Error("Validation tool wrote an invalid request.");
   }
 
   return payload as ValidationRequest;
+}
+
+async function readPreparationManifestFile(
+  workspace: PreparationWorkspace,
+  manifestPath: string,
+): Promise<ReturnType<typeof readPreparationManifest>> {
+  if (manifestPath !== preparationManifestPath) {
+    throw new Error(
+      `Validation manifest path must be ${preparationManifestPath}.`,
+    );
+  }
+
+  const result = await workspace.execute(
+    `if test -f ${shellQuote(preparationManifestPath)}; then cat ${shellQuote(preparationManifestPath)}; else exit 1; fi`,
+  );
+  if (result.exitCode !== 0) {
+    throw new Error("Preparation manifest file is missing.");
+  }
+
+  const payload = tryParseJson(result.stdout);
+  if (payload === undefined) {
+    throw new Error("Preparation manifest file contains invalid JSON.");
+  }
+
+  return readPreparationManifest(payload);
 }
 
 async function writeValidationResult(

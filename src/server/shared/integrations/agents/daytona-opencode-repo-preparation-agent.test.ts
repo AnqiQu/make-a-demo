@@ -165,7 +165,9 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
           "Submitted preparation result.",
         ],
         preparationResult: successResult(),
-        validationRequest: { manifest: successResult().manifest },
+        validationRequest: {
+          manifestPath: "/workspace/.makeademo/preparation-manifest.json",
+        },
       }),
       providerID: "openai",
       timeoutMs: 1_000,
@@ -313,7 +315,9 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
       provider: fakeProvider(events, {
         commandDelayMs: 920,
         commandStdout: ["Validation requested."],
-        validationRequest: { manifest: successResult().manifest },
+        validationRequest: {
+          manifestPath: "/workspace/.makeademo/preparation-manifest.json",
+        },
       }),
       providerID: "openai",
       timeoutMs: 1_000,
@@ -352,7 +356,7 @@ function fakeProvider(
         dependencyInstallRequest?: { command: string };
         preparationResult?: ReturnType<typeof successResult>;
         validationRequest?: {
-          manifest: ReturnType<typeof successResult>["manifest"];
+          manifestPath: string;
         };
         validationResult?: ReturnType<typeof validationArtifact>;
       } = [JSON.stringify(successResult())],
@@ -384,7 +388,7 @@ function fakeWorkspace(
     dependencyInstallRequest?: { command: string };
     preparationResult?: ReturnType<typeof successResult>;
     validationRequest?: {
-      manifest: ReturnType<typeof successResult>["manifest"];
+      manifestPath: string;
     };
     validationResult?: ReturnType<typeof validationArtifact>;
   },
@@ -453,6 +457,16 @@ function fakeWorkspace(
             validationRequest === undefined
               ? ""
               : JSON.stringify(validationRequest),
+        };
+      }
+      if (
+        command.startsWith("if test -f") &&
+        command.includes("preparation-manifest.json")
+      ) {
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout: JSON.stringify(successResult().manifest),
         };
       }
       if (

@@ -27,6 +27,13 @@ describe("createMakeADemoOpenCodeConfigFiles", () => {
       "plugins/makeademo-tools.ts",
       "skills/find-docs/SKILL.md",
     ]);
+    const plugin = files.find(
+      (file) => file.path === "plugins/makeademo-tools.ts",
+    )?.content;
+    expect(plugin).toContain("preparationManifestPath");
+    expect(plugin).toContain("manifestPath: tool.schema.string()");
+    expect(plugin).toContain("manifest = await assertValidationPassed()");
+    expect(plugin).not.toContain("assertValidationPassed(args.manifest)");
   });
 });
 
