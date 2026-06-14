@@ -78,18 +78,16 @@ const result = await runFullPipelineJob(
   }),
   {
     ...(outputRoot === undefined ? {} : { outputRoot }),
-    onProgress: (event) =>
-      process.stderr.write(`[pipeline] ${event.stage}: ${event.status}\n`),
+    onLog: (entry) => process.stdout.write(`[pipeline] ${entry.message}\n`),
   },
 );
 
-process.stdout.write("[pipeline] footage-capture: succeeded\n");
-process.stdout.write("[pipeline] compositing: succeeded\n");
 process.stdout.write(
   `Video: ${result.finalVideo.outputVideoPath ?? result.finalVideo.viewUrl}\n`,
 );
 process.stdout.write(`View URL: ${result.finalVideo.viewUrl}\n`);
 process.stdout.write(`Manifest: ${result.finalVideo.manifestPath}\n`);
+process.stdout.write(`Log: ${result.logPath}\n`);
 process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 
 function readFullPipelineArgs(args: string[]) {

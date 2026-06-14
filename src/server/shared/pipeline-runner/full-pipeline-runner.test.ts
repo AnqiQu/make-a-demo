@@ -82,6 +82,9 @@ describe("runFullPipelineJob", () => {
       expect(result.finalVideo.outputVideoPath).toBe(
         join(outputRoot, "final-video.mp4"),
       );
+      expect(result.logPath).toBe(
+        join(outputRoot, "full-run", "pipeline-log.jsonl"),
+      );
       await expect(
         stat(join(outputRoot, "full-run", "video-script-package.json")),
       ).resolves.toMatchObject({ isFile: expect.any(Function) });
@@ -114,6 +117,110 @@ describe("runFullPipelineJob", () => {
         },
       ),
     ).rejects.toThrow("Stage 1 did not return a validated browser URL");
+  });
+
+  it("writes the full pipeline progress to the log callback and JSONL log file", async () => {
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
+    const messages: string[] = [];
+
+    try {
+      const result = await runFullPipelineJob(
+        {
+          demoBrief: { keyProductFeatures: ["article feed"] },
+          normalizedSupportingDocuments: [],
+          repoSecurity: {
+            files: [{ path: "package.json", text: "{}" }],
+            repoStats: { fileCount: 1, sizeBytes: 100 },
+          },
+          repoUrl: "https://github.com/example/app",
+          workspaceId: "workspace_123",
+        },
+        stage1Dependencies([]),
+        {
+          async captureScenes(input) {
+            return {
+              baseUrl: input.baseUrl,
+              createdAt: "2026-01-01T00:00:00.000Z",
+              keepTemp: true,
+              manifestPath: join(outputRoot, "capture-manifest.json"),
+              runDirectory: outputRoot,
+              runId: "capture",
+              scenes: [
+                {
+                  durationSeconds: 5,
+                  sceneId: "scene_article_feed",
+                  sectionId: "section_test",
+                  videoPath: join(outputRoot, "scene.webm"),
+                },
+              ],
+              scriptId: "script_test",
+              temporary: true,
+              title: "Demo",
+            };
+          },
+          async compositeVideo() {
+            return {
+              createdAt: "2026-01-01T00:00:00.000Z",
+              durationInFrames: 150,
+              fps: 30,
+              manifestPath: join(outputRoot, "composite-manifest.json"),
+              outputVideoPath: join(outputRoot, "final-video.mp4"),
+              renderPlanPath: join(outputRoot, "render-plan.json"),
+              runDirectory: outputRoot,
+              runId: "composite",
+              scriptId: "script_test",
+              title: "Demo",
+              viewUrl: "file:///tmp/final-video.mp4",
+            };
+          },
+          onLog: (entry) => messages.push(entry.message),
+          outputRoot,
+          runId: "full-run",
+        },
+      );
+
+      expect(messages).toEqual(
+        expect.arrayContaining([
+          "Full pipeline started.",
+          "repo-security-screen started.",
+          "repo-preparation started.",
+          "script-generation succeeded.",
+          "Script package generated: 1 section(s), 1 scene(s), 5s estimated.",
+          "Footage Capture started.",
+          "Footage Capture succeeded: 1 scene video(s).",
+          "Compositing started.",
+          "Compositing succeeded.",
+          "Full pipeline succeeded.",
+        ]),
+      );
+
+      const logEntries = (await readFile(result.logPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(logEntries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            event: "script-package-written",
+            message:
+              "Script package generated: 1 section(s), 1 scene(s), 5s estimated.",
+            scriptPath: result.scriptPath,
+          }),
+          expect.objectContaining({
+            event: "capture-succeeded",
+            manifestPath: join(outputRoot, "capture-manifest.json"),
+            sceneCount: 1,
+          }),
+          expect.objectContaining({
+            event: "compositing-succeeded",
+            outputVideoPath: join(outputRoot, "final-video.mp4"),
+            viewUrl: "file:///tmp/final-video.mp4",
+          }),
+        ]),
+      );
+    } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+    }
   });
 });
 
