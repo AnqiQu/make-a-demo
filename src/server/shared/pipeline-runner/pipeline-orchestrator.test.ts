@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { ProjectValidationResult } from "../../pipeline/04-project-validation/validation-result";
 import { runPipelineJob } from "./pipeline-orchestrator";
 
 describe("runPipelineJob", () => {
@@ -20,17 +21,10 @@ describe("runPipelineJob", () => {
       {
         async generateScriptPackage({ preparationManifest, validation }) {
           calls.push("script-generation");
-          return {
+          return scriptPackage({
             assumptions: preparationManifest.assumptions,
-            demoPlan: {
-              featureOrder: ["validation"],
-              narrative: "Demo it",
-              risks: [],
-            },
-            exploration: { assumptions: [], productSurfaces: [], summary: "" },
             validation,
-            videoScript: { sections: [], title: "Demo" },
-          };
+          });
         },
         async prepareRepo() {
           calls.push("repo-preparation");
@@ -82,17 +76,10 @@ describe("runPipelineJob", () => {
       },
       {
         async generateScriptPackage({ preparationManifest, validation }) {
-          return {
+          return scriptPackage({
             assumptions: preparationManifest.assumptions,
-            demoPlan: {
-              featureOrder: ["validation"],
-              narrative: "Demo it",
-              risks: [],
-            },
-            exploration: { assumptions: [], productSurfaces: [], summary: "" },
             validation,
-            videoScript: { sections: [], title: "Demo" },
-          };
+          });
         },
         async prepareRepo() {
           return {
@@ -148,17 +135,7 @@ describe("runPipelineJob", () => {
         async generateScriptPackage({ validation }) {
           calls.push("script-generation");
           expect(validation.logs).toEqual(["validated during preparation"]);
-          return {
-            assumptions: [],
-            demoPlan: {
-              featureOrder: ["validation"],
-              narrative: "Demo it",
-              risks: [],
-            },
-            exploration: { assumptions: [], productSurfaces: [], summary: "" },
-            validation,
-            videoScript: { sections: [], title: "Demo" },
-          };
+          return scriptPackage({ assumptions: [], validation });
         },
         async prepareRepo() {
           calls.push("repo-preparation");
@@ -248,6 +225,44 @@ function manifest() {
     status: "created-new-demo" as const,
     url: "http://localhost:3000",
     workspaceId: "workspace_123",
+  };
+}
+
+function scriptPackage(input: {
+  assumptions: string[];
+  validation: ProjectValidationResult;
+}) {
+  return {
+    assumptions: input.assumptions,
+    demoPlan: {
+      featureOrder: ["validation"],
+      narrative: "Demo it",
+      risks: [],
+    },
+    estimatedDurationSeconds: 5,
+    exploration: { assumptions: [], productSurfaces: [], summary: "" },
+    format: "16:9",
+    scriptId: "script_test",
+    sections: [
+      {
+        id: "section_test",
+        scenes: [
+          {
+            description: "Show validation.",
+            durationSeconds: 5,
+            events: ["Open app"],
+            id: "scene_validation",
+            playwrightSceneId: "scene_validation",
+            playwrightScript: "await page.goto(baseUrl);",
+            type: "playwright-recording" as const,
+          },
+        ],
+        title: "Validation",
+      },
+    ],
+    title: "Demo",
+    validation: input.validation,
+    version: 1,
   };
 }
 

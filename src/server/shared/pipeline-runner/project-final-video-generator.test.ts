@@ -100,33 +100,39 @@ function successfulPipelineResult(): Extract<
         narrative: "Demo script generation.",
         risks: [],
       },
+      estimatedDurationSeconds: 3,
       exploration: {
         assumptions: [],
         productSurfaces: [],
         summary: "A demo generator.",
       },
+      format: "16:9",
+      scriptId: "script-project-1",
+      sections: [
+        {
+          id: "section-main",
+          scenes: [
+            {
+              description: "Demonstrate script generation.",
+              durationSeconds: 3,
+              events: ["Show script generation"],
+              id: "scene-script-generation",
+              playwrightSceneId: "scene-script-generation",
+              playwrightScript: "await page.goto(baseUrl);",
+              type: "playwright-recording",
+            },
+          ],
+          title: "Main flow",
+        },
+      ],
+      title: "Generated Demo",
       validation: {
         blockedNetworkAttempts: [],
         logs: ["validated"],
         status: "succeeded",
         warnings: [],
       },
-      videoScript: {
-        sections: [
-          {
-            id: "section-main",
-            scenes: [
-              {
-                browserActions: ["Show script generation"],
-                id: "scene-script-generation",
-                summary: "Demonstrate script generation.",
-              },
-            ],
-            title: "Main flow",
-          },
-        ],
-        title: "Generated Demo",
-      },
+      version: 1,
     },
   };
 }
