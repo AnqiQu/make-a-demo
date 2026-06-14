@@ -230,15 +230,22 @@ export class DaytonaOpenCodeRepoPreparationAgent
             "Repo Preparation validation tool is not configured.",
           );
         }
-        const manifest = await readPreparationManifestFile(
-          handle.workspace,
-          validationRequest.manifestPath,
-        );
-        const validation = await this.validatePreparation({
-          manifest,
-          workspace: handle,
-        });
+        let manifest: ReturnType<typeof readPreparationManifest> | undefined;
+        let validation: ProjectValidationResult;
+        try {
+          manifest = await readPreparationManifestFile(
+            handle.workspace,
+            validationRequest.manifestPath,
+          );
+          validation = await this.validatePreparation({
+            manifest,
+            workspace: handle,
+          });
+        } catch (error) {
+          validation = createValidationHandoffFailure(readErrorMessage(error));
+        }
         await appendPreparationDebugLog(handle.workspace, {
+          failureReason: validation.failureReason,
           event: "validation-finished",
           status: validation.status,
         });
@@ -247,7 +254,7 @@ export class DaytonaOpenCodeRepoPreparationAgent
           validation,
         });
         await clearValidationRequest(handle.workspace);
-        if (validation.status === "succeeded") {
+        if (validation.status === "succeeded" && manifest !== undefined) {
           await appendPreparationDebugLog(handle.workspace, {
             event: "preparation-auto-succeeded-after-validation",
             status: validation.status,
@@ -259,7 +266,11 @@ export class DaytonaOpenCodeRepoPreparationAgent
             workspace: handle,
           };
         }
-        prompt = createValidationFeedbackPrompt({ manifest, validation });
+        prompt = createValidationFeedbackPrompt({
+          manifest,
+          manifestPath: validationRequest.manifestPath,
+          validation,
+        });
         continue;
       }
 
@@ -380,7 +391,7 @@ type ValidationRequest = {
 };
 
 type ValidationResultArtifact = {
-  manifest: ReturnType<typeof readPreparationManifest>;
+  manifest: ReturnType<typeof readPreparationManifest> | undefined;
   status: ProjectValidationResult["status"];
   validation: ProjectValidationResult;
 };
@@ -477,6 +488,22 @@ function backendToolDeadlineFailure(toolName: string) {
     suggestedChanges: [
       "Retry Repo Preparation with a fresh Daytona workspace or a longer preparation timeout.",
     ],
+  };
+}
+
+function createValidationHandoffFailure(
+  reason: string,
+): ProjectValidationResult {
+  return {
+    blockedNetworkAttempts: [],
+    failureReason: `Preparation manifest handoff is invalid: ${reason}`,
+    logs: [
+      "MakeADemo could not run Project Validation because the preparation manifest handoff was invalid.",
+      `Manifest path: ${preparationManifestPath}`,
+      `Error: ${reason}`,
+    ],
+    status: "failed",
+    warnings: [],
   };
 }
 
@@ -733,7 +760,7 @@ async function readPreparationManifestFile(
 async function writeValidationResult(
   workspace: PreparationWorkspace,
   input: {
-    manifest: ReturnType<typeof readPreparationManifest>;
+    manifest: ReturnType<typeof readPreparationManifest> | undefined;
     validation: ProjectValidationResult;
   },
 ): Promise<void> {
@@ -780,7 +807,8 @@ async function clearValidationRequest(
 }
 
 function createValidationFeedbackPrompt(input: {
-  manifest: ReturnType<typeof readPreparationManifest>;
+  manifest: ReturnType<typeof readPreparationManifest> | undefined;
+  manifestPath: string;
   validation: ProjectValidationResult;
 }): string {
   return [
@@ -795,10 +823,17 @@ function createValidationFeedbackPrompt(input: {
     JSON.stringify(input.validation, null, 2),
     "```",
     "",
-    "## Validated Manifest Draft",
-    "```json",
-    JSON.stringify(input.manifest, null, 2),
-    "```",
+    ...(input.manifest === undefined
+      ? [
+          "## Manifest Handoff",
+          `The agent wrote or referenced ${input.manifestPath}, but MakeADemo could not parse it as a valid Preparation Manifest. Fix that file and call makeademo_validate_preparation again with the same manifest path.`,
+        ]
+      : [
+          "## Validated Manifest Draft",
+          "```json",
+          JSON.stringify(input.manifest, null, 2),
+          "```",
+        ]),
     "",
     "## Debugging Guidance",
     "- If `blockedNetworkAttempts` is non-empty, remove or replace every listed external runtime request with local mocks, bundled assets, or system defaults.",

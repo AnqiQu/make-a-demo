@@ -224,6 +224,68 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
     ).toHaveLength(1);
   });
 
+  it("returns malformed manifest handoff failures to the agent as validation feedback", async () => {
+    const events: unknown[] = [];
+    let validationStarted = false;
+    const agent = new DaytonaOpenCodeRepoPreparationAgent({
+      modelID: "gpt-5.5",
+      providerApiKey: "openai_key",
+      provider: fakeProvider(events, {
+        commandStdout: [
+          "Validation requested.",
+          JSON.stringify({
+            assumptions: [],
+            blockers: ["Agent received validation feedback."],
+            status: "failed",
+            suggestedChanges: [],
+          }),
+        ],
+        manifestPayload: { demoCommand: "npm run demo" },
+        validationRequest: {
+          manifestPath: "/workspace/.makeademo/preparation-manifest.json",
+        },
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+      validatePreparation: async () => {
+        validationStarted = true;
+        return validationArtifact().validation;
+      },
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      blockers: ["Agent received validation feedback."],
+      status: "failed",
+    });
+    expect(validationStarted).toBe(false);
+    expect(
+      events.filter(
+        (event): event is { execute: string } =>
+          typeof event === "object" &&
+          event !== null &&
+          "execute" in event &&
+          typeof event.execute === "string" &&
+          event.execute.includes("opencode run"),
+      ),
+    ).toHaveLength(2);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          execute: expect.stringContaining(
+            '"failureReason":"Preparation manifest handoff is invalid: status must be a non-empty string"',
+          ),
+        },
+      ]),
+    );
+  });
+
   it("writes a Daytona-side preparation debug log during the agent loop", async () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparationAgent({
@@ -361,6 +423,7 @@ function fakeProvider(
         commandStdoutChunks?: string[];
         commandDelayMs?: number;
         dependencyInstallRequest?: { command: string };
+        manifestPayload?: unknown;
         preparationResult?: ReturnType<typeof successResult>;
         validationRequest?: {
           manifestPath: string;
@@ -393,6 +456,7 @@ function fakeWorkspace(
     commandStdoutChunks?: string[];
     commandDelayMs?: number;
     dependencyInstallRequest?: { command: string };
+    manifestPayload?: unknown;
     preparationResult?: ReturnType<typeof successResult>;
     validationRequest?: {
       manifestPath: string;
@@ -473,7 +537,9 @@ function fakeWorkspace(
         return {
           exitCode: 0,
           stderr: "",
-          stdout: JSON.stringify(successResult().manifest),
+          stdout: JSON.stringify(
+            input.manifestPayload ?? successResult().manifest,
+          ),
         };
       }
       if (
@@ -493,7 +559,13 @@ function fakeWorkspace(
         command.startsWith("mkdir -p") &&
         command.includes("validation-result.json")
       ) {
-        validationResult = validationArtifact();
+        const match = command.match(
+          /MAKEADEMO_VALIDATION_RESULT\n([\s\S]*)\nMAKEADEMO_VALIDATION_RESULT/,
+        );
+        validationResult =
+          match?.[1] === undefined
+            ? validationArtifact()
+            : JSON.parse(match[1]);
         return { exitCode: 0, stderr: "", stdout: "" };
       }
       if (
