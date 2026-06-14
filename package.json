@@ -22,6 +22,7 @@
     "preview": "vite preview",
     "stage1:run": "bun src/server/shared/pipeline-runner/stage1-cli.mts",
     "start": "bun src/server/api/server.mts",
+    "worker:demo-generation": "bun src/server/shared/pipeline-runner/project-demo-generation-worker.mts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
