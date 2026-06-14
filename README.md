@@ -81,10 +81,18 @@ R2_SECRET_ACCESS_KEY=
 R2_BUCKET=owlet
 GITHUB_APP_ID=
 GITHUB_APP_SLUG=
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
 GITHUB_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
 GITHUB_REDIRECT_URL=http://localhost:5173/github/callback
 API_PORT=8787
 ```
+
+Register `GITHUB_REDIRECT_URL` as one of the GitHub App's callback URLs. The
+install link sends it as `redirect_uri` so GitHub returns to MakeADemo after
+the app authorization flow. If GitHub returns an authorization `code`,
+MakeADemo exchanges it for a user access token and uses the existing
+installation visible to that user.
 
 Optional email settings:
 

@@ -53,6 +53,11 @@ type DemoRequestStatusResponse =
   | { status: "completed"; videoUrl: string }
   | { status: "failed" | "processing" };
 
+type GitHubConnectionResponse = {
+  installationId: string;
+  repositories: InstalledRepository[];
+};
+
 const durationOptions = [
   { label: "30s", seconds: 30 },
   { label: "1 min", seconds: 60 },
@@ -92,24 +97,42 @@ export function ContextGatheringApp() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const installationId = params.get("installation_id");
-    if (!installationId) {
+    const code = params.get("code");
+    if (!installationId && !code) {
       return;
     }
 
     setError("");
-    fetch(`/api/github/installations/${installationId}/repositories`)
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error("Could not load GitHub repositories");
-        }
-        return response.json() as Promise<{
-          repositories: InstalledRepository[];
-        }>;
-      })
-      .then(({ repositories: nextRepositories }) => {
+    const connection = installationId
+      ? fetch(
+          `/api/github/installations/${encodeURIComponent(installationId)}/repositories`,
+        ).then(async (response) => {
+          if (!response.ok) {
+            throw new Error("Could not load GitHub repositories");
+          }
+          const body = (await response.json()) as {
+            repositories: InstalledRepository[];
+          };
+          return { installationId, repositories: body.repositories };
+        })
+      : fetch(
+          `/api/github/authorized-installation?code=${encodeURIComponent(code ?? "")}`,
+        ).then(async (response) => {
+          if (!response.ok) {
+            throw new Error("Could not connect GitHub installation");
+          }
+          return response.json() as Promise<GitHubConnectionResponse>;
+        });
+
+    connection
+      .then(({ installationId: connectedInstallationId, repositories }) => {
+        const nextRepositories = repositories;
         setRepositories(nextRepositories);
         setDraft((current) => {
-          const connected = connectGitHubInstallation(current, installationId);
+          const connected = connectGitHubInstallation(
+            current,
+            connectedInstallationId,
+          );
           const onlyRepository = nextRepositories[0];
           if (nextRepositories.length === 1 && onlyRepository) {
             setRepoInput(onlyRepository.repoUrl);

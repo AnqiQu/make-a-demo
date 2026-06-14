@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  connectGitHubAuthorizedInstallation,
   createGitHubInstallUrl,
   listGitHubInstallationRepositories,
 } from "./github-app";
@@ -51,4 +52,56 @@ describe("GitHub App integration", () => {
     ]);
   });
 
+  it("uses the existing installation available to an authorized GitHub user", async () => {
+    const connection = await connectGitHubAuthorizedInstallation(
+      { code: "oauth-code" },
+      {
+        createUserAccessToken: async (code) => {
+          expect(code).toBe("oauth-code");
+          return "user-token";
+        },
+        fetchJson: async (url, init) => {
+          expect(url).toBe("https://api.github.com/user/installations");
+          expect(init.headers.Authorization).toBe("Bearer user-token");
+          return { installations: [{ id: 123 }] };
+        },
+        listRepositories: async (installationId) => {
+          expect(installationId).toBe("123");
+          return [
+            {
+              fullName: "example/private-app",
+              private: true,
+              repoUrl: "https://github.com/example/private-app",
+            },
+          ];
+        },
+      },
+    );
+
+    expect(connection).toEqual({
+      installationId: "123",
+      repositories: [
+        {
+          fullName: "example/private-app",
+          private: true,
+          repoUrl: "https://github.com/example/private-app",
+        },
+      ],
+    });
+  });
+
+  it("returns null when an authorized GitHub user has no existing installations", async () => {
+    const connection = await connectGitHubAuthorizedInstallation(
+      { code: "oauth-code" },
+      {
+        createUserAccessToken: async () => "user-token",
+        fetchJson: async () => ({ installations: [] }),
+        listRepositories: async () => {
+          throw new Error("listRepositories should not be called");
+        },
+      },
+    );
+
+    expect(connection).toBeNull();
+  });
 });

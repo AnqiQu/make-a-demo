@@ -433,6 +433,112 @@ describe("Context Gathering API", () => {
     });
   });
 
+  it("connects an authorized user's existing GitHub App installation", async () => {
+    const app = createApiApp({
+      github: {
+        connectAuthorizedInstallation: async (code) => {
+          expect(code).toBe("oauth-code");
+          return {
+            installationId: "123",
+            repositories: [
+              {
+                fullName: "example/private-app",
+                private: true,
+                repoUrl: "https://github.com/example/private-app",
+              },
+            ],
+          };
+        },
+        createInstallUrl: () =>
+          "https://github.com/apps/owlet/installations/select_target",
+        listRepositories: async () => {
+          throw new Error("listRepositories should not be called");
+        },
+      },
+      demoRequests: {
+        async readDemoRequestStatus() {
+          throw new Error("demoRequests should not be called");
+        },
+      },
+      store: {
+        async createQueuedProject() {
+          throw new Error("store should not be called");
+        },
+      },
+      uploads: {
+        bucket: "owlet",
+        putObject: async () => {
+          throw new Error("putObject should not be called");
+        },
+        presignGet: async () => {
+          throw new Error("presignGet should not be called");
+        },
+        presignPut: async () => "https://uploads.example.test/file",
+      },
+    });
+
+    const response = await app.fetch(
+      new Request(
+        "http://localhost/api/github/authorized-installation?code=oauth-code",
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      installationId: "123",
+      repositories: [
+        {
+          fullName: "example/private-app",
+          private: true,
+          repoUrl: "https://github.com/example/private-app",
+        },
+      ],
+    });
+  });
+
+  it("returns not found when an authorized user has no GitHub App installation", async () => {
+    const app = createApiApp({
+      github: {
+        connectAuthorizedInstallation: async () => null,
+        createInstallUrl: () =>
+          "https://github.com/apps/owlet/installations/select_target",
+        listRepositories: async () => {
+          throw new Error("listRepositories should not be called");
+        },
+      },
+      demoRequests: {
+        async readDemoRequestStatus() {
+          throw new Error("demoRequests should not be called");
+        },
+      },
+      store: {
+        async createQueuedProject() {
+          throw new Error("store should not be called");
+        },
+      },
+      uploads: {
+        bucket: "owlet",
+        putObject: async () => {
+          throw new Error("putObject should not be called");
+        },
+        presignGet: async () => {
+          throw new Error("presignGet should not be called");
+        },
+        presignPut: async () => "https://uploads.example.test/file",
+      },
+    });
+
+    const response = await app.fetch(
+      new Request(
+        "http://localhost/api/github/authorized-installation?code=oauth-code",
+      ),
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: "GitHub App installation not found",
+    });
+  });
 });
 
 function createDefaultDependencies() {

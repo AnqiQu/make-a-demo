@@ -12,9 +12,25 @@ export type GitHubRepositoryListDependencies = {
   ): Promise<unknown>;
 };
 
+export type GitHubAuthorizedInstallation = {
+  installationId: string;
+  repositories: GitHubRepository[];
+};
+
+export type GitHubAuthorizedInstallationDependencies = {
+  createUserAccessToken(code: string): Promise<string>;
+  fetchJson(
+    url: string,
+    init: { headers: Record<string, string> },
+  ): Promise<unknown>;
+  listRepositories(installationId: string): Promise<GitHubRepository[]>;
+};
+
 type GitHubAppEnvironment = {
   appId: string;
   appSlug: string;
+  clientId?: string;
+  clientSecret?: string;
   privateKey: string;
   redirectUrl: string;
 };
@@ -23,6 +39,10 @@ type GitHubApiRepository = {
   full_name?: unknown;
   html_url?: unknown;
   private?: unknown;
+};
+
+type GitHubApiUserInstallation = {
+  id?: unknown;
 };
 
 export function createGitHubInstallUrl(input: {
@@ -62,6 +82,33 @@ export async function listGitHubInstallationRepositories(
   }));
 }
 
+export async function connectGitHubAuthorizedInstallation(
+  input: { code: string },
+  dependencies: GitHubAuthorizedInstallationDependencies,
+): Promise<GitHubAuthorizedInstallation | null> {
+  const token = await dependencies.createUserAccessToken(input.code);
+  const response = await dependencies.fetchJson(
+    "https://api.github.com/user/installations",
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    },
+  );
+  const installations = readUserInstallations(response);
+  const installation = installations[0];
+  if (!installation) {
+    return null;
+  }
+
+  const installationId = String(installation.id);
+  return {
+    installationId,
+    repositories: await dependencies.listRepositories(installationId),
+  };
+}
+
 export function createGitHubAppIntegrationFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ) {
@@ -84,7 +131,69 @@ export function createGitHubAppIntegrationFromEnv(
         },
       );
     },
+    connectAuthorizedInstallation(code: string) {
+      return connectGitHubAuthorizedInstallation(
+        { code },
+        {
+          createUserAccessToken: (nextCode) =>
+            createGitHubUserAccessToken(nextCode, app),
+          fetchJson,
+          listRepositories: (installationId) =>
+            listGitHubInstallationRepositories(
+              { installationId },
+              {
+                createInstallationToken: (id) =>
+                  createInstallationToken(id, app),
+                fetchJson,
+              },
+            ),
+        },
+      );
+    },
   };
+}
+
+async function createGitHubUserAccessToken(
+  code: string,
+  app: GitHubAppEnvironment,
+): Promise<string> {
+  if (!app.clientId || !app.clientSecret) {
+    throw new Error(
+      "GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET are required for GitHub authorization callbacks",
+    );
+  }
+
+  const params = new URLSearchParams({
+    client_id: app.clientId,
+    client_secret: app.clientSecret,
+    code,
+    redirect_uri: app.redirectUrl,
+  });
+  const response = await fetch(
+    `https://github.com/login/oauth/access_token?${params.toString()}`,
+    {
+      headers: { Accept: "application/json" },
+      method: "POST",
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      `GitHub user access token request failed: ${response.status}`,
+    );
+  }
+
+  const body = await response.json();
+  if (
+    typeof body !== "object" ||
+    body === null ||
+    Array.isArray(body) ||
+    typeof (body as { access_token?: unknown }).access_token !== "string"
+  ) {
+    throw new Error("GitHub user access token response is missing token");
+  }
+
+  return (body as { access_token: string }).access_token;
 }
 
 async function createInstallationToken(
@@ -157,11 +266,20 @@ function readGitHubAppEnvironment(
 ): GitHubAppEnvironment {
   const appId = readRequiredEnv(env, "GITHUB_APP_ID");
   const appSlug = readRequiredEnv(env, "GITHUB_APP_SLUG");
+  const clientId = env.GITHUB_CLIENT_ID;
+  const clientSecret = env.GITHUB_CLIENT_SECRET;
   const privateKey = readRequiredEnv(env, "GITHUB_PRIVATE_KEY");
   const redirectUrl =
     env.GITHUB_REDIRECT_URL ?? "http://localhost:5173/github/callback";
 
-  return { appId, appSlug, privateKey, redirectUrl };
+  return {
+    appId,
+    appSlug,
+    ...(clientId === undefined ? {} : { clientId }),
+    ...(clientSecret === undefined ? {} : { clientSecret }),
+    privateKey,
+    redirectUrl,
+  };
 }
 
 function readRequiredEnv(env: NodeJS.ProcessEnv, name: string) {
@@ -216,6 +334,35 @@ function readRepositories(value: unknown) {
       html_url: repository.html_url,
       private: repository.private,
     };
+  });
+}
+
+function readUserInstallations(value: unknown) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("GitHub user installations response must be an object");
+  }
+
+  const installations = (value as { installations?: unknown }).installations;
+  if (!Array.isArray(installations)) {
+    throw new Error(
+      "GitHub user installations response must include installations",
+    );
+  }
+
+  return installations.map((item, index) => {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) {
+      throw new Error(`installations[${index}] must be an object`);
+    }
+
+    const installation = item as GitHubApiUserInstallation;
+    if (
+      typeof installation.id !== "number" &&
+      typeof installation.id !== "string"
+    ) {
+      throw new Error(`installations[${index}] is missing id`);
+    }
+
+    return { id: installation.id };
   });
 }
 import { createSign } from "node:crypto";

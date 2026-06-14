@@ -10,6 +10,14 @@ import {
 } from "../shared/integrations/storage/r2-upload-presigner";
 
 type ApiGithubDependencies = {
+  connectAuthorizedInstallation?(code: string): Promise<{
+    installationId: string;
+    repositories: Array<{
+      fullName: string;
+      private: boolean;
+      repoUrl: string;
+    }>;
+  } | null>;
   createInstallUrl(input: { state: string }): string;
   listRepositories(installationId: string): Promise<
     Array<{
@@ -73,6 +81,29 @@ async function handleRequest(
         state: url.searchParams.get("state") ?? crypto.randomUUID(),
       }),
     });
+  }
+
+  if (
+    request.method === "GET" &&
+    url.pathname === "/api/github/authorized-installation"
+  ) {
+    const connectAuthorizedInstallation =
+      dependencies.github.connectAuthorizedInstallation;
+    if (!connectAuthorizedInstallation) {
+      throw new Error("GitHub authorization callbacks are not configured");
+    }
+
+    const connection = await connectAuthorizedInstallation(
+      readRequiredSearchParam(url, "code"),
+    );
+    if (!connection) {
+      return json(
+        { error: "GitHub App installation not found" },
+        { status: 404 },
+      );
+    }
+
+    return json(connection);
   }
 
   const repositoriesMatch =
@@ -251,6 +282,15 @@ function readRecord(value: unknown, path: string): Record<string, unknown> {
 function readString(record: Record<string, unknown>, key: string) {
   const value = record[key];
   if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${key} must be a non-empty string`);
+  }
+
+  return value;
+}
+
+function readRequiredSearchParam(url: URL, key: string) {
+  const value = url.searchParams.get(key);
+  if (!value || value.trim().length === 0) {
     throw new Error(`${key} must be a non-empty string`);
   }
 
