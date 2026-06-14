@@ -67,6 +67,11 @@ describe("runFullPipelineJob", () => {
             return manifest;
           },
           outputRoot,
+          rawOpenCodeLogPath: join(
+            outputRoot,
+            "full-run",
+            "opencode-raw-output.jsonl",
+          ),
           runId: "full-run",
         },
       );
@@ -95,6 +100,11 @@ describe("runFullPipelineJob", () => {
             "video-script-package.json",
           ),
           logPath: join(outputRoot, "full-run", "pipeline-log.jsonl"),
+          rawOpenCodeLogPath: join(
+            outputRoot,
+            "full-run",
+            "opencode-raw-output.jsonl",
+          ),
         },
         status: "succeeded",
       });

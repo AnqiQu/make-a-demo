@@ -1,0 +1,67 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { describe, expect, it } from "vitest";
+
+import { createOpenCodeRawOutputLog } from "./opencode-raw-output-log";
+
+describe("createOpenCodeRawOutputLog", () => {
+  it("writes timestamped raw OpenCode lines and preserves parsed tool events", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "makeademo-opencode-log-"));
+    const logPath = join(directory, "opencode-raw-output.jsonl");
+    const logger = createOpenCodeRawOutputLog({ logPath });
+
+    try {
+      logger.write(
+        "stdout",
+        `${JSON.stringify({
+          part: {
+            state: {
+              output: "package.json contents",
+              status: "completed",
+              title: "package.json",
+            },
+            tool: "read",
+          },
+          type: "tool_use",
+        })}\npartial`,
+      );
+      logger.write("stderr", " warning\n");
+      logger.write("stdout", " line\n");
+      await logger.close();
+
+      const entries = (await readFile(logPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+
+      expect(entries).toEqual([
+        expect.objectContaining({
+          channel: "stdout",
+          eventType: "tool_use",
+          raw: expect.stringContaining('"tool":"read"'),
+          tool: "read",
+          toolState: "completed",
+          toolTitle: "package.json",
+        }),
+        expect.objectContaining({
+          channel: "stderr",
+          raw: " warning",
+        }),
+        expect.objectContaining({
+          channel: "stdout",
+          raw: "partial line",
+        }),
+      ]);
+      expect(entries[0]?.parsed.part.state.output).toBe(
+        "package.json contents",
+      );
+      expect(
+        entries.every((entry) => typeof entry.timestamp === "string"),
+      ).toBe(true);
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+});

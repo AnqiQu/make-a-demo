@@ -73,6 +73,7 @@ export type FullPipelineRunnerOptions = PipelineOrchestratorOptions & {
   ) => Promise<CompositedVideoManifest>;
   onLog?: (entry: FullPipelineLogEntry) => void;
   outputRoot?: string;
+  rawOpenCodeLogPath?: string;
   runId?: string;
 };
 
@@ -203,6 +204,9 @@ export async function runFullPipelineJob(
       finalVideoPath: finalVideo.outputVideoPath ?? finalVideo.viewUrl,
       generatedScriptPath: scriptPath,
       logPath,
+      ...(options.rawOpenCodeLogPath === undefined
+        ? {}
+        : { rawOpenCodeLogPath: options.rawOpenCodeLogPath }),
       renderPlanPath: finalVideo.renderPlanPath,
       viewUrl: finalVideo.viewUrl,
     },

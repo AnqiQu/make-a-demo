@@ -1,5 +1,5 @@
 import { readFile, stat } from "node:fs/promises";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 
 import { readDemoBrief } from "../../pipeline/01-context-gathering/intake/project-intake";
@@ -12,6 +12,7 @@ import { DaytonaSdkPreparationWorkspaceProvider } from "../integrations/daytona/
 import { DaytonaSandboxRunner } from "../integrations/sandbox/daytona-sandbox-runner";
 import { runFullPipelineJob } from "./full-pipeline-runner";
 import { createOpenCodeOutputStream } from "./opencode-output-stream";
+import { createOpenCodeRawOutputLog } from "./opencode-raw-output-log";
 import { collectStage1CliOptions } from "./stage1-cli-interactive";
 import { parseStage1CliArgs } from "./stage1-cli-options";
 import { createStage1PipelineDependencies } from "./stage1-pipeline";
@@ -20,6 +21,12 @@ import { readRepoSecurityInput } from "./stage1-repo-security";
 const { outputRoot, stage1Args } = readFullPipelineArgs(process.argv.slice(2));
 const options = await readOptions(stage1Args);
 const daytonaApiKey = process.env.DAYTONA_API_KEY;
+const fullPipelineOutputRoot = outputRoot ?? ".makeademo-full-pipeline-runs";
+const runId = createRunId();
+const runDirectory = join(fullPipelineOutputRoot, runId);
+const rawOpenCodeLog = createOpenCodeRawOutputLog({
+  logPath: join(runDirectory, "opencode-raw-output.jsonl"),
+});
 
 if (daytonaApiKey === undefined || daytonaApiKey === "") {
   throw new Error("DAYTONA_API_KEY is required for full pipeline runs.");
@@ -58,8 +65,14 @@ const repoPreparationAgent = createRepoPreparationAgent({
     ? {}
     : { daytonaSnapshot: options.daytonaSnapshot }),
   modelID: options.modelID,
-  onStderr: (chunk) => process.stderr.write(chunk),
-  onStdout: (chunk) => openCodeOutput.write(chunk),
+  onStderr: (chunk) => {
+    rawOpenCodeLog.write("stderr", chunk);
+    process.stderr.write(chunk);
+  },
+  onStdout: (chunk) => {
+    rawOpenCodeLog.write("stdout", chunk);
+    openCodeOutput.write(chunk);
+  },
   providerApiKey: readProviderApiKey(options.providerID),
   providerID: options.providerID,
 });
@@ -77,10 +90,14 @@ const result = await runFullPipelineJob(
     sandboxRunner: new DaytonaSandboxRunner(),
   }),
   {
-    ...(outputRoot === undefined ? {} : { outputRoot }),
+    outputRoot: fullPipelineOutputRoot,
     onLog: (entry) => process.stdout.write(`[pipeline] ${entry.message}\n`),
+    rawOpenCodeLogPath: rawOpenCodeLog.logPath,
+    runId,
   },
-);
+).finally(async () => {
+  await rawOpenCodeLog.close();
+});
 
 process.stdout.write("\nFull pipeline complete.\n");
 process.stdout.write(
@@ -92,6 +109,7 @@ process.stdout.write(
 );
 process.stdout.write(`Composite manifest: ${result.finalVideo.manifestPath}\n`);
 process.stdout.write(`Log: ${result.logPath}\n`);
+process.stdout.write(`Raw OpenCode log: ${rawOpenCodeLog.logPath}\n`);
 process.stdout.write(`Result JSON: ${result.resultPath}\n`);
 
 function readFullPipelineArgs(args: string[]) {
@@ -169,4 +187,8 @@ function readFlagValue(args: string[], index: number, flag: string): string {
   }
 
   return value;
+}
+
+function createRunId() {
+  return `full-pipeline-${new Date().toISOString().replaceAll(/[:.]/g, "-")}`;
 }
