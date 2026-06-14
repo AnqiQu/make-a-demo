@@ -86,6 +86,13 @@ GITHUB_REDIRECT_URL=http://localhost:5173/github/callback
 API_PORT=8787
 ```
 
+Required for local full-pipeline runs:
+
+```bash
+DAYTONA_API_KEY=...
+OPENAI_API_KEY=sk-...
+```
+
 Optional email settings:
 
 ```bash
@@ -143,26 +150,29 @@ Run migrations against Railway Postgres when the schema changes:
 DATABASE_URL=<railway-postgres-public-url> bun run db:migrate
 ```
 
-## Stage 1 Pipeline
+## Pipeline
 
-Stage 1 runs the MakeADemo Pipeline through Script Generation:
+The primary local pipeline command runs from repository intake through final video output:
 
 1. Context Gathering
 2. Repo Security Screen
 3. Repo Preparation with OpenCode
 4. Project Validation
 5. Video Script Package generation
+6. Footage Capture
+7. Compositing
 
 Interactive run:
 
 ```bash
-bun run stage1:run
+bun run pipeline:run
 ```
 
 Non-interactive run:
 
 ```bash
-bun run stage1:run -- \
+bun run pipeline:run -- \
+  --output-root .makeademo-full-pipeline-runs \
   --repo https://github.com/OWNER/REPO \
   --feature "Feature one" \
   --feature "Feature two" \
@@ -174,13 +184,52 @@ Optional flags:
 ```bash
 --provider openai
 --model gpt-5.5
---daytona-snapshot makeademo-opencode
+--daytona-snapshot makeademo-opencode-v3
 --workspace-id workspace-test
 ```
 
-Stage 1 requires `DAYTONA_API_KEY`. Repo Security Screen, Repo Preparation, and Project Validation run through Daytona-backed sandboxes using the backend Daytona seam.
+Full pipeline runs require `DAYTONA_API_KEY` and `OPENAI_API_KEY`. Repo Security Screen, Repo Preparation, and Project Validation run through Daytona-backed sandboxes using the backend Daytona seam. Repo Preparation runs OpenCode inside Daytona and streams concise progress to the terminal.
 
-Repo Preparation retains its Daytona workspace for Project Validation, then validation cleanup destroys it after the browser check completes.
+Each full run writes a local run directory under `--output-root`:
+
+```text
+.makeademo-full-pipeline-runs/full-pipeline-<timestamp>/
+  full-pipeline-result.json
+  opencode-raw-output.jsonl
+  pipeline-log.jsonl
+  video-script-package.json
+  capture/capture/capture-manifest.json
+  composite/composite/composite-manifest.json
+  composite/composite/final-video.mp4
+```
+
+The CLI prints the final artifact paths when it completes:
+
+```text
+Full pipeline complete.
+Final video: <path-to-final-video.mp4>
+Generated script: <path-to-video-script-package.json>
+Capture manifest: <path-to-capture-manifest.json>
+Composite manifest: <path-to-composite-manifest.json>
+Log: <path-to-pipeline-log.jsonl>
+Raw OpenCode log: <path-to-opencode-raw-output.jsonl>
+Result JSON: <path-to-full-pipeline-result.json>
+```
+
+`pipeline-log.jsonl` is the structured high-level pipeline event log. `opencode-raw-output.jsonl` is intentionally more verbose than terminal output: it records raw OpenCode stdout/stderr lines with timestamps and parsed tool metadata when available.
+
+If the pipeline fails, `full-pipeline-result.json` is still written with failure status, failure details, and available log paths.
+
+Stage 1 can still be run by itself for debugging through Script Generation:
+
+```bash
+bun run stage1:run -- \
+  --repo https://github.com/OWNER/REPO \
+  --feature "Feature one" \
+  --feature "Feature two"
+```
+
+Stage 1 emits the same capture-ready Video Script Package shape used by Footage Capture.
 
 ## Demo Tooling
 
@@ -206,26 +255,13 @@ bun run demo:validate-scripts -- --headed
 bun run demo:validate-scripts -- --headed --pause-after-scene 1000
 ```
 
-Capture scene videos:
-
-```bash
-bun run demo:capture-scenes
-```
-
-Common capture options:
-
-```bash
-bun run demo:capture-scenes -- \
-  --script demo/data/milo_video_script_example.json \
-  --base-url http://localhost:3000 \
-  --temp-root .demo-capture-runs
-```
-
 Install Chromium if Playwright browsers are missing:
 
 ```bash
 bunx playwright install chromium
 ```
+
+Footage Capture and Compositing are now driven by `bun run pipeline:run`; the previous standalone Stage 2 CLIs are no longer public package scripts.
 
 ## Quality Checks
 
