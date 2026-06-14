@@ -56,8 +56,10 @@ export async function validateProject(
       };
     }
 
+    const browserUrl =
+      sandboxResult.browserUrl ?? input.preparationManifest.url;
     const browserResult = await dependencies.browserValidator.validate({
-      url: sandboxResult.browserUrl ?? input.preparationManifest.url,
+      url: browserUrl,
     });
     const browserNetworkAttempts = findRuntimeBoundaryViolations(
       browserResult.blockedNetworkAttempts ?? [],
@@ -66,6 +68,7 @@ export async function validateProject(
     if (browserNetworkAttempts.length > 0) {
       return {
         blockedNetworkAttempts: browserNetworkAttempts,
+        browserUrl,
         failureReason:
           "Runtime network communication across the sandbox boundary is not allowed.",
         logs: [...sandboxResult.logs, ...browserResult.logs],
@@ -78,6 +81,7 @@ export async function validateProject(
     if (!browserResult.interactable) {
       return {
         blockedNetworkAttempts: [],
+        browserUrl,
         failureReason: "Configured URL loaded but was not interactable.",
         logs: [...sandboxResult.logs, ...browserResult.logs],
         screenshotArtifactId: browserResult.screenshotArtifactId,
@@ -88,6 +92,7 @@ export async function validateProject(
 
     return {
       blockedNetworkAttempts: [],
+      browserUrl,
       logs: [...sandboxResult.logs, ...browserResult.logs],
       screenshotArtifactId: browserResult.screenshotArtifactId,
       status: "succeeded",

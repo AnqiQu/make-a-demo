@@ -159,6 +159,13 @@ function successfulPipelineResult(): PipelineJobResult {
       workspaceId: "project-1",
     },
     status: "succeeded",
+    validation: {
+      blockedNetworkAttempts: [],
+      browserUrl: "https://preview.example.test/",
+      logs: ["validated"],
+      status: "succeeded",
+      warnings: [],
+    },
     videoScriptPackage: {
       assumptions: [],
       demoPlan: {
@@ -194,6 +201,7 @@ function successfulPipelineResult(): PipelineJobResult {
       title: "Demo",
       validation: {
         blockedNetworkAttempts: [],
+        browserUrl: "https://preview.example.test/",
         logs: ["validated"],
         status: "succeeded",
         warnings: [],

@@ -96,7 +96,11 @@ export async function runPipelineJob(
 
   return {
     preparationManifest: preparation.manifest,
+    ...(preparation.workspace === undefined
+      ? {}
+      : { preparationWorkspace: preparation.workspace }),
     status: "succeeded",
+    validation,
     videoScriptPackage,
   };
 }

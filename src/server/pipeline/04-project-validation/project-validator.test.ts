@@ -41,6 +41,7 @@ describe("validateProject", () => {
 
     expect(result).toEqual({
       blockedNetworkAttempts: [],
+      browserUrl: "https://preview.example.test",
       logs: ["installed", "started demo", "loaded app"],
       screenshotArtifactId: "artifact_screenshot",
       status: "succeeded",
