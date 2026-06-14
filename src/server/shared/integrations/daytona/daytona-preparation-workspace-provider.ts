@@ -13,16 +13,20 @@ type DaytonaFetch = typeof fetch;
 export type DaytonaPreparationWorkspaceProviderOptions = {
   apiBaseUrl?: string;
   apiKey: string;
+  diskGB?: number;
   fetch?: DaytonaFetch;
   snapshot?: string;
   toolboxBaseUrl?: string;
 };
+
+const defaultSandboxDiskGB = 3;
 
 export class DaytonaPreparationWorkspaceProvider
   implements PreparationWorkspaceProvider
 {
   private readonly apiBaseUrl: string;
   private readonly apiKey: string;
+  private readonly diskGB: number;
   private readonly fetch: DaytonaFetch;
   private readonly snapshot: string | undefined;
   private readonly toolboxBaseUrl: string;
@@ -30,6 +34,7 @@ export class DaytonaPreparationWorkspaceProvider
   constructor(options: DaytonaPreparationWorkspaceProviderOptions) {
     this.apiBaseUrl = options.apiBaseUrl ?? "https://app.daytona.io/api";
     this.apiKey = options.apiKey;
+    this.diskGB = options.diskGB ?? defaultSandboxDiskGB;
     this.fetch = options.fetch ?? fetch;
     this.snapshot = options.snapshot;
     this.toolboxBaseUrl =
@@ -41,6 +46,7 @@ export class DaytonaPreparationWorkspaceProvider
       `${this.apiBaseUrl}/sandbox`,
       {
         body: JSON.stringify({
+          disk: this.diskGB,
           networkBlockAll: true,
           ...(this.snapshot === undefined ? {} : { snapshot: this.snapshot }),
         }),

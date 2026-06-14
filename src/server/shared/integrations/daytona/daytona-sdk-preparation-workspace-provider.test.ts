@@ -15,6 +15,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     expect(handle.id).toBe("sandbox_123");
     expect(calls[0]).toEqual({
       create: {
+        disk: 3,
         snapshot: "makeademo-opencode",
       },
     });

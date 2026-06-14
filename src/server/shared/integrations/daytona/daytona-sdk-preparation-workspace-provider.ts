@@ -89,13 +89,17 @@ type DaytonaSdkPty = Awaited<
 export type DaytonaSdkPreparationWorkspaceProviderOptions = {
   apiKey?: string;
   client?: DaytonaSdkClient;
+  diskGB?: number;
   snapshot?: string;
 };
+
+const defaultSandboxDiskGB = 3;
 
 export class DaytonaSdkPreparationWorkspaceProvider
   implements PreparationWorkspaceProvider
 {
   private readonly client: DaytonaSdkClient;
+  private readonly diskGB: number;
   private readonly snapshot: string | undefined;
 
   constructor(options: DaytonaSdkPreparationWorkspaceProviderOptions = {}) {
@@ -105,10 +109,12 @@ export class DaytonaSdkPreparationWorkspaceProvider
         options.apiKey === undefined ? undefined : { apiKey: options.apiKey },
       ) as DaytonaSdkClient);
     this.snapshot = options.snapshot;
+    this.diskGB = options.diskGB ?? defaultSandboxDiskGB;
   }
 
   async create(): Promise<PreparationWorkspaceHandle> {
     const sandbox = await this.client.create({
+      disk: this.diskGB,
       ...(this.snapshot === undefined ? {} : { snapshot: this.snapshot }),
     });
     const id = sandbox.id ?? sandbox.name;
