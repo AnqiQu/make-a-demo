@@ -591,11 +591,7 @@ function createDaytonaRepoPreparationPrompt(
     "## Final Response Contract",
     "When backend validation has passed, call `makeademo_submit_preparation_result` exactly once. Do not print final JSON in plain text.",
     "",
-    `For success, first write ${preparationManifestPath} with a manifest matching this shape, validate it, then call the submit tool with status "succeeded" only:`,
-    "",
-    "```json",
-    '{"repoUrl":"...","workspaceId":"...","status":"created-new-demo","setupSummary":"...","createdFiles":[],"modifiedFiles":[],"demoCommand":"...","url":"http://localhost:3000","mockedServices":[],"assumptions":[],"risks":[],"existingDemoEvidence":[],"scriptGenerationContext":[],"diffArtifactId":"..."}',
-    "```",
+    ...createPreparationManifestGuidance(input),
     "",
     "```json",
     '{"status":"failed","blockers":[],"assumptions":[],"suggestedChanges":[]}',
@@ -648,6 +644,8 @@ function createContinueRepoPreparationPrompt(
     `If validation has not passed yet, write ${preparationManifestPath}, call makeademo_validate_preparation with that path, and stop for feedback.`,
     'For success, pass only `status: "succeeded"`. The backend will submit the latest validated manifest file. For failure, pass `status: "failed"`, `blockers`, `assumptions`, and `suggestedChanges`.',
     "",
+    ...createPreparationManifestGuidance(input),
+    "",
     "## Submission Context",
     "```json",
     JSON.stringify(
@@ -660,6 +658,70 @@ function createContinueRepoPreparationPrompt(
     ),
     "```",
   ].join("\n");
+}
+
+function createPreparationManifestGuidance(
+  input: Pick<RepoPreparationInput, "repoUrl" | "workspaceId">,
+): string[] {
+  return [
+    "## Preparation Manifest File",
+    `Write the successful manifest to ${preparationManifestPath} before calling validation.`,
+    "Each field must be present unless described as an array that may be empty.",
+    "",
+    "### Field Guide",
+    `- repoUrl: submitted repository URL. Example: ${input.repoUrl}`,
+    `- workspaceId: MakeADemo workspace/request ID from the submission context. Example: ${input.workspaceId}`,
+    '- status: preparation strategy, one of "created-new-demo", "adapted-existing-demo", or "reused-existing-demo". Example: "created-new-demo".',
+    '- setupSummary: one short paragraph explaining what changed and how the demo runs. Example: "Prepared a frontend-only demo that uses local mock RealWorld API data."',
+    '- createdFiles: files newly created for MakeADemo. Example: ["frontend/src/demoApi.js"]. Use [] if none.',
+    '- modifiedFiles: existing files changed for MakeADemo. Example: ["package.json", "frontend/src/main.jsx"]. Use [] if none.',
+    '- demoCommand: command Project Validation should run from /workspace to start a long-running local server. Example: "npm run demo".',
+    '- url: local HTTP URL served by demoCommand. Example: "http://localhost:4173/".',
+    '- mockedServices: external services replaced with local mocks or fixtures. Example: ["RealWorld API", "avatar image service"]. Use [] if none.',
+    '- assumptions: assumptions made while preparing the demo. Example: ["Demo data can be in-memory and reset on reload"]. Use [] if none.',
+    '- risks: remaining concerns that could affect later capture. Example: ["Repository tests require undeclared jsdom but the browser demo path does not"]. Use [] if none.',
+    '- existingDemoEvidence: evidence that an existing demo was reused or adapted. Example: ["frontend/package.json already had a preview script"]. Use [] if none.',
+    '- scriptGenerationContext: concrete product flows, routes, demo credentials, visual beats, and mock behavior for the next pipeline stage. Example: ["Home feed shows seeded articles and tags", "Login accepts demo@example.com with any password", "Editor stores articles in local mock state"].',
+    '- diffArtifactId: stable identifier for the workspace diff artifact if available. Example: "workspace-diff".',
+    "",
+    "### File-Writing Example",
+    "```bash",
+    "mkdir -p /workspace/.makeademo",
+    "cat > /workspace/.makeademo/preparation-manifest.json <<'JSON'",
+    JSON.stringify(
+      {
+        assumptions: ["Demo data can be in-memory and reset on reload"],
+        createdFiles: ["frontend/src/demoApi.js"],
+        demoCommand: "npm run demo",
+        diffArtifactId: "workspace-diff",
+        existingDemoEvidence: [
+          "frontend/package.json already had build and preview scripts",
+        ],
+        mockedServices: ["RealWorld API", "avatar image service"],
+        modifiedFiles: ["package.json", "frontend/src/main.jsx"],
+        repoUrl: input.repoUrl,
+        risks: [
+          "Repository tests require undeclared jsdom but the browser demo path does not",
+        ],
+        scriptGenerationContext: [
+          "Home feed shows seeded articles and tags",
+          "Login accepts demo@example.com with any password",
+          "Editor stores articles in local mock state",
+        ],
+        setupSummary:
+          "Prepared a frontend-only demo that uses local mock RealWorld API data.",
+        status: "created-new-demo",
+        url: "http://localhost:4173/",
+        workspaceId: input.workspaceId,
+      },
+      null,
+      2,
+    ),
+    "JSON",
+    "```",
+    "",
+    "Then call makeademo_validate_preparation with manifestPath set to /workspace/.makeademo/preparation-manifest.json and stop for feedback.",
+  ];
 }
 
 function parseOpenCodeJsonResult(stdout: string) {
