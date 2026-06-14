@@ -87,7 +87,7 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
       providerApiKey: "openai_key",
       provider: fakeProvider(events, {
         commandStdout: [
-          "Dependency install requested.",
+          JSON.stringify({ sessionID: "session_123", type: "session" }),
           "Submitted preparation result.",
         ],
         dependencyInstallRequest: { command: "bun install" },
@@ -151,6 +151,19 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
         },
       ]),
     );
+    const openCodeCommands = events
+      .filter(
+        (event): event is { execute: string } =>
+          typeof event === "object" &&
+          event !== null &&
+          "execute" in event &&
+          typeof event.execute === "string" &&
+          event.execute.includes("opencode run"),
+      )
+      .map((event) => event.execute);
+    expect(openCodeCommands).toHaveLength(2);
+    expect(openCodeCommands[0]).not.toContain("--session");
+    expect(openCodeCommands[1]).toContain("--session 'session_123'");
   });
 
   it("returns a successful preparation result as soon as backend validation passes", async () => {

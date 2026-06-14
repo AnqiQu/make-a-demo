@@ -172,6 +172,7 @@ export class DaytonaOpenCodeRepoPreparationAgent
     deadlineAt: number,
   ): Promise<RawPreparationRunResult> {
     let prompt = initialPrompt;
+    let currentSessionID: string | undefined;
     for (let attempt = 0; attempt < 8; attempt += 1) {
       await appendPreparationDebugLog(handle.workspace, {
         attempt: attempt + 1,
@@ -184,11 +185,16 @@ export class DaytonaOpenCodeRepoPreparationAgent
         prompt,
         providerApiKey: this.providerApiKey,
         providerID: this.providerID,
+        ...(currentSessionID === undefined
+          ? {}
+          : { sessionID: currentSessionID }),
       });
+      currentSessionID = openCodeResult.sessionID ?? currentSessionID;
       await appendPreparationDebugLog(handle.workspace, {
         attempt: attempt + 1,
         event: "opencode-finished",
         exitCode: openCodeResult.exitCode,
+        sessionID: currentSessionID,
         stderrLength: openCodeResult.stderr.length,
         stdoutLength: openCodeResult.stdout.length,
       });
@@ -314,8 +320,9 @@ export class DaytonaOpenCodeRepoPreparationAgent
       prompt: string;
       providerApiKey: string;
       providerID: string;
+      sessionID?: string;
     },
-  ): Promise<PreparationWorkspaceCommandResult> {
+  ): Promise<PreparationWorkspaceCommandResult & { sessionID?: string }> {
     const outputWrites: Promise<void>[] = [];
     const onStdout = (chunk: string) => {
       this.onStdout?.(chunk);
@@ -349,7 +356,8 @@ export class DaytonaOpenCodeRepoPreparationAgent
     );
     await Promise.all(outputWrites);
 
-    return result;
+    const sessionID = readOpenCodeSessionID(result.stdout);
+    return sessionID === undefined ? result : { ...result, sessionID };
   }
 }
 
@@ -516,12 +524,16 @@ function createOpenCodeRunCommand(input: {
   prompt: string;
   providerApiKey: string;
   providerID: string;
+  sessionID?: string;
 }): string {
   return [
     "opencode run",
     "--dangerously-skip-permissions",
     "--format json",
     "--dir /workspace",
+    ...(input.sessionID === undefined
+      ? []
+      : [`--session ${shellQuote(input.sessionID)}`]),
     `--model ${shellQuote(input.model)}`,
     shellQuote(input.prompt),
   ].join(" ");
@@ -903,6 +915,41 @@ function createValidationFeedbackPrompt(input: {
     "- If the demo URL did not become ready, make the submitted `demoCommand` start a long-running local server on the manifest `url` port.",
     "- Do not request dependency installation unless a new dependency install is strictly required and the command is allowlisted.",
   ].join("\n");
+}
+
+function readOpenCodeSessionID(stdout: string): string | undefined {
+  for (const line of stdout.split("\n")) {
+    const event = tryParseJson(line);
+    if (typeof event !== "object" || event === null) {
+      continue;
+    }
+
+    const directSessionID = (event as { sessionID?: unknown }).sessionID;
+    if (typeof directSessionID === "string" && directSessionID.length > 0) {
+      return directSessionID;
+    }
+
+    const session = (event as { session?: unknown }).session;
+    if (typeof session === "object" && session !== null) {
+      const nestedID = (session as { id?: unknown }).id;
+      if (typeof nestedID === "string" && nestedID.length > 0) {
+        return nestedID;
+      }
+    }
+
+    const type = (event as { type?: unknown }).type;
+    const id = (event as { id?: unknown }).id;
+    if (
+      typeof type === "string" &&
+      type.includes("session") &&
+      typeof id === "string" &&
+      id.length > 0
+    ) {
+      return id;
+    }
+  }
+
+  return undefined;
 }
 
 function parseOpenCodeJsonPayload(stdout: string): unknown | undefined {
