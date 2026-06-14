@@ -82,13 +82,17 @@ const result = await runFullPipelineJob(
   },
 );
 
+process.stdout.write("\nFull pipeline complete.\n");
 process.stdout.write(
-  `Video: ${result.finalVideo.outputVideoPath ?? result.finalVideo.viewUrl}\n`,
+  `Final video: ${result.finalVideo.outputVideoPath ?? result.finalVideo.viewUrl}\n`,
 );
-process.stdout.write(`View URL: ${result.finalVideo.viewUrl}\n`);
-process.stdout.write(`Manifest: ${result.finalVideo.manifestPath}\n`);
+process.stdout.write(`Generated script: ${result.scriptPath}\n`);
+process.stdout.write(
+  `Capture manifest: ${result.captureManifest.manifestPath}\n`,
+);
+process.stdout.write(`Composite manifest: ${result.finalVideo.manifestPath}\n`);
 process.stdout.write(`Log: ${result.logPath}\n`);
-process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+process.stdout.write(`Result JSON: ${result.resultPath}\n`);
 
 function readFullPipelineArgs(args: string[]) {
   const stage1Args: string[] = [];

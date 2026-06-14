@@ -82,6 +82,22 @@ describe("runFullPipelineJob", () => {
       expect(result.finalVideo.outputVideoPath).toBe(
         join(outputRoot, "final-video.mp4"),
       );
+      expect(result.resultPath).toBe(
+        join(outputRoot, "full-run", "full-pipeline-result.json"),
+      );
+      await expect(readJsonFile(result.resultPath)).resolves.toMatchObject({
+        artifacts: {
+          captureManifestPath: join(outputRoot, "capture-manifest.json"),
+          finalVideoPath: join(outputRoot, "final-video.mp4"),
+          generatedScriptPath: join(
+            outputRoot,
+            "full-run",
+            "video-script-package.json",
+          ),
+          logPath: join(outputRoot, "full-run", "pipeline-log.jsonl"),
+        },
+        status: "succeeded",
+      });
       expect(result.logPath).toBe(
         join(outputRoot, "full-run", "pipeline-log.jsonl"),
       );
@@ -216,6 +232,11 @@ describe("runFullPipelineJob", () => {
             outputVideoPath: join(outputRoot, "final-video.mp4"),
             viewUrl: "file:///tmp/final-video.mp4",
           }),
+          expect.objectContaining({
+            event: "result-written",
+            message: "Full pipeline result written.",
+            resultPath: result.resultPath,
+          }),
         ]),
       );
     } finally {
@@ -313,4 +334,8 @@ function stage1Dependencies(
       throw new Error("validation should not rerun");
     },
   };
+}
+
+async function readJsonFile(path: string) {
+  return JSON.parse(await readFile(path, "utf8"));
 }

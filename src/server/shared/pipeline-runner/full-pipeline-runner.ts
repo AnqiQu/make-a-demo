@@ -22,11 +22,34 @@ export type FullPipelineResult = {
   captureManifest: CaptureManifest;
   finalVideo: CompositedVideoManifest;
   logPath: string;
+  resultPath: string;
   scriptPath: string;
   stage1: Extract<
     Awaited<ReturnType<typeof runPipelineJob>>,
     { status: "succeeded" }
   >;
+  status: "succeeded";
+};
+
+type FullPipelineArtifactSummary = {
+  artifacts: {
+    captureManifestPath: string;
+    compositeManifestPath: string;
+    finalVideoPath: string;
+    generatedScriptPath: string;
+    logPath: string;
+    renderPlanPath: string;
+    viewUrl: string;
+  };
+  runDirectory: string;
+  runId: string;
+  script: {
+    estimatedDurationSeconds: number;
+    sceneCount: number;
+    scriptId: string;
+    sectionCount: number;
+    title: string;
+  };
   status: "succeeded";
 };
 
@@ -172,11 +195,40 @@ export async function runFullPipelineJob(
     message: "Full pipeline succeeded.",
     viewUrl: finalVideo.viewUrl,
   });
+  const resultPath = join(runDirectory, "full-pipeline-result.json");
+  const artifactSummary: FullPipelineArtifactSummary = {
+    artifacts: {
+      captureManifestPath: captureManifest.manifestPath,
+      compositeManifestPath: finalVideo.manifestPath,
+      finalVideoPath: finalVideo.outputVideoPath ?? finalVideo.viewUrl,
+      generatedScriptPath: scriptPath,
+      logPath,
+      renderPlanPath: finalVideo.renderPlanPath,
+      viewUrl: finalVideo.viewUrl,
+    },
+    runDirectory,
+    runId,
+    script: {
+      estimatedDurationSeconds: scriptSummary.estimatedDurationSeconds,
+      sceneCount: scriptSummary.sceneCount,
+      scriptId: stage1.videoScriptPackage.scriptId,
+      sectionCount: scriptSummary.sectionCount,
+      title: stage1.videoScriptPackage.title,
+    },
+    status: "succeeded",
+  };
+  await writeFile(resultPath, `${JSON.stringify(artifactSummary, null, 2)}\n`);
+  await log({
+    event: "result-written",
+    message: "Full pipeline result written.",
+    resultPath,
+  });
 
   return {
     captureManifest,
     finalVideo,
     logPath,
+    resultPath,
     scriptPath,
     stage1,
     status: "succeeded",
