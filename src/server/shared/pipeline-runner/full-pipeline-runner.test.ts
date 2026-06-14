@@ -145,6 +145,78 @@ describe("runFullPipelineJob", () => {
     ).rejects.toThrow("Stage 1 did not return a validated browser URL");
   });
 
+  it("writes a local result file with failure details when Stage 1 fails", async () => {
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
+
+    try {
+      await expect(
+        runFullPipelineJob(
+          {
+            demoBrief: { keyProductFeatures: ["article feed"] },
+            normalizedSupportingDocuments: [],
+            repoSecurity: {
+              files: [{ path: "package.json", text: "{}" }],
+              repoStats: { fileCount: 1, sizeBytes: 100 },
+            },
+            repoUrl: "https://github.com/example/app",
+            workspaceId: "workspace_123",
+          },
+          {
+            async generateScriptPackage() {
+              throw new Error("script generation should not run");
+            },
+            async prepareRepo() {
+              return {
+                fallbackPrompt:
+                  "Repo Preparation agent timed out after 600000ms. Inspect the retained Daytona workspace debug log.",
+                status: "failed",
+              };
+            },
+            screenRepoSecurity() {
+              return { rejections: [], status: "passed", warnings: [] };
+            },
+            async validateProject() {
+              throw new Error("validation should not run");
+            },
+          },
+          {
+            outputRoot,
+            rawOpenCodeLogPath: join(
+              outputRoot,
+              "failed-run",
+              "opencode-raw-output.jsonl",
+            ),
+            runId: "failed-run",
+          },
+        ),
+      ).rejects.toThrow("Stage 1 failed with status preparation-failed");
+
+      await expect(
+        readJsonFile(
+          join(outputRoot, "failed-run", "full-pipeline-result.json"),
+        ),
+      ).resolves.toMatchObject({
+        artifacts: {
+          logPath: join(outputRoot, "failed-run", "pipeline-log.jsonl"),
+          rawOpenCodeLogPath: join(
+            outputRoot,
+            "failed-run",
+            "opencode-raw-output.jsonl",
+          ),
+        },
+        failure: {
+          blockers: [
+            "Repo Preparation agent timed out after 600000ms. Inspect the retained Daytona workspace debug log.",
+          ],
+          suggestedChanges: [],
+        },
+        status: "preparation-failed",
+      });
+    } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
   it("writes the full pipeline progress to the log callback and JSONL log file", async () => {
     const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
     const messages: string[] = [];

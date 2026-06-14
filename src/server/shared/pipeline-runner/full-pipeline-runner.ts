@@ -112,10 +112,30 @@ export async function runFullPipelineJob(
     },
   });
   if (stage1.status !== "succeeded") {
+    const resultPath = join(runDirectory, "full-pipeline-result.json");
     await log({
       event: "pipeline-failed",
       message: `Stage 1 failed with status ${stage1.status}.`,
       status: stage1.status,
+    });
+    await writeFile(
+      resultPath,
+      `${JSON.stringify(
+        createFailureSummary({
+          logPath,
+          rawOpenCodeLogPath: options.rawOpenCodeLogPath,
+          runDirectory,
+          runId,
+          stage1,
+        }),
+        null,
+        2,
+      )}\n`,
+    );
+    await log({
+      event: "result-written",
+      message: "Full pipeline failure result written.",
+      resultPath,
     });
     throw new Error(`Stage 1 failed with status ${stage1.status}`);
   }
@@ -267,6 +287,58 @@ function summarizeScriptPackage(
       0,
     ),
     sectionCount: scriptPackage.sections.length,
+  };
+}
+
+function createFailureSummary(input: {
+  logPath: string;
+  rawOpenCodeLogPath: string | undefined;
+  runDirectory: string;
+  runId: string;
+  stage1: Exclude<
+    Awaited<ReturnType<typeof runPipelineJob>>,
+    { status: "succeeded" }
+  >;
+}) {
+  return {
+    artifacts: {
+      logPath: input.logPath,
+      ...(input.rawOpenCodeLogPath === undefined
+        ? {}
+        : { rawOpenCodeLogPath: input.rawOpenCodeLogPath }),
+    },
+    failure: readStage1Failure(input.stage1),
+    runDirectory: input.runDirectory,
+    runId: input.runId,
+    status: input.stage1.status,
+  };
+}
+
+function readStage1Failure(
+  stage1: Exclude<
+    Awaited<ReturnType<typeof runPipelineJob>>,
+    { status: "succeeded" }
+  >,
+) {
+  if (stage1.status === "preparation-failed") {
+    return {
+      blockers: [stage1.fallbackPrompt],
+      suggestedChanges: [],
+    };
+  }
+
+  if (stage1.status === "validation-failed") {
+    return {
+      blockers: [
+        stage1.validation.failureReason ?? "Project validation failed.",
+      ],
+      suggestedChanges: stage1.validation.warnings,
+    };
+  }
+
+  return {
+    blockers: stage1.security.rejections,
+    suggestedChanges: stage1.security.warnings,
   };
 }
 
