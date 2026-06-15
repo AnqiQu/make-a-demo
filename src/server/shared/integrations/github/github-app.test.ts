@@ -53,6 +53,7 @@ describe("GitHub App integration", () => {
   });
 
   it("uses the existing installation available to an authorized GitHub user", async () => {
+    const requests: Array<{ authorization: string; url: string }> = [];
     const connection = await connectGitHubAuthorizedInstallation(
       { code: "oauth-code" },
       {
@@ -61,19 +62,30 @@ describe("GitHub App integration", () => {
           return "user-token";
         },
         fetchJson: async (url, init) => {
-          expect(url).toBe("https://api.github.com/user/installations");
-          expect(init.headers.Authorization).toBe("Bearer user-token");
-          return { installations: [{ id: 123 }] };
-        },
-        listRepositories: async (installationId) => {
-          expect(installationId).toBe("123");
-          return [
-            {
-              fullName: "example/private-app",
-              private: true,
-              repoUrl: "https://github.com/example/private-app",
-            },
-          ];
+          requests.push({
+            authorization: init.headers.Authorization ?? "",
+            url,
+          });
+
+          if (url === "https://api.github.com/user/installations") {
+            return { installations: [{ id: 123 }] };
+          }
+
+          if (
+            url === "https://api.github.com/user/installations/123/repositories"
+          ) {
+            return {
+              repositories: [
+                {
+                  full_name: "example/private-app",
+                  html_url: "https://github.com/example/private-app",
+                  private: true,
+                },
+              ],
+            };
+          }
+
+          throw new Error(`unexpected GitHub URL: ${url}`);
         },
       },
     );
@@ -88,6 +100,16 @@ describe("GitHub App integration", () => {
         },
       ],
     });
+    expect(requests).toEqual([
+      {
+        authorization: "Bearer user-token",
+        url: "https://api.github.com/user/installations",
+      },
+      {
+        authorization: "Bearer user-token",
+        url: "https://api.github.com/user/installations/123/repositories",
+      },
+    ]);
   });
 
   it("returns null when an authorized GitHub user has no existing installations", async () => {
@@ -96,9 +118,6 @@ describe("GitHub App integration", () => {
       {
         createUserAccessToken: async () => "user-token",
         fetchJson: async () => ({ installations: [] }),
-        listRepositories: async () => {
-          throw new Error("listRepositories should not be called");
-        },
       },
     );
 

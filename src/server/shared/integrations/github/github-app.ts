@@ -23,7 +23,6 @@ export type GitHubAuthorizedInstallationDependencies = {
     url: string,
     init: { headers: Record<string, string> },
   ): Promise<unknown>;
-  listRepositories(installationId: string): Promise<GitHubRepository[]>;
 };
 
 type GitHubAppEnvironment = {
@@ -105,7 +104,10 @@ export async function connectGitHubAuthorizedInstallation(
   const installationId = String(installation.id);
   return {
     installationId,
-    repositories: await dependencies.listRepositories(installationId),
+    repositories: await listGitHubUserInstallationRepositories(
+      { installationId, token },
+      { fetchJson: dependencies.fetchJson },
+    ),
   };
 }
 
@@ -138,19 +140,32 @@ export function createGitHubAppIntegrationFromEnv(
           createUserAccessToken: (nextCode) =>
             createGitHubUserAccessToken(nextCode, app),
           fetchJson,
-          listRepositories: (installationId) =>
-            listGitHubInstallationRepositories(
-              { installationId },
-              {
-                createInstallationToken: (id) =>
-                  createInstallationToken(id, app),
-                fetchJson,
-              },
-            ),
         },
       );
     },
   };
+}
+
+async function listGitHubUserInstallationRepositories(
+  input: { installationId: string; token: string },
+  dependencies: Pick<GitHubRepositoryListDependencies, "fetchJson">,
+): Promise<GitHubRepository[]> {
+  const response = await dependencies.fetchJson(
+    `https://api.github.com/user/installations/${input.installationId}/repositories`,
+    {
+      headers: {
+        Authorization: `Bearer ${input.token}`,
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    },
+  );
+  const repositories = readRepositories(response);
+
+  return repositories.map((repository) => ({
+    fullName: repository.full_name,
+    private: repository.private,
+    repoUrl: repository.html_url,
+  }));
 }
 
 async function createGitHubUserAccessToken(

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { createRecordingPipelineObserver } from "./pipeline-observer";
 import type { ProjectValidationResult } from "../../pipeline/04-project-validation/validation-result";
+import { createRecordingPipelineObserver } from "./pipeline-observer";
 import { runPipelineJob } from "./pipeline-orchestrator";
 
 describe("runPipelineJob", () => {
@@ -137,6 +137,10 @@ describe("runPipelineJob", () => {
         async generateScriptPackage({ preparationManifest, validation }) {
           now += 40;
           return {
+            ...scriptPackage({
+              assumptions: preparationManifest.assumptions,
+              validation,
+            }),
             assumptions: preparationManifest.assumptions,
             demoPlan: {
               featureOrder: ["validation"],
@@ -144,23 +148,6 @@ describe("runPipelineJob", () => {
               risks: ["copy risk"],
             },
             exploration: { assumptions: [], productSurfaces: [], summary: "" },
-            validation,
-            videoScript: {
-              sections: [
-                {
-                  id: "section-main",
-                  scenes: [
-                    {
-                      browserActions: ["Click primary action"],
-                      id: "scene-main",
-                      summary: "Show the primary action.",
-                    },
-                  ],
-                  title: "Main flow",
-                },
-              ],
-              title: "Demo",
-            },
           };
         },
         async prepareRepo() {
