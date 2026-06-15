@@ -131,9 +131,16 @@ export function createGitHubAppIntegrationFromEnv(
     createAuthorizationUrl(input: { state: string }) {
       return createGitHubAuthorizationUrl({
         clientId: readGitHubClientId(app),
-        redirectUrl: app.redirectUrl,
+        redirectUrl: createGitHubOAuthCallbackUrl(app.redirectUrl),
         state: input.state,
       });
+    },
+    createCallbackUrl(input: {
+      installationId: string;
+      setupAction: string;
+      state: string;
+    }) {
+      return createGitHubCallbackUrl(app.redirectUrl, input);
     },
     createInstallUrl(input: { state: string }) {
       return createGitHubInstallUrl({
@@ -199,7 +206,7 @@ async function createGitHubUserAccessToken(
     client_id: app.clientId,
     client_secret: app.clientSecret,
     code,
-    redirect_uri: app.redirectUrl,
+    redirect_uri: createGitHubOAuthCallbackUrl(app.redirectUrl),
   });
   const response = await fetch("https://github.com/login/oauth/access_token", {
     body: params,
@@ -336,6 +343,28 @@ function readGitHubClientId(app: GitHubAppEnvironment) {
   }
 
   return app.clientId;
+}
+
+function createGitHubOAuthCallbackUrl(frontendCallbackUrl: string) {
+  const url = new URL(frontendCallbackUrl);
+  url.pathname = "/api/github/oauth-callback";
+  url.search = "";
+  url.hash = "";
+
+  return url.toString();
+}
+
+function createGitHubCallbackUrl(
+  frontendCallbackUrl: string,
+  input: { installationId: string; setupAction: string; state: string },
+) {
+  const url = new URL(frontendCallbackUrl);
+  url.search = "";
+  url.searchParams.set("installation_id", input.installationId);
+  url.searchParams.set("setup_action", input.setupAction);
+  url.searchParams.set("state", input.state);
+
+  return url.toString();
 }
 
 function formatGitHubOAuthError(value: unknown) {

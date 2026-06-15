@@ -36,6 +36,31 @@ describe("GitHub App integration", () => {
     );
   });
 
+  it("routes OAuth callbacks through the API while final callbacks return to the frontend", () => {
+    const integration = createGitHubAppIntegrationFromEnv({
+      GITHUB_APP_ID: "123",
+      GITHUB_APP_SLUG: "owlet-demo",
+      GITHUB_CLIENT_ID: "client-123",
+      GITHUB_CLIENT_SECRET: "secret-123",
+      GITHUB_PRIVATE_KEY:
+        "-----BEGIN RSA PRIVATE KEY-----\nprivate-key\n-----END RSA PRIVATE KEY-----",
+      GITHUB_REDIRECT_URL: "http://localhost:5173/github/callback",
+    });
+
+    expect(integration.createAuthorizationUrl({ state: "draft-123" })).toBe(
+      "https://github.com/login/oauth/authorize?client_id=client-123&redirect_uri=http%3A%2F%2Flocalhost%3A5173%2Fapi%2Fgithub%2Foauth-callback&state=draft-123",
+    );
+    expect(
+      integration.createCallbackUrl({
+        installationId: "123",
+        setupAction: "oauth",
+        state: "draft-123",
+      }),
+    ).toBe(
+      "http://localhost:5173/github/callback?installation_id=123&setup_action=oauth&state=draft-123",
+    );
+  });
+
   it("lists repositories available to an installation", async () => {
     const repositories = await listGitHubInstallationRepositories(
       { installationId: "123" },

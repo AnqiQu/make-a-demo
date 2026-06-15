@@ -375,7 +375,7 @@ describe("Context Gathering API", () => {
     const app = createApiApp({
       github: {
         createAuthorizationUrl: ({ state }) =>
-          `https://github.com/login/oauth/authorize?client_id=client-123&redirect_uri=http%3A%2F%2Flocalhost%3A5173%2Fgithub%2Fcallback&state=${state}`,
+          `https://github.com/login/oauth/authorize?client_id=client-123&redirect_uri=http%3A%2F%2Flocalhost%3A5173%2Fapi%2Fgithub%2Foauth-callback&state=${state}`,
         createInstallUrl: ({ state }) =>
           `https://github.com/apps/owlet/installations/new?state=${state}`,
         listRepositories: async (installationId) => {
@@ -419,7 +419,7 @@ describe("Context Gathering API", () => {
     expect(authorizationResponse.status).toBe(200);
     await expect(authorizationResponse.json()).resolves.toEqual({
       authorizationUrl:
-        "https://github.com/login/oauth/authorize?client_id=client-123&redirect_uri=http%3A%2F%2Flocalhost%3A5173%2Fgithub%2Fcallback&state=draft-1",
+        "https://github.com/login/oauth/authorize?client_id=client-123&redirect_uri=http%3A%2F%2Flocalhost%3A5173%2Fapi%2Fgithub%2Foauth-callback&state=draft-1",
     });
 
     const installResponse = await app.fetch(
@@ -551,6 +551,111 @@ describe("Context Gathering API", () => {
     await expect(response.json()).resolves.toEqual({
       error: "GitHub App installation not found",
     });
+  });
+
+  it("redirects first-time OAuth callbacks directly to GitHub installation", async () => {
+    const app = createApiApp({
+      github: {
+        connectAuthorizedInstallation: async (code) => {
+          expect(code).toBe("oauth-code");
+          return null;
+        },
+        createInstallUrl: ({ state }) =>
+          `https://github.com/apps/owlet/installations/new?state=${state}`,
+        listRepositories: async () => {
+          throw new Error("listRepositories should not be called");
+        },
+      },
+      demoRequests: {
+        async readDemoRequestStatus() {
+          throw new Error("demoRequests should not be called");
+        },
+      },
+      store: {
+        async createQueuedProject() {
+          throw new Error("store should not be called");
+        },
+      },
+      uploads: {
+        bucket: "owlet",
+        putObject: async () => {
+          throw new Error("putObject should not be called");
+        },
+        presignGet: async () => {
+          throw new Error("presignGet should not be called");
+        },
+        presignPut: async () => "https://uploads.example.test/file",
+      },
+    });
+
+    const response = await app.fetch(
+      new Request(
+        "http://localhost/api/github/oauth-callback?code=oauth-code&state=draft-1",
+      ),
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("Location")).toBe(
+      "https://github.com/apps/owlet/installations/new?state=draft-1",
+    );
+  });
+
+  it("redirects OAuth callbacks with existing installations to the frontend callback", async () => {
+    const app = createApiApp({
+      github: {
+        connectAuthorizedInstallation: async (code) => {
+          expect(code).toBe("oauth-code");
+          return {
+            installationId: "123",
+            repositories: [
+              {
+                fullName: "example/private-app",
+                private: true,
+                repoUrl: "https://github.com/example/private-app",
+              },
+            ],
+          };
+        },
+        createCallbackUrl: ({ installationId, state }) =>
+          `http://localhost:5173/github/callback?installation_id=${installationId}&setup_action=oauth&state=${state}`,
+        createInstallUrl: ({ state }) =>
+          `https://github.com/apps/owlet/installations/new?state=${state}`,
+        listRepositories: async () => {
+          throw new Error("listRepositories should not be called");
+        },
+      },
+      demoRequests: {
+        async readDemoRequestStatus() {
+          throw new Error("demoRequests should not be called");
+        },
+      },
+      store: {
+        async createQueuedProject() {
+          throw new Error("store should not be called");
+        },
+      },
+      uploads: {
+        bucket: "owlet",
+        putObject: async () => {
+          throw new Error("putObject should not be called");
+        },
+        presignGet: async () => {
+          throw new Error("presignGet should not be called");
+        },
+        presignPut: async () => "https://uploads.example.test/file",
+      },
+    });
+
+    const response = await app.fetch(
+      new Request(
+        "http://localhost/api/github/oauth-callback?code=oauth-code&state=draft-1",
+      ),
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("Location")).toBe(
+      "http://localhost:5173/github/callback?installation_id=123&setup_action=oauth&state=draft-1",
+    );
   });
 });
 

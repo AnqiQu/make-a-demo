@@ -88,13 +88,20 @@ GITHUB_REDIRECT_URL=http://localhost:5173/github/callback
 API_PORT=8787
 ```
 
-Register `GITHUB_REDIRECT_URL` as one of the GitHub App's callback URLs and as
-the GitHub App setup URL for local development. The GitHub connection starts at
-the OAuth authorization URL with `redirect_uri=GITHUB_REDIRECT_URL`; when
-GitHub returns an authorization `code`, MakeADemo exchanges it for a user access
-token and uses the existing installation visible to that user. If no
-installation is visible yet, MakeADemo sends the user through the fresh install
-URL, which returns through the app setup URL after installation.
+Register the same-origin API callback URL as one of the GitHub App's callback
+URLs. For local development, that callback URL is:
+
+```text
+http://localhost:5173/api/github/oauth-callback
+```
+
+Set the GitHub App setup URL to `GITHUB_REDIRECT_URL`. The GitHub connection
+starts at the OAuth authorization URL with `redirect_uri` set to the API
+callback URL; when GitHub returns an authorization `code`, MakeADemo exchanges
+it for a user access token. If the user already has an installation, the API
+redirects back to `GITHUB_REDIRECT_URL` with the connected installation. If no
+installation is visible yet, the API redirects straight to the fresh install
+URL, and GitHub returns through the app setup URL after installation.
 
 Required for local full-pipeline runs:
 

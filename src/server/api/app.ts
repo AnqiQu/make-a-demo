@@ -19,6 +19,11 @@ type ApiGithubDependencies = {
     }>;
   } | null>;
   createAuthorizationUrl?(input: { state: string }): string;
+  createCallbackUrl?(input: {
+    installationId: string;
+    setupAction: string;
+    state: string;
+  }): string;
   createInstallUrl(input: { state: string }): string;
   listRepositories(installationId: string): Promise<
     Array<{
@@ -98,6 +103,42 @@ async function handleRequest(
         state: url.searchParams.get("state") ?? crypto.randomUUID(),
       }),
     });
+  }
+
+  if (
+    request.method === "GET" &&
+    url.pathname === "/api/github/oauth-callback"
+  ) {
+    const connectAuthorizedInstallation =
+      dependencies.github.connectAuthorizedInstallation;
+    if (!connectAuthorizedInstallation) {
+      throw new Error("GitHub authorization callbacks are not configured");
+    }
+
+    const state = url.searchParams.get("state") ?? crypto.randomUUID();
+    const connection = await connectAuthorizedInstallation(
+      readRequiredSearchParam(url, "code"),
+    );
+    if (!connection) {
+      return Response.redirect(
+        dependencies.github.createInstallUrl({ state }),
+        302,
+      );
+    }
+
+    const createCallbackUrl = dependencies.github.createCallbackUrl;
+    if (!createCallbackUrl) {
+      throw new Error("GitHub callback redirects are not configured");
+    }
+
+    return Response.redirect(
+      createCallbackUrl({
+        installationId: connection.installationId,
+        setupAction: "oauth",
+        state,
+      }),
+      302,
+    );
   }
 
   if (
