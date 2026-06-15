@@ -51,7 +51,7 @@ For runtime-code changes, always use the `tdd` skill if you have to it. If you d
 - When exporting a new interface, add a docstring that explains what implementations should do and the invariants they must uphold.
 - Run `bun run lint`, `bun run typecheck`, `bun run test`, `bun run knip`, and `bun run graph:deps` before considering code changes complete.
 
-### Commit Messages
+### Commit
 
 - Keep commit messages concise, easily readable, and very specific.
 - Use one of these prefixes: `feature:`, `bugfix:`, `refactor:`, `test:`, `docs:`, `chore:`, `infra:`, or `generated:`.
@@ -64,7 +64,7 @@ For runtime-code changes, always use the `tdd` skill if you have to it. If you d
 - Use `infra:` for deployment, CI, environment, sandbox, cloud, or operational tooling changes.
 - Use `generated:` for regenerated artifacts such as dependency graphs, schemas, lockfiles, or other machine-generated outputs when committed separately.
 - Prefer a specific subject that explains the exact change, such as `bugfix: preserve Daytona preview paths` rather than `bugfix: fix pipeline`.
-- If a single very specific subject cannot clearly describe the staged changes, split the work into two or more commits.
+- N.B. When asked to commit, split staged work into multiple small commits if one concise message would omit important nuance; each commit should be fully described by its short subject.
 
 ### Testing
 
