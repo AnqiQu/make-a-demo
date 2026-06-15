@@ -19,6 +19,7 @@ import {
   type SupportingFileDraft,
   canContinueFromRepoStep,
   collectIntakeDetails,
+  connectGitHubInstallation,
   connectGitHubInstallationRepositories,
   createInitialContextGatheringDraft,
   removePendingSupportingFile,
@@ -196,6 +197,8 @@ export function ContextGatheringApp() {
   const [demoRequestProgress, setDemoRequestProgress] =
     useState<DemoRequestProgress>({ status: "processing" });
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLoadingGitHubRepositories, setIsLoadingGitHubRepositories] =
+    useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -210,10 +213,19 @@ export function ContextGatheringApp() {
 
     if (request) {
       clearGitHubCallbackParams(params);
+      if (request.installationId) {
+        const githubInstallationId = request.installationId;
+        setRepositories([]);
+        setRepoInput("");
+        setDraft((current) =>
+          connectGitHubInstallation(current, githubInstallationId),
+        );
+      }
     }
 
     let cancelled = false;
     setError("");
+    setIsLoadingGitHubRepositories(true);
 
     async function loadGitHubConnection() {
       try {
@@ -235,22 +247,24 @@ export function ContextGatheringApp() {
         }
 
         const nextRepositories = connection.repositories;
+        const firstRepository = nextRepositories[0];
         setRepositories(nextRepositories);
-        setDraft((current) => {
-          const connected = connectGitHubInstallationRepositories(current, {
+        if (firstRepository) {
+          setRepoInput(firstRepository.repoUrl);
+        }
+        setDraft((current) =>
+          connectGitHubInstallationRepositories(current, {
             githubInstallationId: connection.installationId,
             repositories: nextRepositories,
-          });
-          const firstRepository = nextRepositories[0];
-          if (firstRepository) {
-            setRepoInput(firstRepository.repoUrl);
-          }
-
-          return connected;
-        });
+          }),
+        );
       } catch (caught) {
         if (!cancelled) {
           setError(caught instanceof Error ? caught.message : "GitHub failed");
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingGitHubRepositories(false);
         }
       }
     }
@@ -528,6 +542,7 @@ export function ContextGatheringApp() {
               onRepositorySelect={selectRepositoryFromDropdown}
               repoInput={repoInput}
               repositories={repositories}
+              isLoadingRepositories={isLoadingGitHubRepositories}
               selectedRepoUrl={draft.repoUrl}
             />
           </article>
@@ -578,6 +593,7 @@ export function ContextGatheringApp() {
 
 type RepoConnectionFieldsProps = {
   githubInstallationId: string | undefined;
+  isLoadingRepositories: boolean;
   onConnectGitHub: () => void;
   onRepoInputChange: (value: string) => void;
   onRepositorySelect: (repoUrl: string) => void;
@@ -588,6 +604,7 @@ type RepoConnectionFieldsProps = {
 
 export function RepoConnectionFields({
   githubInstallationId,
+  isLoadingRepositories,
   onConnectGitHub,
   onRepoInputChange,
   onRepositorySelect,
@@ -596,6 +613,9 @@ export function RepoConnectionFields({
   selectedRepoUrl,
 }: RepoConnectionFieldsProps) {
   const isConnected = githubInstallationId !== undefined;
+  const connectedRepositoryStatus = isLoadingRepositories
+    ? "Loading repositories..."
+    : "No repositories found";
 
   return (
     <div className="repo-connect-row">
@@ -620,6 +640,18 @@ export function RepoConnectionFields({
             <ChevronDown strokeWidth={2.4} />
           </span>
         </label>
+      ) : isConnected ? (
+        <label className="repo-url-input repo-url-loading">
+          <span className="link-icon" aria-hidden="true">
+            <LinkIcon strokeWidth={2.4} />
+          </span>
+          <input
+            aria-label="GitHub repositories"
+            disabled
+            readOnly
+            value={connectedRepositoryStatus}
+          />
+        </label>
       ) : (
         <label className="repo-url-input">
           <span className="link-icon" aria-hidden="true">
@@ -643,13 +675,14 @@ export function RepoConnectionFields({
         className={`github-button ${
           isConnected ? "github-button-connected" : ""
         }`}
+        disabled={isConnected}
         onClick={() => (isConnected ? undefined : onConnectGitHub())}
         type="button"
       >
         <span className="github-logo-frame" aria-hidden="true">
           <img alt="" className="github-logo-image" src={githubLogoUrl} />
         </span>
-        {isConnected ? "GitHub connected" : "Connect GitHub"}
+        {isConnected ? "Connected" : "Connect GitHub"}
       </button>
     </div>
   );
