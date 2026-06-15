@@ -1,0 +1,262 @@
+{
+  "version": 1,
+  "defaults": {
+    "mode": "stage1",
+    "model": "gpt-5.5",
+    "provider": "openai",
+    "repetitions": 1,
+    "outputRoot": ".makeademo-benchmark-runs"
+  },
+  "repos": [
+    {
+      "id": "conduit-realworld",
+      "repoUrl": "https://github.com/TonyMckes/conduit-realworld-example-app",
+      "categories": [
+        "realworld",
+        "fullstack",
+        "react",
+        "express",
+        "postgres",
+        "auth"
+      ],
+      "features": [
+        "Show the article feed",
+        "Create or inspect an article",
+        "Show authentication-related UI"
+      ],
+      "expectedLevel": "L3"
+    },
+    {
+      "id": "cal-diy",
+      "repoUrl": "https://github.com/calcom/cal.diy",
+      "categories": [
+        "scheduling",
+        "fullstack",
+        "nextjs",
+        "monorepo",
+        "auth",
+        "external-services"
+      ],
+      "features": [
+        "Show booking availability",
+        "Create a scheduling link",
+        "Show calendar configuration"
+      ],
+      "expectedLevel": "L3"
+    },
+    {
+      "id": "dub",
+      "repoUrl": "https://github.com/dubinc/dub",
+      "categories": [
+        "saas",
+        "analytics",
+        "nextjs",
+        "monorepo",
+        "database",
+        "external-services"
+      ],
+      "features": [
+        "Show link creation",
+        "Show link analytics",
+        "Show workspace navigation"
+      ],
+      "expectedLevel": "L3"
+    },
+    {
+      "id": "twenty",
+      "repoUrl": "https://github.com/twentyhq/twenty",
+      "categories": [
+        "crm",
+        "fullstack",
+        "monorepo",
+        "database",
+        "auth",
+        "large"
+      ],
+      "features": [
+        "Show the CRM object list",
+        "Inspect a company or person record",
+        "Show pipeline-style workflow"
+      ],
+      "expectedLevel": "L3"
+    },
+    {
+      "id": "typehero",
+      "repoUrl": "https://github.com/typehero/typehero",
+      "categories": ["education", "nextjs", "monorepo", "auth", "database"],
+      "features": [
+        "Show TypeScript challenges",
+        "Open a challenge",
+        "Show community or learning progress UI"
+      ],
+      "expectedLevel": "L3"
+    },
+    {
+      "id": "midday",
+      "repoUrl": "https://github.com/midday-ai/midday",
+      "categories": [
+        "finance",
+        "saas",
+        "monorepo",
+        "database",
+        "auth",
+        "external-services"
+      ],
+      "features": [
+        "Show financial overview",
+        "Show invoicing or time tracking",
+        "Show assistant-style workflow"
+      ],
+      "expectedLevel": "L3"
+    },
+    {
+      "id": "bulletproof-react",
+      "repoUrl": "https://github.com/alan2207/bulletproof-react",
+      "categories": [
+        "frontend",
+        "react",
+        "typescript",
+        "architecture-sample",
+        "medium"
+      ],
+      "features": [
+        "Show the sample app",
+        "Navigate between core app views",
+        "Show a data-entry or list workflow"
+      ],
+      "expectedLevel": "L3"
+    },
+    {
+      "id": "react-redux-realworld",
+      "repoUrl": "https://github.com/gothinkster/react-redux-realworld-example-app",
+      "categories": ["realworld", "frontend", "react", "redux", "legacy"],
+      "features": [
+        "Show the global article feed",
+        "Open an article",
+        "Show sign-in or profile UI"
+      ],
+      "expectedLevel": "L3"
+    },
+    {
+      "id": "jira-clone",
+      "repoUrl": "https://github.com/oldboyxx/jira_clone",
+      "categories": [
+        "project-management",
+        "fullstack",
+        "react",
+        "node",
+        "database",
+        "seeded-demo"
+      ],
+      "features": [
+        "Show the issue board",
+        "Open an issue",
+        "Move or edit an issue"
+      ],
+      "expectedLevel": "L3"
+    },
+    {
+      "id": "formbricks",
+      "repoUrl": "https://github.com/formbricks/formbricks",
+      "categories": [
+        "saas",
+        "survey",
+        "nextjs",
+        "monorepo",
+        "database",
+        "auth"
+      ],
+      "features": [
+        "Show survey creation",
+        "Preview a survey",
+        "Show response analytics"
+      ],
+      "expectedLevel": "L3"
+    },
+    {
+      "id": "documenso",
+      "repoUrl": "https://github.com/documenso/documenso",
+      "categories": [
+        "saas",
+        "documents",
+        "nextjs",
+        "monorepo",
+        "database",
+        "auth",
+        "file-workflow"
+      ],
+      "features": [
+        "Show document upload or signing flow",
+        "Open a document",
+        "Show recipient or signing status"
+      ],
+      "expectedLevel": "L3"
+    },
+    {
+      "id": "openstatus",
+      "repoUrl": "https://github.com/openstatusHQ/openstatus",
+      "categories": [
+        "monitoring",
+        "status-page",
+        "nextjs",
+        "monorepo",
+        "database",
+        "external-services"
+      ],
+      "features": [
+        "Show monitor configuration",
+        "Show a status page",
+        "Show incident or uptime history"
+      ],
+      "expectedLevel": "L3"
+    },
+    {
+      "id": "boxyhq-saas-starter",
+      "repoUrl": "https://github.com/boxyhq/saas-starter-kit",
+      "categories": [
+        "saas-starter",
+        "nextjs",
+        "auth",
+        "database",
+        "enterprise"
+      ],
+      "features": [
+        "Show the app dashboard",
+        "Show organization or team settings",
+        "Show authentication-related workflow"
+      ],
+      "expectedLevel": "L3"
+    },
+    {
+      "id": "medusa-nextjs-starter",
+      "repoUrl": "https://github.com/medusajs/nextjs-starter-medusa",
+      "categories": [
+        "commerce",
+        "nextjs",
+        "frontend",
+        "external-backend",
+        "deprecated"
+      ],
+      "features": [
+        "Show product browsing",
+        "Open a product detail page",
+        "Show cart or checkout UI"
+      ],
+      "expectedLevel": "L1"
+    },
+    {
+      "id": "bluesky-social-app",
+      "repoUrl": "https://github.com/bluesky-social/social-app",
+      "categories": [
+        "social",
+        "react-native",
+        "web",
+        "mobile",
+        "large",
+        "hard"
+      ],
+      "features": ["Show the social feed", "Open a profile", "Show compose UI"],
+      "expectedLevel": "L1"
+    }
+  ]
+}
