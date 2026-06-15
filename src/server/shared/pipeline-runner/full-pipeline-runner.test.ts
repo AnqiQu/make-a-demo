@@ -105,8 +105,25 @@ describe("runFullPipelineJob", () => {
             "full-run",
             "opencode-raw-output.jsonl",
           ),
+          scriptGenerationResumePath: join(
+            outputRoot,
+            "full-run",
+            "script-generation-resume.json",
+          ),
         },
         status: "succeeded",
+      });
+      await expect(
+        readJsonFile(
+          join(outputRoot, "full-run", "script-generation-resume.json"),
+        ),
+      ).resolves.toMatchObject({
+        demoBrief: { keyProductFeatures: ["article feed"] },
+        opencodeSessionID: "session_prepare_123",
+        preparationWorkspaceId: "daytona_workspace",
+        repoUrl: "https://github.com/example/app",
+        runDirectory: join(outputRoot, "full-run"),
+        validation: { browserUrl: "https://preview.example.test/" },
       });
       expect(result.logPath).toBe(
         join(outputRoot, "full-run", "pipeline-log.jsonl"),
@@ -211,6 +228,81 @@ describe("runFullPipelineJob", () => {
           suggestedChanges: [],
         },
         status: "preparation-failed",
+      });
+    } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("writes the Script Generation resume artifact before running Script Generation", async () => {
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
+
+    try {
+      await expect(
+        runFullPipelineJob(
+          {
+            demoBrief: { keyProductFeatures: ["article feed"] },
+            normalizedSupportingDocuments: [],
+            repoSecurity: {
+              files: [{ path: "package.json", text: "{}" }],
+              repoStats: { fileCount: 1, sizeBytes: 100 },
+            },
+            repoUrl: "https://github.com/example/app",
+            workspaceId: "workspace_123",
+          },
+          {
+            async generateScriptPackage() {
+              throw new Error("ScriptGen stalled before artifact output");
+            },
+            async prepareRepo() {
+              return {
+                manifest: {
+                  assumptions: [],
+                  createdFiles: [],
+                  demoCommand: "npm run demo",
+                  diffArtifactId: "diff",
+                  existingDemoEvidence: [],
+                  mockedServices: [],
+                  modifiedFiles: [],
+                  repoUrl: "https://github.com/example/app",
+                  risks: [],
+                  scriptGenerationContext: [],
+                  setupSummary: "Prepared app.",
+                  status: "adapted-existing-demo",
+                  url: "http://localhost:3000/",
+                  workspaceId: "workspace_123",
+                },
+                opencodeSessionID: "session_prepare_123",
+                status: "succeeded",
+                validation: {
+                  blockedNetworkAttempts: [],
+                  browserUrl: "https://preview.example.test/",
+                  logs: ["validated"],
+                  status: "succeeded",
+                  warnings: [],
+                },
+                workspace: fakePreparationWorkspaceHandle(),
+              };
+            },
+            screenRepoSecurity() {
+              return { rejections: [], status: "passed", warnings: [] };
+            },
+            async validateProject() {
+              throw new Error("validation should not rerun");
+            },
+          },
+          { outputRoot, runId: "scriptgen-fails" },
+        ),
+      ).rejects.toThrow("ScriptGen stalled before artifact output");
+
+      await expect(
+        readJsonFile(
+          join(outputRoot, "scriptgen-fails", "script-generation-resume.json"),
+        ),
+      ).resolves.toMatchObject({
+        opencodeSessionID: "session_prepare_123",
+        preparationWorkspaceId: "daytona_workspace",
+        validation: { browserUrl: "https://preview.example.test/" },
       });
     } finally {
       await rm(outputRoot, { force: true, recursive: true });
@@ -396,6 +488,7 @@ function stage1Dependencies(
           url: "http://localhost:3000/",
           workspaceId: "workspace_123",
         },
+        opencodeSessionID: "session_prepare_123",
         status: "succeeded",
         validation: {
           blockedNetworkAttempts: [],
@@ -406,6 +499,7 @@ function stage1Dependencies(
           status: "succeeded",
           warnings: [],
         },
+        workspace: fakePreparationWorkspaceHandle(),
       };
     },
     screenRepoSecurity() {
@@ -414,6 +508,23 @@ function stage1Dependencies(
     },
     async validateProject() {
       throw new Error("validation should not rerun");
+    },
+  };
+}
+
+function fakePreparationWorkspaceHandle() {
+  return {
+    async destroy() {},
+    id: "daytona_workspace",
+    workspace: {
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async getPreviewUrl() {
+        return "https://preview.example.test/";
+      },
+      async setOutboundNetworkAccess() {},
+      async uploadFiles() {},
     },
   };
 }

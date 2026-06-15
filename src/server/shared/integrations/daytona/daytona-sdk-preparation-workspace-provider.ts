@@ -16,6 +16,7 @@ import type {
 type DaytonaSdkClient = {
   create(input?: unknown): Promise<DaytonaSdkSandbox>;
   delete(sandbox: DaytonaSdkSandbox): Promise<void>;
+  get?(idOrName: string): Promise<DaytonaSdkSandbox>;
 };
 
 type DaytonaSdkSandbox = {
@@ -90,16 +91,44 @@ export type DaytonaSdkPreparationWorkspaceProviderOptions = {
   apiKey?: string;
   client?: DaytonaSdkClient;
   diskGB?: number;
+  ptyConnectionTimeoutMs?: number;
   snapshot?: string;
 };
 
 const defaultSandboxDiskGB = 3;
+const defaultPtyConnectionTimeoutMs = 30_000;
+
+export async function createDaytonaSdkPreparationWorkspaceHandle(input: {
+  apiKey?: string;
+  client?: DaytonaSdkClient;
+  sandboxId: string;
+  ptyConnectionTimeoutMs?: number;
+}): Promise<PreparationWorkspaceHandle> {
+  const client =
+    input.client ??
+    (new Daytona(
+      input.apiKey === undefined ? undefined : { apiKey: input.apiKey },
+    ) as DaytonaSdkClient);
+  if (client.get === undefined) {
+    throw new Error("Daytona client does not support sandbox lookup.");
+  }
+  const sandbox = await client.get(input.sandboxId);
+
+  return createPreparationWorkspaceHandle({
+    client,
+    id: input.sandboxId,
+    ptyConnectionTimeoutMs:
+      input.ptyConnectionTimeoutMs ?? defaultPtyConnectionTimeoutMs,
+    sandbox,
+  });
+}
 
 export class DaytonaSdkPreparationWorkspaceProvider
   implements PreparationWorkspaceProvider
 {
   private readonly client: DaytonaSdkClient;
   private readonly diskGB: number;
+  private readonly ptyConnectionTimeoutMs: number;
   private readonly snapshot: string | undefined;
 
   constructor(options: DaytonaSdkPreparationWorkspaceProviderOptions = {}) {
@@ -110,6 +139,8 @@ export class DaytonaSdkPreparationWorkspaceProvider
       ) as DaytonaSdkClient);
     this.snapshot = options.snapshot;
     this.diskGB = options.diskGB ?? defaultSandboxDiskGB;
+    this.ptyConnectionTimeoutMs =
+      options.ptyConnectionTimeoutMs ?? defaultPtyConnectionTimeoutMs;
   }
 
   async create(): Promise<PreparationWorkspaceHandle> {
@@ -122,25 +153,43 @@ export class DaytonaSdkPreparationWorkspaceProvider
       throw new Error("Daytona did not return a sandbox id.");
     }
 
-    const client = this.client;
-
-    const workspace = new DaytonaSdkPreparationWorkspace(sandbox);
-
-    return {
-      async destroy() {
-        await workspace.cancelActiveCommands();
-        await client.delete(sandbox);
-      },
+    return createPreparationWorkspaceHandle({
+      client: this.client,
       id,
-      workspace,
-    };
+      ptyConnectionTimeoutMs: this.ptyConnectionTimeoutMs,
+      sandbox,
+    });
   }
+}
+
+function createPreparationWorkspaceHandle(input: {
+  client: DaytonaSdkClient;
+  id: string;
+  ptyConnectionTimeoutMs: number;
+  sandbox: DaytonaSdkSandbox;
+}): PreparationWorkspaceHandle {
+  const workspace = new DaytonaSdkPreparationWorkspace(
+    input.sandbox,
+    input.ptyConnectionTimeoutMs,
+  );
+
+  return {
+    async destroy() {
+      await workspace.cancelActiveCommands();
+      await input.client.delete(input.sandbox);
+    },
+    id: input.id,
+    workspace,
+  };
 }
 
 class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
   private readonly activePtys = new Set<ManagedPty>();
 
-  constructor(private readonly sandbox: DaytonaSdkSandbox) {}
+  constructor(
+    private readonly sandbox: DaytonaSdkSandbox,
+    private readonly ptyConnectionTimeoutMs: number,
+  ) {}
 
   async execute(
     command: string,
@@ -188,7 +237,11 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
     this.activePtys.add(pty);
 
     try {
-      await pty.waitForConnection();
+      await withTimeout(
+        pty.waitForConnection(),
+        this.ptyConnectionTimeoutMs,
+        `Daytona PTY did not connect within ${this.ptyConnectionTimeoutMs}ms.`,
+      );
       await pty.sendInput(
         `stty -echo\n${command}\nprintf '\\n__MAKEADEMO_EXIT__:%s\\n' $?\nexit\n`,
       );
@@ -268,6 +321,24 @@ class ManagedPty {
   waitForConnection(): Promise<void> {
     return this.pty.waitForConnection();
   }
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise.finally(() => {
+      if (timeout !== undefined) {
+        clearTimeout(timeout);
+      }
+    }),
+    new Promise<never>((_, reject) => {
+      timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+    }),
+  ]);
 }
 
 function readExitCode(output: string): number | undefined {

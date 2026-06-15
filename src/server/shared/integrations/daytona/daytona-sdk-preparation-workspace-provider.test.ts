@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { DaytonaSdkPreparationWorkspaceProvider } from "./daytona-sdk-preparation-workspace-provider";
+import {
+  DaytonaSdkPreparationWorkspaceProvider,
+  createDaytonaSdkPreparationWorkspaceHandle,
+} from "./daytona-sdk-preparation-workspace-provider";
 
 describe("DaytonaSdkPreparationWorkspaceProvider", () => {
   it("creates a sandbox from the configured snapshot", async () => {
@@ -43,6 +46,23 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         },
       ],
     });
+  });
+
+  it("reconnects to an existing sandbox as a preparation workspace", async () => {
+    const calls: unknown[] = [];
+
+    const handle = await createDaytonaSdkPreparationWorkspaceHandle({
+      client: fakeClient(calls),
+      sandboxId: "sandbox_existing",
+    });
+    const result = await handle.workspace.execute("pwd");
+
+    expect(handle.id).toBe("sandbox_existing");
+    expect(result.stdout).toBe("ok");
+    expect(calls).toEqual([
+      { get: "sandbox_existing" },
+      { executeCommand: "pwd" },
+    ]);
   });
 
   it("executes commands, updates network settings, and deletes the sandbox", async () => {
@@ -159,6 +179,28 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
   });
 
+  it("fails fast when a streaming PTY never connects", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { ptyNeverConnects: true }),
+      ptyConnectionTimeoutMs: 1,
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.execute("opencode run hello", {
+        onStdout: () => {},
+      }),
+    ).rejects.toThrow("Daytona PTY did not connect within 1ms");
+
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        { waitForConnection: true },
+        { disconnect: true },
+      ]),
+    );
+  });
+
   it("continues when Daytona org policy rejects sandbox-level network overrides", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -186,7 +228,11 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
 
 function fakeClient(
   calls: unknown[],
-  options: { networkError?: Error; ptyWaitsForDisconnect?: boolean } = {},
+  options: {
+    networkError?: Error;
+    ptyNeverConnects?: boolean;
+    ptyWaitsForDisconnect?: boolean;
+  } = {},
 ) {
   const sandbox = {
     fs: {
@@ -247,6 +293,9 @@ function fakeClient(
           },
           async waitForConnection() {
             calls.push({ waitForConnection: true });
+            if (options.ptyNeverConnects === true) {
+              await new Promise(() => {});
+            }
           },
         };
       },
@@ -306,6 +355,10 @@ function fakeClient(
     },
     async delete(input: { id?: string; name?: string }) {
       calls.push({ delete: input.id ?? input.name });
+    },
+    async get(idOrName: string) {
+      calls.push({ get: idOrName });
+      return sandbox;
     },
   };
 }
