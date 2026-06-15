@@ -58,12 +58,27 @@ type GitHubConnectionResponse = {
   repositories: InstalledRepository[];
 };
 
+type GitHubCallbackRequest = {
+  code?: string;
+  installationId?: string;
+  key: string;
+  state: string;
+};
+
+type PendingGitHubCallbackConnection = {
+  key: string;
+  promise: Promise<GitHubConnectionResponse | null>;
+};
+
 const durationOptions = [
   { label: "30s", seconds: 30 },
   { label: "1 min", seconds: 60 },
   { label: "2 min", seconds: 120 },
   { label: "3 min", seconds: 180 },
 ];
+
+let pendingGitHubCallbackConnection: PendingGitHubCallbackConnection | null =
+  null;
 
 async function redirectToGitHubInstall(state: string) {
   const response = await fetch(
@@ -75,6 +90,81 @@ async function redirectToGitHubInstall(state: string) {
 
   const { installUrl } = (await response.json()) as { installUrl: string };
   window.location.href = installUrl;
+}
+
+function readGitHubCallbackRequest(
+  params: URLSearchParams,
+  draftId: string,
+): GitHubCallbackRequest | null {
+  const installationId = params.get("installation_id") ?? undefined;
+  const code = params.get("code") ?? undefined;
+  if (!installationId && !code) {
+    return null;
+  }
+
+  return {
+    ...(code === undefined ? {} : { code }),
+    ...(installationId === undefined ? {} : { installationId }),
+    key: installationId ? `installation:${installationId}` : `code:${code}`,
+    state: params.get("state") ?? draftId,
+  };
+}
+
+function getGitHubCallbackConnection(
+  request: GitHubCallbackRequest,
+): PendingGitHubCallbackConnection {
+  if (pendingGitHubCallbackConnection?.key === request.key) {
+    return pendingGitHubCallbackConnection;
+  }
+
+  const promise = request.installationId
+    ? fetch(
+        `/api/github/installations/${encodeURIComponent(request.installationId)}/repositories`,
+      ).then(async (response) => {
+        if (!response.ok) {
+          throw new Error("Could not load GitHub repositories");
+        }
+        const body = (await response.json()) as {
+          repositories: InstalledRepository[];
+        };
+        return {
+          installationId: request.installationId ?? "",
+          repositories: body.repositories,
+        };
+      })
+    : fetch(
+        `/api/github/authorized-installation?code=${encodeURIComponent(request.code ?? "")}`,
+      ).then(async (response) => {
+        if (response.status === 404) {
+          await redirectToGitHubInstall(request.state);
+          return null;
+        }
+        if (!response.ok) {
+          throw new Error("Could not connect GitHub installation");
+        }
+        return response.json() as Promise<GitHubConnectionResponse>;
+      });
+
+  pendingGitHubCallbackConnection = {
+    key: request.key,
+    promise,
+  };
+
+  return pendingGitHubCallbackConnection;
+}
+
+function clearGitHubCallbackParams(params: URLSearchParams) {
+  params.delete("code");
+  params.delete("installation_id");
+  params.delete("setup_action");
+  params.delete("state");
+
+  const search = params.toString();
+  window.history.replaceState(
+    {},
+    "",
+    `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`,
+  );
 }
 
 const initialIntakeDetailsForm: IntakeDetailsInput = {
@@ -108,10 +198,17 @@ export function ContextGatheringApp() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const installationId = params.get("installation_id");
-    const code = params.get("code");
-    if (!installationId && !code) {
+    const request = readGitHubCallbackRequest(params, draft.draftId);
+    const pendingConnection = request
+      ? getGitHubCallbackConnection(request)
+      : pendingGitHubCallbackConnection;
+    if (!pendingConnection) {
       return;
+    }
+    const activeConnection = pendingConnection;
+
+    if (request) {
+      clearGitHubCallbackParams(params);
     }
 
     let cancelled = false;
@@ -119,35 +216,21 @@ export function ContextGatheringApp() {
 
     async function loadGitHubConnection() {
       try {
-        const connection = installationId
-          ? await fetch(
-              `/api/github/installations/${encodeURIComponent(installationId)}/repositories`,
-            ).then(async (response) => {
-              if (!response.ok) {
-                throw new Error("Could not load GitHub repositories");
-              }
-              const body = (await response.json()) as {
-                repositories: InstalledRepository[];
-              };
-              return { installationId, repositories: body.repositories };
-            })
-          : await fetch(
-              `/api/github/authorized-installation?code=${encodeURIComponent(code ?? "")}`,
-            ).then(async (response) => {
-              if (response.status === 404) {
-                await redirectToGitHubInstall(
-                  params.get("state") ?? draft.draftId,
-                );
-                return null;
-              }
-              if (!response.ok) {
-                throw new Error("Could not connect GitHub installation");
-              }
-              return response.json() as Promise<GitHubConnectionResponse>;
-            });
+        const connection = await activeConnection.promise;
 
-        if (cancelled || !connection) {
+        if (!connection) {
+          if (pendingGitHubCallbackConnection?.key === activeConnection.key) {
+            pendingGitHubCallbackConnection = null;
+          }
           return;
+        }
+
+        if (cancelled) {
+          return;
+        }
+
+        if (pendingGitHubCallbackConnection?.key === activeConnection.key) {
+          pendingGitHubCallbackConnection = null;
         }
 
         const nextRepositories = connection.repositories;

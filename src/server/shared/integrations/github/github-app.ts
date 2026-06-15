@@ -201,27 +201,34 @@ async function createGitHubUserAccessToken(
     code,
     redirect_uri: app.redirectUrl,
   });
-  const response = await fetch(
-    `https://github.com/login/oauth/access_token?${params.toString()}`,
-    {
-      headers: { Accept: "application/json" },
-      method: "POST",
+  const response = await fetch("https://github.com/login/oauth/access_token", {
+    body: params,
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
     },
-  );
+    method: "POST",
+  });
+  const body = await response.json().catch(() => null);
 
   if (!response.ok) {
+    const oauthError = formatGitHubOAuthError(body);
     throw new Error(
-      `GitHub user access token request failed: ${response.status}`,
+      `GitHub user access token request failed: ${response.status}${oauthError ? `: ${oauthError}` : ""}`,
     );
   }
 
-  const body = await response.json();
   if (
     typeof body !== "object" ||
     body === null ||
     Array.isArray(body) ||
     typeof (body as { access_token?: unknown }).access_token !== "string"
   ) {
+    const oauthError = formatGitHubOAuthError(body);
+    if (oauthError) {
+      throw new Error(`GitHub user access token request failed: ${oauthError}`);
+    }
+
     throw new Error("GitHub user access token response is missing token");
   }
 
@@ -329,6 +336,25 @@ function readGitHubClientId(app: GitHubAppEnvironment) {
   }
 
   return app.clientId;
+}
+
+function formatGitHubOAuthError(value: unknown) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return "";
+  }
+
+  const error = (value as { error?: unknown }).error;
+  if (typeof error !== "string" || error.length === 0) {
+    return "";
+  }
+
+  const description = (value as { error_description?: unknown })
+    .error_description;
+  if (typeof description !== "string" || description.length === 0) {
+    return error;
+  }
+
+  return `${error}: ${description}`;
 }
 
 function normalizePrivateKey(privateKey: string) {

@@ -1,13 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   connectGitHubAuthorizedInstallation,
+  createGitHubAppIntegrationFromEnv,
   createGitHubAuthorizationUrl,
   createGitHubInstallUrl,
   listGitHubInstallationRepositories,
 } from "./github-app";
 
 describe("GitHub App integration", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("creates the GitHub App authorization URL with the callback redirect URI", () => {
     expect(
       createGitHubAuthorizationUrl({
@@ -134,5 +139,36 @@ describe("GitHub App integration", () => {
     );
 
     expect(connection).toBeNull();
+  });
+
+  it("surfaces GitHub OAuth errors when the authorization code cannot be exchanged", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: "bad_verification_code",
+          error_description: "The code passed is incorrect or expired.",
+        }),
+        {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        },
+      ),
+    );
+
+    const integration = createGitHubAppIntegrationFromEnv({
+      GITHUB_APP_ID: "123",
+      GITHUB_APP_SLUG: "owlet-demo",
+      GITHUB_CLIENT_ID: "client-123",
+      GITHUB_CLIENT_SECRET: "secret-123",
+      GITHUB_PRIVATE_KEY:
+        "-----BEGIN RSA PRIVATE KEY-----\nprivate-key\n-----END RSA PRIVATE KEY-----",
+      GITHUB_REDIRECT_URL: "http://localhost:5173/github/callback",
+    });
+
+    await expect(
+      integration.connectAuthorizedInstallation("expired-code"),
+    ).rejects.toThrow(
+      "GitHub user access token request failed: bad_verification_code: The code passed is incorrect or expired.",
+    );
   });
 });
