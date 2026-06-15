@@ -59,6 +59,7 @@ describe("ContextGatheringApp", () => {
     const html = renderToStaticMarkup(
       createElement(RepoConnectionFields, {
         githubInstallationId: "installation-123",
+        isLoadingRepositories: false,
         onConnectGitHub: () => undefined,
         onRepoInputChange: () => undefined,
         onRepositorySelect: () => undefined,
@@ -91,8 +92,30 @@ describe("ContextGatheringApp", () => {
     expect(html).not.toContain('class="button-icon"');
     expect(html).not.toContain(">OR<");
     expect(html).toContain('class="or-label or-label-connected"');
-    expect(styles).toContain("grid-column: 2 / 4;");
+    expect(styles).toContain(
+      "grid-template-columns: minmax(0, 1fr) auto auto;",
+    );
     expect(styles).toContain("grid-column: 3;");
+  });
+
+  it("shows GitHub as connected while connected repositories are still loading", () => {
+    const html = renderToStaticMarkup(
+      createElement(RepoConnectionFields, {
+        githubInstallationId: "installation-123",
+        isLoadingRepositories: true,
+        onConnectGitHub: () => undefined,
+        onRepoInputChange: () => undefined,
+        onRepositorySelect: () => undefined,
+        repoInput: "",
+        repositories: [],
+        selectedRepoUrl: "",
+      }),
+    );
+
+    expect(html).toContain("Connected");
+    expect(html).toContain("Loading repositories...");
+    expect(html).not.toContain("Connect GitHub");
+    expect(html).not.toContain("https://github.com/org/repo");
   });
 });
 

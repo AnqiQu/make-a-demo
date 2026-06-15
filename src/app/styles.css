@@ -264,6 +264,12 @@ button:disabled {
   color: #9ca3af;
 }
 
+.repo-url-loading input:disabled {
+  color: #64748b;
+  opacity: 1;
+  -webkit-text-fill-color: #64748b;
+}
+
 .or-label {
   color: #6b7280;
   display: block;
@@ -312,6 +318,15 @@ button:disabled {
   background: #16a34a;
   border-color: #16a34a;
   color: #ffffff;
+}
+
+.github-button-connected:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.github-button-connected:disabled:hover {
+  transform: none;
 }
 
 .github-button:hover,
