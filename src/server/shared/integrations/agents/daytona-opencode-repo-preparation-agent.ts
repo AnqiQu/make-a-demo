@@ -267,6 +267,9 @@ export class DaytonaOpenCodeRepoPreparationAgent
           });
           return {
             manifest,
+            ...(currentSessionID === undefined
+              ? {}
+              : { opencodeSessionID: currentSessionID }),
             status: "succeeded" as const,
             validation,
             workspace: handle,
@@ -291,7 +294,13 @@ export class DaytonaOpenCodeRepoPreparationAgent
           preparationResult.status === "succeeded" &&
           validation?.status === "succeeded"
         ) {
-          return { ...preparationResult, validation };
+          return {
+            ...preparationResult,
+            ...(currentSessionID === undefined
+              ? {}
+              : { opencodeSessionID: currentSessionID }),
+            validation,
+          };
         }
 
         return preparationResult;
@@ -324,7 +333,9 @@ export class DaytonaOpenCodeRepoPreparationAgent
     },
   ): Promise<PreparationWorkspaceCommandResult & { sessionID?: string }> {
     const outputWrites: Promise<void>[] = [];
+    let streamedStdout = "";
     const onStdout = (chunk: string) => {
+      streamedStdout += chunk;
       this.onStdout?.(chunk);
       outputWrites.push(
         appendOpenCodeAttemptOutput(handle.workspace, {
@@ -356,7 +367,9 @@ export class DaytonaOpenCodeRepoPreparationAgent
     );
     await Promise.all(outputWrites);
 
-    const sessionID = readOpenCodeSessionID(result.stdout);
+    const sessionID = readOpenCodeSessionID(
+      `${streamedStdout}\n${result.stdout}`,
+    );
     return sessionID === undefined ? result : { ...result, sessionID };
   }
 }

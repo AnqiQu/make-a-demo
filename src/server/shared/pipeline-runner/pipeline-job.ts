@@ -32,6 +32,7 @@ export type PipelineJobResult =
     }
   | {
       preparationManifest: PreparationManifest;
+      opencodeSessionID?: string;
       preparationWorkspace?: PreparationWorkspaceHandle;
       status: "succeeded";
       validation: ProjectValidationResult;

@@ -14,6 +14,7 @@ export type RepoPreparationInput = {
 type RepoPreparationAgentResult =
   | {
       manifest: unknown;
+      opencodeSessionID?: string;
       status: "succeeded";
       validation?: ProjectValidationResult;
       workspace?: PreparationWorkspaceHandle;
@@ -37,6 +38,7 @@ export interface RepoPreparationAgent {
 export type RepoPreparationResult =
   | {
       manifest: PreparationManifest;
+      opencodeSessionID?: string;
       status: "succeeded";
       validation?: ProjectValidationResult;
       workspace?: PreparationWorkspaceHandle;

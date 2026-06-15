@@ -40,6 +40,43 @@ describe("prepareRepo", () => {
     }
   });
 
+  it("preserves the OpenCode session ID for same-session Script Generation", async () => {
+    const agent: RepoPreparationAgent = {
+      async prepare() {
+        return {
+          manifest: {
+            assumptions: [],
+            demoCommand: "npm run demo:makeademo",
+            diffArtifactId: "artifact_diff",
+            repoUrl: "https://github.com/example/app",
+            risks: [],
+            setupSummary: "Reused an existing demo script.",
+            status: "reused-existing-demo",
+            url: "http://localhost:3000",
+            workspaceId: "workspace_123",
+          },
+          opencodeSessionID: "session_prepare_123",
+          status: "succeeded",
+        };
+      },
+    };
+
+    const result = await prepareRepo(
+      {
+        normalizedSupportingDocuments: [],
+        repoUrl: "https://github.com/example/app",
+        structuredDemoIntent: { keyProductFeatures: ["validation"] },
+        workspaceId: "workspace_123",
+      },
+      { agent },
+    );
+
+    expect(result).toMatchObject({
+      opencodeSessionID: "session_prepare_123",
+      status: "succeeded",
+    });
+  });
+
   it("returns a fallback prompt when the preparation agent cannot prepare the workspace", async () => {
     const agent: RepoPreparationAgent = {
       async prepare() {

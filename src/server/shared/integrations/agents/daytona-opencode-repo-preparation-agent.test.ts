@@ -107,6 +107,7 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
 
     expect(result).toMatchObject({
       manifest: { demoCommand: "npm run demo:makeademo" },
+      opencodeSessionID: "session_123",
       status: "succeeded",
       workspace: { id: "daytona_workspace" },
     });
@@ -235,6 +236,42 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
           event.execute.includes("opencode run"),
       ),
     ).toHaveLength(1);
+  });
+
+  it("preserves the OpenCode session ID from streamed output when validation passes", async () => {
+    const agent = new DaytonaOpenCodeRepoPreparationAgent({
+      modelID: "gpt-5.5",
+      providerApiKey: "openai_key",
+      provider: fakeProvider([], {
+        commandStdout: ["Validation requested."],
+        commandStdoutChunks: [
+          `${JSON.stringify({ sessionID: "session_streamed_123", type: "step_start" })}\n`,
+        ],
+        validationRequest: {
+          manifestPath: "/workspace/.makeademo/preparation-manifest.json",
+        },
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+      validatePreparation: async () => ({
+        blockedNetworkAttempts: [],
+        logs: ["validated"],
+        status: "succeeded",
+        warnings: [],
+      }),
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      opencodeSessionID: "session_streamed_123",
+      status: "succeeded",
+    });
   });
 
   it("returns malformed manifest handoff failures to the agent as validation feedback", async () => {

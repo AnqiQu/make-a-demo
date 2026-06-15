@@ -34,7 +34,12 @@ type PipelineProgressEvent = {
   status: "failed" | "started" | "succeeded";
 };
 
+export type ScriptGenerationReadyEvent = ScriptGenerationInput;
+
 export type PipelineOrchestratorOptions = {
+  onScriptGenerationReady?: (
+    event: ScriptGenerationReadyEvent,
+  ) => Promise<unknown> | unknown;
   onProgress?: (event: PipelineProgressEvent) => Promise<unknown> | unknown;
 };
 
@@ -105,17 +110,28 @@ export async function runPipelineJob(
     });
   }
 
+  const scriptGenerationInput = {
+    demoBrief: input.demoBrief,
+    normalizedSupportingDocuments: input.normalizedSupportingDocuments,
+    ...(preparation.opencodeSessionID === undefined
+      ? {}
+      : { opencodeSessionID: preparation.opencodeSessionID }),
+    preparationManifest: preparation.manifest,
+    ...(preparation.workspace === undefined
+      ? {}
+      : { preparationWorkspace: preparation.workspace }),
+    repoUrl: input.repoUrl,
+    validation,
+  };
+
+  await options.onScriptGenerationReady?.(scriptGenerationInput);
   await emitProgress(options, {
     stage: "script-generation",
     status: "started",
   });
-  const videoScriptPackage = await dependencies.generateScriptPackage({
-    demoBrief: input.demoBrief,
-    normalizedSupportingDocuments: input.normalizedSupportingDocuments,
-    preparationManifest: preparation.manifest,
-    repoUrl: input.repoUrl,
-    validation,
-  });
+  const videoScriptPackage = await dependencies.generateScriptPackage(
+    scriptGenerationInput,
+  );
   await emitProgress(options, {
     stage: "script-generation",
     status: "succeeded",
@@ -123,6 +139,9 @@ export async function runPipelineJob(
 
   return {
     preparationManifest: preparation.manifest,
+    ...(preparation.opencodeSessionID === undefined
+      ? {}
+      : { opencodeSessionID: preparation.opencodeSessionID }),
     ...(preparation.workspace === undefined
       ? {}
       : { preparationWorkspace: preparation.workspace }),

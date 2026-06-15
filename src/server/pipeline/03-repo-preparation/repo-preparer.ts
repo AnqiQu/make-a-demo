@@ -27,6 +27,9 @@ export async function prepareRepo(
   try {
     return {
       manifest: readPreparationManifest(result.manifest),
+      ...(result.opencodeSessionID === undefined
+        ? {}
+        : { opencodeSessionID: result.opencodeSessionID }),
       status: "succeeded",
       ...(result.validation === undefined
         ? {}
