@@ -411,6 +411,14 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
           ),
         },
         {
+          execute: expect.stringContaining(
+            "/workspace/.makeademo/opencode-activity.jsonl",
+          ),
+        },
+        {
+          execute: expect.stringContaining('"stage":"repo-preparation"'),
+        },
+        {
           execute: expect.stringContaining("agent output"),
         },
         {
@@ -552,6 +560,9 @@ function fakeWorkspace(
         return { exitCode: 0, stderr: "", stdout: "" };
       }
       if (command.includes("opencode-attempt-") && command.includes(".log")) {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      }
+      if (command.includes("opencode-activity.jsonl")) {
         return { exitCode: 0, stderr: "", stdout: "" };
       }
       if (

@@ -6,6 +6,7 @@ import { assertCaptureReadyScriptQuality } from "../../../pipeline/05-script-gen
 import type { VideoScriptPackage } from "../../../pipeline/05-script-generation/video-script-package";
 import { parseVideoScriptPackage } from "../../../pipeline/06-capture/video-script-package.schema";
 import type { CaptureReadyVideoScriptPackage } from "../../../pipeline/06-capture/video-script-package.schema";
+import { appendDaytonaOpenCodeActivityLog } from "./daytona-opencode-activity-log";
 
 const makeADemoArtifactDirectory = "/workspace/.makeademo";
 const makeADemoOpenCodeConfigDirectory = `${makeADemoArtifactDirectory}/opencode`;
@@ -51,6 +52,7 @@ export class DaytonaOpenCodeScriptGenerationAgent
         `Script Generation OpenCode attempt ${attempt} starting in session ${input.opencodeSessionID}.`,
       );
       await removePreviousScriptPackage(input);
+      const outputWrites: Promise<void>[] = [];
       const result = await input.preparationWorkspace.workspace.execute(
         createOpenCodeRunCommand({
           model: `${this.providerID}/${this.modelID}`,
@@ -62,10 +64,37 @@ export class DaytonaOpenCodeScriptGenerationAgent
             providerApiKey: this.providerApiKey,
             providerID: this.providerID,
           }),
-          onStderr: this.onStderr,
-          onStdout: this.onStdout,
+          onStderr: (chunk) => {
+            this.onStderr?.(chunk);
+            outputWrites.push(
+              appendDaytonaOpenCodeActivityLog(
+                input.preparationWorkspace.workspace,
+                {
+                  attempt,
+                  channel: "stderr",
+                  raw: chunk,
+                  stage: "script-generation",
+                },
+              ),
+            );
+          },
+          onStdout: (chunk) => {
+            this.onStdout?.(chunk);
+            outputWrites.push(
+              appendDaytonaOpenCodeActivityLog(
+                input.preparationWorkspace.workspace,
+                {
+                  attempt,
+                  channel: "stdout",
+                  raw: chunk,
+                  stage: "script-generation",
+                },
+              ),
+            );
+          },
         }),
       );
+      await Promise.all(outputWrites);
 
       if (result.exitCode !== 0) {
         lastFailure = `OpenCode Script Generation exited with ${result.exitCode}: ${[result.stderr, result.stdout].filter((line) => line.length > 0).join("\n")}`;

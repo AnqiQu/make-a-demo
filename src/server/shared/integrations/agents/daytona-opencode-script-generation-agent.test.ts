@@ -53,6 +53,56 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
     );
   });
 
+  it("mirrors Script Generation OpenCode output into a Daytona activity log", async () => {
+    const events: unknown[] = [];
+    const stderr: string[] = [];
+    const stdout: string[] = [];
+    const agent = new DaytonaOpenCodeScriptGenerationAgent({
+      modelID: "gpt-5.5",
+      onStderr: (chunk) => stderr.push(chunk),
+      onStdout: (chunk) => stdout.push(chunk),
+      providerApiKey: "openai_key",
+      providerID: "openai",
+    });
+
+    await agent.generateScriptPackage({
+      ...scriptGenerationInput(),
+      opencodeSessionID: "session_prepare_123",
+      preparationWorkspace: workspaceHandle(events, [interactivePackage()]),
+    });
+
+    expect(stdout).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("script generation output"),
+      ]),
+    );
+    expect(stderr).toEqual(["script generation warning"]);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          execute: expect.stringContaining(
+            "/workspace/.makeademo/opencode-activity.jsonl",
+          ),
+        },
+        {
+          execute: expect.stringContaining('"stage":"script-generation"'),
+        },
+        {
+          execute: expect.stringContaining('"channel":"stdout"'),
+        },
+        {
+          execute: expect.stringContaining("script generation output"),
+        },
+        {
+          execute: expect.stringContaining('"channel":"stderr"'),
+        },
+        {
+          execute: expect.stringContaining("script generation warning"),
+        },
+      ]),
+    );
+  });
+
   it("repairs static placeholder script packages in the same OpenCode session", async () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeScriptGenerationAgent({
@@ -103,7 +153,12 @@ function workspaceHandle(events: unknown[], artifacts: unknown[]) {
       if (command.includes("opencode run")) {
         latestArtifact = artifacts.shift();
         options?.onStdout?.("script generation output");
+        options?.onStderr?.("script generation warning");
         return { exitCode: 0, stderr: "", stdout: "generated" };
+      }
+
+      if (command.includes("opencode-activity.jsonl")) {
+        return { exitCode: 0, stderr: "", stdout: "" };
       }
 
       if (command.startsWith("if test -f")) {

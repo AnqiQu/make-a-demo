@@ -15,6 +15,7 @@ import type {
   RepoPreparationInput,
 } from "../../../pipeline/03-repo-preparation/repo-preparation-agent.interface";
 import type { ProjectValidationResult } from "../../../pipeline/04-project-validation/validation-result";
+import { appendDaytonaOpenCodeActivityLog } from "./daytona-opencode-activity-log";
 import { createMakeADemoOpenCodeConfigFiles } from "./prepared-opencode-config";
 
 const makeADemoArtifactDirectory = "/workspace/.makeademo";
@@ -344,6 +345,14 @@ export class DaytonaOpenCodeRepoPreparationAgent
           chunk,
         }),
       );
+      outputWrites.push(
+        appendDaytonaOpenCodeActivityLog(handle.workspace, {
+          attempt: input.attempt,
+          channel: "stdout",
+          raw: chunk,
+          stage: "repo-preparation",
+        }),
+      );
     };
     const onStderr = (chunk: string) => {
       this.onStderr?.(chunk);
@@ -352,6 +361,14 @@ export class DaytonaOpenCodeRepoPreparationAgent
           attempt: input.attempt,
           channel: "stderr",
           chunk,
+        }),
+      );
+      outputWrites.push(
+        appendDaytonaOpenCodeActivityLog(handle.workspace, {
+          attempt: input.attempt,
+          channel: "stderr",
+          raw: chunk,
+          stage: "repo-preparation",
         }),
       );
     };
