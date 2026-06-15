@@ -65,6 +65,18 @@ const durationOptions = [
   { label: "3 min", seconds: 180 },
 ];
 
+async function redirectToGitHubInstall(state: string) {
+  const response = await fetch(
+    `/api/github/install-url?state=${encodeURIComponent(state)}`,
+  );
+  if (!response.ok) {
+    throw new Error("Could not start GitHub connection.");
+  }
+
+  const { installUrl } = (await response.json()) as { installUrl: string };
+  window.location.href = installUrl;
+}
+
 const initialIntakeDetailsForm: IntakeDetailsInput = {
   email: "",
   importantFeatures: "",
@@ -102,36 +114,48 @@ export function ContextGatheringApp() {
       return;
     }
 
+    let cancelled = false;
     setError("");
-    const connection = installationId
-      ? fetch(
-          `/api/github/installations/${encodeURIComponent(installationId)}/repositories`,
-        ).then(async (response) => {
-          if (!response.ok) {
-            throw new Error("Could not load GitHub repositories");
-          }
-          const body = (await response.json()) as {
-            repositories: InstalledRepository[];
-          };
-          return { installationId, repositories: body.repositories };
-        })
-      : fetch(
-          `/api/github/authorized-installation?code=${encodeURIComponent(code ?? "")}`,
-        ).then(async (response) => {
-          if (!response.ok) {
-            throw new Error("Could not connect GitHub installation");
-          }
-          return response.json() as Promise<GitHubConnectionResponse>;
-        });
 
-    connection
-      .then(({ installationId: connectedInstallationId, repositories }) => {
-        const nextRepositories = repositories;
+    async function loadGitHubConnection() {
+      try {
+        const connection = installationId
+          ? await fetch(
+              `/api/github/installations/${encodeURIComponent(installationId)}/repositories`,
+            ).then(async (response) => {
+              if (!response.ok) {
+                throw new Error("Could not load GitHub repositories");
+              }
+              const body = (await response.json()) as {
+                repositories: InstalledRepository[];
+              };
+              return { installationId, repositories: body.repositories };
+            })
+          : await fetch(
+              `/api/github/authorized-installation?code=${encodeURIComponent(code ?? "")}`,
+            ).then(async (response) => {
+              if (response.status === 404) {
+                await redirectToGitHubInstall(
+                  params.get("state") ?? draft.draftId,
+                );
+                return null;
+              }
+              if (!response.ok) {
+                throw new Error("Could not connect GitHub installation");
+              }
+              return response.json() as Promise<GitHubConnectionResponse>;
+            });
+
+        if (cancelled || !connection) {
+          return;
+        }
+
+        const nextRepositories = connection.repositories;
         setRepositories(nextRepositories);
         setDraft((current) => {
           const connected = connectGitHubInstallation(
             current,
-            connectedInstallationId,
+            connection.installationId,
           );
           const onlyRepository = nextRepositories[0];
           if (nextRepositories.length === 1 && onlyRepository) {
@@ -144,11 +168,19 @@ export function ContextGatheringApp() {
 
           return connected;
         });
-      })
-      .catch((caught) => {
-        setError(caught instanceof Error ? caught.message : "GitHub failed");
-      });
-  }, []);
+      } catch (caught) {
+        if (!cancelled) {
+          setError(caught instanceof Error ? caught.message : "GitHub failed");
+        }
+      }
+    }
+
+    void loadGitHubConnection();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [draft.draftId]);
 
   useEffect(() => {
     if (
@@ -196,15 +228,17 @@ export function ContextGatheringApp() {
   async function connectGitHub() {
     setError("");
     const response = await fetch(
-      `/api/github/install-url?state=${encodeURIComponent(draft.draftId)}`,
+      `/api/github/authorization-url?state=${encodeURIComponent(draft.draftId)}`,
     );
     if (!response.ok) {
       setError("Could not start GitHub connection.");
       return;
     }
 
-    const { installUrl } = (await response.json()) as { installUrl: string };
-    window.location.href = installUrl;
+    const { authorizationUrl } = (await response.json()) as {
+      authorizationUrl: string;
+    };
+    window.location.href = authorizationUrl;
   }
 
   function continueFromRepo() {

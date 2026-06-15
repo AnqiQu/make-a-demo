@@ -46,14 +46,25 @@ type GitHubApiUserInstallation = {
 
 export function createGitHubInstallUrl(input: {
   appSlug: string;
-  redirectUrl: string;
   state: string;
 }): string {
   const params = new URLSearchParams();
   params.set("state", input.state);
-  params.set("redirect_uri", input.redirectUrl);
 
-  return `https://github.com/apps/${input.appSlug}/installations/select_target?${params.toString()}`;
+  return `https://github.com/apps/${input.appSlug}/installations/new?${params.toString()}`;
+}
+
+export function createGitHubAuthorizationUrl(input: {
+  clientId: string;
+  redirectUrl: string;
+  state: string;
+}): string {
+  const params = new URLSearchParams();
+  params.set("client_id", input.clientId);
+  params.set("redirect_uri", input.redirectUrl);
+  params.set("state", input.state);
+
+  return `https://github.com/login/oauth/authorize?${params.toString()}`;
 }
 
 export async function listGitHubInstallationRepositories(
@@ -117,10 +128,16 @@ export function createGitHubAppIntegrationFromEnv(
   const app = readGitHubAppEnvironment(env);
 
   return {
+    createAuthorizationUrl(input: { state: string }) {
+      return createGitHubAuthorizationUrl({
+        clientId: readGitHubClientId(app),
+        redirectUrl: app.redirectUrl,
+        state: input.state,
+      });
+    },
     createInstallUrl(input: { state: string }) {
       return createGitHubInstallUrl({
         appSlug: app.appSlug,
-        redirectUrl: app.redirectUrl,
         state: input.state,
       });
     },
@@ -304,6 +321,14 @@ function readRequiredEnv(env: NodeJS.ProcessEnv, name: string) {
   }
 
   return value;
+}
+
+function readGitHubClientId(app: GitHubAppEnvironment) {
+  if (!app.clientId) {
+    throw new Error("GITHUB_CLIENT_ID is required for GitHub authorization");
+  }
+
+  return app.clientId;
 }
 
 function normalizePrivateKey(privateKey: string) {

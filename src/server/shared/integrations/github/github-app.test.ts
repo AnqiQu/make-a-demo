@@ -2,20 +2,32 @@ import { describe, expect, it } from "vitest";
 
 import {
   connectGitHubAuthorizedInstallation,
+  createGitHubAuthorizationUrl,
   createGitHubInstallUrl,
   listGitHubInstallationRepositories,
 } from "./github-app";
 
 describe("GitHub App integration", () => {
-  it("creates the GitHub App target selection URL with the callback redirect URI", () => {
+  it("creates the GitHub App authorization URL with the callback redirect URI", () => {
     expect(
-      createGitHubInstallUrl({
-        appSlug: "owlet-demo",
-        redirectUrl: "https://app.example.com/github/callback",
+      createGitHubAuthorizationUrl({
+        clientId: "client-123",
+        redirectUrl: "http://localhost:5173/github/callback",
         state: "draft-123",
       }),
     ).toBe(
-      "https://github.com/apps/owlet-demo/installations/select_target?state=draft-123&redirect_uri=https%3A%2F%2Fapp.example.com%2Fgithub%2Fcallback",
+      "https://github.com/login/oauth/authorize?client_id=client-123&redirect_uri=http%3A%2F%2Flocalhost%3A5173%2Fgithub%2Fcallback&state=draft-123",
+    );
+  });
+
+  it("creates the GitHub App install URL for fresh installations", () => {
+    expect(
+      createGitHubInstallUrl({
+        appSlug: "owlet-demo",
+        state: "draft-123",
+      }),
+    ).toBe(
+      "https://github.com/apps/owlet-demo/installations/new?state=draft-123",
     );
   });
 

@@ -371,11 +371,13 @@ describe("Context Gathering API", () => {
     );
   });
 
-  it("returns GitHub App install URLs and installation repositories", async () => {
+  it("returns GitHub App authorization and install URLs plus installation repositories", async () => {
     const app = createApiApp({
       github: {
+        createAuthorizationUrl: ({ state }) =>
+          `https://github.com/login/oauth/authorize?client_id=client-123&redirect_uri=http%3A%2F%2Flocalhost%3A5173%2Fgithub%2Fcallback&state=${state}`,
         createInstallUrl: ({ state }) =>
-          `https://github.com/apps/owlet/installations/select_target?state=${state}`,
+          `https://github.com/apps/owlet/installations/new?state=${state}`,
         listRepositories: async (installationId) => {
           expect(installationId).toBe("123");
           return [
@@ -409,13 +411,24 @@ describe("Context Gathering API", () => {
       },
     });
 
+    const authorizationResponse = await app.fetch(
+      new Request(
+        "http://localhost/api/github/authorization-url?state=draft-1",
+      ),
+    );
+    expect(authorizationResponse.status).toBe(200);
+    await expect(authorizationResponse.json()).resolves.toEqual({
+      authorizationUrl:
+        "https://github.com/login/oauth/authorize?client_id=client-123&redirect_uri=http%3A%2F%2Flocalhost%3A5173%2Fgithub%2Fcallback&state=draft-1",
+    });
+
     const installResponse = await app.fetch(
       new Request("http://localhost/api/github/install-url?state=draft-1"),
     );
     expect(installResponse.status).toBe(200);
     await expect(installResponse.json()).resolves.toEqual({
       installUrl:
-        "https://github.com/apps/owlet/installations/select_target?state=draft-1",
+        "https://github.com/apps/owlet/installations/new?state=draft-1",
     });
 
     const repositoriesResponse = await app.fetch(

@@ -18,6 +18,7 @@ type ApiGithubDependencies = {
       repoUrl: string;
     }>;
   } | null>;
+  createAuthorizationUrl?(input: { state: string }): string;
   createInstallUrl(input: { state: string }): string;
   listRepositories(installationId: string): Promise<
     Array<{
@@ -74,6 +75,22 @@ async function handleRequest(
   dependencies: ApiAppDependencies,
 ): Promise<Response> {
   const url = new URL(request.url);
+
+  if (
+    request.method === "GET" &&
+    url.pathname === "/api/github/authorization-url"
+  ) {
+    const createAuthorizationUrl = dependencies.github.createAuthorizationUrl;
+    if (!createAuthorizationUrl) {
+      throw new Error("GitHub authorization is not configured");
+    }
+
+    return json({
+      authorizationUrl: createAuthorizationUrl({
+        state: url.searchParams.get("state") ?? crypto.randomUUID(),
+      }),
+    });
+  }
 
   if (request.method === "GET" && url.pathname === "/api/github/install-url") {
     return json({
