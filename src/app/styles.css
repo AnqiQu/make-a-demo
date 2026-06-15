@@ -199,6 +199,17 @@ button:disabled {
   padding: 0 1.15rem;
 }
 
+.repo-url-select {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.repo-url-select .link-icon {
+  grid-column: 1;
+  grid-row: 1;
+  pointer-events: none;
+  z-index: 1;
+}
+
 .link-icon {
   color: #485564;
   display: grid;
@@ -207,12 +218,26 @@ button:disabled {
 }
 
 .button-icon,
-.link-icon svg {
+.link-icon svg,
+.repo-select-chevron svg {
   height: 1.45rem;
   width: 1.45rem;
 }
 
-.repo-url-input input {
+.repo-select-chevron {
+  color: #485564;
+  display: grid;
+  grid-column: 3;
+  grid-row: 1;
+  height: 1.45rem;
+  pointer-events: none;
+  place-items: center;
+  width: 1.45rem;
+  z-index: 1;
+}
+
+.repo-url-input input,
+.repo-url-input select {
   background: transparent;
   border: 0;
   color: #3a2118;
@@ -220,6 +245,19 @@ button:disabled {
   font-weight: 600;
   min-width: 0;
   outline: 0;
+}
+
+.repo-url-input select {
+  appearance: none;
+  cursor: pointer;
+  grid-column: 1 / 4;
+  grid-row: 1;
+  height: 100%;
+  overflow: hidden;
+  padding: 0 2.35rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  width: 100%;
 }
 
 .repo-url-input input::placeholder {
@@ -232,6 +270,17 @@ button:disabled {
   font-size: 1rem;
   font-weight: 700;
   text-align: center;
+}
+
+.or-label-connected {
+  color: #16a34a;
+  display: grid;
+  place-items: center;
+}
+
+.or-label-connected svg {
+  height: 1.45rem;
+  width: 1.45rem;
 }
 
 .github-button,

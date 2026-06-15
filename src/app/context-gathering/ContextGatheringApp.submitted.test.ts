@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   ContextDetailsForm,
   ContextGatheringApp,
+  RepoConnectionFields,
   SubmittedDemoPanel,
 } from "./ContextGatheringApp";
 
@@ -52,6 +53,46 @@ describe("ContextGatheringApp", () => {
     expect(styles).toContain("width: min(100%, 68rem);");
     expect(styles).toContain("width: max-content;");
     expect(styles).toContain("min-width: 0;");
+  });
+
+  it("uses the repository URL field as the connected repository dropdown", () => {
+    const html = renderToStaticMarkup(
+      createElement(RepoConnectionFields, {
+        githubInstallationId: "installation-123",
+        onConnectGitHub: () => undefined,
+        onRepoInputChange: () => undefined,
+        onRepositorySelect: () => undefined,
+        repoInput: "",
+        repositories: [
+          {
+            fullName: "example/private-app",
+            private: true,
+            repoUrl: "https://github.com/example/private-app",
+          },
+          {
+            fullName: "example/another-app",
+            private: true,
+            repoUrl: "https://github.com/example/another-app",
+          },
+        ],
+        selectedRepoUrl: "https://github.com/example/private-app",
+      }),
+    );
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+
+    expect(html).toContain('class="repo-url-input repo-url-select"');
+    expect(html).toContain('aria-label="Select one GitHub repository to demo"');
+    expect(html).toContain("example/private-app");
+    expect(html).toContain('class="repo-select-chevron"');
+    expect(html).not.toContain('class="repo-select-field"');
+    expect(html).not.toContain('class="button-icon"');
+    expect(html).not.toContain(">OR<");
+    expect(html).toContain('class="or-label or-label-connected"');
+    expect(styles).toContain("grid-column: 2 / 4;");
+    expect(styles).toContain("grid-column: 3;");
   });
 });
 
