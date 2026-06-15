@@ -8,6 +8,11 @@ import {
 } from "../../pipeline/07-compositing/composite-video";
 import type { FinalVideoEmailNotifier } from "../../pipeline/final-output/final-video-email-notifier.interface";
 import type { PipelineJobResult } from "./pipeline-job";
+import {
+  type PipelineObserver,
+  noopPipelineObserver,
+  sanitizeObservabilityError,
+} from "./pipeline-observer";
 import type { ProjectFinalVideoGenerator } from "./project-demo-generation-queue";
 
 export type CompositeProjectFinalVideoGeneratorOptions = Pick<
@@ -20,6 +25,8 @@ export type CompositeProjectFinalVideoGeneratorOptions = Pick<
   | "renderer"
 > & {
   finalVideoEmailNotifier?: FinalVideoEmailNotifier;
+  now?: () => number;
+  observer?: PipelineObserver;
   tempRoot?: string;
 };
 
@@ -38,6 +45,21 @@ export class CompositeProjectFinalVideoGenerator
     projectId: string;
   }) {
     const runId = `composite-${input.projectId}`;
+    const observer = this.options.observer ?? noopPipelineObserver;
+    const now = this.options.now ?? Date.now;
+    const context = {
+      demoRequestId: input.demoRequestId,
+      projectId: input.projectId,
+      runId,
+      workspaceId: input.pipelineResult.preparationManifest.workspaceId,
+    };
+    observer.record({
+      ...context,
+      event: "stage.started",
+      stage: "compositing",
+      status: "started",
+    });
+    const startedAt = now();
     const workspace = join(this.options.tempRoot ?? tmpdir(), runId);
     await mkdir(workspace, { recursive: true });
 
@@ -65,37 +87,70 @@ export class CompositeProjectFinalVideoGenerator
       )}\n`,
     );
 
-    const manifest = await compositeVideoFromScript({
-      captureManifestPath,
-      demoRequestId: input.demoRequestId,
-      ...(this.options.demoRequestStore === undefined
-        ? {}
-        : { demoRequestStore: this.options.demoRequestStore }),
-      ...(this.options.finalVideoEmailNotifier === undefined
-        ? {}
-        : { finalVideoEmailNotifier: this.options.finalVideoEmailNotifier }),
-      ...(this.options.finalVideoStorage === undefined
-        ? {}
-        : { finalVideoStorage: this.options.finalVideoStorage }),
-      ...(this.options.outputRoot === undefined
-        ? {}
-        : { outputRoot: this.options.outputRoot }),
-      ...(this.options.projectRoot === undefined
-        ? {}
-        : { projectRoot: this.options.projectRoot }),
-      ...(this.options.publicAppBaseUrl === undefined
-        ? {}
-        : { publicAppBaseUrl: this.options.publicAppBaseUrl }),
-      ...(this.options.renderer === undefined
-        ? {}
-        : { renderer: this.options.renderer }),
-      runId,
-      scriptPath,
-    });
+    let manifest: Awaited<ReturnType<typeof compositeVideoFromScript>>;
+    try {
+      manifest = await compositeVideoFromScript({
+        captureManifestPath,
+        demoRequestId: input.demoRequestId,
+        ...(this.options.demoRequestStore === undefined
+          ? {}
+          : { demoRequestStore: this.options.demoRequestStore }),
+        ...(this.options.finalVideoEmailNotifier === undefined
+          ? {}
+          : { finalVideoEmailNotifier: this.options.finalVideoEmailNotifier }),
+        ...(this.options.finalVideoStorage === undefined
+          ? {}
+          : { finalVideoStorage: this.options.finalVideoStorage }),
+        ...(this.options.outputRoot === undefined
+          ? {}
+          : { outputRoot: this.options.outputRoot }),
+        ...(this.options.projectRoot === undefined
+          ? {}
+          : { projectRoot: this.options.projectRoot }),
+        ...(this.options.publicAppBaseUrl === undefined
+          ? {}
+          : { publicAppBaseUrl: this.options.publicAppBaseUrl }),
+        ...(this.options.renderer === undefined
+          ? {}
+          : { renderer: this.options.renderer }),
+        runId,
+        scriptPath,
+      });
+    } catch (error) {
+      observer.record({
+        ...context,
+        ...sanitizeObservabilityError(error),
+        durationMs: now() - startedAt,
+        event: "stage.failed",
+        sceneCount: countScenes(scriptPackage),
+        stage: "compositing",
+        status: "failed",
+      });
+      throw error;
+    }
 
     if (!manifest.finalVideo) {
-      throw new Error("Final video was not stored");
+      const error = new Error("Final video was not stored");
+      observer.record({
+        ...context,
+        ...sanitizeObservabilityError(error),
+        durationMs: now() - startedAt,
+        event: "stage.failed",
+        sceneCount: countScenes(scriptPackage),
+        stage: "compositing",
+        status: "failed",
+      });
+      throw error;
     }
+
+    observer.record({
+      ...context,
+      durationMs: now() - startedAt,
+      event: "stage.succeeded",
+      sceneCount: countScenes(scriptPackage),
+      stage: "compositing",
+      status: "succeeded",
+    });
 
     return { generatedDemoUrl: manifest.finalVideo.r2Url };
   }
@@ -144,4 +199,13 @@ function buildCompositingScriptPackage(
     title: pipelineResult.videoScriptPackage.title,
     version: 1,
   };
+}
+
+function countScenes(
+  scriptPackage: ReturnType<typeof buildCompositingScriptPackage>,
+) {
+  return scriptPackage.sections.reduce(
+    (total, section) => total + section.scenes.length,
+    0,
+  );
 }

@@ -7,6 +7,7 @@ import { createR2UploadPresignerFromEnv } from "../integrations/storage/r2-clien
 import { R2FinalVideoStorage } from "../integrations/storage/r2-final-video-storage";
 import { createNeonDemoRequestFinalVideoStore } from "../persistence/neon-demo-request-final-video-store";
 import { createNeonProjectDemoGenerationQueueStore } from "../persistence/neon-project-demo-generation-queue-store";
+import { createJsonPipelineObserver } from "./pipeline-observer";
 import { runPipelineJob } from "./pipeline-orchestrator";
 import { processNextProjectDemoGenerationJob } from "./project-demo-generation-queue";
 import { CompositeProjectFinalVideoGenerator } from "./project-final-video-generator";
@@ -25,6 +26,10 @@ const modelID = process.env.REPO_PREPARATION_MODEL_ID ?? "gpt-4.1";
 const queueStore = createNeonProjectDemoGenerationQueueStore();
 const demoRequestStore = createNeonDemoRequestFinalVideoStore();
 const r2 = createR2UploadPresignerFromEnv();
+const observer = createJsonPipelineObserver({
+  service: "makeademo-demo-generation-worker",
+  write: (line) => process.stdout.write(line),
+});
 const sandboxProvider = new DaytonaSdkPreparationWorkspaceProvider({
   apiKey: daytonaApiKey,
   ...(daytonaSnapshot === undefined ? {} : { snapshot: daytonaSnapshot }),
@@ -39,6 +44,7 @@ const repoPreparationAgent = createRepoPreparationAgent({
 const finalVideoGenerator = new CompositeProjectFinalVideoGenerator({
   demoRequestStore,
   finalVideoStorage: new R2FinalVideoStorage(r2),
+  observer,
   ...(finalVideoEmailsEnabled(process.env)
     ? {
         finalVideoEmailNotifier: createResendFinalVideoEmailNotifierFromEnv(),
@@ -50,36 +56,41 @@ const finalVideoGenerator = new CompositeProjectFinalVideoGenerator({
 process.stdout.write("MakeADemo demo generation worker started\n");
 
 do {
-  const result = await processNextProjectDemoGenerationJob(queueStore, {
-    generateFinalVideo: (input) =>
-      finalVideoGenerator.generateFinalVideo(input),
-    async runPipeline(job) {
-      const repoSecurity = await readRepoSecurityInput(
-        sandboxProvider,
-        job.repoUrl,
-      );
+  const result = await processNextProjectDemoGenerationJob(
+    queueStore,
+    {
+      generateFinalVideo: (input) =>
+        finalVideoGenerator.generateFinalVideo(input),
+      async runPipeline(job) {
+        const repoSecurity = await readRepoSecurityInput(
+          sandboxProvider,
+          job.repoUrl,
+        );
 
-      return runPipelineJob(
-        {
-          demoBrief: job.demoBrief,
-          normalizedSupportingDocuments: job.normalizedSupportingDocuments,
-          repoSecurity,
-          repoUrl: job.repoUrl,
-          workspaceId: job.workspaceId,
-        },
-        createStage1PipelineDependencies({
-          repoPreparationAgent,
-          sandboxRunner: new DaytonaSandboxRunner(),
-        }),
-        {
-          onProgress: (event) =>
-            process.stderr.write(
-              `[pipeline] ${event.stage}: ${event.status}\n`,
-            ),
-        },
-      );
+        return runPipelineJob(
+          {
+            demoBrief: job.demoBrief,
+            normalizedSupportingDocuments: job.normalizedSupportingDocuments,
+            repoSecurity,
+            repoUrl: job.repoUrl,
+            workspaceId: job.workspaceId,
+          },
+          createStage1PipelineDependencies({
+            repoPreparationAgent,
+            sandboxRunner: new DaytonaSandboxRunner(),
+          }),
+          {
+            context: {
+              demoRequestId: job.demoRequestId,
+              projectId: job.projectId,
+            },
+            observer,
+          },
+        );
+      },
     },
-  });
+    { observer },
+  );
 
   if (result.status !== "idle") {
     process.stdout.write(

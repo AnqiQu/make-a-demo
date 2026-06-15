@@ -2044,6 +2044,12 @@
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M484.52,-1412C554.47,-1412 651,-1412 651,-1412 651,-1412 651,-1545 651,-1545"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="648.9,-1545 651,-1551 653.1,-1545 648.9,-1545"/>
 </g>
+<!-- src/server/shared/pipeline&#45;runner/pipeline&#45;orchestrator.ts&#45;&gt;src/server/shared/pipeline&#45;runner/pipeline&#45;observer.ts -->
+<g id="edge91" class="edge">
+<title>src/server/shared/pipeline&#45;runner/pipeline&#45;orchestrator.ts&#45;&gt;src/server/shared/pipeline&#45;runner/pipeline&#45;observer.ts</title>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M435.84,-2021C511.46,-2021 638,-2021 638,-2021 638,-2021 638,-2102.74 638,-2102.74"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="635.9,-2102.74 638,-2108.74 640.1,-2102.74 635.9,-2102.74"/>
+</g>
 <!-- src/server/shared/pipeline&#45;runner/project&#45;demo&#45;generation&#45;queue.test.ts -->
 <g id="node136" class="node">
 <title>src/server/shared/pipeline&#45;runner/project&#45;demo&#45;generation&#45;queue.test.ts</title>
@@ -2052,6 +2058,12 @@
 <text xml:space="preserve" text-anchor="start" x="73.5" y="-1380.62" font-family="Helvetica,sans-Serif" font-size="9.00">project&#45;demo&#45;generation&#45;queue.test.ts</text>
 </a>
 </g>
+</g>
+<!-- src/server/shared/pipeline&#45;runner/project&#45;demo&#45;generation&#45;queue.test.ts&#45;&gt;src/server/shared/pipeline&#45;runner/pipeline&#45;observer.ts -->
+<g id="edge92" class="edge">
+<title>src/server/shared/pipeline&#45;runner/project&#45;demo&#45;generation&#45;queue.test.ts&#45;&gt;src/server/shared/pipeline&#45;runner/pipeline&#45;observer.ts</title>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M232,-2135.77C232,-2130.38 232,-2124.62 232,-2124.62 232,-2124.62 557.08,-2124.62 557.08,-2124.62"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="557.08,-2126.73 563.08,-2124.63 557.08,-2122.53 557.08,-2126.73"/>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/project&#45;demo&#45;generation&#45;queue.ts -->
 <g id="node137" class="node">
@@ -2067,6 +2079,12 @@
 <title>src/server/shared/pipeline&#45;runner/project&#45;demo&#45;generation&#45;queue.test.ts&#45;&gt;src/server/shared/pipeline&#45;runner/project&#45;demo&#45;generation&#45;queue.ts</title>
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M257.38,-1382C257.38,-1382 318.66,-1382 318.66,-1382"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="318.66,-1384.1 324.66,-1382 318.66,-1379.9 318.66,-1384.1"/>
+</g>
+<!-- src/server/shared/pipeline&#45;runner/project&#45;demo&#45;generation&#45;queue.ts&#45;&gt;src/server/shared/pipeline&#45;runner/pipeline&#45;observer.ts -->
+<g id="edge94" class="edge">
+<title>src/server/shared/pipeline&#45;runner/project&#45;demo&#45;generation&#45;queue.ts&#45;&gt;src/server/shared/pipeline&#45;runner/pipeline&#45;observer.ts</title>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M455,-2165.96C455,-2152.34 455,-2128.12 455,-2128.12 455,-2128.12 557.1,-2128.12 557.1,-2128.12"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="557.1,-2130.23 563.1,-2128.13 557.1,-2126.03 557.1,-2130.23"/>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/project&#45;demo&#45;generation&#45;worker.mts -->
 <g id="node138" class="node">
@@ -2184,6 +2202,12 @@
 <text xml:space="preserve" text-anchor="start" x="81.38" y="-1508.62" font-family="Helvetica,sans-Serif" font-size="9.00">project&#45;final&#45;video&#45;generator.test.ts</text>
 </a>
 </g>
+</g>
+<!-- src/server/shared/pipeline&#45;runner/project&#45;final&#45;video&#45;generator.test.ts&#45;&gt;src/server/shared/pipeline&#45;runner/pipeline&#45;observer.ts -->
+<g id="edge110" class="edge">
+<title>src/server/shared/pipeline&#45;runner/project&#45;final&#45;video&#45;generator.test.ts&#45;&gt;src/server/shared/pipeline&#45;runner/pipeline&#45;observer.ts</title>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M228.83,-2119.29C228.83,-2119.29 557.12,-2119.29 557.12,-2119.29"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="557.12,-2121.39 563.12,-2119.29 557.12,-2117.19 557.12,-2121.39"/>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/project&#45;final&#45;video&#45;generator.test.ts&#45;&gt;src/server/shared/pipeline&#45;runner/project&#45;final&#45;video&#45;generator.ts -->
 <g id="edge118" class="edge">

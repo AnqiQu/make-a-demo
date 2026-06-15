@@ -265,6 +265,28 @@ export function connectGitHubInstallation(
   };
 }
 
+export function connectGitHubInstallationRepositories(
+  draft: ContextGatheringDraft,
+  input: {
+    githubInstallationId: string;
+    repositories: Array<{
+      private: boolean;
+      repoUrl: string;
+    }>;
+  },
+): ContextGatheringDraft {
+  const connected = connectGitHubInstallation(
+    draft,
+    input.githubInstallationId,
+  );
+  const firstRepository = input.repositories[0];
+  if (!firstRepository) {
+    return connected;
+  }
+
+  return selectRepositoryForDemo(connected, firstRepository);
+}
+
 export function selectRepositoryForDemo(
   draft: ContextGatheringDraft,
   input: {

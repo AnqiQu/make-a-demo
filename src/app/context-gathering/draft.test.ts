@@ -5,6 +5,7 @@ import {
   canContinueFromRepoStep,
   collectIntakeDetails,
   connectGitHubInstallation,
+  connectGitHubInstallationRepositories,
   createInitialContextGatheringDraft,
   rejectUnsupportedSupportingFile,
   removePendingSupportingFile,
@@ -226,6 +227,30 @@ describe("Context Gathering draft", () => {
       private: true,
       repoUrl: "https://github.com/example/private-app",
     });
+    expect(canContinueFromRepoStep(draft, "")).toBe(true);
+  });
+
+  it("auto-selects the first repository returned for a connected GitHub installation", () => {
+    const draft = connectGitHubInstallationRepositories(
+      createInitialContextGatheringDraft(),
+      {
+        githubInstallationId: "installation-123",
+        repositories: [
+          {
+            private: true,
+            repoUrl: "https://github.com/example/first-app",
+          },
+          {
+            private: true,
+            repoUrl: "https://github.com/example/second-app",
+          },
+        ],
+      },
+    );
+
+    expect(draft.githubInstallationId).toBe("installation-123");
+    expect(draft.repoUrl).toBe("https://github.com/example/first-app");
+    expect(draft.repoVisibility).toBe("private");
     expect(canContinueFromRepoStep(draft, "")).toBe(true);
   });
 });
