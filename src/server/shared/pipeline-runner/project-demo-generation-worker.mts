@@ -1,4 +1,5 @@
 import { finalVideoEmailsEnabled } from "../../pipeline/final-output/final-video-email-feature";
+import { DaytonaOpenCodeScriptGenerationAgent } from "../integrations/agents/daytona-opencode-script-generation-agent";
 import { createRepoPreparationAgent } from "../integrations/agents/repo-preparation-agent-factory";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import { createResendFinalVideoEmailNotifierFromEnv } from "../integrations/email/resend-final-video-email-notifier";
@@ -32,6 +33,11 @@ const sandboxProvider = new DaytonaSdkPreparationWorkspaceProvider({
 const repoPreparationAgent = createRepoPreparationAgent({
   daytonaApiKey,
   ...(daytonaSnapshot === undefined ? {} : { daytonaSnapshot }),
+  modelID,
+  providerApiKey: readProviderApiKey(providerID),
+  providerID,
+});
+const scriptGenerationAgent = new DaytonaOpenCodeScriptGenerationAgent({
   modelID,
   providerApiKey: readProviderApiKey(providerID),
   providerID,
@@ -70,6 +76,7 @@ do {
         createStage1PipelineDependencies({
           repoPreparationAgent,
           sandboxRunner: new DaytonaSandboxRunner(),
+          scriptGenerationAgent,
         }),
         {
           onProgress: (event) =>
