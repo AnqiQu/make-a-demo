@@ -1,6 +1,8 @@
 import {
   ArrowLeft,
+  ArrowRight,
   Check,
+  ChevronDown,
   Info,
   Link as LinkIcon,
   Upload,
@@ -18,6 +20,7 @@ import {
   canContinueFromRepoStep,
   collectIntakeDetails,
   connectGitHubInstallation,
+  connectGitHubInstallationRepositories,
   createInitialContextGatheringDraft,
   removePendingSupportingFile,
   selectRepositoryForDemo,
@@ -52,12 +55,119 @@ type DemoRequestStatusResponse =
   | { status: "completed"; videoUrl: string }
   | { status: "failed" | "processing" };
 
+type GitHubConnectionResponse = {
+  installationId: string;
+  repositories: InstalledRepository[];
+};
+
+type GitHubCallbackRequest = {
+  code?: string;
+  installationId?: string;
+  key: string;
+  state: string;
+};
+
+type PendingGitHubCallbackConnection = {
+  key: string;
+  promise: Promise<GitHubConnectionResponse | null>;
+};
+
 const durationOptions = [
   { label: "30s", seconds: 30 },
   { label: "1 min", seconds: 60 },
   { label: "2 min", seconds: 120 },
   { label: "3 min", seconds: 180 },
 ];
+
+let pendingGitHubCallbackConnection: PendingGitHubCallbackConnection | null =
+  null;
+
+async function redirectToGitHubInstall(state: string) {
+  const response = await fetch(
+    `/api/github/install-url?state=${encodeURIComponent(state)}`,
+  );
+  if (!response.ok) {
+    throw new Error("Could not start GitHub connection.");
+  }
+
+  const { installUrl } = (await response.json()) as { installUrl: string };
+  window.location.href = installUrl;
+}
+
+function readGitHubCallbackRequest(
+  params: URLSearchParams,
+  draftId: string,
+): GitHubCallbackRequest | null {
+  const installationId = params.get("installation_id") ?? undefined;
+  const code = params.get("code") ?? undefined;
+  if (!installationId && !code) {
+    return null;
+  }
+
+  return {
+    ...(code === undefined ? {} : { code }),
+    ...(installationId === undefined ? {} : { installationId }),
+    key: installationId ? `installation:${installationId}` : `code:${code}`,
+    state: params.get("state") ?? draftId,
+  };
+}
+
+function getGitHubCallbackConnection(
+  request: GitHubCallbackRequest,
+): PendingGitHubCallbackConnection {
+  if (pendingGitHubCallbackConnection?.key === request.key) {
+    return pendingGitHubCallbackConnection;
+  }
+
+  const promise = request.installationId
+    ? fetch(
+        `/api/github/installations/${encodeURIComponent(request.installationId)}/repositories`,
+      ).then(async (response) => {
+        if (!response.ok) {
+          throw new Error("Could not load GitHub repositories");
+        }
+        const body = (await response.json()) as {
+          repositories: InstalledRepository[];
+        };
+        return {
+          installationId: request.installationId ?? "",
+          repositories: body.repositories,
+        };
+      })
+    : fetch(
+        `/api/github/authorized-installation?code=${encodeURIComponent(request.code ?? "")}`,
+      ).then(async (response) => {
+        if (response.status === 404) {
+          await redirectToGitHubInstall(request.state);
+          return null;
+        }
+        if (!response.ok) {
+          throw new Error("Could not connect GitHub installation");
+        }
+        return response.json() as Promise<GitHubConnectionResponse>;
+      });
+
+  pendingGitHubCallbackConnection = {
+    key: request.key,
+    promise,
+  };
+
+  return pendingGitHubCallbackConnection;
+}
+
+function clearGitHubCallbackParams(params: URLSearchParams) {
+  params.delete("code");
+  params.delete("installation_id");
+  params.delete("setup_action");
+  params.delete("state");
+
+  const search = params.toString();
+  window.history.replaceState(
+    {},
+    "",
+    `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`,
+  );
+}
 
 const initialIntakeDetailsForm: IntakeDetailsInput = {
   email: "",
@@ -87,44 +197,84 @@ export function ContextGatheringApp() {
   const [demoRequestProgress, setDemoRequestProgress] =
     useState<DemoRequestProgress>({ status: "processing" });
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLoadingGitHubRepositories, setIsLoadingGitHubRepositories] =
+    useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const installationId = params.get("installation_id");
-    if (!installationId) {
+    const request = readGitHubCallbackRequest(params, draft.draftId);
+    const pendingConnection = request
+      ? getGitHubCallbackConnection(request)
+      : pendingGitHubCallbackConnection;
+    if (!pendingConnection) {
       return;
     }
+    const activeConnection = pendingConnection;
 
+    if (request) {
+      clearGitHubCallbackParams(params);
+      if (request.installationId) {
+        const githubInstallationId = request.installationId;
+        setRepositories([]);
+        setRepoInput("");
+        setDraft((current) =>
+          connectGitHubInstallation(current, githubInstallationId),
+        );
+      }
+    }
+
+    let cancelled = false;
     setError("");
-    fetch(`/api/github/installations/${installationId}/repositories`)
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error("Could not load GitHub repositories");
-        }
-        return response.json() as Promise<{
-          repositories: InstalledRepository[];
-        }>;
-      })
-      .then(({ repositories: nextRepositories }) => {
-        setRepositories(nextRepositories);
-        setDraft((current) => {
-          const connected = connectGitHubInstallation(current, installationId);
-          const onlyRepository = nextRepositories[0];
-          if (nextRepositories.length === 1 && onlyRepository) {
-            setRepoInput(onlyRepository.repoUrl);
-            return selectRepositoryForDemo(connected, {
-              private: onlyRepository.private,
-              repoUrl: onlyRepository.repoUrl,
-            });
-          }
+    setIsLoadingGitHubRepositories(true);
 
-          return connected;
-        });
-      })
-      .catch((caught) => {
-        setError(caught instanceof Error ? caught.message : "GitHub failed");
-      });
-  }, []);
+    async function loadGitHubConnection() {
+      try {
+        const connection = await activeConnection.promise;
+
+        if (!connection) {
+          if (pendingGitHubCallbackConnection?.key === activeConnection.key) {
+            pendingGitHubCallbackConnection = null;
+          }
+          return;
+        }
+
+        if (cancelled) {
+          return;
+        }
+
+        if (pendingGitHubCallbackConnection?.key === activeConnection.key) {
+          pendingGitHubCallbackConnection = null;
+        }
+
+        const nextRepositories = connection.repositories;
+        const firstRepository = nextRepositories[0];
+        setRepositories(nextRepositories);
+        if (firstRepository) {
+          setRepoInput(firstRepository.repoUrl);
+        }
+        setDraft((current) =>
+          connectGitHubInstallationRepositories(current, {
+            githubInstallationId: connection.installationId,
+            repositories: nextRepositories,
+          }),
+        );
+      } catch (caught) {
+        if (!cancelled) {
+          setError(caught instanceof Error ? caught.message : "GitHub failed");
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingGitHubRepositories(false);
+        }
+      }
+    }
+
+    void loadGitHubConnection();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [draft.draftId]);
 
   useEffect(() => {
     if (
@@ -172,20 +322,25 @@ export function ContextGatheringApp() {
   async function connectGitHub() {
     setError("");
     const response = await fetch(
-      `/api/github/install-url?state=${encodeURIComponent(draft.draftId)}`,
+      `/api/github/authorization-url?state=${encodeURIComponent(draft.draftId)}`,
     );
     if (!response.ok) {
       setError("Could not start GitHub connection.");
       return;
     }
 
-    const { installUrl } = (await response.json()) as { installUrl: string };
-    window.location.href = installUrl;
+    const { authorizationUrl } = (await response.json()) as {
+      authorizationUrl: string;
+    };
+    window.location.href = authorizationUrl;
   }
 
   function continueFromRepo() {
     try {
-      if (!repoInput.startsWith("https://github.com/")) {
+      const selectedRepoUrl = draft.githubInstallationId
+        ? draft.repoUrl
+        : repoInput;
+      if (!selectedRepoUrl.startsWith("https://github.com/")) {
         throw new Error(
           draft.githubInstallationId
             ? "Select one GitHub repository to demo."
@@ -198,7 +353,7 @@ export function ContextGatheringApp() {
           ...(draft.githubInstallationId === undefined
             ? {}
             : { githubInstallationId: draft.githubInstallationId }),
-          repoUrl: repoInput,
+          repoUrl: selectedRepoUrl,
           repoVisibility: draft.githubInstallationId
             ? draft.repoVisibility
             : "public",
@@ -380,72 +535,16 @@ export function ContextGatheringApp() {
       {draft.chatStep === "repo" ? (
         <section className="repo-step" aria-label="GitHub repository">
           <article className="repo-panel">
-            <div className="repo-connect-row">
-              <label className="repo-url-input">
-                <span className="link-icon" aria-hidden="true">
-                  <LinkIcon strokeWidth={2.4} />
-                </span>
-                <input
-                  aria-label="GitHub repository URL"
-                  onChange={(event) => setRepoInput(event.currentTarget.value)}
-                  placeholder="https://github.com/your-org/your-repo"
-                  value={repoInput}
-                />
-              </label>
-              <span className="or-label">OR</span>
-              <button
-                className={`github-button ${
-                  draft.githubInstallationId ? "github-button-connected" : ""
-                }`}
-                onClick={() =>
-                  draft.githubInstallationId ? undefined : void connectGitHub()
-                }
-                type="button"
-              >
-                <span className="github-logo-frame" aria-hidden="true">
-                  <img
-                    alt=""
-                    className="github-logo-image"
-                    src={githubLogoUrl}
-                  />
-                </span>
-                {draft.githubInstallationId ? (
-                  <>
-                    <Check aria-hidden="true" className="button-icon" />
-                    GitHub connected
-                  </>
-                ) : (
-                  "Connect GitHub"
-                )}
-              </button>
-              {repositories.length > 1 ? (
-                <label className="repo-select-field">
-                  <span>Select one repository to demo</span>
-                  <select
-                    aria-label="Select one GitHub repository to demo"
-                    onChange={(event) =>
-                      selectRepositoryFromDropdown(event.currentTarget.value)
-                    }
-                    value={draft.repoUrl}
-                  >
-                    <option value="">Choose a repository</option>
-                    {repositories.map((repository) => (
-                      <option
-                        key={repository.repoUrl}
-                        value={repository.repoUrl}
-                      >
-                        {repository.fullName}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ) : null}
-              {repositories.length === 1 && draft.repoUrl ? (
-                <p className="repo-selected-note">
-                  ✓ Selected {repositories[0]?.fullName}
-                </p>
-              ) : null}
-            </div>
+            <RepoConnectionFields
+              githubInstallationId={draft.githubInstallationId}
+              onConnectGitHub={() => void connectGitHub()}
+              onRepoInputChange={setRepoInput}
+              onRepositorySelect={selectRepositoryFromDropdown}
+              repoInput={repoInput}
+              repositories={repositories}
+              isLoadingRepositories={isLoadingGitHubRepositories}
+              selectedRepoUrl={draft.repoUrl}
+            />
           </article>
           <p className="repo-help">
             Paste a public GitHub URL, or connect GitHub to grant access to a
@@ -454,12 +553,13 @@ export function ContextGatheringApp() {
             We currently support web apps built with JavaScript or TypeScript.
           </p>
           <button
-            className="primary-hoot"
+            aria-label="Make me a demo"
+            className="primary-hoot repo-submit-button"
             disabled={!canContinueRepoStep}
             onClick={continueFromRepo}
             type="button"
           >
-            Make me a demo
+            <ArrowRight aria-hidden="true" strokeWidth={2.4} />
           </button>
         </section>
       ) : null}
@@ -488,6 +588,103 @@ export function ContextGatheringApp() {
 
       {error ? <p className="error-banner">{error}</p> : null}
     </main>
+  );
+}
+
+type RepoConnectionFieldsProps = {
+  githubInstallationId: string | undefined;
+  isLoadingRepositories: boolean;
+  onConnectGitHub: () => void;
+  onRepoInputChange: (value: string) => void;
+  onRepositorySelect: (repoUrl: string) => void;
+  repoInput: string;
+  repositories: InstalledRepository[];
+  selectedRepoUrl: string;
+};
+
+export function RepoConnectionFields({
+  githubInstallationId,
+  isLoadingRepositories,
+  onConnectGitHub,
+  onRepoInputChange,
+  onRepositorySelect,
+  repoInput,
+  repositories,
+  selectedRepoUrl,
+}: RepoConnectionFieldsProps) {
+  const isConnected = githubInstallationId !== undefined;
+  const connectedRepositoryStatus = isLoadingRepositories
+    ? "Loading repositories..."
+    : "No repositories found";
+
+  return (
+    <div className="repo-connect-row">
+      {isConnected && repositories.length > 0 ? (
+        <label className="repo-url-input repo-url-select">
+          <span className="link-icon" aria-hidden="true">
+            <LinkIcon strokeWidth={2.4} />
+          </span>
+          <select
+            aria-label="Select one GitHub repository to demo"
+            onChange={(event) => onRepositorySelect(event.currentTarget.value)}
+            value={selectedRepoUrl}
+          >
+            <option value="">Choose a repository</option>
+            {repositories.map((repository) => (
+              <option key={repository.repoUrl} value={repository.repoUrl}>
+                {repository.fullName}
+              </option>
+            ))}
+          </select>
+          <span className="repo-select-chevron" aria-hidden="true">
+            <ChevronDown strokeWidth={2.4} />
+          </span>
+        </label>
+      ) : isConnected ? (
+        <label className="repo-url-input repo-url-loading">
+          <span className="link-icon" aria-hidden="true">
+            <LinkIcon strokeWidth={2.4} />
+          </span>
+          <input
+            aria-label="GitHub repositories"
+            disabled
+            readOnly
+            value={connectedRepositoryStatus}
+          />
+        </label>
+      ) : (
+        <label className="repo-url-input">
+          <span className="link-icon" aria-hidden="true">
+            <LinkIcon strokeWidth={2.4} />
+          </span>
+          <input
+            aria-label="GitHub repository URL"
+            onChange={(event) => onRepoInputChange(event.currentTarget.value)}
+            placeholder="https://github.com/org/repo"
+            value={repoInput}
+          />
+        </label>
+      )}
+      <span
+        aria-label={isConnected ? "GitHub connected" : undefined}
+        className={`or-label ${isConnected ? "or-label-connected" : ""}`}
+      >
+        {isConnected ? <Check aria-hidden="true" strokeWidth={2.4} /> : "OR"}
+      </span>
+      <button
+        className={`github-button ${
+          isConnected ? "github-button-connected" : ""
+        }`}
+        disabled={isConnected}
+        onClick={() => (isConnected ? undefined : onConnectGitHub())}
+        type="button"
+      >
+        <span className="github-logo-frame" aria-hidden="true">
+          <img alt="" className="github-logo-image" src={githubLogoUrl} />
+        </span>
+        {isConnected ? "Connected" : "Connect GitHub"}
+      </button>
+    </div>
   );
 }
 

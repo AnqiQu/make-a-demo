@@ -1,6 +1,11 @@
 import type { DemoBrief } from "../../pipeline/01-context-gathering/intake/demo-brief.schema";
 import type { NormalizedSupportingDocument } from "../../pipeline/01-context-gathering/supporting-documents";
 import type { PipelineJobResult } from "./pipeline-job";
+import {
+  type PipelineObserver,
+  noopPipelineObserver,
+  sanitizeObservabilityError,
+} from "./pipeline-observer";
 
 type ProjectDemoGenerationJob = {
   demoBrief: DemoBrief;
@@ -62,14 +67,34 @@ export type ProjectDemoGenerationDependencies = ProjectFinalVideoGenerator & {
   runPipeline(input: ProjectDemoGenerationJob): Promise<PipelineJobResult>;
 };
 
+export type ProjectDemoGenerationOptions = {
+  now?: () => number;
+  observer?: PipelineObserver;
+};
+
 export async function processNextProjectDemoGenerationJob(
   store: ProjectDemoGenerationQueueStore,
   dependencies: ProjectDemoGenerationDependencies,
+  options: ProjectDemoGenerationOptions = {},
 ): Promise<ProjectDemoGenerationResult> {
+  const observer = options.observer ?? noopPipelineObserver;
+  const now = options.now ?? Date.now;
   const job = await store.claimNextQueuedProject();
   if (!job) {
     return { status: "idle" };
   }
+
+  const context = {
+    demoRequestId: job.demoRequestId,
+    projectId: job.projectId,
+    workspaceId: job.workspaceId,
+  };
+  observer.record({
+    ...context,
+    event: "job.claimed",
+    status: "claimed",
+  });
+  const startedAt = now();
 
   try {
     const pipelineResult = await dependencies.runPipeline(job);
@@ -77,6 +102,14 @@ export async function processNextProjectDemoGenerationJob(
       await store.markProjectFailed({
         error: pipelineResult.status,
         projectId: job.projectId,
+      });
+      observer.record({
+        ...context,
+        durationMs: now() - startedAt,
+        errorMessage: pipelineResult.status,
+        errorType: "PipelineJobFailed",
+        event: "job.failed",
+        status: "failed",
       });
       return { projectId: job.projectId, status: "failed" };
     }
@@ -90,12 +123,25 @@ export async function processNextProjectDemoGenerationJob(
       generatedDemoUrl: finalVideo.generatedDemoUrl,
       projectId: job.projectId,
     });
+    observer.record({
+      ...context,
+      durationMs: now() - startedAt,
+      event: "job.completed",
+      status: "completed",
+    });
 
     return { projectId: job.projectId, status: "completed" };
   } catch (error) {
     await store.markProjectFailed({
       error: error instanceof Error ? error.message : "Unknown queue error",
       projectId: job.projectId,
+    });
+    observer.record({
+      ...context,
+      ...sanitizeObservabilityError(error),
+      durationMs: now() - startedAt,
+      event: "job.failed",
+      status: "failed",
     });
     return { projectId: job.projectId, status: "failed" };
   }
