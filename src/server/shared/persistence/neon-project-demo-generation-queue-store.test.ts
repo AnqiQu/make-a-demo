@@ -19,14 +19,11 @@ describe("NeonProjectDemoGenerationQueueStore", () => {
                           limit: async () => [
                             {
                               context: {
-                                structuredContext: {
-                                  importantFeatures:
-                                    "script generation, video generation",
-                                  productSummary: "Creates demo videos.",
-                                  requestedDurationSeconds: 60,
-                                  targetUsers: "Founders",
-                                },
-                                transcript: [],
+                                importantFeatures:
+                                  "script generation, video generation",
+                                productSummary: "Creates demo videos.",
+                                requestedDurationSeconds: 60,
+                                targetUsers: "Founders",
                               },
                               demoRequestId: "demo-request-1",
                               projectId: "project-1",

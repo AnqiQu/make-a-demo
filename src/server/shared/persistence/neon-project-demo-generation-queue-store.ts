@@ -186,10 +186,13 @@ export function createNeonProjectDemoGenerationQueueStore(
 
 function readDemoBriefFromProjectContext(value: unknown) {
   const context = readRecord(value, "Project context");
-  const structuredContext = readRecord(
-    context.structuredContext,
-    "Project context.structuredContext",
-  );
+  const structuredContext =
+    context.structuredContext === undefined
+      ? context
+      : readRecord(
+          context.structuredContext,
+          "Project context.structuredContext",
+        );
   const targetUsers = readOptionalString(structuredContext, "targetUsers");
 
   return {

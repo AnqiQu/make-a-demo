@@ -1,13 +1,5 @@
 type ProjectRepoVisibility = "private" | "public";
 
-type ContextTranscriptMessage = {
-  id: string;
-  promptId: string;
-  role: "assistant" | "user";
-  text: string;
-  timestamp: string;
-};
-
 type SupportingFileSubmission = {
   fileName: string;
   mimeType: string;
@@ -21,7 +13,6 @@ export type ContextGatheringSubmission = {
     email: string;
     name: string;
   };
-  contextTranscript: ContextTranscriptMessage[];
   githubInstallationId?: string;
   repoUrl: string;
   repoVisibility: ProjectRepoVisibility;
@@ -35,8 +26,10 @@ export type ContextGatheringSubmission = {
 };
 
 type ContextGatheringProjectContext = {
-  structuredContext: ContextGatheringSubmission["structuredContext"];
-  transcript: ContextTranscriptMessage[];
+  importantFeatures: string;
+  productSummary: string;
+  requestedDurationSeconds: number;
+  targetUsers: string;
 };
 
 export type ContextGatheringStoreInput = {
@@ -78,10 +71,7 @@ export async function submitContextGathering(
 
   return dependencies.store.createQueuedProject({
     project: {
-      context: {
-        structuredContext: input.structuredContext,
-        transcript: input.contextTranscript,
-      },
+      context: createProjectContext(input.structuredContext),
       repoUrl: input.repoUrl,
       repoVisibility: input.repoVisibility,
       supportingFiles: input.supportingFiles.map(serializeSupportingFile),
@@ -94,6 +84,17 @@ export async function submitContextGathering(
       name: input.contact.name,
     },
   });
+}
+
+function createProjectContext(
+  input: ContextGatheringSubmission["structuredContext"],
+): ContextGatheringProjectContext {
+  return {
+    importantFeatures: input.importantFeatures,
+    productSummary: input.productSummary,
+    requestedDurationSeconds: input.requestedDurationSeconds,
+    targetUsers: input.targetUsers,
+  };
 }
 
 function serializeSupportingFile(file: SupportingFileSubmission) {

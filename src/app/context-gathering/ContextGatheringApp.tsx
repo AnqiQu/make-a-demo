@@ -175,7 +175,6 @@ const initialIntakeDetailsForm: IntakeDetailsInput = {
   name: "",
   productSummary: "",
   requestedDurationSeconds: 60,
-  supplementaryInformation: "",
   targetUsers: "",
 };
 
@@ -453,7 +452,6 @@ export function ContextGatheringApp() {
       const response = await fetch("/api/context-gathering/submit", {
         body: JSON.stringify({
           contact: draftToSubmit.contact,
-          contextTranscript: draftToSubmit.contextTranscript,
           githubInstallationId: draftToSubmit.githubInstallationId,
           repoUrl: draftToSubmit.repoUrl,
           repoVisibility: draftToSubmit.repoVisibility,

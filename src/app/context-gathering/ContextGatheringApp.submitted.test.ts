@@ -129,7 +129,6 @@ describe("ContextDetailsForm", () => {
           name: "",
           productSummary: "",
           requestedDurationSeconds: 60,
-          supplementaryInformation: "",
           targetUsers: "",
         },
         isSubmitting: false,
@@ -161,7 +160,6 @@ describe("ContextDetailsForm", () => {
     expect(html).not.toContain("<h2>Supporting documents</h2>");
     expect(html).not.toContain("Drop anything relevant here");
     expect(html).not.toContain("ZIP");
-    expect(html).not.toContain("Any supplementary information?");
     expect(html).not.toContain("Chat response");
     expect(html).not.toContain("<textarea");
   });
@@ -175,7 +173,6 @@ describe("ContextDetailsForm", () => {
           name: "",
           productSummary: "",
           requestedDurationSeconds: 60,
-          supplementaryInformation: "",
           targetUsers: "",
         },
         isSubmitting: false,
