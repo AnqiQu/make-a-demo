@@ -15,6 +15,8 @@ export type PreparationWorkspaceExecuteOptions = {
   onStdout?: (chunk: string) => void;
 };
 
+export type PreparationWorkspaceLogEntry = Record<string, unknown>;
+
 /**
  * Executes commands and network-policy changes inside a Repo Preparation workspace.
  * Implementations must scope destructive work to the ephemeral workspace copy and
@@ -27,6 +29,12 @@ export interface PreparationWorkspace {
     options?: PreparationWorkspaceExecuteOptions,
   ): Promise<PreparationWorkspaceCommandResult>;
   getPreviewUrl(port: number): Promise<string>;
+  /**
+   * Emits structured audit logs inside the sandbox. Implementations must keep a
+   * durable copy available from workspace storage and may additionally relay the
+   * entry through provider-specific process logs when that route is available.
+   */
+  writeSandboxLog?(entry: PreparationWorkspaceLogEntry): Promise<void>;
   setOutboundNetworkAccess(enabled: boolean): Promise<void>;
   uploadFiles(files: PreparationWorkspaceUploadFile[]): Promise<void>;
 }

@@ -328,15 +328,19 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
     expect(events).toEqual(
       expect.arrayContaining([
         {
-          execute: expect.stringContaining(
-            '"failureReason":"Preparation manifest handoff is invalid: status must be a non-empty string"',
-          ),
+          sandboxLog: expect.objectContaining({
+            event: "validation-finished",
+            failureReason:
+              "Preparation manifest handoff is invalid: status must be a non-empty string",
+            stage: "repo-preparation",
+            status: "failed",
+          }),
         },
       ]),
     );
   });
 
-  it("writes a Daytona-side preparation debug log during the agent loop", async () => {
+  it("writes Repo Preparation lifecycle events to the sandbox Pino log seam", async () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparationAgent({
       modelID: "gpt-5.5",
@@ -360,23 +364,27 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
     expect(events).toEqual(
       expect.arrayContaining([
         {
-          execute: expect.stringContaining(
-            "/workspace/.makeademo/repo-preparation-debug.jsonl",
-          ),
+          sandboxLog: expect.objectContaining({
+            event: "opencode-started",
+            stage: "repo-preparation",
+          }),
         },
         {
-          execute: expect.stringContaining('"event":"opencode-started"'),
+          sandboxLog: expect.objectContaining({
+            event: "preparation-result-found",
+            stage: "repo-preparation",
+          }),
         },
-        {
-          execute: expect.stringContaining(
-            '"event":"preparation-result-found"',
-          ),
-        },
+      ]),
+    );
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        { execute: expect.stringContaining("repo-preparation-debug.jsonl") },
       ]),
     );
   });
 
-  it("mirrors streamed OpenCode output into Daytona attempt log files", async () => {
+  it("mirrors meaningful streamed OpenCode output into the sandbox Pino log seam", async () => {
     const events: unknown[] = [];
     const streamed: string[] = [];
     const agent = new DaytonaOpenCodeRepoPreparationAgent({
@@ -406,29 +414,61 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
     expect(events).toEqual(
       expect.arrayContaining([
         {
-          execute: expect.stringContaining(
-            "/workspace/.makeademo/opencode-attempt-1.stdout.log",
-          ),
+          sandboxLog: expect.objectContaining({
+            channel: "stdout",
+            event: "opencode.output",
+            raw: "agent output",
+            stage: "repo-preparation",
+          }),
         },
         {
-          execute: expect.stringContaining(
-            "/workspace/.makeademo/opencode-activity.jsonl",
-          ),
+          sandboxLog: expect.objectContaining({
+            channel: "stderr",
+            event: "opencode.output",
+            raw: "agent warning",
+            stage: "repo-preparation",
+          }),
         },
-        {
-          execute: expect.stringContaining('"stage":"repo-preparation"'),
-        },
-        {
-          execute: expect.stringContaining("agent output"),
-        },
-        {
-          execute: expect.stringContaining(
-            "/workspace/.makeademo/opencode-attempt-1.stderr.log",
-          ),
-        },
-        {
-          execute: expect.stringContaining("agent warning"),
-        },
+      ]),
+    );
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        { execute: expect.stringContaining("opencode-activity.jsonl") },
+        { execute: expect.stringContaining("opencode-attempt-1.stdout.log") },
+        { execute: expect.stringContaining("opencode-attempt-1.stderr.log") },
+      ]),
+    );
+  });
+
+  it("filters terminal-control-only OpenCode chunks out of the sandbox audit log", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparationAgent({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandStderrChunks: ["\r"],
+        commandStdout: ["Submitted preparation result."],
+        commandStdoutChunks: ["\r\r", "\u001b[?25h", ">"],
+        preparationResult: successResult(),
+        validationResult: validationArtifact(),
+      }),
+      providerApiKey: "openai_key",
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        { sandboxLog: expect.objectContaining({ raw: "\r\r" }) },
+        { sandboxLog: expect.objectContaining({ raw: "\u001b[?25h" }) },
+        { sandboxLog: expect.objectContaining({ raw: ">" }) },
+        { sandboxLog: expect.objectContaining({ raw: "\r" }) },
       ]),
     );
   });
@@ -556,15 +596,6 @@ function fakeWorkspace(
       for (const chunk of input.commandStderrChunks ?? []) {
         options?.onStderr?.(chunk);
       }
-      if (command.includes("repo-preparation-debug.jsonl")) {
-        return { exitCode: 0, stderr: "", stdout: "" };
-      }
-      if (command.includes("opencode-attempt-") && command.includes(".log")) {
-        return { exitCode: 0, stderr: "", stdout: "" };
-      }
-      if (command.includes("opencode-activity.jsonl")) {
-        return { exitCode: 0, stderr: "", stdout: "" };
-      }
       if (
         command.startsWith("if test -f") &&
         command.includes("dependency-install-request.json")
@@ -673,6 +704,9 @@ function fakeWorkspace(
     },
     async uploadFiles() {
       throw new Error("Repo Preparation should clone inside Daytona.");
+    },
+    async writeSandboxLog(entry) {
+      events.push({ sandboxLog: entry });
     },
   };
 }

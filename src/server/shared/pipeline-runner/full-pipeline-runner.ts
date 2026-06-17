@@ -1,4 +1,4 @@
-import { appendFile, mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type {
@@ -11,6 +11,11 @@ import type {
   CompositedVideoManifest,
 } from "../../pipeline/07-compositing/composite-video";
 import { compositeVideoFromScript } from "../../pipeline/07-compositing/composite-video";
+import {
+  type PipelineLogSink,
+  createFilePipelineLogSink,
+  createPipelineEventLogger,
+} from "../logging/pipeline-event-logger";
 import type { PipelineJobInput } from "./pipeline-job";
 import { runPipelineJob } from "./pipeline-orchestrator";
 import type {
@@ -59,7 +64,7 @@ type FullPipelineArtifactSummary = {
 type FullPipelineLogEntry = {
   event: string;
   message: string;
-  timestamp: string;
+  time: string;
 } & Record<string, unknown>;
 
 type FullPipelineLogInput = {
@@ -75,6 +80,7 @@ export type FullPipelineRunnerOptions = PipelineOrchestratorOptions & {
     input: CompositeVideoFromScriptInput,
   ) => Promise<CompositedVideoManifest>;
   onLog?: (entry: FullPipelineLogEntry) => void;
+  logSinks?: PipelineLogSink[];
   outputRoot?: string;
   rawOpenCodeLogPath?: string;
   runId?: string;
@@ -91,7 +97,10 @@ export async function runFullPipelineJob(
   const runDirectory = join(outputRoot, runId);
   await mkdir(runDirectory, { recursive: true });
   const logPath = join(runDirectory, "pipeline-log.jsonl");
-  const log = createPipelineLogger(logPath, options.onLog);
+  const log = createPipelineLogger(logPath, {
+    extraSinks: options.logSinks ?? [],
+    onLog: options.onLog,
+  });
 
   await log({
     event: "pipeline-started",
@@ -327,16 +336,30 @@ async function writeScriptGenerationResumeFile(input: {
 
 function createPipelineLogger(
   logPath: string,
-  onLog: ((entry: FullPipelineLogEntry) => void) | undefined,
+  options: {
+    extraSinks: PipelineLogSink[];
+    onLog: ((entry: FullPipelineLogEntry) => void) | undefined;
+  },
 ) {
-  return async (entry: FullPipelineLogInput) => {
-    const logEntry: FullPipelineLogEntry = {
-      ...entry,
-      timestamp: new Date().toISOString(),
-    };
+  const sinks: PipelineLogSink[] = [
+    createFilePipelineLogSink(logPath),
+    ...options.extraSinks,
+  ];
+  if (options.onLog !== undefined) {
+    sinks.push({
+      write(line) {
+        options.onLog?.(JSON.parse(line) as FullPipelineLogEntry);
+      },
+    });
+  }
 
-    onLog?.(logEntry);
-    await appendFile(logPath, `${JSON.stringify(logEntry)}\n`);
+  const logger = createPipelineEventLogger({
+    base: { component: "full-pipeline" },
+    sinks,
+  });
+
+  return async (entry: FullPipelineLogInput) => {
+    await logger.info(entry, entry.message);
   };
 }
 

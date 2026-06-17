@@ -6,7 +6,7 @@ import { assertCaptureReadyScriptQuality } from "../../../pipeline/05-script-gen
 import type { VideoScriptPackage } from "../../../pipeline/05-script-generation/video-script-package";
 import { parseVideoScriptPackage } from "../../../pipeline/06-capture/video-script-package.schema";
 import type { CaptureReadyVideoScriptPackage } from "../../../pipeline/06-capture/video-script-package.schema";
-import { appendDaytonaOpenCodeActivityLog } from "./daytona-opencode-activity-log";
+import { writeDaytonaOpenCodeActivityLog } from "./daytona-opencode-activity-log";
 
 const makeADemoArtifactDirectory = "/workspace/.makeademo";
 const makeADemoOpenCodeConfigDirectory = `${makeADemoArtifactDirectory}/opencode`;
@@ -48,6 +48,11 @@ export class DaytonaOpenCodeScriptGenerationAgent
       "Script Generation did not produce a valid script package.";
 
     for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
+      await writeScriptGenerationSandboxLog(input, {
+        attempt,
+        event: "script-generation.opencode-attempt.started",
+        opencodeSessionID: input.opencodeSessionID,
+      });
       this.writeStatus(
         `Script Generation OpenCode attempt ${attempt} starting in session ${input.opencodeSessionID}.`,
       );
@@ -67,7 +72,7 @@ export class DaytonaOpenCodeScriptGenerationAgent
           onStderr: (chunk) => {
             this.onStderr?.(chunk);
             outputWrites.push(
-              appendDaytonaOpenCodeActivityLog(
+              writeDaytonaOpenCodeActivityLog(
                 input.preparationWorkspace.workspace,
                 {
                   attempt,
@@ -81,7 +86,7 @@ export class DaytonaOpenCodeScriptGenerationAgent
           onStdout: (chunk) => {
             this.onStdout?.(chunk);
             outputWrites.push(
-              appendDaytonaOpenCodeActivityLog(
+              writeDaytonaOpenCodeActivityLog(
                 input.preparationWorkspace.workspace,
                 {
                   attempt,
@@ -98,6 +103,12 @@ export class DaytonaOpenCodeScriptGenerationAgent
 
       if (result.exitCode !== 0) {
         lastFailure = `OpenCode Script Generation exited with ${result.exitCode}: ${[result.stderr, result.stdout].filter((line) => line.length > 0).join("\n")}`;
+        await writeScriptGenerationSandboxLog(input, {
+          attempt,
+          event: "script-generation.opencode-attempt.failed",
+          exitCode: result.exitCode,
+          reason: lastFailure,
+        });
         this.writeStatus(
           `Script Generation OpenCode attempt ${attempt} failed before artifact validation.`,
         );
@@ -108,6 +119,11 @@ export class DaytonaOpenCodeScriptGenerationAgent
       const artifact = await readScriptPackageArtifact(input);
       if (artifact.status === "failed") {
         lastFailure = artifact.reason;
+        await writeScriptGenerationSandboxLog(input, {
+          attempt,
+          event: "script-generation.artifact.missing",
+          reason: lastFailure,
+        });
         this.writeStatus(
           `Script Generation OpenCode attempt ${attempt} did not produce a readable artifact: ${artifact.reason}`,
         );
@@ -120,6 +136,11 @@ export class DaytonaOpenCodeScriptGenerationAgent
         assertCaptureReadyScriptQuality(
           artifact.value as CaptureReadyVideoScriptPackage,
         );
+        await writeScriptGenerationSandboxLog(input, {
+          attempt,
+          event: "script-generation.script-package.succeeded",
+          scriptId: (artifact.value as CaptureReadyVideoScriptPackage).scriptId,
+        });
         this.writeStatus(
           `Script Generation OpenCode attempt ${attempt} produced a valid script package.`,
         );
@@ -129,6 +150,11 @@ export class DaytonaOpenCodeScriptGenerationAgent
         );
       } catch (error) {
         lastFailure = readErrorMessage(error);
+        await writeScriptGenerationSandboxLog(input, {
+          attempt,
+          event: "script-generation.script-package.invalid",
+          reason: lastFailure,
+        });
         this.writeStatus(
           `Script Generation OpenCode attempt ${attempt} produced an invalid artifact: ${lastFailure}`,
         );
@@ -148,6 +174,18 @@ export class DaytonaOpenCodeScriptGenerationAgent
       })}\n`,
     );
   }
+}
+
+async function writeScriptGenerationSandboxLog(
+  input: AgenticScriptGenerationInput,
+  entry: Record<string, unknown>,
+): Promise<void> {
+  await input.preparationWorkspace.workspace.writeSandboxLog?.({
+    ...entry,
+    repoUrl: input.repoUrl,
+    stage: "script-generation",
+    workspaceId: input.preparationManifest.workspaceId,
+  });
 }
 
 async function removePreviousScriptPackage(

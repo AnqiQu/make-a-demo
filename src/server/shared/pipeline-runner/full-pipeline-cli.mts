@@ -11,6 +11,7 @@ import { DaytonaOpenCodeScriptGenerationAgent } from "../integrations/agents/day
 import { createRepoPreparationAgent } from "../integrations/agents/repo-preparation-agent-factory";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import { DaytonaSandboxRunner } from "../integrations/sandbox/daytona-sandbox-runner";
+import { createPrettyPipelineLogSink } from "../logging/pipeline-event-logger";
 import { runFullPipelineJob } from "./full-pipeline-runner";
 import { createOpenCodeOutputStream } from "./opencode-output-stream";
 import { createOpenCodeRawOutputLog } from "./opencode-raw-output-log";
@@ -119,8 +120,12 @@ const result = await runFullPipelineJob(
     scriptGenerationAgent,
   }),
   {
+    logSinks: [
+      createPrettyPipelineLogSink({
+        write: (text) => process.stdout.write(text),
+      }),
+    ],
     outputRoot: fullPipelineOutputRoot,
-    onLog: (entry) => process.stdout.write(`[pipeline] ${entry.message}\n`),
     rawOpenCodeLogPath: rawOpenCodeLog.logPath,
     runId,
     scriptGenerationRawOpenCodeLogPath: scriptGenerationRawOpenCodeLog.logPath,

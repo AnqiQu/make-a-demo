@@ -138,6 +138,82 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ]);
   });
 
+  it("writes Pino-formatted sandbox logs through durable files", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls),
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.writeSandboxLog?.({
+      event: "repo-preparation.started",
+      stage: "repo-preparation",
+      timestamp: "2026-06-17T00:00:00.000Z",
+    });
+    await handle.workspace.writeSandboxLog?.({
+      event: "repo-preparation.succeeded",
+      stage: "repo-preparation",
+    });
+
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        {
+          executeCommand: expect.stringContaining(
+            "/tmp/makeademo/sandbox-log.jsonl",
+          ),
+        },
+        {
+          executeCommand: expect.stringContaining(
+            "/workspace/.makeademo/sandbox-log.jsonl",
+          ),
+        },
+        {
+          executeCommand: expect.stringContaining(
+            '"event":"repo-preparation.succeeded"',
+          ),
+        },
+        {
+          executeCommand: expect.stringContaining('"level":"info"'),
+        },
+        {
+          executeCommand: expect.stringContaining(
+            '"message":"repo-preparation.succeeded"',
+          ),
+        },
+        {
+          executeCommand: expect.stringContaining('"service":"makeademo"'),
+        },
+        {
+          executeCommand: expect.stringContaining(
+            '"eventTime":"2026-06-17T00:00:00.000Z"',
+          ),
+        },
+      ]),
+    );
+    const sandboxLogWrites = calls
+      .filter(
+        (call): call is { executeCommand: string } =>
+          typeof call === "object" &&
+          call !== null &&
+          "executeCommand" in call &&
+          typeof call.executeCommand === "string" &&
+          call.executeCommand.includes("/tmp/makeademo/sandbox-log.jsonl"),
+      )
+      .map((call) => call.executeCommand);
+    expect(sandboxLogWrites).not.toHaveLength(0);
+    for (const command of sandboxLogWrites) {
+      expect(countOccurrences(command, '"workspaceId"')).toBe(1);
+      expect(countOccurrences(command, '"message"')).toBe(1);
+      expect(command).not.toContain('"timestamp"');
+    }
+    expect(
+      calls.filter(
+        (call) =>
+          typeof call === "object" && call !== null && "createSession" in call,
+      ),
+    ).toHaveLength(0);
+  });
+
   it("disconnects active streaming commands before deleting the sandbox", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -361,4 +437,8 @@ function fakeClient(
       return sandbox;
     },
   };
+}
+
+function countOccurrences(text: string, needle: string): number {
+  return text.split(needle).length - 1;
 }

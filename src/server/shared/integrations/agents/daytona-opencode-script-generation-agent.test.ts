@@ -53,7 +53,7 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
     );
   });
 
-  it("mirrors Script Generation OpenCode output into a Daytona activity log", async () => {
+  it("mirrors Script Generation OpenCode output into the sandbox Pino log seam", async () => {
     const events: unknown[] = [];
     const stderr: string[] = [];
     const stdout: string[] = [];
@@ -80,25 +80,26 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
     expect(events).toEqual(
       expect.arrayContaining([
         {
-          execute: expect.stringContaining(
-            "/workspace/.makeademo/opencode-activity.jsonl",
-          ),
+          sandboxLog: expect.objectContaining({
+            channel: "stdout",
+            event: "opencode.output",
+            raw: "script generation output",
+            stage: "script-generation",
+          }),
         },
         {
-          execute: expect.stringContaining('"stage":"script-generation"'),
+          sandboxLog: expect.objectContaining({
+            channel: "stderr",
+            event: "opencode.output",
+            raw: "script generation warning",
+            stage: "script-generation",
+          }),
         },
-        {
-          execute: expect.stringContaining('"channel":"stdout"'),
-        },
-        {
-          execute: expect.stringContaining("script generation output"),
-        },
-        {
-          execute: expect.stringContaining('"channel":"stderr"'),
-        },
-        {
-          execute: expect.stringContaining("script generation warning"),
-        },
+      ]),
+    );
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        { execute: expect.stringContaining("opencode-activity.jsonl") },
       ]),
     );
   });
@@ -157,10 +158,6 @@ function workspaceHandle(events: unknown[], artifacts: unknown[]) {
         return { exitCode: 0, stderr: "", stdout: "generated" };
       }
 
-      if (command.includes("opencode-activity.jsonl")) {
-        return { exitCode: 0, stderr: "", stdout: "" };
-      }
-
       if (command.startsWith("if test -f")) {
         return latestArtifact === undefined
           ? { exitCode: 1, stderr: "", stdout: "" }
@@ -174,6 +171,9 @@ function workspaceHandle(events: unknown[], artifacts: unknown[]) {
     },
     async setOutboundNetworkAccess() {},
     async uploadFiles() {},
+    async writeSandboxLog(entry) {
+      events.push({ sandboxLog: entry });
+    },
   };
 
   return {

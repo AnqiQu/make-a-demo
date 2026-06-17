@@ -21,6 +21,7 @@ describe("DaytonaSandboxRunner", () => {
       "npm ci",
       "sh -lc 'cd /workspace && nohup npm run demo > /tmp/makeademo-demo.log 2>&1 & echo $!'",
       "node -e 'fetch(process.argv[1]).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));' 'http://localhost:3000'",
+      "if test -f /tmp/makeademo-demo.log; then cat /tmp/makeademo-demo.log; fi",
     ]);
     expect(workspace.networkAccess).toEqual([true, false]);
     expect(result).toMatchObject({
@@ -38,6 +39,41 @@ describe("DaytonaSandboxRunner", () => {
     await result.cleanup?.();
 
     expect(workspace.destroyed).toBe(true);
+  });
+
+  it("writes Project Validation progress and demo server output to sandbox logs", async () => {
+    const workspace = new FakePreparationWorkspaceHandle();
+    const runner = new DaytonaSandboxRunner();
+
+    await runner.runValidation({
+      demoCommand: "npm run demo",
+      preparationManifest: manifest("workspace_123"),
+      preparationWorkspace: workspace,
+      repoUrl: "https://github.com/example/app",
+      url: "http://localhost:3000",
+    });
+
+    expect(workspace.sandboxLogs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "project-validation.started",
+          stage: "project-validation",
+        }),
+        expect.objectContaining({
+          event: "project-validation.dependency-install.succeeded",
+          stage: "project-validation",
+        }),
+        expect.objectContaining({
+          event: "project-validation.demo-readiness.succeeded",
+          stage: "project-validation",
+        }),
+        expect.objectContaining({
+          event: "project-validation.demo-server-log",
+          log: "demo server ready",
+          stage: "project-validation",
+        }),
+      ]),
+    );
   });
 
   it("requires the retained Repo Preparation workspace", async () => {
@@ -194,6 +230,8 @@ class FakePreparationWorkspaceHandle implements PreparationWorkspaceHandle {
   networkAccess: boolean[] = [];
   previewPorts: number[] = [];
   readinessResults: number[] = [];
+  sandboxLogs: Record<string, unknown>[] = [];
+  private lastReadinessExitCode = 0;
 
   constructor(
     private readonly exitCodesByCommand = new Map<string, number>(),
@@ -208,10 +246,22 @@ class FakePreparationWorkspaceHandle implements PreparationWorkspaceHandle {
       }
 
       if (command.includes("fetch")) {
+        this.lastReadinessExitCode = this.readinessResults.shift() ?? 0;
         return {
-          exitCode: this.readinessResults.shift() ?? 0,
+          exitCode: this.lastReadinessExitCode,
           stderr: "",
           stdout: "",
+        };
+      }
+
+      if (command.startsWith("if test -f /tmp/makeademo-demo.log")) {
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout:
+            this.lastReadinessExitCode === 0
+              ? "demo server ready"
+              : "demo server failed",
         };
       }
 
@@ -219,9 +269,7 @@ class FakePreparationWorkspaceHandle implements PreparationWorkspaceHandle {
         return {
           exitCode: 0,
           stderr: "",
-          stdout: command.startsWith("if test -f")
-            ? "demo server failed"
-            : `ran ${command}`,
+          stdout: `ran ${command}`,
         };
       }
 
@@ -235,6 +283,9 @@ class FakePreparationWorkspaceHandle implements PreparationWorkspaceHandle {
     },
     setOutboundNetworkAccess: async (enabled: boolean) => {
       this.networkAccess.push(enabled);
+    },
+    writeSandboxLog: async (entry: Record<string, unknown>) => {
+      this.sandboxLogs.push(entry);
     },
     getPreviewUrl: async (port: number) => {
       this.previewPorts.push(port);
