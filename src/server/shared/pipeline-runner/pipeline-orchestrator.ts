@@ -42,6 +42,9 @@ export type PipelineOrchestratorOptions = {
   context?: Omit<PipelineObservationContext, "workspaceId">;
   now?: () => number;
   observer?: PipelineObserver;
+  onScriptGenerationReady?: (
+    event: ScriptGenerationReadyEvent,
+  ) => Promise<unknown> | unknown;
   onProgress?: (event: PipelineProgressEvent) => Promise<unknown> | unknown;
 };
 
@@ -268,14 +271,24 @@ export async function runPipelineJob(
   });
 
   let videoScriptPackage: VideoScriptPackage;
+  const scriptGenerationInput = {
+    demoBrief: input.demoBrief,
+    normalizedSupportingDocuments: input.normalizedSupportingDocuments,
+    ...(preparation.opencodeSessionID === undefined
+      ? {}
+      : { opencodeSessionID: preparation.opencodeSessionID }),
+    preparationManifest: preparation.manifest,
+    ...(preparation.workspace === undefined
+      ? {}
+      : { preparationWorkspace: preparation.workspace }),
+    repoUrl: input.repoUrl,
+    validation,
+  } satisfies ScriptGenerationInput;
   try {
-    videoScriptPackage = await dependencies.generateScriptPackage({
-      demoBrief: input.demoBrief,
-      normalizedSupportingDocuments: input.normalizedSupportingDocuments,
-      preparationManifest: preparation.manifest,
-      repoUrl: input.repoUrl,
-      validation,
-    });
+    await options.onScriptGenerationReady?.(scriptGenerationInput);
+    videoScriptPackage = await dependencies.generateScriptPackage(
+      scriptGenerationInput,
+    );
   } catch (error) {
     reportStageFinished("script-generation", "failed", {
       context,
