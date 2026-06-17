@@ -25,9 +25,12 @@ describe("submitContextGathering", () => {
             sizeBytes: 128,
           }),
         ]);
-        expect(input.project.context.structuredContext.importantFeatures).toBe(
-          "repo validation, script generation",
-        );
+        expect(input.project.context).toEqual({
+          importantFeatures: "repo validation, script generation",
+          productSummary: "A product that creates demo videos.",
+          requestedDurationSeconds: 90,
+          targetUsers: "Early founders",
+        });
         return {
           demoRequestId: "demo-request-1",
           projectId: "project-1",
@@ -39,15 +42,6 @@ describe("submitContextGathering", () => {
     const result = await submitContextGathering(
       {
         contact: { email: "founder@example.com", name: "Anqi" },
-        contextTranscript: [
-          {
-            id: "message-1",
-            promptId: "name-email",
-            role: "assistant",
-            text: "What is your name and email address",
-            timestamp: "2026-06-07T17:00:00.000Z",
-          },
-        ],
         repoUrl: "https://github.com/example/app",
         repoVisibility: "public",
         structuredContext: {
@@ -88,7 +82,6 @@ describe("submitContextGathering", () => {
       submitContextGathering(
         {
           contact: { email: "founder@example.com", name: "Anqi" },
-          contextTranscript: [],
           repoUrl: "https://github.com/example/private-app",
           repoVisibility: "private",
           structuredContext: {

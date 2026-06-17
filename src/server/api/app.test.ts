@@ -230,6 +230,12 @@ describe("Context Gathering API", () => {
         async createQueuedProject(input) {
           expect(input.user.email).toBe("anqi@example.com");
           expect(input.project.repoVisibility).toBe("public");
+          expect(input.project.context).toEqual({
+            importantFeatures: "script generation",
+            productSummary: "A demo generator.",
+            requestedDurationSeconds: 60,
+            targetUsers: "Founders",
+          });
           return {
             demoRequestId: "demo-request-1",
             projectId: "project-1",
@@ -253,7 +259,6 @@ describe("Context Gathering API", () => {
       new Request("http://localhost/api/context-gathering/submit", {
         body: JSON.stringify({
           contact: { email: "anqi@example.com", name: "Anqi" },
-          contextTranscript: [],
           repoUrl: "https://github.com/example/app",
           repoVisibility: "public",
           structuredContext: {

@@ -49,7 +49,6 @@ describe("Context Gathering draft", () => {
       importantFeatures: "Repo validation and script generation.",
       productSummary: "Owlet turns apps into demo videos.",
       requestedDurationSeconds: 120,
-      supplementaryInformation: "",
       targetUsers: "Founders and hackathon builders.",
     });
     expect(draft.chatStep).toBe("details");
@@ -81,7 +80,6 @@ describe("Context Gathering draft", () => {
         name: "Anqi",
         productSummary: "MakeADemo creates demo videos from runnable apps.",
         requestedDurationSeconds: 60,
-        supplementaryInformation: "Use the launch deck tone.",
         targetUsers: "Founders and product teams.",
       },
       { now: () => "2026-06-07T17:05:00.000Z" },
@@ -95,7 +93,6 @@ describe("Context Gathering draft", () => {
       importantFeatures: "Context gathering and video rendering.",
       productSummary: "MakeADemo creates demo videos from runnable apps.",
       requestedDurationSeconds: 60,
-      supplementaryInformation: "Use the launch deck tone.",
       targetUsers: "Founders and product teams.",
     });
     expect(collected.chatStep).toBe("details");
@@ -110,8 +107,6 @@ describe("Context Gathering draft", () => {
       "Context gathering and video rendering.",
       "How long do you want the demo video to be? Choose between 30s-3min.",
       "1 minute",
-      "Any supplementary information?",
-      "Use the launch deck tone.",
     ]);
   });
 
@@ -129,7 +124,6 @@ describe("Context Gathering draft", () => {
         name: "Anqi",
         productSummary: "",
         requestedDurationSeconds: 60,
-        supplementaryInformation: "",
         targetUsers: "",
       },
       { now: () => "2026-06-07T17:05:00.000Z" },
@@ -143,7 +137,6 @@ describe("Context Gathering draft", () => {
       importantFeatures: "",
       productSummary: "",
       requestedDurationSeconds: 60,
-      supplementaryInformation: "",
       targetUsers: "",
     });
     expect(collected.contextTranscript.map((message) => message.text)).toEqual([

@@ -5,7 +5,6 @@ type ChatPromptId =
   | "important-features"
   | "name-email"
   | "product-summary"
-  | "supporting-documents"
   | "target-users";
 
 type ContextTranscriptMessage = {
@@ -30,7 +29,6 @@ export type IntakeDetailsInput = {
   name: string;
   productSummary: string;
   requestedDurationSeconds: number;
-  supplementaryInformation: string;
   targetUsers: string;
 };
 
@@ -49,7 +47,6 @@ export type ContextGatheringDraft = {
     importantFeatures: string;
     productSummary: string;
     requestedDurationSeconds?: number;
-    supplementaryInformation: string;
     targetUsers: string;
   };
   supportingFiles: SupportingFileDraft[];
@@ -116,7 +113,6 @@ export function createInitialContextGatheringDraft(
     structuredContext: {
       importantFeatures: "",
       productSummary: "",
-      supplementaryInformation: "",
       targetUsers: "",
     },
     supportingFiles: [],
@@ -152,7 +148,6 @@ export function collectIntakeDetails(
   const productSummary = input.productSummary.trim();
   const targetUsers = input.targetUsers.trim();
   const importantFeatures = input.importantFeatures.trim();
-  const supplementaryInformation = input.supplementaryInformation.trim();
 
   if (name.length === 0) {
     throw new Error("Name is required");
@@ -207,17 +202,6 @@ export function collectIntakeDetails(
       answer: formatDuration(input.requestedDurationSeconds),
       prompt: readPrompt("demo-duration"),
     },
-    ...(supplementaryInformation.length === 0
-      ? []
-      : [
-          {
-            answer: supplementaryInformation,
-            prompt: {
-              id: "supporting-documents" as const,
-              text: "Any supplementary information?",
-            },
-          },
-        ]),
   ];
 
   return {
@@ -247,7 +231,6 @@ export function collectIntakeDetails(
       importantFeatures,
       productSummary,
       requestedDurationSeconds: input.requestedDurationSeconds,
-      supplementaryInformation,
       targetUsers,
     },
   };
@@ -488,10 +471,7 @@ function readPrompt(promptId: ChatPromptId) {
 function findLastPromptMessage(draft: ContextGatheringDraft) {
   for (let index = draft.contextTranscript.length - 1; index >= 0; index -= 1) {
     const message = draft.contextTranscript[index];
-    if (
-      message?.role === "assistant" &&
-      message.promptId !== "supporting-documents"
-    ) {
+    if (message?.role === "assistant") {
       return message;
     }
   }
