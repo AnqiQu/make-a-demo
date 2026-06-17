@@ -67,6 +67,12 @@ export type ProjectDemoGenerationDependencies = ProjectFinalVideoGenerator & {
   runPipeline(input: ProjectDemoGenerationJob): Promise<PipelineJobResult>;
 };
 
+export type ProjectFullPipelineGenerationDependencies = {
+  runFullPipeline(
+    input: ProjectDemoGenerationJob,
+  ): Promise<GeneratedFinalVideo>;
+};
+
 export type ProjectDemoGenerationOptions = {
   now?: () => number;
   observer?: PipelineObserver;
@@ -74,7 +80,9 @@ export type ProjectDemoGenerationOptions = {
 
 export async function processNextProjectDemoGenerationJob(
   store: ProjectDemoGenerationQueueStore,
-  dependencies: ProjectDemoGenerationDependencies,
+  dependencies:
+    | ProjectDemoGenerationDependencies
+    | ProjectFullPipelineGenerationDependencies,
   options: ProjectDemoGenerationOptions = {},
 ): Promise<ProjectDemoGenerationResult> {
   const observer = options.observer ?? noopPipelineObserver;
@@ -97,6 +105,22 @@ export async function processNextProjectDemoGenerationJob(
   const startedAt = now();
 
   try {
+    if ("runFullPipeline" in dependencies) {
+      const finalVideo = await dependencies.runFullPipeline(job);
+      await store.markProjectCompleted({
+        generatedDemoUrl: finalVideo.generatedDemoUrl,
+        projectId: job.projectId,
+      });
+      observer.record({
+        ...context,
+        durationMs: now() - startedAt,
+        event: "job.completed",
+        status: "completed",
+      });
+
+      return { projectId: job.projectId, status: "completed" };
+    }
+
     const pipelineResult = await dependencies.runPipeline(job);
     if (pipelineResult.status !== "succeeded") {
       await store.markProjectFailed({
