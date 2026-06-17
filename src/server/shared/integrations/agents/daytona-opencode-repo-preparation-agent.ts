@@ -15,6 +15,7 @@ import type {
   RepoPreparationInput,
 } from "../../../pipeline/03-repo-preparation/repo-preparation-agent.interface";
 import type { ProjectValidationResult } from "../../../pipeline/04-project-validation/validation-result";
+import { writeDaytonaOpenCodeActivityLog } from "./daytona-opencode-activity-log";
 import { createMakeADemoOpenCodeConfigFiles } from "./prepared-opencode-config";
 
 const makeADemoArtifactDirectory = "/workspace/.makeademo";
@@ -22,7 +23,6 @@ const makeADemoOpenCodeConfigDirectory = `${makeADemoArtifactDirectory}/opencode
 const dependencyInstallRequestPath = `${makeADemoArtifactDirectory}/dependency-install-request.json`;
 const preparationManifestPath = `${makeADemoArtifactDirectory}/preparation-manifest.json`;
 const preparationResultPath = `${makeADemoArtifactDirectory}/repo-preparation-result.json`;
-const preparationDebugLogPath = `${makeADemoArtifactDirectory}/repo-preparation-debug.jsonl`;
 const validationRequestPath = `${makeADemoArtifactDirectory}/validation-request.json`;
 const validationResultPath = `${makeADemoArtifactDirectory}/validation-result.json`;
 const minimumBackendToolBudgetMs = 100;
@@ -72,7 +72,7 @@ export class DaytonaOpenCodeRepoPreparationAgent
   async prepare(input: RepoPreparationInput) {
     const handle = await this.provider.create();
     const deadlineAt = Date.now() + this.timeoutMs;
-    await appendPreparationDebugLog(handle.workspace, {
+    await writePreparationSandboxLog(handle.workspace, {
       event: "workspace-created",
       timeoutMs: this.timeoutMs,
       workspaceId: handle.id,
@@ -84,7 +84,7 @@ export class DaytonaOpenCodeRepoPreparationAgent
         this.timeoutMs,
       );
     } catch (error) {
-      await appendPreparationDebugLog(handle.workspace, {
+      await writePreparationSandboxLog(handle.workspace, {
         error: readErrorMessage(error),
         event: "preparation-error",
       });
@@ -100,7 +100,7 @@ export class DaytonaOpenCodeRepoPreparationAgent
     }
 
     if (result.status !== "succeeded") {
-      await appendPreparationDebugLog(handle.workspace, {
+      await writePreparationSandboxLog(handle.workspace, {
         event: "preparation-timeout",
         reason: result.reason,
         workspaceId: handle.id,
@@ -110,11 +110,11 @@ export class DaytonaOpenCodeRepoPreparationAgent
         assumptions: [],
         blockers: [
           result.reason,
-          `Debug log retained in Daytona workspace ${handle.id}: ${preparationDebugLogPath}`,
+          `Sandbox audit log retained in Daytona workspace ${handle.id}: ${makeADemoArtifactDirectory}/sandbox-log.jsonl`,
         ],
         status: "failed" as const,
         suggestedChanges: [
-          "Inspect the retained Daytona workspace debug log, then delete the workspace when finished.",
+          "Inspect the retained Daytona workspace sandbox audit log, then delete the workspace when finished.",
           "Retry Repo Preparation in a fresh Daytona workspace.",
         ],
       };
@@ -133,7 +133,7 @@ export class DaytonaOpenCodeRepoPreparationAgent
     input: RepoPreparationInput,
     deadlineAt: number,
   ): Promise<RawPreparationRunResult> {
-    await appendPreparationDebugLog(handle.workspace, {
+    await writePreparationSandboxLog(handle.workspace, {
       event: "clone-started",
     });
     await handle.workspace.setOutboundNetworkAccess(true);
@@ -141,7 +141,7 @@ export class DaytonaOpenCodeRepoPreparationAgent
       createCloneCommand(input.repoUrl),
     );
     await handle.workspace.setOutboundNetworkAccess(false);
-    await appendPreparationDebugLog(handle.workspace, {
+    await writePreparationSandboxLog(handle.workspace, {
       event: "clone-finished",
       exitCode: cloneResult.exitCode,
       stderrLength: cloneResult.stderr.length,
@@ -153,7 +153,7 @@ export class DaytonaOpenCodeRepoPreparationAgent
     }
 
     await installMakeADemoOpenCodeConfig(handle.workspace);
-    await appendPreparationDebugLog(handle.workspace, {
+    await writePreparationSandboxLog(handle.workspace, {
       event: "opencode-config-installed",
     });
 
@@ -174,7 +174,7 @@ export class DaytonaOpenCodeRepoPreparationAgent
     let prompt = initialPrompt;
     let currentSessionID: string | undefined;
     for (let attempt = 0; attempt < 8; attempt += 1) {
-      await appendPreparationDebugLog(handle.workspace, {
+      await writePreparationSandboxLog(handle.workspace, {
         attempt: attempt + 1,
         event: "opencode-started",
         remainingMs: deadlineAt - Date.now(),
@@ -190,7 +190,7 @@ export class DaytonaOpenCodeRepoPreparationAgent
           : { sessionID: currentSessionID }),
       });
       currentSessionID = openCodeResult.sessionID ?? currentSessionID;
-      await appendPreparationDebugLog(handle.workspace, {
+      await writePreparationSandboxLog(handle.workspace, {
         attempt: attempt + 1,
         event: "opencode-finished",
         exitCode: openCodeResult.exitCode,
@@ -203,7 +203,7 @@ export class DaytonaOpenCodeRepoPreparationAgent
         handle.workspace,
       );
       if (dependencyInstallRequest !== undefined) {
-        await appendPreparationDebugLog(handle.workspace, {
+        await writePreparationSandboxLog(handle.workspace, {
           command: dependencyInstallRequest.command,
           event: "dependency-install-requested",
         });
@@ -215,7 +215,7 @@ export class DaytonaOpenCodeRepoPreparationAgent
           workspace: handle.workspace,
         });
         await clearDependencyInstallRequest(handle.workspace);
-        await appendPreparationDebugLog(handle.workspace, {
+        await writePreparationSandboxLog(handle.workspace, {
           event: "dependency-install-finished",
         });
         prompt = createContinueRepoPreparationPrompt(input);
@@ -224,7 +224,7 @@ export class DaytonaOpenCodeRepoPreparationAgent
 
       const validationRequest = await readValidationRequest(handle.workspace);
       if (validationRequest !== undefined) {
-        await appendPreparationDebugLog(handle.workspace, {
+        await writePreparationSandboxLog(handle.workspace, {
           event: "validation-requested",
           remainingMs: deadlineAt - Date.now(),
         });
@@ -250,7 +250,7 @@ export class DaytonaOpenCodeRepoPreparationAgent
         } catch (error) {
           validation = createValidationHandoffFailure(readErrorMessage(error));
         }
-        await appendPreparationDebugLog(handle.workspace, {
+        await writePreparationSandboxLog(handle.workspace, {
           failureReason: validation.failureReason,
           event: "validation-finished",
           status: validation.status,
@@ -261,12 +261,15 @@ export class DaytonaOpenCodeRepoPreparationAgent
         });
         await clearValidationRequest(handle.workspace);
         if (validation.status === "succeeded" && manifest !== undefined) {
-          await appendPreparationDebugLog(handle.workspace, {
+          await writePreparationSandboxLog(handle.workspace, {
             event: "preparation-auto-succeeded-after-validation",
             status: validation.status,
           });
           return {
             manifest,
+            ...(currentSessionID === undefined
+              ? {}
+              : { opencodeSessionID: currentSessionID }),
             status: "succeeded" as const,
             validation,
             workspace: handle,
@@ -282,7 +285,7 @@ export class DaytonaOpenCodeRepoPreparationAgent
 
       const preparationResult = await readPreparationResult(handle.workspace);
       if (preparationResult !== undefined) {
-        await appendPreparationDebugLog(handle.workspace, {
+        await writePreparationSandboxLog(handle.workspace, {
           event: "preparation-result-found",
           status: preparationResult.status,
         });
@@ -291,7 +294,13 @@ export class DaytonaOpenCodeRepoPreparationAgent
           preparationResult.status === "succeeded" &&
           validation?.status === "succeeded"
         ) {
-          return { ...preparationResult, validation };
+          return {
+            ...preparationResult,
+            ...(currentSessionID === undefined
+              ? {}
+              : { opencodeSessionID: currentSessionID }),
+            validation,
+          };
         }
 
         return preparationResult;
@@ -324,23 +333,27 @@ export class DaytonaOpenCodeRepoPreparationAgent
     },
   ): Promise<PreparationWorkspaceCommandResult & { sessionID?: string }> {
     const outputWrites: Promise<void>[] = [];
+    let streamedStdout = "";
     const onStdout = (chunk: string) => {
+      streamedStdout += chunk;
       this.onStdout?.(chunk);
       outputWrites.push(
-        appendOpenCodeAttemptOutput(handle.workspace, {
+        writeDaytonaOpenCodeActivityLog(handle.workspace, {
           attempt: input.attempt,
           channel: "stdout",
-          chunk,
+          raw: chunk,
+          stage: "repo-preparation",
         }),
       );
     };
     const onStderr = (chunk: string) => {
       this.onStderr?.(chunk);
       outputWrites.push(
-        appendOpenCodeAttemptOutput(handle.workspace, {
+        writeDaytonaOpenCodeActivityLog(handle.workspace, {
           attempt: input.attempt,
           channel: "stderr",
-          chunk,
+          raw: chunk,
+          stage: "repo-preparation",
         }),
       );
     };
@@ -356,7 +369,9 @@ export class DaytonaOpenCodeRepoPreparationAgent
     );
     await Promise.all(outputWrites);
 
-    const sessionID = readOpenCodeSessionID(result.stdout);
+    const sessionID = readOpenCodeSessionID(
+      `${streamedStdout}\n${result.stdout}`,
+    );
     return sessionID === undefined ? result : { ...result, sessionID };
   }
 }
@@ -453,37 +468,17 @@ async function cancelActiveCommandsQuietly(
   }
 }
 
-async function appendPreparationDebugLog(
+async function writePreparationSandboxLog(
   workspace: PreparationWorkspace,
   event: Record<string, unknown>,
 ): Promise<void> {
-  const payload = {
+  const eventName =
+    typeof event.event === "string" ? event.event : "repo-preparation.debug";
+  await workspace.writeSandboxLog?.({
     ...event,
-    timestamp: new Date().toISOString(),
-  };
-  const result = await workspace.execute(
-    `mkdir -p ${shellQuote(makeADemoArtifactDirectory)} && printf '%s\n' ${shellQuote(JSON.stringify(payload))} >> ${shellQuote(preparationDebugLogPath)}`,
-  );
-  if (result.exitCode !== 0) {
-    throw new Error("Failed to write Repo Preparation debug log.");
-  }
-}
-
-async function appendOpenCodeAttemptOutput(
-  workspace: PreparationWorkspace,
-  input: { attempt: number; channel: "stderr" | "stdout"; chunk: string },
-): Promise<void> {
-  if (input.chunk.length === 0) {
-    return;
-  }
-
-  const path = `${makeADemoArtifactDirectory}/opencode-attempt-${input.attempt}.${input.channel}.log`;
-  const result = await workspace.execute(
-    `mkdir -p ${shellQuote(makeADemoArtifactDirectory)} && printf '%s' ${shellQuote(input.chunk)} >> ${shellQuote(path)}`,
-  );
-  if (result.exitCode !== 0) {
-    throw new Error("Failed to write OpenCode attempt output log.");
-  }
+    event: eventName,
+    stage: "repo-preparation",
+  });
 }
 
 function backendToolDeadlineFailure(toolName: string) {

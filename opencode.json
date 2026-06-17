@@ -11,7 +11,8 @@
       "**/.env": "deny",
       "**/.env.*": "deny",
       "**/*.env": "deny",
-      "**/*.env.*": "deny"
+      "**/*.env.*": "deny",
+      ".env.example": "allow"
     }
   },
   "skills": {

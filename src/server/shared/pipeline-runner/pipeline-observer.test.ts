@@ -22,20 +22,19 @@ describe("createJsonPipelineObserver", () => {
       workspaceId: "workspace-1",
     });
 
-    expect(lines).toEqual([
-      `${JSON.stringify({
-        demoRequestId: "demo-request-1",
-        durationMs: 42,
-        event: "stage.succeeded",
-        level: "info",
-        projectId: "project-1",
-        sceneCount: 3,
-        service: "makeademo-worker",
-        stage: "compositing",
-        status: "succeeded",
-        time: "2026-06-14T00:00:00.000Z",
-        workspaceId: "workspace-1",
-      })}\n`,
-    ]);
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0] ?? "{}")).toEqual({
+      demoRequestId: "demo-request-1",
+      durationMs: 42,
+      event: "stage.succeeded",
+      level: "info",
+      projectId: "project-1",
+      sceneCount: 3,
+      service: "makeademo-worker",
+      stage: "compositing",
+      status: "succeeded",
+      time: "2026-06-14T00:00:00.000Z",
+      workspaceId: "workspace-1",
+    });
   });
 });

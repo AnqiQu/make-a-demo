@@ -1,16 +1,18 @@
+import { compositeVideoFromScript } from "../../pipeline/07-compositing/composite-video";
 import { finalVideoEmailsEnabled } from "../../pipeline/final-output/final-video-email-feature";
+import { DaytonaOpenCodeScriptGenerationAgent } from "../integrations/agents/daytona-opencode-script-generation-agent";
 import { createRepoPreparationAgent } from "../integrations/agents/repo-preparation-agent-factory";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import { createResendFinalVideoEmailNotifierFromEnv } from "../integrations/email/resend-final-video-email-notifier";
 import { DaytonaSandboxRunner } from "../integrations/sandbox/daytona-sandbox-runner";
 import { createR2UploadPresignerFromEnv } from "../integrations/storage/r2-client";
 import { R2FinalVideoStorage } from "../integrations/storage/r2-final-video-storage";
+import { R2SupportingDocumentLoader } from "../integrations/storage/r2-supporting-document-loader";
 import { createNeonDemoRequestFinalVideoStore } from "../persistence/neon-demo-request-final-video-store";
 import { createNeonProjectDemoGenerationQueueStore } from "../persistence/neon-project-demo-generation-queue-store";
+import { runFullPipelineJob } from "./full-pipeline-runner";
 import { createJsonPipelineObserver } from "./pipeline-observer";
-import { runPipelineJob } from "./pipeline-orchestrator";
 import { processNextProjectDemoGenerationJob } from "./project-demo-generation-queue";
-import { CompositeProjectFinalVideoGenerator } from "./project-final-video-generator";
 import { createStage1PipelineDependencies } from "./stage1-pipeline";
 import { readRepoSecurityInput } from "./stage1-repo-security";
 
@@ -23,9 +25,13 @@ const daytonaApiKey = readRequiredEnv("DAYTONA_API_KEY");
 const daytonaSnapshot = process.env.DAYTONA_SNAPSHOT;
 const providerID = process.env.REPO_PREPARATION_PROVIDER_ID ?? "openai";
 const modelID = process.env.REPO_PREPARATION_MODEL_ID ?? "gpt-4.1";
-const queueStore = createNeonProjectDemoGenerationQueueStore();
 const demoRequestStore = createNeonDemoRequestFinalVideoStore();
 const r2 = createR2UploadPresignerFromEnv();
+const queueStore = createNeonProjectDemoGenerationQueueStore(
+  undefined,
+  new R2SupportingDocumentLoader(r2),
+);
+const finalVideoStorage = new R2FinalVideoStorage(r2);
 const observer = createJsonPipelineObserver({
   service: "makeademo-demo-generation-worker",
   write: (line) => process.stdout.write(line),
@@ -41,17 +47,17 @@ const repoPreparationAgent = createRepoPreparationAgent({
   providerApiKey: readProviderApiKey(providerID),
   providerID,
 });
-const finalVideoGenerator = new CompositeProjectFinalVideoGenerator({
-  demoRequestStore,
-  finalVideoStorage: new R2FinalVideoStorage(r2),
-  observer,
-  ...(finalVideoEmailsEnabled(process.env)
-    ? {
-        finalVideoEmailNotifier: createResendFinalVideoEmailNotifierFromEnv(),
-        publicAppBaseUrl: readRequiredEnv("PUBLIC_APP_BASE_URL"),
-      }
-    : {}),
+const scriptGenerationAgent = new DaytonaOpenCodeScriptGenerationAgent({
+  modelID,
+  providerApiKey: readProviderApiKey(providerID),
+  providerID,
 });
+const finalVideoEmailNotifier = finalVideoEmailsEnabled(process.env)
+  ? createResendFinalVideoEmailNotifierFromEnv()
+  : undefined;
+const publicAppBaseUrl = finalVideoEmailsEnabled(process.env)
+  ? readRequiredEnv("PUBLIC_APP_BASE_URL")
+  : undefined;
 
 process.stdout.write("MakeADemo demo generation worker started\n");
 
@@ -59,15 +65,13 @@ do {
   const result = await processNextProjectDemoGenerationJob(
     queueStore,
     {
-      generateFinalVideo: (input) =>
-        finalVideoGenerator.generateFinalVideo(input),
-      async runPipeline(job) {
+      async runFullPipeline(job) {
         const repoSecurity = await readRepoSecurityInput(
           sandboxProvider,
           job.repoUrl,
         );
 
-        return runPipelineJob(
+        const result = await runFullPipelineJob(
           {
             demoBrief: job.demoBrief,
             normalizedSupportingDocuments: job.normalizedSupportingDocuments,
@@ -78,8 +82,21 @@ do {
           createStage1PipelineDependencies({
             repoPreparationAgent,
             sandboxRunner: new DaytonaSandboxRunner(),
+            scriptGenerationAgent,
           }),
           {
+            async compositeVideo(input) {
+              return compositeVideoFromScript({
+                ...input,
+                demoRequestId: job.demoRequestId,
+                demoRequestStore,
+                finalVideoStorage,
+                ...(finalVideoEmailNotifier === undefined
+                  ? {}
+                  : { finalVideoEmailNotifier }),
+                ...(publicAppBaseUrl === undefined ? {} : { publicAppBaseUrl }),
+              });
+            },
             context: {
               demoRequestId: job.demoRequestId,
               projectId: job.projectId,
@@ -87,6 +104,12 @@ do {
             observer,
           },
         );
+
+        if (!result.finalVideo.finalVideo) {
+          throw new Error("Full pipeline did not store a final video");
+        }
+
+        return { generatedDemoUrl: result.finalVideo.finalVideo.r2Url };
       },
     },
     { observer },

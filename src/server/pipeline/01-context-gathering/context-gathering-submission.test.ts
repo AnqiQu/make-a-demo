@@ -17,7 +17,13 @@ describe("submitContextGathering", () => {
         expect(input.project.repoVisibility).toBe("public");
         expect(input.project.githubInstallationId).toBeUndefined();
         expect(input.project.supportingFiles).toEqual([
-          "r2://owlet/uploads/draft-1/product.md",
+          JSON.stringify({
+            fileName: "product.md",
+            mimeType: "text/markdown",
+            r2Key: "uploads/draft-1/product.md",
+            r2Url: "r2://owlet/uploads/draft-1/product.md",
+            sizeBytes: 128,
+          }),
         ]);
         expect(input.project.context.structuredContext.importantFeatures).toBe(
           "repo validation, script generation",

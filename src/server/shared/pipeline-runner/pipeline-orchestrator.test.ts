@@ -353,8 +353,14 @@ describe("runPipelineJob", () => {
         workspaceId: "workspace_123",
       },
       {
-        async generateScriptPackage({ validation }) {
+        async generateScriptPackage({
+          opencodeSessionID,
+          preparationWorkspace,
+          validation,
+        }) {
           calls.push("script-generation");
+          expect(opencodeSessionID).toBe("session_prepare_123");
+          expect(preparationWorkspace?.id).toBe("daytona_workspace");
           expect(validation.logs).toEqual(["validated during preparation"]);
           return scriptPackage({ assumptions: [], validation });
         },
@@ -362,6 +368,7 @@ describe("runPipelineJob", () => {
           calls.push("repo-preparation");
           return {
             manifest: manifest(),
+            opencodeSessionID: "session_prepare_123",
             status: "succeeded",
             validation: {
               blockedNetworkAttempts: [],
@@ -380,12 +387,26 @@ describe("runPipelineJob", () => {
           throw new Error("validation should not rerun after tool validation");
         },
       },
+      {
+        onScriptGenerationReady(event) {
+          calls.push("script-generation-ready");
+          expect(event.opencodeSessionID).toBe("session_prepare_123");
+          expect(event.preparationWorkspace?.id).toBe("daytona_workspace");
+          expect(event.validation.logs).toEqual([
+            "validated during preparation",
+          ]);
+        },
+      },
     );
 
     expect(result.status).toBe("succeeded");
+    if (result.status === "succeeded") {
+      expect(result.opencodeSessionID).toBe("session_prepare_123");
+    }
     expect(calls).toEqual([
       "repo-security-screen",
       "repo-preparation",
+      "script-generation-ready",
       "script-generation",
     ]);
   });

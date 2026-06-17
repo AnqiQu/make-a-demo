@@ -18,7 +18,7 @@
 - **Preparation Manifest**: The durable internal pipeline artifact produced by Repo Preparation that records the prepared demo command, local URL, existing demo evidence, workspace changes, mocks, assumptions, risks, and script-generation context for later stages, analytics, and future product features.
 - **Runtime Network Lockdown**: The Repo Preparation and Project Validation boundary where the prepared app runtime is sealed from external network access after setup, and any attempted inbound or outbound sandbox-boundary communication is reported as a failure.
 - **Sandbox**: The isolated execution environment that runs the submitted app, Playwright validation, and Playwright capture with the network boundary sealed after dependency installation.
-- **Script Generation**: The stage where MakeADemo turns validated project context and key product features into a Video Script.
+- **Script Generation**: The stage where MakeADemo resumes the validated Repo Preparation OpenCode session to turn prepared repo context and key product features into a Video Script.
 - **Video Script**: A structured plan for the demo video that organizes what the video will communicate over time.
 - **Video Script Package**: The handoff artifact produced by Script Generation before footage capture begins, containing the Video Script, Script Sections, Scene Descriptions, Browser Actions, and validation context.
 - **Script Section**: A top-level part of the Video Script, such as intro, feature demonstration, or use case, that groups related scenes.
@@ -48,7 +48,7 @@
 - The preparation agent can invoke **Runtime Network Lockdown** as an iterative tool/check; app runtime network attempts return structured tool-call failures so the agent can mock or remove dependencies before retrying.
 - **Repo Preparation** first checks whether the submitted project already contains a prepared demo command, MakeADemo Config, or existing demo flow before creating a new one.
 - **Repo Preparation** mutates the ephemeral workspace directly and stores the resulting diff as an artifact for auditability, fallback prompts, and future apply-to-repo flows.
-- **Repo Preparation** may gather script-generation context, but final **Script Generation** remains a separate post-validation stage.
+- **Repo Preparation** may gather script-generation context, but final **Script Generation** remains a separate post-validation stage with a backend-controlled prompt that resumes the same OpenCode session after validation passes.
 - If **Repo Preparation** cannot produce a deterministic demo runtime, MakeADemo returns a **Preparation Fallback Prompt** and does not proceed to Script Generation.
 - **Project Validation** and **Footage Capture** run Playwright inside the **Sandbox** rather than from the backend host.
 - **Preparation Manifest** supplies the prepared demo command and local URL used by **Project Validation**.

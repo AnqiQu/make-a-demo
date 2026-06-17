@@ -1,5 +1,7 @@
-import { appendFile, mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import {
+  createFilePipelineLogSink,
+  createPipelineEventLogger,
+} from "../logging/pipeline-event-logger";
 
 type OpenCodeRawOutputChannel = "stderr" | "stdout";
 
@@ -16,18 +18,17 @@ type OpenCodeRawOutputLogOptions = {
 export function createOpenCodeRawOutputLog(
   options: OpenCodeRawOutputLogOptions,
 ): OpenCodeRawOutputLog {
-  let writeChain: Promise<void> = Promise.resolve();
+  const logger = createPipelineEventLogger({
+    base: { component: "opencode-raw-output" },
+    sinks: [createFilePipelineLogSink(options.logPath)],
+  });
   const buffers: Record<OpenCodeRawOutputChannel, string> = {
     stderr: "",
     stdout: "",
   };
 
   const appendEntry = (entry: Record<string, unknown>) => {
-    writeChain = writeChain.then(() =>
-      mkdir(dirname(options.logPath), { recursive: true }).then(() =>
-        appendFile(options.logPath, `${JSON.stringify(entry)}\n`),
-      ),
-    );
+    void logger.info(entry, `OpenCode ${entry.channel ?? "output"}.`);
   };
 
   return {
@@ -38,8 +39,7 @@ export function createOpenCodeRawOutputLog(
           buffers[channel] = "";
         }
       }
-
-      await writeChain;
+      await logger.flush();
     },
     logPath: options.logPath,
     write(channel, chunk) {
@@ -72,7 +72,6 @@ function createLogEntry(channel: OpenCodeRawOutputChannel, raw: string) {
         }),
     raw,
     source: "opencode",
-    timestamp: new Date().toISOString(),
     ...(tool === undefined ? {} : tool),
   };
 }

@@ -6,6 +6,7 @@ import { validateProject } from "../../pipeline/04-project-validation/project-va
 import type { SandboxRunner } from "../../pipeline/04-project-validation/sandbox-runner.interface";
 import { DefaultDemoPlanner } from "../../pipeline/05-script-generation/demo-planning/default-demo-planner";
 import { DefaultScriptComposer } from "../../pipeline/05-script-generation/script-composition/default-script-composer";
+import type { ScriptGenerationAgent } from "../../pipeline/05-script-generation/script-generation-agent.interface";
 import { generateVideoScriptPackage } from "../../pipeline/05-script-generation/script-generation-orchestrator";
 import { LlmProjectExplorer } from "../integrations/agents/llm-project-explorer";
 import { PlaywrightBrowserValidator } from "../integrations/browser/playwright-browser-validator";
@@ -15,6 +16,7 @@ export type Stage1PipelineOptions = {
   browserValidator?: BrowserValidator;
   repoPreparationAgent: RepoPreparationAgent;
   sandboxRunner: SandboxRunner;
+  scriptGenerationAgent?: ScriptGenerationAgent;
 };
 
 export function createStage1PipelineDependencies(
@@ -29,6 +31,9 @@ export function createStage1PipelineDependencies(
       return generateVideoScriptPackage(input, {
         demoPlanner: new DefaultDemoPlanner(),
         projectExplorer: new LlmProjectExplorer(),
+        ...(options.scriptGenerationAgent === undefined
+          ? {}
+          : { scriptGenerationAgent: options.scriptGenerationAgent }),
         scriptComposer: new DefaultScriptComposer(),
       });
     },

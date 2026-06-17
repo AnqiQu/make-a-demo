@@ -1,4 +1,4 @@
-import { appendFile, mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type {
@@ -11,11 +11,17 @@ import type {
   CompositedVideoManifest,
 } from "../../pipeline/07-compositing/composite-video";
 import { compositeVideoFromScript } from "../../pipeline/07-compositing/composite-video";
+import {
+  type PipelineLogSink,
+  createFilePipelineLogSink,
+  createPipelineEventLogger,
+} from "../logging/pipeline-event-logger";
 import type { PipelineJobInput } from "./pipeline-job";
 import { runPipelineJob } from "./pipeline-orchestrator";
 import type {
   PipelineOrchestratorDependencies,
   PipelineOrchestratorOptions,
+  ScriptGenerationReadyEvent,
 } from "./pipeline-orchestrator";
 
 export type FullPipelineResult = {
@@ -39,6 +45,8 @@ type FullPipelineArtifactSummary = {
     generatedScriptPath: string;
     logPath: string;
     renderPlanPath: string;
+    scriptGenerationResumePath?: string;
+    scriptGenerationRawOpenCodeLogPath?: string;
     viewUrl: string;
   };
   runDirectory: string;
@@ -56,7 +64,7 @@ type FullPipelineArtifactSummary = {
 type FullPipelineLogEntry = {
   event: string;
   message: string;
-  timestamp: string;
+  time: string;
 } & Record<string, unknown>;
 
 type FullPipelineLogInput = {
@@ -72,9 +80,11 @@ export type FullPipelineRunnerOptions = PipelineOrchestratorOptions & {
     input: CompositeVideoFromScriptInput,
   ) => Promise<CompositedVideoManifest>;
   onLog?: (entry: FullPipelineLogEntry) => void;
+  logSinks?: PipelineLogSink[];
   outputRoot?: string;
   rawOpenCodeLogPath?: string;
   runId?: string;
+  scriptGenerationRawOpenCodeLogPath?: string;
 };
 
 export async function runFullPipelineJob(
@@ -87,7 +97,10 @@ export async function runFullPipelineJob(
   const runDirectory = join(outputRoot, runId);
   await mkdir(runDirectory, { recursive: true });
   const logPath = join(runDirectory, "pipeline-log.jsonl");
-  const log = createPipelineLogger(logPath, options.onLog);
+  const log = createPipelineLogger(logPath, {
+    extraSinks: options.logSinks ?? [],
+    onLog: options.onLog,
+  });
 
   await log({
     event: "pipeline-started",
@@ -99,10 +112,26 @@ export async function runFullPipelineJob(
     workspaceId: input.workspaceId,
   });
 
+  let scriptGenerationResumePath: string | undefined;
   const stage1 = await runPipelineJob(input, dependencies, {
     ...options,
+    onScriptGenerationReady: async (event) => {
+      await options.onScriptGenerationReady?.(event);
+      scriptGenerationResumePath = await writeScriptGenerationResumeFile({
+        event,
+        input,
+        runDirectory,
+      });
+      if (scriptGenerationResumePath !== undefined) {
+        await log({
+          event: "script-generation-resume-written",
+          message: "Script Generation resume artifact written.",
+          resumePath: scriptGenerationResumePath,
+        });
+      }
+    },
     onProgress: async (event) => {
-      options.onProgress?.(event);
+      await options.onProgress?.(event);
       await log({
         event: "stage-progress",
         message: `${event.stage} ${event.status}.`,
@@ -126,6 +155,8 @@ export async function runFullPipelineJob(
           rawOpenCodeLogPath: options.rawOpenCodeLogPath,
           runDirectory,
           runId,
+          scriptGenerationRawOpenCodeLogPath:
+            options.scriptGenerationRawOpenCodeLogPath,
           stage1,
         }),
         null,
@@ -228,6 +259,15 @@ export async function runFullPipelineJob(
         ? {}
         : { rawOpenCodeLogPath: options.rawOpenCodeLogPath }),
       renderPlanPath: finalVideo.renderPlanPath,
+      ...(scriptGenerationResumePath === undefined
+        ? {}
+        : { scriptGenerationResumePath }),
+      ...(options.scriptGenerationRawOpenCodeLogPath === undefined
+        ? {}
+        : {
+            scriptGenerationRawOpenCodeLogPath:
+              options.scriptGenerationRawOpenCodeLogPath,
+          }),
       viewUrl: finalVideo.viewUrl,
     },
     runDirectory,
@@ -259,18 +299,67 @@ export async function runFullPipelineJob(
   };
 }
 
+async function writeScriptGenerationResumeFile(input: {
+  event: ScriptGenerationReadyEvent;
+  input: PipelineJobInput;
+  runDirectory: string;
+}): Promise<string | undefined> {
+  if (
+    input.event.opencodeSessionID === undefined ||
+    input.event.preparationWorkspace === undefined
+  ) {
+    return undefined;
+  }
+
+  const resumePath = join(input.runDirectory, "script-generation-resume.json");
+  await writeFile(
+    resumePath,
+    `${JSON.stringify(
+      {
+        demoBrief: input.input.demoBrief,
+        normalizedSupportingDocuments:
+          input.input.normalizedSupportingDocuments,
+        opencodeSessionID: input.event.opencodeSessionID,
+        preparationManifest: input.event.preparationManifest,
+        preparationWorkspaceId: input.event.preparationWorkspace.id,
+        repoUrl: input.input.repoUrl,
+        runDirectory: input.runDirectory,
+        validation: input.event.validation,
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  return resumePath;
+}
+
 function createPipelineLogger(
   logPath: string,
-  onLog: ((entry: FullPipelineLogEntry) => void) | undefined,
+  options: {
+    extraSinks: PipelineLogSink[];
+    onLog: ((entry: FullPipelineLogEntry) => void) | undefined;
+  },
 ) {
-  return async (entry: FullPipelineLogInput) => {
-    const logEntry: FullPipelineLogEntry = {
-      ...entry,
-      timestamp: new Date().toISOString(),
-    };
+  const sinks: PipelineLogSink[] = [
+    createFilePipelineLogSink(logPath),
+    ...options.extraSinks,
+  ];
+  if (options.onLog !== undefined) {
+    sinks.push({
+      write(line) {
+        options.onLog?.(JSON.parse(line) as FullPipelineLogEntry);
+      },
+    });
+  }
 
-    onLog?.(logEntry);
-    await appendFile(logPath, `${JSON.stringify(logEntry)}\n`);
+  const logger = createPipelineEventLogger({
+    base: { component: "full-pipeline" },
+    sinks,
+  });
+
+  return async (entry: FullPipelineLogInput) => {
+    await logger.info(entry, entry.message);
   };
 }
 
@@ -295,6 +384,7 @@ function createFailureSummary(input: {
   rawOpenCodeLogPath: string | undefined;
   runDirectory: string;
   runId: string;
+  scriptGenerationRawOpenCodeLogPath: string | undefined;
   stage1: Exclude<
     Awaited<ReturnType<typeof runPipelineJob>>,
     { status: "succeeded" }
@@ -306,6 +396,12 @@ function createFailureSummary(input: {
       ...(input.rawOpenCodeLogPath === undefined
         ? {}
         : { rawOpenCodeLogPath: input.rawOpenCodeLogPath }),
+      ...(input.scriptGenerationRawOpenCodeLogPath === undefined
+        ? {}
+        : {
+            scriptGenerationRawOpenCodeLogPath:
+              input.scriptGenerationRawOpenCodeLogPath,
+          }),
     },
     failure: readStage1Failure(input.stage1),
     runDirectory: input.runDirectory,

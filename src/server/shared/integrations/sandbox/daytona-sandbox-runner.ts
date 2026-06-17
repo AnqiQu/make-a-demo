@@ -35,7 +35,15 @@ export class DaytonaSandboxRunner implements SandboxRunner {
     }
 
     const handle = input.preparationWorkspace;
+    const writeSandboxLog = (entry: Record<string, unknown>) =>
+      handle.workspace.writeSandboxLog?.({
+        ...entry,
+        repoUrl: input.repoUrl,
+        stage: "project-validation",
+        workspaceId: input.preparationManifest.workspaceId,
+      });
     try {
+      await writeSandboxLog({ event: "project-validation.started" });
       const repoFilesResult = await handle.workspace.execute(
         "find /workspace -maxdepth 1 -mindepth 1 -printf '%f\\n' | sort",
       );
@@ -44,6 +52,10 @@ export class DaytonaSandboxRunner implements SandboxRunner {
         .map((line) => line.trim())
         .filter((line) => line.length > 0);
       const installPlan = inferInstallPlan(repoFiles);
+      await writeSandboxLog({
+        command: installPlan.command,
+        event: "project-validation.dependency-install.started",
+      });
 
       await handle.workspace.setOutboundNetworkAccess(true);
       let installResult: Awaited<
@@ -56,6 +68,13 @@ export class DaytonaSandboxRunner implements SandboxRunner {
       }
 
       if (installResult.exitCode !== 0) {
+        await writeSandboxLog({
+          command: installPlan.command,
+          event: "project-validation.dependency-install.failed",
+          exitCode: installResult.exitCode,
+          stderr: installResult.stderr,
+          stdout: installResult.stdout,
+        });
         await handle.destroy();
         return {
           blockedNetworkAttempts: [],
@@ -67,10 +86,25 @@ export class DaytonaSandboxRunner implements SandboxRunner {
           runtimeExitCode: installResult.exitCode,
         };
       }
+      await writeSandboxLog({
+        command: installPlan.command,
+        event: "project-validation.dependency-install.succeeded",
+        exitCode: installResult.exitCode,
+      });
 
+      await writeSandboxLog({
+        command: input.demoCommand,
+        event: "project-validation.demo-command.started",
+        url: input.url,
+      });
       const runtimeResult = await handle.workspace.execute(
         createStartDemoCommand(input.demoCommand),
       );
+      await writeSandboxLog({
+        event: "project-validation.demo-command.launched",
+        exitCode: runtimeResult.exitCode,
+        stdout: runtimeResult.stdout,
+      });
       const readinessResult = await waitForDemoReadiness({
         pollIntervalMs: this.readinessPollIntervalMs,
         timeoutMs: this.readinessTimeoutMs,
@@ -78,9 +112,16 @@ export class DaytonaSandboxRunner implements SandboxRunner {
         workspace: handle.workspace,
       });
       if (readinessResult.exitCode !== 0) {
+        await writeSandboxLog({
+          event: "project-validation.demo-readiness.failed",
+          stderr: readinessResult.stderr,
+          stdout: readinessResult.stdout,
+          url: input.url,
+        });
         const demoLogsResult = await handle.workspace.execute(
           "if test -f /tmp/makeademo-demo.log; then cat /tmp/makeademo-demo.log; fi",
         );
+        await writeDemoServerLog(writeSandboxLog, demoLogsResult.stdout);
 
         return {
           blockedNetworkAttempts: [],
@@ -96,9 +137,21 @@ export class DaytonaSandboxRunner implements SandboxRunner {
           runtimeExitCode: 1,
         };
       }
+      await writeSandboxLog({
+        event: "project-validation.demo-readiness.succeeded",
+        url: input.url,
+      });
+      const demoLogsResult = await handle.workspace.execute(
+        "if test -f /tmp/makeademo-demo.log; then cat /tmp/makeademo-demo.log; fi",
+      );
+      await writeDemoServerLog(writeSandboxLog, demoLogsResult.stdout);
       const browserUrl = await createBrowserPreviewUrl({
         localUrl: input.url,
         workspace: handle.workspace,
+      });
+      await writeSandboxLog({
+        browserUrl,
+        event: "project-validation.browser-preview.created",
       });
 
       return {
@@ -125,6 +178,22 @@ export class DaytonaSandboxRunner implements SandboxRunner {
       await handle.destroy();
     }
   }
+}
+
+async function writeDemoServerLog(
+  writeSandboxLog: (
+    entry: Record<string, unknown>,
+  ) => Promise<void> | undefined,
+  output: string,
+): Promise<void> {
+  if (output.length === 0) {
+    return;
+  }
+
+  await writeSandboxLog({
+    event: "project-validation.demo-server-log",
+    log: output,
+  });
 }
 
 function collectLogs(result: { stderr: string; stdout: string }): string[] {

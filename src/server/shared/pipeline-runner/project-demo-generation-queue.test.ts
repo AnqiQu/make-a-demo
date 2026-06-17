@@ -58,6 +58,48 @@ describe("processNextProjectDemoGenerationJob", () => {
     ]);
   });
 
+  it("claims one queued Project and completes it after the full pipeline stores the generated video", async () => {
+    const calls: string[] = [];
+    const store = {
+      async claimNextQueuedProject() {
+        calls.push("claim");
+        return queuedProjectJob();
+      },
+      async markProjectCompleted(input: {
+        generatedDemoUrl: string;
+        projectId: string;
+      }) {
+        calls.push("complete");
+        expect(input).toEqual({
+          generatedDemoUrl:
+            "r2://owlet/demo-videos/demo-request-1/full/final.mp4",
+          projectId: "project-1",
+        });
+      },
+      async markProjectFailed() {
+        throw new Error("project should not fail");
+      },
+    };
+
+    const result = await processNextProjectDemoGenerationJob(store, {
+      async runFullPipeline(input) {
+        calls.push("full-pipeline");
+        expect(input.demoRequestId).toBe("demo-request-1");
+        expect(input.repoUrl).toBe("https://github.com/example/app");
+        return {
+          generatedDemoUrl:
+            "r2://owlet/demo-videos/demo-request-1/full/final.mp4",
+        };
+      },
+    });
+
+    expect(result).toEqual({
+      projectId: "project-1",
+      status: "completed",
+    });
+    expect(calls).toEqual(["claim", "full-pipeline", "complete"]);
+  });
+
   it("reports structured job observability events when a Project is claimed and completed", async () => {
     const observer = createRecordingPipelineObserver();
     let now = 2_000;
