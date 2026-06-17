@@ -5,6 +5,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
+import type { R2ObjectStorage } from "./r2-supporting-document-loader";
 import type {
   GetPresignerInput,
   PutObjectInput,
@@ -12,7 +13,8 @@ import type {
   R2UploadStorage,
 } from "./r2-upload-presigner";
 
-export function createR2UploadPresignerFromEnv(): R2UploadStorage {
+export function createR2UploadPresignerFromEnv(): R2UploadStorage &
+  R2ObjectStorage {
   const accountId = readRequiredEnv("R2_ACCOUNT_ID");
   const accessKeyId = readRequiredEnv("R2_ACCESS_KEY_ID");
   const secretAccessKey = readRequiredEnv("R2_SECRET_ACCESS_KEY");
@@ -34,6 +36,19 @@ export function createR2UploadPresignerFromEnv(): R2UploadStorage {
           Key: input.key,
         }),
       );
+    },
+    async getObject(input) {
+      const response = await client.send(
+        new GetObjectCommand({
+          Bucket: input.bucket,
+          Key: input.key,
+        }),
+      );
+      if (!response.Body) {
+        throw new Error(`R2 object ${input.key} was empty`);
+      }
+
+      return response.Body.transformToByteArray();
     },
     async presignGet(input: GetPresignerInput) {
       return getSignedUrl(

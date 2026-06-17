@@ -7,6 +7,7 @@ import { createResendFinalVideoEmailNotifierFromEnv } from "../integrations/emai
 import { DaytonaSandboxRunner } from "../integrations/sandbox/daytona-sandbox-runner";
 import { createR2UploadPresignerFromEnv } from "../integrations/storage/r2-client";
 import { R2FinalVideoStorage } from "../integrations/storage/r2-final-video-storage";
+import { R2SupportingDocumentLoader } from "../integrations/storage/r2-supporting-document-loader";
 import { createNeonDemoRequestFinalVideoStore } from "../persistence/neon-demo-request-final-video-store";
 import { createNeonProjectDemoGenerationQueueStore } from "../persistence/neon-project-demo-generation-queue-store";
 import { runFullPipelineJob } from "./full-pipeline-runner";
@@ -24,9 +25,12 @@ const daytonaApiKey = readRequiredEnv("DAYTONA_API_KEY");
 const daytonaSnapshot = process.env.DAYTONA_SNAPSHOT;
 const providerID = process.env.REPO_PREPARATION_PROVIDER_ID ?? "openai";
 const modelID = process.env.REPO_PREPARATION_MODEL_ID ?? "gpt-4.1";
-const queueStore = createNeonProjectDemoGenerationQueueStore();
 const demoRequestStore = createNeonDemoRequestFinalVideoStore();
 const r2 = createR2UploadPresignerFromEnv();
+const queueStore = createNeonProjectDemoGenerationQueueStore(
+  undefined,
+  new R2SupportingDocumentLoader(r2),
+);
 const finalVideoStorage = new R2FinalVideoStorage(r2);
 const observer = createJsonPipelineObserver({
   service: "makeademo-demo-generation-worker",

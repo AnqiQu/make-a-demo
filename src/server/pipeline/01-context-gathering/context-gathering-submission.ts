@@ -8,6 +8,14 @@ type ContextTranscriptMessage = {
   timestamp: string;
 };
 
+type SupportingFileSubmission = {
+  fileName: string;
+  mimeType: string;
+  r2Key: string;
+  r2Url: string;
+  sizeBytes: number;
+};
+
 export type ContextGatheringSubmission = {
   contact: {
     email: string;
@@ -23,13 +31,7 @@ export type ContextGatheringSubmission = {
     requestedDurationSeconds: number;
     targetUsers: string;
   };
-  supportingFiles: Array<{
-    fileName: string;
-    mimeType: string;
-    r2Key: string;
-    r2Url: string;
-    sizeBytes: number;
-  }>;
+  supportingFiles: SupportingFileSubmission[];
 };
 
 type ContextGatheringProjectContext = {
@@ -82,7 +84,7 @@ export async function submitContextGathering(
       },
       repoUrl: input.repoUrl,
       repoVisibility: input.repoVisibility,
-      supportingFiles: input.supportingFiles.map((file) => file.r2Url),
+      supportingFiles: input.supportingFiles.map(serializeSupportingFile),
       ...(input.githubInstallationId === undefined
         ? {}
         : { githubInstallationId: input.githubInstallationId }),
@@ -91,6 +93,16 @@ export async function submitContextGathering(
       email: input.contact.email,
       name: input.contact.name,
     },
+  });
+}
+
+function serializeSupportingFile(file: SupportingFileSubmission) {
+  return JSON.stringify({
+    fileName: file.fileName,
+    mimeType: file.mimeType,
+    r2Key: file.r2Key,
+    r2Url: file.r2Url,
+    sizeBytes: file.sizeBytes,
   });
 }
 
