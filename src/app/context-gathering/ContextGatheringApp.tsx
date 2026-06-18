@@ -611,9 +611,16 @@ export function RepoConnectionFields({
   selectedRepoUrl,
 }: RepoConnectionFieldsProps) {
   const isConnected = githubInstallationId !== undefined;
+  const canRetryGitHubConnection =
+    isConnected && !isLoadingRepositories && repositories.length === 0;
   const connectedRepositoryStatus = isLoadingRepositories
     ? "Loading repositories..."
     : "No repositories found";
+  const githubButtonLabel = canRetryGitHubConnection
+    ? "Reconnect GitHub"
+    : isConnected
+      ? "Connected"
+      : "Connect GitHub";
 
   return (
     <div className="repo-connect-row">
@@ -673,14 +680,18 @@ export function RepoConnectionFields({
         className={`github-button ${
           isConnected ? "github-button-connected" : ""
         }`}
-        disabled={isConnected}
-        onClick={() => (isConnected ? undefined : onConnectGitHub())}
+        disabled={isConnected && !canRetryGitHubConnection}
+        onClick={() =>
+          isConnected && !canRetryGitHubConnection
+            ? undefined
+            : onConnectGitHub()
+        }
         type="button"
       >
         <span className="github-logo-frame" aria-hidden="true">
           <img alt="" className="github-logo-image" src={githubLogoUrl} />
         </span>
-        {isConnected ? "Connected" : "Connect GitHub"}
+        {githubButtonLabel}
       </button>
     </div>
   );

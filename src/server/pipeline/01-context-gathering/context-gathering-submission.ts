@@ -1,3 +1,5 @@
+import { readSupportingDocumentUpload } from "./supporting-documents";
+
 type ProjectRepoVisibility = "private" | "public";
 
 type SupportingFileSubmission = {
@@ -98,12 +100,19 @@ function createProjectContext(
 }
 
 function serializeSupportingFile(file: SupportingFileSubmission) {
-  return JSON.stringify({
+  const upload = readSupportingDocumentUpload({
+    artifactId: readNonEmptyString(file.r2Url, "r2Url"),
     fileName: file.fileName,
     mimeType: file.mimeType,
-    r2Key: file.r2Key,
-    r2Url: file.r2Url,
     sizeBytes: file.sizeBytes,
+  });
+
+  return JSON.stringify({
+    fileName: upload.fileName,
+    mimeType: upload.mimeType,
+    r2Key: readNonEmptyString(file.r2Key, "r2Key"),
+    r2Url: upload.artifactId,
+    sizeBytes: upload.sizeBytes,
   });
 }
 
@@ -124,8 +133,20 @@ function validateSubmission(input: ContextGatheringSubmission) {
     throw new Error("name is required");
   }
 
+  if (!Array.isArray(input.supportingFiles)) {
+    throw new Error("supportingFiles must be an array");
+  }
+
   const duration = input.structuredContext.requestedDurationSeconds;
   if (!Number.isFinite(duration) || duration < 30 || duration > 180) {
     throw new Error("requestedDurationSeconds must be between 30 and 180");
   }
+}
+
+function readNonEmptyString(value: unknown, key: string) {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${key} must be a non-empty string`);
+  }
+
+  return value;
 }

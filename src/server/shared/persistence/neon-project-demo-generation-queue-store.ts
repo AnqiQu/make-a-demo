@@ -94,21 +94,34 @@ export class NeonProjectDemoGenerationQueueStore
       return undefined;
     }
 
-    const supportingFiles = readQueuedSupportingDocuments(row.supportingFiles);
+    try {
+      const supportingFiles = readQueuedSupportingDocuments(
+        row.supportingFiles,
+      );
 
-    return {
-      demoBrief: readDemoBriefFromProjectContext(row.context),
-      demoRequestId: readString(row, "demoRequestId"),
-      normalizedSupportingDocuments:
-        supportingFiles.length === 0 || !this.supportingDocumentLoader
-          ? []
-          : await this.supportingDocumentLoader.loadSupportingDocuments(
-              supportingFiles,
-            ),
-      projectId,
-      repoUrl: readString(row, "repoUrl"),
-      workspaceId: projectId,
-    };
+      return {
+        demoBrief: readDemoBriefFromProjectContext(row.context),
+        demoRequestId: readString(row, "demoRequestId"),
+        normalizedSupportingDocuments:
+          supportingFiles.length === 0 || !this.supportingDocumentLoader
+            ? []
+            : await this.supportingDocumentLoader.loadSupportingDocuments(
+                supportingFiles,
+              ),
+        projectId,
+        repoUrl: readString(row, "repoUrl"),
+        workspaceId: projectId,
+      };
+    } catch (error) {
+      await this.markProjectFailed({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Project queue claim failed after processing started",
+        projectId,
+      });
+      return undefined;
+    }
   }
 
   async markProjectCompleted(input: {

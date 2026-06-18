@@ -223,6 +223,15 @@ describe("Context Gathering draft", () => {
     expect(canContinueFromRepoStep(draft, "")).toBe(true);
   });
 
+  it("stores trimmed public repository URLs when continuing from the repo step", () => {
+    const draft = setRepoDetails(createInitialContextGatheringDraft(), {
+      repoUrl: " https://github.com/example/app ",
+      repoVisibility: "public",
+    });
+
+    expect(draft.repoUrl).toBe("https://github.com/example/app");
+  });
+
   it("auto-selects the first repository returned for a connected GitHub installation", () => {
     const draft = connectGitHubInstallationRepositories(
       createInitialContextGatheringDraft(),
