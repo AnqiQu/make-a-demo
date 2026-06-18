@@ -1,9 +1,5 @@
 {
-  "entry": [
-    "src/server/api/server.mts",
-    "src/server/shared/pipeline-runner/project-demo-generation-worker.mts",
-    "demo/app/main.tsx"
-  ],
+  "entry": ["demo/app/main.tsx"],
   "ignoreDependencies": ["@railway/cli"],
   "ignore": [
     ".dependency-cruiser.graph.cjs",
