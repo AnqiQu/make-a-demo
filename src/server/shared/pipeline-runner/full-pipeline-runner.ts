@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import type { DemoRequestScriptStore } from "../../pipeline/05-script-generation/demo-request-script-store.interface";
 import type {
   CaptureManifest,
   CaptureScenesFromScriptInput,
@@ -29,7 +30,7 @@ export type FullPipelineResult = {
   finalVideo: CompositedVideoManifest;
   logPath: string;
   resultPath: string;
-  scriptPath: string;
+  scriptPath?: string;
   stage1: Extract<
     Awaited<ReturnType<typeof runPipelineJob>>,
     { status: "succeeded" }
@@ -42,7 +43,8 @@ type FullPipelineArtifactSummary = {
     captureManifestPath: string;
     compositeManifestPath: string;
     finalVideoPath: string;
-    generatedScriptPath: string;
+    generatedScriptDemoRequestId?: string;
+    generatedScriptPath?: string;
     logPath: string;
     renderPlanPath: string;
     scriptGenerationResumePath?: string;
@@ -79,6 +81,7 @@ export type FullPipelineRunnerOptions = PipelineOrchestratorOptions & {
   compositeVideo?: (
     input: CompositeVideoFromScriptInput,
   ) => Promise<CompositedVideoManifest>;
+  demoRequestScriptStore?: DemoRequestScriptStore;
   onLog?: (entry: FullPipelineLogEntry) => void;
   logSinks?: PipelineLogSink[];
   outputRoot?: string;
@@ -180,28 +183,23 @@ export async function runFullPipelineJob(
     throw new Error("Stage 1 did not return a validated browser URL.");
   }
 
-  const scriptPath = join(runDirectory, "video-script-package.json");
-  await writeFile(
-    scriptPath,
-    `${JSON.stringify(stage1.videoScriptPackage, null, 2)}\n`,
-  );
   const scriptSummary = summarizeScriptPackage(stage1.videoScriptPackage);
-  await log({
-    event: "script-package-written",
-    message: `Script package generated: ${scriptSummary.sectionCount} section(s), ${scriptSummary.sceneCount} scene(s), ${scriptSummary.estimatedDurationSeconds}s estimated.`,
-    estimatedDurationSeconds: scriptSummary.estimatedDurationSeconds,
-    sceneCount: scriptSummary.sceneCount,
-    scriptId: stage1.videoScriptPackage.scriptId,
-    scriptPath,
-    sectionCount: scriptSummary.sectionCount,
-    title: stage1.videoScriptPackage.title,
+  const scriptPersistence = await persistGeneratedScript({
+    demoRequestId: options.context?.demoRequestId,
+    log,
+    runDirectory,
+    scriptPackage: stage1.videoScriptPackage,
+    scriptStore: options.demoRequestScriptStore,
+    scriptSummary,
   });
 
   await log({
     baseUrl: browserUrl,
     event: "capture-started",
     message: "Footage Capture started.",
-    scriptPath,
+    ...(scriptPersistence.scriptPath === undefined
+      ? { generatedScriptDemoRequestId: scriptPersistence.demoRequestId }
+      : { scriptPath: scriptPersistence.scriptPath }),
   });
   const captureManifest = await (
     options.captureScenes ?? captureScenesFromScript
@@ -209,7 +207,10 @@ export async function runFullPipelineJob(
     baseUrl: browserUrl,
     keepTemp: true,
     runId: "capture",
-    scriptPath,
+    scriptPackage: stage1.videoScriptPackage,
+    ...(scriptPersistence.scriptPath === undefined
+      ? {}
+      : { scriptPath: scriptPersistence.scriptPath }),
     tempRoot: join(runDirectory, "capture"),
   });
   await log({
@@ -224,14 +225,20 @@ export async function runFullPipelineJob(
     captureManifestPath: captureManifest.manifestPath,
     event: "compositing-started",
     message: "Compositing started.",
-    scriptPath,
+    ...(scriptPersistence.scriptPath === undefined
+      ? { generatedScriptDemoRequestId: scriptPersistence.demoRequestId }
+      : { scriptPath: scriptPersistence.scriptPath }),
   });
   const finalVideo = await (options.compositeVideo ?? compositeVideoFromScript)(
     {
       captureManifestPath: captureManifest.manifestPath,
       outputRoot: join(runDirectory, "composite"),
       runId: "composite",
-      scriptPath,
+      scriptDirectory: runDirectory,
+      scriptPackage: stage1.videoScriptPackage,
+      ...(scriptPersistence.scriptPath === undefined
+        ? {}
+        : { scriptPath: scriptPersistence.scriptPath }),
     },
   );
   await log({
@@ -253,7 +260,12 @@ export async function runFullPipelineJob(
       captureManifestPath: captureManifest.manifestPath,
       compositeManifestPath: finalVideo.manifestPath,
       finalVideoPath: finalVideo.outputVideoPath ?? finalVideo.viewUrl,
-      generatedScriptPath: scriptPath,
+      ...(scriptPersistence.demoRequestId === undefined
+        ? {}
+        : { generatedScriptDemoRequestId: scriptPersistence.demoRequestId }),
+      ...(scriptPersistence.scriptPath === undefined
+        ? {}
+        : { generatedScriptPath: scriptPersistence.scriptPath }),
       logPath,
       ...(options.rawOpenCodeLogPath === undefined
         ? {}
@@ -293,10 +305,73 @@ export async function runFullPipelineJob(
     finalVideo,
     logPath,
     resultPath,
-    scriptPath,
+    ...(scriptPersistence.scriptPath === undefined
+      ? {}
+      : { scriptPath: scriptPersistence.scriptPath }),
     stage1,
     status: "succeeded",
   };
+}
+
+async function persistGeneratedScript(input: {
+  demoRequestId: string | undefined;
+  log: (entry: FullPipelineLogInput) => Promise<void>;
+  runDirectory: string;
+  scriptPackage: Extract<
+    Awaited<ReturnType<typeof runPipelineJob>>,
+    { status: "succeeded" }
+  >["videoScriptPackage"];
+  scriptStore: DemoRequestScriptStore | undefined;
+  scriptSummary: ReturnType<typeof summarizeScriptPackage>;
+}): Promise<{ demoRequestId?: string; scriptPath?: string }> {
+  if (input.scriptStore === undefined) {
+    const scriptPath = join(input.runDirectory, "video-script-package.json");
+    await writeFile(
+      scriptPath,
+      `${JSON.stringify(input.scriptPackage, null, 2)}\n`,
+    );
+    await input.log({
+      event: "script-package-written",
+      message: scriptGeneratedMessage(input.scriptSummary),
+      estimatedDurationSeconds: input.scriptSummary.estimatedDurationSeconds,
+      sceneCount: input.scriptSummary.sceneCount,
+      scriptId: input.scriptPackage.scriptId,
+      scriptPath,
+      sectionCount: input.scriptSummary.sectionCount,
+      title: input.scriptPackage.title,
+    });
+
+    return { scriptPath };
+  }
+
+  if (input.demoRequestId === undefined) {
+    throw new Error(
+      "context.demoRequestId is required to save the generated script to the database.",
+    );
+  }
+
+  await input.scriptStore.saveGeneratedScript({
+    demoRequestId: input.demoRequestId,
+    script: input.scriptPackage,
+  });
+  await input.log({
+    demoRequestId: input.demoRequestId,
+    event: "script-package-saved",
+    message: scriptGeneratedMessage(input.scriptSummary),
+    estimatedDurationSeconds: input.scriptSummary.estimatedDurationSeconds,
+    sceneCount: input.scriptSummary.sceneCount,
+    scriptId: input.scriptPackage.scriptId,
+    sectionCount: input.scriptSummary.sectionCount,
+    title: input.scriptPackage.title,
+  });
+
+  return { demoRequestId: input.demoRequestId };
+}
+
+function scriptGeneratedMessage(
+  scriptSummary: ReturnType<typeof summarizeScriptPackage>,
+) {
+  return `Script package generated: ${scriptSummary.sectionCount} section(s), ${scriptSummary.sceneCount} scene(s), ${scriptSummary.estimatedDurationSeconds}s estimated.`;
 }
 
 async function writeScriptGenerationResumeFile(input: {

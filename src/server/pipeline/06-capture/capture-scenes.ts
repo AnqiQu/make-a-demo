@@ -2,7 +2,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DefaultPlaywrightSceneRecorder } from "./playwright-scene-recorder";
 import type { SceneRecorder } from "./scene-recorder.interface";
-import { parseVideoScriptPackage } from "./video-script-package.schema";
+import {
+  type CaptureReadyVideoScriptPackage,
+  parseVideoScriptPackage,
+} from "./video-script-package.schema";
 
 type CapturedSceneManifestEntry = {
   durationSeconds: number;
@@ -29,7 +32,8 @@ export type CaptureScenesFromScriptInput = {
   keepTemp?: boolean;
   recorder?: SceneRecorder;
   runId?: string;
-  scriptPath: string;
+  scriptPackage?: CaptureReadyVideoScriptPackage;
+  scriptPath?: string;
   tempRoot?: string;
 };
 
@@ -43,9 +47,7 @@ export async function captureScenesFromScript(
   const rawScenesDirectory = join(runDirectory, "raw-scenes");
   await mkdir(rawScenesDirectory, { recursive: true });
 
-  const scriptPackage = parseVideoScriptPackage(
-    JSON.parse(await readFile(input.scriptPath, "utf8")),
-  );
+  const scriptPackage = await readScriptPackage(input);
   const recorder = input.recorder ?? new DefaultPlaywrightSceneRecorder();
   const scenes: CapturedSceneManifestEntry[] = [];
 
@@ -90,6 +92,20 @@ export async function captureScenesFromScript(
     }
     throw error;
   }
+}
+
+async function readScriptPackage(input: CaptureScenesFromScriptInput) {
+  if (input.scriptPackage !== undefined) {
+    return parseVideoScriptPackage(input.scriptPackage);
+  }
+
+  if (input.scriptPath === undefined) {
+    throw new Error("scriptPath or scriptPackage is required");
+  }
+
+  return parseVideoScriptPackage(
+    JSON.parse(await readFile(input.scriptPath, "utf8")),
+  );
 }
 
 async function createRunDirectory(tempRoot: string, runId: string) {

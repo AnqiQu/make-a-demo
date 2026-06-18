@@ -47,8 +47,9 @@ describe("runFullPipelineJob", () => {
           },
           async compositeVideo(input) {
             calls.push(`composite:${input.captureManifestPath}`);
+            expect(input.scriptPath).toBeDefined();
             expect(
-              JSON.parse(await readFile(input.scriptPath, "utf8")),
+              JSON.parse(await readFile(input.scriptPath as string, "utf8")),
             ).toMatchObject({ scriptId: "script_test" });
             const manifest: CompositedVideoManifest = {
               createdAt: "2026-01-01T00:00:00.000Z",
@@ -131,6 +132,99 @@ describe("runFullPipelineJob", () => {
       await expect(
         stat(join(outputRoot, "full-run", "video-script-package.json")),
       ).resolves.toMatchObject({ isFile: expect.any(Function) });
+    } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("stores the generated script on the Demo Request when durable script persistence is configured", async () => {
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
+    const savedScripts: unknown[] = [];
+
+    try {
+      const result = await runFullPipelineJob(
+        {
+          demoBrief: { keyProductFeatures: ["article feed"] },
+          normalizedSupportingDocuments: [],
+          repoSecurity: {
+            files: [{ path: "package.json", text: "{}" }],
+            repoStats: { fileCount: 1, sizeBytes: 100 },
+          },
+          repoUrl: "https://github.com/example/app",
+          workspaceId: "workspace_123",
+        },
+        stage1Dependencies([]),
+        {
+          async captureScenes(input) {
+            expect(input.scriptPath).toBeUndefined();
+            expect(input.scriptPackage).toMatchObject({
+              scriptId: "script_test",
+            });
+            return {
+              baseUrl: input.baseUrl,
+              createdAt: "2026-01-01T00:00:00.000Z",
+              keepTemp: true,
+              manifestPath: join(outputRoot, "capture-manifest.json"),
+              runDirectory: outputRoot,
+              runId: "capture",
+              scenes: [],
+              scriptId: "script_test",
+              temporary: true,
+              title: "Demo",
+            };
+          },
+          async compositeVideo(input) {
+            expect(input.scriptPath).toBeUndefined();
+            expect(input.scriptPackage).toMatchObject({
+              scriptId: "script_test",
+            });
+            return {
+              createdAt: "2026-01-01T00:00:00.000Z",
+              durationInFrames: 150,
+              fps: 30,
+              manifestPath: join(outputRoot, "composite-manifest.json"),
+              outputVideoPath: join(outputRoot, "final-video.mp4"),
+              renderPlanPath: join(outputRoot, "render-plan.json"),
+              runDirectory: outputRoot,
+              runId: "composite",
+              scriptId: "script_test",
+              title: "Demo",
+              viewUrl: "file:///tmp/final-video.mp4",
+            };
+          },
+          context: {
+            demoRequestId: "demo-request-123",
+            projectId: "project-123",
+          },
+          demoRequestScriptStore: {
+            async saveGeneratedScript(input) {
+              savedScripts.push(input);
+            },
+          },
+          outputRoot,
+          runId: "full-run",
+        },
+      );
+
+      expect(savedScripts).toEqual([
+        {
+          demoRequestId: "demo-request-123",
+          script: expect.objectContaining({
+            scriptId: "script_test",
+            title: "Demo",
+          }),
+        },
+      ]);
+      expect(result.scriptPath).toBeUndefined();
+      await expect(
+        stat(join(outputRoot, "full-run", "video-script-package.json")),
+      ).rejects.toThrow();
+      await expect(readJsonFile(result.resultPath)).resolves.toMatchObject({
+        artifacts: {
+          generatedScriptDemoRequestId: "demo-request-123",
+        },
+        status: "succeeded",
+      });
     } finally {
       await rm(outputRoot, { force: true, recursive: true });
     }
