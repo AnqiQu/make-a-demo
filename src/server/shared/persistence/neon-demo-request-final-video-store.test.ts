@@ -3,6 +3,85 @@ import { describe, expect, it } from "vitest";
 import { NeonDemoRequestFinalVideoStore } from "./neon-demo-request-final-video-store";
 
 describe("NeonDemoRequestFinalVideoStore", () => {
+  it("saves the generated script package on the Demo Request", async () => {
+    const updates: unknown[] = [];
+    const db = {
+      select() {
+        throw new Error("select should not be called");
+      },
+      update() {
+        return {
+          set(values: unknown) {
+            updates.push(values);
+            return {
+              where() {
+                return {
+                  returning: async () => [{ id: "demo-request-123" }],
+                };
+              },
+            };
+          },
+        };
+      },
+    };
+    const store = new NeonDemoRequestFinalVideoStore(db);
+
+    await store.saveGeneratedScript({
+      demoRequestId: "demo-request-123",
+      script: {
+        assumptions: [],
+        demoPlan: {
+          featureOrder: ["article feed"],
+          narrative: "Show the article feed.",
+          risks: [],
+        },
+        estimatedDurationSeconds: 5,
+        exploration: {
+          assumptions: [],
+          productSurfaces: ["article feed"],
+          summary: "Prepared app.",
+        },
+        format: "16:9",
+        scriptId: "script_test",
+        sections: [
+          {
+            id: "section_test",
+            scenes: [
+              {
+                description: "Show article feed.",
+                durationSeconds: 5,
+                events: ["Open app"],
+                id: "scene_article_feed",
+                playwrightSceneId: "scene_article_feed",
+                playwrightScript: "await page.goto(baseUrl);",
+                type: "playwright-recording",
+              },
+            ],
+            title: "Article Feed",
+          },
+        ],
+        title: "Demo",
+        validation: {
+          blockedNetworkAttempts: [],
+          browserUrl: "https://preview.example.test/",
+          logs: ["validated"],
+          status: "succeeded",
+          warnings: [],
+        },
+        version: 1,
+      },
+    });
+
+    expect(updates).toEqual([
+      {
+        script: expect.objectContaining({
+          scriptId: "script_test",
+          title: "Demo",
+        }),
+      },
+    ]);
+  });
+
   it("links the generated final video to the Demo Request without writing queue status", async () => {
     const updates: unknown[] = [];
     const db = {

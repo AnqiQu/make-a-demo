@@ -120,7 +120,9 @@ export type CompositeVideoFromScriptInput = {
   publicAppBaseUrl?: string;
   renderer?: VideoRenderer;
   runId?: string;
-  scriptPath: string;
+  scriptDirectory?: string;
+  scriptPackage?: unknown;
+  scriptPath?: string;
 };
 
 export async function compositeVideoFromScript(
@@ -139,9 +141,7 @@ export async function compositeVideoFromScript(
 
   await mkdir(publicDir, { recursive: true });
 
-  const scriptPackage = parseFullVideoScriptPackage(
-    JSON.parse(await readFile(input.scriptPath, "utf8")),
-  );
+  const scriptPackage = await readScriptPackage(input);
   const captureManifest = parseCaptureManifest(
     JSON.parse(await readFile(input.captureManifestPath, "utf8")),
   );
@@ -152,7 +152,11 @@ export async function compositeVideoFromScript(
     );
   }
 
-  const scriptDirectory = dirname(resolve(input.scriptPath));
+  const scriptDirectory =
+    input.scriptDirectory ??
+    (input.scriptPath === undefined
+      ? projectRoot
+      : dirname(resolve(input.scriptPath)));
   const scenes = await stageScenes({
     captureManifest,
     projectRoot,
@@ -221,6 +225,20 @@ export async function compositeVideoFromScript(
 
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   return manifest;
+}
+
+async function readScriptPackage(input: CompositeVideoFromScriptInput) {
+  if (input.scriptPackage !== undefined) {
+    return parseFullVideoScriptPackage(input.scriptPackage);
+  }
+
+  if (input.scriptPath === undefined) {
+    throw new Error("scriptPath or scriptPackage is required");
+  }
+
+  return parseFullVideoScriptPackage(
+    JSON.parse(await readFile(input.scriptPath, "utf8")),
+  );
 }
 
 function assertFinalVideoDependencies(input: CompositeVideoFromScriptInput) {

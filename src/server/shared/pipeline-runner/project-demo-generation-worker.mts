@@ -101,6 +101,7 @@ do {
               demoRequestId: job.demoRequestId,
               projectId: job.projectId,
             },
+            demoRequestScriptStore: demoRequestStore,
             observer,
           },
         );
