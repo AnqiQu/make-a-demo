@@ -34,6 +34,20 @@ describe("parseStage1CliArgs", () => {
     });
   });
 
+  it("uses the configured Daytona snapshot default when no flag is passed", () => {
+    expect(
+      parseStage1CliArgs(
+        [
+          "--repo",
+          "https://github.com/example/app",
+          "--feature",
+          "validation dashboard",
+        ],
+        { daytonaSnapshot: "makeademo-opencode" },
+      ).daytonaSnapshot,
+    ).toBe("makeademo-opencode");
+  });
+
   it("rejects the legacy local workspace root option", () => {
     expect(() =>
       parseStage1CliArgs([

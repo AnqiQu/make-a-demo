@@ -8,14 +8,31 @@ export type Stage1CliOptions = {
   workspaceId: string;
 };
 
-export function parseStage1CliArgs(args: string[]): Stage1CliOptions {
+export type Stage1CliDefaults = {
+  daytonaSnapshot?: string;
+};
+
+export function readStage1CliDefaults(
+  env: NodeJS.ProcessEnv = process.env,
+): Stage1CliDefaults {
+  const daytonaSnapshot = env.DAYTONA_SNAPSHOT;
+
+  return daytonaSnapshot === undefined || daytonaSnapshot.trim() === ""
+    ? {}
+    : { daytonaSnapshot };
+}
+
+export function parseStage1CliArgs(
+  args: string[],
+  defaults: Stage1CliDefaults = {},
+): Stage1CliOptions {
   const docs: string[] = [];
   const features: string[] = [];
   let modelID = "gpt-5.5";
   let providerID = "openai";
   let repoUrl: string | undefined;
   let workspaceId: string | undefined;
-  let daytonaSnapshot: string | undefined;
+  let daytonaSnapshot = defaults.daytonaSnapshot;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];

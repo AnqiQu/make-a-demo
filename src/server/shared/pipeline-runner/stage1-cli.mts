@@ -14,7 +14,10 @@ import { DaytonaSandboxRunner } from "../integrations/sandbox/daytona-sandbox-ru
 import { createOpenCodeOutputStream } from "./opencode-output-stream";
 import { runPipelineJob } from "./pipeline-orchestrator";
 import { collectStage1CliOptions } from "./stage1-cli-interactive";
-import { parseStage1CliArgs } from "./stage1-cli-options";
+import {
+  parseStage1CliArgs,
+  readStage1CliDefaults,
+} from "./stage1-cli-options";
 import { createStage1PipelineDependencies } from "./stage1-pipeline";
 import { readRepoSecurityInput } from "./stage1-repo-security";
 
@@ -98,8 +101,9 @@ if (result.status !== "succeeded") {
 }
 
 async function readOptions(args: string[]) {
+  const defaults = readStage1CliDefaults();
   if (args.length > 0) {
-    return parseStage1CliArgs(args);
+    return parseStage1CliArgs(args, defaults);
   }
 
   const readline = createInterface({
@@ -108,10 +112,13 @@ async function readOptions(args: string[]) {
   });
 
   try {
-    return await collectStage1CliOptions({
-      prompt: (question) => readline.question(question),
-      write: (message) => process.stdout.write(`${message}\n`),
-    });
+    return await collectStage1CliOptions(
+      {
+        prompt: (question) => readline.question(question),
+        write: (message) => process.stdout.write(`${message}\n`),
+      },
+      defaults,
+    );
   } finally {
     readline.close();
   }
