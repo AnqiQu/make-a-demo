@@ -13,12 +13,16 @@ describe("collectStage1CliOptions", () => {
       "workspace-demo",
     ];
 
-    const options = await collectStage1CliOptions({
-      prompt: async () => answers.shift() ?? "",
-      write: () => {},
-    });
+    const options = await collectStage1CliOptions(
+      {
+        prompt: async () => answers.shift() ?? "",
+        write: () => {},
+      },
+      { daytonaSnapshot: "makeademo-opencode" },
+    );
 
     expect(options).toEqual({
+      daytonaSnapshot: "makeademo-opencode",
       docs: ["./brief.md", "./setup-notes.txt"],
       features: ["validation dashboard", "script package"],
       modelID: "gpt-5.5",

@@ -1,4 +1,4 @@
-import type { Stage1CliOptions } from "./stage1-cli-options";
+import type { Stage1CliDefaults, Stage1CliOptions } from "./stage1-cli-options";
 
 type Stage1CliPrompt = (question: string) => Promise<string>;
 
@@ -9,6 +9,7 @@ export type Stage1CliInteractiveIO = {
 
 export async function collectStage1CliOptions(
   io: Stage1CliInteractiveIO,
+  defaults: Stage1CliDefaults = {},
 ): Promise<Stage1CliOptions> {
   io.write("MakeADemo Stage 1 CLI");
   io.write("Press Enter to accept defaults where shown.");
@@ -40,6 +41,9 @@ export async function collectStage1CliOptions(
     createWorkspaceId(repoUrl),
   );
   return {
+    ...(defaults.daytonaSnapshot === undefined
+      ? {}
+      : { daytonaSnapshot: defaults.daytonaSnapshot }),
     docs,
     features,
     modelID,
