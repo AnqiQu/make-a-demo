@@ -96,4 +96,38 @@ describe("submitContextGathering", () => {
       ),
     ).rejects.toThrow("githubInstallationId is required for private repos");
   });
+
+  it("rejects malformed Supporting Document metadata before queueing", async () => {
+    const store: ContextGatheringStore = {
+      async createQueuedProject() {
+        throw new Error("store should not be called");
+      },
+    };
+
+    await expect(
+      submitContextGathering(
+        {
+          contact: { email: "founder@example.com", name: "Anqi" },
+          repoUrl: "https://github.com/example/app",
+          repoVisibility: "public",
+          structuredContext: {
+            importantFeatures: "script generation",
+            productSummary: "A demo generator.",
+            requestedDurationSeconds: 60,
+            targetUsers: "Founders",
+          },
+          supportingFiles: [
+            {
+              fileName: "demo.mp4",
+              mimeType: "video/mp4",
+              r2Key: "uploads/draft-1/demo.mp4",
+              r2Url: "r2://owlet/uploads/draft-1/demo.mp4",
+              sizeBytes: 128,
+            },
+          ],
+        },
+        { store },
+      ),
+    ).rejects.toThrow("Supporting Documents cannot be videos or pictures");
+  });
 });

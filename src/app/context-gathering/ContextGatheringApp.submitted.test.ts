@@ -117,6 +117,27 @@ describe("ContextGatheringApp", () => {
     expect(html).not.toContain("Connect GitHub");
     expect(html).not.toContain("https://github.com/org/repo");
   });
+
+  it("lets users reconnect GitHub when connected repositories fail to load", () => {
+    const html = renderToStaticMarkup(
+      createElement(RepoConnectionFields, {
+        githubInstallationId: "installation-123",
+        isLoadingRepositories: false,
+        onConnectGitHub: () => undefined,
+        onRepoInputChange: () => undefined,
+        onRepositorySelect: () => undefined,
+        repoInput: "",
+        repositories: [],
+        selectedRepoUrl: "",
+      }),
+    );
+
+    expect(html).toContain("No repositories found");
+    expect(html).toContain("Reconnect GitHub");
+    expect(html).toContain(
+      '<button class="github-button github-button-connected" type="button">',
+    );
+  });
 });
 
 describe("ContextDetailsForm", () => {

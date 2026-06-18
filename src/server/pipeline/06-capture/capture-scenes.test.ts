@@ -112,6 +112,77 @@ describe("captureScenesFromScript", () => {
     expect(manifestJson).toEqual(manifest);
   });
 
+  it("skips sections with only compositing-native scenes while recording Playwright scenes", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
+    const tempRoot = join(workspace, "runs");
+    const recordedSceneIds: string[] = [];
+
+    const manifest = await captureScenesFromScript({
+      baseUrl: "http://localhost:3000",
+      recorder: {
+        async recordScene(input) {
+          recordedSceneIds.push(input.scene.id);
+          return {
+            durationSeconds: input.scene.durationSeconds,
+            videoPath: join(
+              input.runDirectory,
+              "raw-scenes",
+              `${input.scene.id}.webm`,
+            ),
+          };
+        },
+      },
+      scriptPackage: {
+        scriptId: "script-001",
+        title: "Demo Script",
+        version: 1,
+        estimatedDurationSeconds: 9,
+        format: "16:9",
+        sections: [
+          {
+            id: "intro",
+            title: "Intro",
+            scenes: [
+              {
+                id: "title-card",
+                type: "full-screen-text",
+                description: "Open with a title card.",
+                durationSeconds: 1,
+                background: { colour: "#000000", type: "solid" },
+              },
+            ],
+          },
+          {
+            id: "demo",
+            title: "Demo",
+            scenes: [
+              {
+                id: "video-scene-001",
+                type: "playwright-recording",
+                playwrightSceneId: "scene-001",
+                description: "Open the app.",
+                durationSeconds: 4,
+                events: ["Navigate to the app."],
+                playwrightScript: "await page.goto(baseUrl);",
+              },
+            ],
+          },
+        ],
+      },
+      tempRoot,
+    });
+
+    expect(recordedSceneIds).toEqual(["scene-001"]);
+    expect(manifest.scenes).toEqual([
+      {
+        durationSeconds: 4,
+        sceneId: "scene-001",
+        sectionId: "demo",
+        videoPath: join(manifest.runDirectory, "raw-scenes", "scene-001.webm"),
+      },
+    ]);
+  });
+
   it("rejects malformed Video Script Packages before recording starts", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
     const scriptPath = join(workspace, "script.json");

@@ -24,6 +24,25 @@ describe("screenRepoSecurity", () => {
     );
   });
 
+  it("rejects secret-looking files committed outside the repo root", () => {
+    const result = screenRepoSecurity({
+      files: [
+        { path: "package.json", text: JSON.stringify({}) },
+        { path: "apps/web/.env.production", text: "API_KEY=secret" },
+        { path: "config/id_ed25519", text: "private-key" },
+      ],
+      repoStats: { fileCount: 10, sizeBytes: 100_000 },
+    });
+
+    expect(result.status).toBe("rejected");
+    expect(result.rejections).toContain(
+      "repo contains committed secret file apps/web/.env.production",
+    );
+    expect(result.rejections).toContain(
+      "repo contains committed secret file config/id_ed25519",
+    );
+  });
+
   it("warns for large repos and non-fatal preparation risks", () => {
     const result = screenRepoSecurity({
       files: [

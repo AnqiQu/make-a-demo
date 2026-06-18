@@ -104,31 +104,35 @@ function readSections(packageRecord: Record<string, unknown>) {
     throw new Error("sections must be a non-empty array");
   }
 
-  return sections.map((section, sectionIndex): ScriptSection => {
-    const sectionPath = `sections[${sectionIndex}]`;
-    const sectionRecord = assertRecord(section, sectionPath);
+  const scriptSections = sections.map(
+    (section, sectionIndex): ScriptSection => {
+      const sectionPath = `sections[${sectionIndex}]`;
+      const sectionRecord = assertRecord(section, sectionPath);
 
-    const scenes = sectionRecord.scenes;
-    if (!Array.isArray(scenes) || scenes.length === 0) {
-      throw new Error(`${sectionPath}.scenes must be a non-empty array`);
-    }
+      const scenes = sectionRecord.scenes;
+      if (!Array.isArray(scenes) || scenes.length === 0) {
+        throw new Error(`${sectionPath}.scenes must be a non-empty array`);
+      }
 
-    const captureScenes = scenes.flatMap((scene, sceneIndex) =>
-      readCaptureScene(scene, `${sectionPath}.scenes[${sceneIndex}]`),
-    );
-
-    if (captureScenes.length === 0) {
-      throw new Error(
-        `${sectionPath}.scenes must include at least one playwright-recording scene`,
+      const captureScenes = scenes.flatMap((scene, sceneIndex) =>
+        readCaptureScene(scene, `${sectionPath}.scenes[${sceneIndex}]`),
       );
-    }
 
-    return {
-      id: readNonEmptyString(sectionRecord, "id", sectionPath),
-      scenes: captureScenes,
-      title: readNonEmptyString(sectionRecord, "title", sectionPath),
-    };
-  });
+      return {
+        id: readNonEmptyString(sectionRecord, "id", sectionPath),
+        scenes: captureScenes,
+        title: readNonEmptyString(sectionRecord, "title", sectionPath),
+      };
+    },
+  );
+
+  if (!scriptSections.some((section) => section.scenes.length > 0)) {
+    throw new Error(
+      "sections must include at least one playwright-recording scene",
+    );
+  }
+
+  return scriptSections;
 }
 
 function readCaptureScene(value: unknown, path: string): SceneDescription[] {

@@ -130,7 +130,7 @@ export function setRepoDetails(
   return {
     ...draft,
     chatStep: "details",
-    repoUrl: input.repoUrl,
+    repoUrl: input.repoUrl.trim(),
     repoVisibility: input.repoVisibility,
     ...(input.githubInstallationId === undefined
       ? {}
