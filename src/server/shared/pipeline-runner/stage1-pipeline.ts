@@ -8,6 +8,9 @@ import { DefaultDemoPlanner } from "../../pipeline/05-script-generation/demo-pla
 import { DefaultScriptComposer } from "../../pipeline/05-script-generation/script-composition/default-script-composer";
 import type { ScriptGenerationAgent } from "../../pipeline/05-script-generation/script-generation-agent.interface";
 import { generateVideoScriptPackage } from "../../pipeline/05-script-generation/script-generation-orchestrator";
+import { validateCapturePath } from "../../pipeline/06-capture-path-validation/capture-path-validator";
+import type { CapturePathSceneValidator } from "../../pipeline/06-capture-path-validation/capture-path-validator";
+import { DefaultCapturePathSceneValidator } from "../../pipeline/06-capture-path-validation/playwright-capture-path-scene-validator";
 import { LlmProjectExplorer } from "../integrations/agents/llm-project-explorer";
 import { PlaywrightBrowserValidator } from "../integrations/browser/playwright-browser-validator";
 import type { PipelineOrchestratorDependencies } from "./pipeline-orchestrator";
@@ -16,6 +19,7 @@ export type Stage1PipelineOptions = {
   browserValidator?: BrowserValidator;
   repoPreparationAgent: RepoPreparationAgent;
   sandboxRunner: SandboxRunner;
+  sceneValidator?: CapturePathSceneValidator;
   scriptGenerationAgent?: ScriptGenerationAgent;
 };
 
@@ -25,6 +29,8 @@ export function createStage1PipelineDependencies(
   const browserValidator =
     options.browserValidator ?? new PlaywrightBrowserValidator();
   const sandboxRunner = options.sandboxRunner;
+  const sceneValidator =
+    options.sceneValidator ?? new DefaultCapturePathSceneValidator();
 
   return {
     generateScriptPackage(input) {
@@ -41,8 +47,16 @@ export function createStage1PipelineDependencies(
       return prepareRepo(input, { agent: options.repoPreparationAgent });
     },
     screenRepoSecurity,
-    validateProject(input) {
-      return validateProject(input, { browserValidator, sandboxRunner });
+    validateCapturePath(input) {
+      return validateCapturePath(input, {
+        sceneValidator,
+        validateProject(projectInput) {
+          return validateProject(projectInput, {
+            browserValidator,
+            sandboxRunner,
+          });
+        },
+      });
     },
   };
 }

@@ -6,8 +6,8 @@ import type {
 } from "../../pipeline/02-repo-security-screen/repo-security-screen";
 import type { PreparationManifest } from "../../pipeline/03-repo-preparation/preparation-manifest";
 import type { PreparationWorkspaceHandle } from "../../pipeline/03-repo-preparation/preparation-workspace-runner";
-import type { ProjectValidationResult } from "../../pipeline/04-project-validation/validation-result";
 import type { VideoScriptPackage } from "../../pipeline/05-script-generation/video-script-package";
+import type { CapturePathValidationResult } from "../../pipeline/06-capture-path-validation/capture-path-validator.interface";
 
 export type PipelineJobInput = {
   demoBrief: DemoBrief;
@@ -27,14 +27,14 @@ export type PipelineJobResult =
       status: "preparation-failed";
     }
   | {
-      status: "validation-failed";
-      validation: ProjectValidationResult;
+      capturePathValidation: CapturePathValidationResult;
+      status: "capture-path-validation-failed";
     }
   | {
       preparationManifest: PreparationManifest;
       opencodeSessionID?: string;
       preparationWorkspace?: PreparationWorkspaceHandle;
+      capturePathValidation: CapturePathValidationResult;
       status: "succeeded";
-      validation: ProjectValidationResult;
       videoScriptPackage: VideoScriptPackage;
     };

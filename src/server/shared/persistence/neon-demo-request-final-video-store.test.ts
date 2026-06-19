@@ -61,13 +61,6 @@ describe("NeonDemoRequestFinalVideoStore", () => {
           },
         ],
         title: "Demo",
-        validation: {
-          blockedNetworkAttempts: [],
-          browserUrl: "https://preview.example.test/",
-          logs: ["validated"],
-          status: "succeeded",
-          warnings: [],
-        },
         version: 1,
       },
     });

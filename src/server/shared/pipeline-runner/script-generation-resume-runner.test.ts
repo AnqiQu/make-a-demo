@@ -32,13 +32,6 @@ describe("runScriptGenerationResume", () => {
           preparationWorkspaceId: "daytona_workspace",
           repoUrl: "https://github.com/example/app",
           runDirectory: outputRoot,
-          validation: {
-            blockedNetworkAttempts: [],
-            browserUrl: "https://preview.example.test/",
-            logs: ["validated"],
-            status: "succeeded",
-            warnings: [],
-          },
         },
         {
           preparationWorkspace: fakePreparationWorkspaceHandle(),
@@ -122,13 +115,6 @@ function scriptPackage() {
     scriptId: "script_test",
     sections: [],
     title: "Demo",
-    validation: {
-      blockedNetworkAttempts: [],
-      browserUrl: "https://preview.example.test/",
-      logs: ["validated"],
-      status: "succeeded" as const,
-      warnings: [],
-    },
     version: 1,
   };
 }

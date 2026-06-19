@@ -2,7 +2,6 @@ import type { DemoBrief } from "../01-context-gathering/intake/demo-brief.schema
 import type { NormalizedSupportingDocument } from "../01-context-gathering/supporting-documents";
 import type { PreparationManifest } from "../03-repo-preparation/preparation-manifest";
 import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
-import type { ProjectValidationResult } from "../04-project-validation/validation-result";
 import type { DemoPlanner } from "./demo-planning/demo-planner.interface";
 import type { ProjectExplorer } from "./project-exploration/project-explorer.interface";
 import type { ScriptComposer } from "./script-composition/script-composer.interface";
@@ -19,7 +18,6 @@ export type ScriptGenerationInput = {
   preparationManifest: PreparationManifest;
   preparationWorkspace?: PreparationWorkspaceHandle;
   repoUrl: string;
-  validation: ProjectValidationResult;
 };
 
 export type ScriptGenerationDependencies = {
@@ -64,7 +62,6 @@ export async function generateVideoScriptPackage(
   return buildVideoScriptPackage({
     demoPlan,
     exploration,
-    validation: input.validation,
     videoScript,
   });
 }

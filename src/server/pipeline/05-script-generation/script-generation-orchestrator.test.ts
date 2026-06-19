@@ -11,13 +11,6 @@ describe("generateVideoScriptPackage", () => {
         normalizedSupportingDocuments: [],
         preparationManifest: manifest(),
         repoUrl: "https://github.com/example/app",
-        validation: {
-          blockedNetworkAttempts: [],
-          logs: ["validated"],
-          screenshotArtifactId: "artifact_screenshot",
-          status: "succeeded",
-          warnings: [],
-        },
       },
       {
         projectExplorer: {
@@ -79,7 +72,6 @@ describe("generateVideoScriptPackage", () => {
       playwrightScript: "await page.goto(baseUrl);",
       type: "playwright-recording",
     });
-    expect(packageResult.validation.logs).toEqual(["validated"]);
     expect(packageResult.assumptions).toEqual(["single page app"]);
   });
 });

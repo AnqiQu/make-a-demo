@@ -241,7 +241,6 @@ function attachPipelineMetadata(
     assumptions: exploration.assumptions,
     demoPlan,
     exploration,
-    validation: input.validation,
   };
 }
 
@@ -298,12 +297,12 @@ function createScriptGenerationPrompt(
   return [
     "# MakeADemo Script Generation",
     "",
-    "Repo Preparation and Project Validation have passed in this same OpenCode session.",
-    "The prepared app is now frozen: do not modify application source, package files, lockfiles, or runtime setup.",
+    "Repo Preparation has produced a deterministic prepared workspace in this same OpenCode session.",
+    "Do not modify application source, package files, lockfiles, or runtime setup during Script Generation.",
     `Write exactly one artifact: ${scriptPackagePath}.`,
     "",
     "## Goal",
-    "Explore the validated prepared repo enough to create a capture-ready Video Script Package with real browser interactions for the requested features.",
+    "Explore the prepared repo enough to create a Video Script Package with real browser interactions for the requested features.",
     "Use your existing session context from preparation, but inspect relevant routes, components, fixtures, and docs when needed.",
     "",
     "## Hard Requirements",
@@ -326,7 +325,6 @@ function createScriptGenerationPrompt(
         normalizedSupportingDocuments: input.normalizedSupportingDocuments,
         preparationManifest: input.preparationManifest,
         repoUrl: input.repoUrl,
-        validation: input.validation,
       },
       null,
       2,

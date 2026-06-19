@@ -112,8 +112,7 @@ function readResumeFile(contents: string): ScriptGenerationResumeFile {
     typeof resume.repoUrl !== "string" ||
     typeof resume.runDirectory !== "string" ||
     resume.demoBrief === undefined ||
-    resume.preparationManifest === undefined ||
-    resume.validation === undefined
+    resume.preparationManifest === undefined
   ) {
     throw new Error(
       "Script Generation resume file is missing required fields.",
@@ -128,7 +127,6 @@ function readResumeFile(contents: string): ScriptGenerationResumeFile {
     preparationWorkspaceId: resume.preparationWorkspaceId,
     repoUrl: resume.repoUrl,
     runDirectory: resume.runDirectory,
-    validation: resume.validation,
   };
 }
 

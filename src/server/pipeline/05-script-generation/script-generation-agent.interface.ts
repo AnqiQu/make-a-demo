@@ -8,9 +8,10 @@ export type AgenticScriptGenerationInput = ScriptGenerationInput & {
 };
 
 /**
- * Generates the capture-ready Video Script Package inside a validated prepared workspace.
- * Implementations must treat the app runtime as frozen after Project Validation, resume
- * the provided preparation OpenCode session, and write only Script Generation artifacts.
+ * Generates a Video Script Package inside a prepared workspace.
+ * Implementations should resume the provided preparation OpenCode session and
+ * write only Script Generation artifacts; Capture Path Validation decides later
+ * whether the package is accepted for Footage Capture.
  */
 export interface ScriptGenerationAgent {
   generateScriptPackage(

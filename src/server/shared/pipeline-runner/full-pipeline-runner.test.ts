@@ -10,7 +10,7 @@ import { runFullPipelineJob } from "./full-pipeline-runner";
 import type { PipelineOrchestratorDependencies } from "./pipeline-orchestrator";
 
 describe("runFullPipelineJob", () => {
-  it("runs Stage 1, captures scenes from the validated browser URL, and composites the final video", async () => {
+  it("runs Stage 1, captures scenes from the capture-path browser URL, and composites the final video", async () => {
     const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
     const calls: string[] = [];
 
@@ -81,6 +81,7 @@ describe("runFullPipelineJob", () => {
         "repo-security-screen",
         "repo-preparation",
         "script-generation",
+        "capture-path-validation",
         "capture:https://preview.example.test/",
         `composite:${join(outputRoot, "capture-manifest.json")}`,
       ]);
@@ -124,7 +125,6 @@ describe("runFullPipelineJob", () => {
         preparationWorkspaceId: "daytona_workspace",
         repoUrl: "https://github.com/example/app",
         runDirectory: join(outputRoot, "full-run"),
-        validation: { browserUrl: "https://preview.example.test/" },
       });
       expect(result.logPath).toBe(
         join(outputRoot, "full-run", "pipeline-log.jsonl"),
@@ -230,7 +230,7 @@ describe("runFullPipelineJob", () => {
     }
   });
 
-  it("fails before capture when Stage 1 did not produce a validated browser URL", async () => {
+  it("fails before capture when Capture Path Validation did not produce a browser URL", async () => {
     await expect(
       runFullPipelineJob(
         {
@@ -253,7 +253,7 @@ describe("runFullPipelineJob", () => {
           },
         },
       ),
-    ).rejects.toThrow("Stage 1 did not return a validated browser URL");
+    ).rejects.toThrow("Capture Path Validation did not return a browser URL");
   });
 
   it("writes a local result file with failure details when Stage 1 fails", async () => {
@@ -286,8 +286,8 @@ describe("runFullPipelineJob", () => {
             screenRepoSecurity() {
               return { rejections: [], status: "passed", warnings: [] };
             },
-            async validateProject() {
-              throw new Error("validation should not run");
+            async validateCapturePath() {
+              throw new Error("capture path validation should not run");
             },
           },
           {
@@ -324,6 +324,80 @@ describe("runFullPipelineJob", () => {
         status: "preparation-failed",
       });
     } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("reports Capture Path Validation exhaustion as a MakeADemo issue instead of preparation advice", async () => {
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
+    const previousRepairAttempts =
+      process.env.MAKEADEMO_CAPTURE_PATH_REPAIR_ATTEMPTS;
+    process.env.MAKEADEMO_CAPTURE_PATH_REPAIR_ATTEMPTS = "0";
+
+    try {
+      await expect(
+        runFullPipelineJob(
+          {
+            demoBrief: { keyProductFeatures: ["article feed"] },
+            normalizedSupportingDocuments: [],
+            repoSecurity: {
+              files: [{ path: "package.json", text: "{}" }],
+              repoStats: { fileCount: 1, sizeBytes: 100 },
+            },
+            repoUrl: "https://github.com/example/app",
+            workspaceId: "workspace_123",
+          },
+          {
+            ...stage1Dependencies([]),
+            async validateCapturePath() {
+              return {
+                blockedNetworkAttempts: [],
+                browserUrl: "https://preview.example.test/",
+                failedSceneId: "scene_article_feed",
+                failureReason: "Generated selector did not match.",
+                logs: ["selector failed"],
+                status: "failed",
+                warnings: ["Retry with more seeded data."],
+              };
+            },
+          },
+          {
+            async captureScenes() {
+              throw new Error("capture should not run");
+            },
+            async compositeVideo() {
+              throw new Error("compositing should not run");
+            },
+            outputRoot,
+            runId: "capture-path-fails",
+          },
+        ),
+      ).rejects.toThrow(
+        "Stage 1 failed with status capture-path-validation-failed",
+      );
+
+      await expect(
+        readJsonFile(
+          join(outputRoot, "capture-path-fails", "full-pipeline-result.json"),
+        ),
+      ).resolves.toMatchObject({
+        failure: {
+          blockers: [
+            "Capture Path Validation failed. Please report this issue to MakeADemo.",
+          ],
+        },
+        status: "capture-path-validation-failed",
+      });
+    } finally {
+      if (previousRepairAttempts === undefined) {
+        Reflect.deleteProperty(
+          process.env,
+          "MAKEADEMO_CAPTURE_PATH_REPAIR_ATTEMPTS",
+        );
+      } else {
+        process.env.MAKEADEMO_CAPTURE_PATH_REPAIR_ATTEMPTS =
+          previousRepairAttempts;
+      }
       await rm(outputRoot, { force: true, recursive: true });
     }
   });
@@ -368,21 +442,16 @@ describe("runFullPipelineJob", () => {
                 },
                 opencodeSessionID: "session_prepare_123",
                 status: "succeeded",
-                validation: {
-                  blockedNetworkAttempts: [],
-                  browserUrl: "https://preview.example.test/",
-                  logs: ["validated"],
-                  status: "succeeded",
-                  warnings: [],
-                },
                 workspace: fakePreparationWorkspaceHandle(),
               };
             },
             screenRepoSecurity() {
               return { rejections: [], status: "passed", warnings: [] };
             },
-            async validateProject() {
-              throw new Error("validation should not rerun");
+            async validateCapturePath() {
+              throw new Error(
+                "capture path validation should not run after script generation fails",
+              );
             },
           },
           { outputRoot, runId: "scriptgen-fails" },
@@ -396,7 +465,6 @@ describe("runFullPipelineJob", () => {
       ).resolves.toMatchObject({
         opencodeSessionID: "session_prepare_123",
         preparationWorkspaceId: "daytona_workspace",
-        validation: { browserUrl: "https://preview.example.test/" },
       });
     } finally {
       await rm(outputRoot, { force: true, recursive: true });
@@ -469,6 +537,7 @@ describe("runFullPipelineJob", () => {
           "repo-security-screen started.",
           "repo-preparation started.",
           "script-generation succeeded.",
+          "capture-path-validation succeeded.",
           "Script package generated: 1 section(s), 1 scene(s), 5s estimated.",
           "Footage Capture started.",
           "Footage Capture succeeded: 1 scene video(s).",
@@ -553,13 +622,6 @@ function stage1Dependencies(
           },
         ],
         title: "Demo",
-        validation: {
-          blockedNetworkAttempts: [],
-          browserUrl: "https://preview.example.test/",
-          logs: ["validated"],
-          status: "succeeded",
-          warnings: [],
-        },
         version: 1,
       };
     },
@@ -584,15 +646,6 @@ function stage1Dependencies(
         },
         opencodeSessionID: "session_prepare_123",
         status: "succeeded",
-        validation: {
-          blockedNetworkAttempts: [],
-          ...(options.includeBrowserUrl === false
-            ? {}
-            : { browserUrl: "https://preview.example.test/" }),
-          logs: ["validated"],
-          status: "succeeded",
-          warnings: [],
-        },
         workspace: fakePreparationWorkspaceHandle(),
       };
     },
@@ -600,8 +653,17 @@ function stage1Dependencies(
       calls.push("repo-security-screen");
       return { rejections: [], status: "passed", warnings: [] };
     },
-    async validateProject() {
-      throw new Error("validation should not rerun");
+    async validateCapturePath() {
+      calls.push("capture-path-validation");
+      return {
+        blockedNetworkAttempts: [],
+        ...(options.includeBrowserUrl === false
+          ? {}
+          : { browserUrl: "https://preview.example.test/" }),
+        logs: ["validated capture path"],
+        status: "succeeded",
+        warnings: [],
+      };
     },
   };
 }

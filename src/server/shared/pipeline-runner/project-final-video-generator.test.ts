@@ -161,14 +161,14 @@ function successfulPipelineResult(): Extract<
       url: "http://localhost:3000",
       workspaceId: "project-1",
     },
-    status: "succeeded",
-    validation: {
+    capturePathValidation: {
       blockedNetworkAttempts: [],
       browserUrl: "https://preview.example.test/",
-      logs: ["validated"],
+      logs: ["validated capture path"],
       status: "succeeded",
       warnings: [],
     },
+    status: "succeeded",
     videoScriptPackage: {
       assumptions: [],
       demoPlan: {
@@ -202,13 +202,6 @@ function successfulPipelineResult(): Extract<
         },
       ],
       title: "Generated Demo",
-      validation: {
-        blockedNetworkAttempts: [],
-        browserUrl: "https://preview.example.test/",
-        logs: ["validated"],
-        status: "succeeded",
-        warnings: [],
-      },
       version: 1,
     },
   };

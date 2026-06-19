@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import type { ProjectValidationResult } from "../../pipeline/04-project-validation/validation-result";
 import { createRecordingPipelineObserver } from "./pipeline-observer";
 import { runPipelineJob } from "./pipeline-orchestrator";
 
 describe("runPipelineJob", () => {
-  it("runs security screen, repo preparation, validation, and script generation in order", async () => {
+  it("runs security screen, repo preparation, script generation, and capture path validation in order", async () => {
     const calls: string[] = [];
 
     const result = await runPipelineJob(
@@ -20,11 +19,10 @@ describe("runPipelineJob", () => {
         workspaceId: "workspace_123",
       },
       {
-        async generateScriptPackage({ preparationManifest, validation }) {
+        async generateScriptPackage({ preparationManifest }) {
           calls.push("script-generation");
           return scriptPackage({
             assumptions: preparationManifest.assumptions,
-            validation,
           });
         },
         async prepareRepo() {
@@ -39,11 +37,13 @@ describe("runPipelineJob", () => {
           calls.push("repo-security-screen");
           return { rejections: [], status: "passed", warnings: [] };
         },
-        async validateProject(input) {
-          calls.push("project-validation");
+        async validateCapturePath(input) {
+          calls.push("capture-path-validation");
           expect(input.preparationWorkspace?.id).toBe("daytona_workspace");
+          expect(input.videoScriptPackage.scriptId).toBe("script_test");
           return {
             blockedNetworkAttempts: [],
+            browserUrl: "https://preview.example.test/",
             logs: ["validated"],
             status: "succeeded",
             warnings: [],
@@ -56,8 +56,8 @@ describe("runPipelineJob", () => {
     expect(calls).toEqual([
       "repo-security-screen",
       "repo-preparation",
-      "project-validation",
       "script-generation",
+      "capture-path-validation",
     ]);
   });
 
@@ -76,10 +76,9 @@ describe("runPipelineJob", () => {
         workspaceId: "workspace_123",
       },
       {
-        async generateScriptPackage({ preparationManifest, validation }) {
+        async generateScriptPackage({ preparationManifest }) {
           return scriptPackage({
             assumptions: preparationManifest.assumptions,
-            validation,
           });
         },
         async prepareRepo() {
@@ -92,9 +91,10 @@ describe("runPipelineJob", () => {
         screenRepoSecurity() {
           return { rejections: [], status: "passed", warnings: [] };
         },
-        async validateProject() {
+        async validateCapturePath() {
           return {
             blockedNetworkAttempts: [],
+            browserUrl: "https://preview.example.test/",
             logs: ["validated"],
             status: "succeeded",
             warnings: [],
@@ -111,10 +111,10 @@ describe("runPipelineJob", () => {
       "repo-security-screen:succeeded",
       "repo-preparation:started",
       "repo-preparation:succeeded",
-      "project-validation:started",
-      "project-validation:succeeded",
       "script-generation:started",
       "script-generation:succeeded",
+      "capture-path-validation:started",
+      "capture-path-validation:succeeded",
     ]);
   });
 
@@ -134,12 +134,11 @@ describe("runPipelineJob", () => {
         workspaceId: "workspace_123",
       },
       {
-        async generateScriptPackage({ preparationManifest, validation }) {
+        async generateScriptPackage({ preparationManifest }) {
           now += 40;
           return {
             ...scriptPackage({
               assumptions: preparationManifest.assumptions,
-              validation,
             }),
             assumptions: preparationManifest.assumptions,
             demoPlan: {
@@ -172,7 +171,7 @@ describe("runPipelineJob", () => {
             warnings: ["Uses postinstall script."],
           };
         },
-        async validateProject() {
+        async validateCapturePath() {
           now += 30;
           return {
             blockedNetworkAttempts: [
@@ -285,36 +284,6 @@ describe("runPipelineJob", () => {
         projectId: "project-1",
         riskCount: undefined,
         sceneCount: undefined,
-        stage: "project-validation",
-        status: "started",
-        warningCount: undefined,
-        workspaceId: "workspace_123",
-      },
-      {
-        blockedNetworkAttemptCount: 1,
-        createdFileCount: undefined,
-        demoRequestId: "demo-request-1",
-        durationMs: 30,
-        event: "stage.succeeded",
-        mockedServiceCount: undefined,
-        projectId: "project-1",
-        riskCount: undefined,
-        sceneCount: undefined,
-        stage: "project-validation",
-        status: "succeeded",
-        warningCount: 1,
-        workspaceId: "workspace_123",
-      },
-      {
-        blockedNetworkAttemptCount: undefined,
-        createdFileCount: undefined,
-        demoRequestId: "demo-request-1",
-        durationMs: undefined,
-        event: "stage.started",
-        mockedServiceCount: undefined,
-        projectId: "project-1",
-        riskCount: undefined,
-        sceneCount: undefined,
         stage: "script-generation",
         status: "started",
         warningCount: undefined,
@@ -335,10 +304,40 @@ describe("runPipelineJob", () => {
         warningCount: undefined,
         workspaceId: "workspace_123",
       },
+      {
+        blockedNetworkAttemptCount: undefined,
+        createdFileCount: undefined,
+        demoRequestId: "demo-request-1",
+        durationMs: undefined,
+        event: "stage.started",
+        mockedServiceCount: undefined,
+        projectId: "project-1",
+        riskCount: undefined,
+        sceneCount: undefined,
+        stage: "capture-path-validation",
+        status: "started",
+        warningCount: undefined,
+        workspaceId: "workspace_123",
+      },
+      {
+        blockedNetworkAttemptCount: 1,
+        createdFileCount: undefined,
+        demoRequestId: "demo-request-1",
+        durationMs: 30,
+        event: "stage.succeeded",
+        mockedServiceCount: undefined,
+        projectId: "project-1",
+        riskCount: undefined,
+        sceneCount: 1,
+        stage: "capture-path-validation",
+        status: "succeeded",
+        warningCount: 1,
+        workspaceId: "workspace_123",
+      },
     ]);
   });
 
-  it("uses validation produced during repo preparation without rerunning project validation", async () => {
+  it("carries the preparation OpenCode session into script generation and capture path validation", async () => {
     const calls: string[] = [];
 
     const result = await runPipelineJob(
@@ -356,13 +355,11 @@ describe("runPipelineJob", () => {
         async generateScriptPackage({
           opencodeSessionID,
           preparationWorkspace,
-          validation,
         }) {
           calls.push("script-generation");
           expect(opencodeSessionID).toBe("session_prepare_123");
           expect(preparationWorkspace?.id).toBe("daytona_workspace");
-          expect(validation.logs).toEqual(["validated during preparation"]);
-          return scriptPackage({ assumptions: [], validation });
+          return scriptPackage({ assumptions: [] });
         },
         async prepareRepo() {
           calls.push("repo-preparation");
@@ -370,12 +367,6 @@ describe("runPipelineJob", () => {
             manifest: manifest(),
             opencodeSessionID: "session_prepare_123",
             status: "succeeded",
-            validation: {
-              blockedNetworkAttempts: [],
-              logs: ["validated during preparation"],
-              status: "succeeded",
-              warnings: [],
-            },
             workspace: fakeWorkspaceHandle(),
           };
         },
@@ -383,8 +374,20 @@ describe("runPipelineJob", () => {
           calls.push("repo-security-screen");
           return { rejections: [], status: "passed", warnings: [] };
         },
-        async validateProject() {
-          throw new Error("validation should not rerun after tool validation");
+        async validateCapturePath({
+          preparationWorkspace,
+          videoScriptPackage,
+        }) {
+          calls.push("capture-path-validation");
+          expect(preparationWorkspace?.id).toBe("daytona_workspace");
+          expect(videoScriptPackage.scriptId).toBe("script_test");
+          return {
+            blockedNetworkAttempts: [],
+            browserUrl: "https://preview.example.test/",
+            logs: ["validated capture path"],
+            status: "succeeded",
+            warnings: [],
+          };
         },
       },
       {
@@ -392,9 +395,6 @@ describe("runPipelineJob", () => {
           calls.push("script-generation-ready");
           expect(event.opencodeSessionID).toBe("session_prepare_123");
           expect(event.preparationWorkspace?.id).toBe("daytona_workspace");
-          expect(event.validation.logs).toEqual([
-            "validated during preparation",
-          ]);
         },
       },
     );
@@ -408,7 +408,108 @@ describe("runPipelineJob", () => {
       "repo-preparation",
       "script-generation-ready",
       "script-generation",
+      "capture-path-validation",
     ]);
+  });
+
+  it("repairs the script package after capture path validation fails and reruns validation", async () => {
+    const previousRepairAttempts =
+      process.env.MAKEADEMO_CAPTURE_PATH_REPAIR_ATTEMPTS;
+    process.env.MAKEADEMO_CAPTURE_PATH_REPAIR_ATTEMPTS = "1";
+    const calls: string[] = [];
+
+    try {
+      const result = await runPipelineJob(
+        {
+          demoBrief: { keyProductFeatures: ["validation"] },
+          normalizedSupportingDocuments: [],
+          repoSecurity: {
+            files: [{ path: "package.json", text: "{}" }],
+            repoStats: { fileCount: 1, sizeBytes: 1_000 },
+          },
+          repoUrl: "https://github.com/example/app",
+          workspaceId: "workspace_123",
+        },
+        {
+          async generateScriptPackage() {
+            calls.push("script-generation");
+            return scriptPackage({ assumptions: [], scriptId: "script_bad" });
+          },
+          async prepareRepo() {
+            calls.push("repo-preparation");
+            return {
+              manifest: manifest(),
+              opencodeSessionID: "session_prepare_123",
+              status: "succeeded",
+              workspace: fakeWorkspaceHandle(),
+            };
+          },
+          async repairCapturePathFailure(input) {
+            calls.push(
+              `repair:${input.attempt}:${input.failure.failedSceneId}:${input.opencodeSessionID}`,
+            );
+            return {
+              preparationManifest: input.preparationManifest,
+              videoScriptPackage: scriptPackage({
+                assumptions: [],
+                scriptId: "script_repaired",
+              }),
+            };
+          },
+          screenRepoSecurity() {
+            calls.push("repo-security-screen");
+            return { rejections: [], status: "passed", warnings: [] };
+          },
+          async validateCapturePath(input) {
+            calls.push(
+              `capture-path-validation:${input.videoScriptPackage.scriptId}`,
+            );
+            if (input.videoScriptPackage.scriptId === "script_bad") {
+              return {
+                blockedNetworkAttempts: [],
+                browserUrl: "https://preview.example.test/",
+                failedSceneId: "scene_validation",
+                failureReason: "Button was not found.",
+                logs: ["missing button"],
+                status: "failed",
+                warnings: [],
+              };
+            }
+
+            return {
+              blockedNetworkAttempts: [],
+              browserUrl: "https://preview.example.test/",
+              logs: ["validated repaired script"],
+              status: "succeeded",
+              warnings: [],
+            };
+          },
+        },
+      );
+
+      expect(result.status).toBe("succeeded");
+      if (result.status === "succeeded") {
+        expect(result.videoScriptPackage.scriptId).toBe("script_repaired");
+      }
+      expect(calls).toEqual([
+        "repo-security-screen",
+        "repo-preparation",
+        "script-generation",
+        "capture-path-validation:script_bad",
+        "repair:1:scene_validation:session_prepare_123",
+        "capture-path-validation:script_repaired",
+      ]);
+    } finally {
+      if (previousRepairAttempts === undefined) {
+        Reflect.deleteProperty(
+          process.env,
+          "MAKEADEMO_CAPTURE_PATH_REPAIR_ATTEMPTS",
+        );
+      } else {
+        process.env.MAKEADEMO_CAPTURE_PATH_REPAIR_ATTEMPTS =
+          previousRepairAttempts;
+      }
+    }
   });
 
   it("returns a fallback prompt and stops when Repo Preparation fails", async () => {
@@ -438,7 +539,7 @@ describe("runPipelineJob", () => {
         screenRepoSecurity() {
           return { rejections: [], status: "passed", warnings: [] };
         },
-        async validateProject() {
+        async validateCapturePath() {
           throw new Error("validation should not run after preparation fails");
         },
       },
@@ -472,7 +573,7 @@ function manifest() {
 
 function scriptPackage(input: {
   assumptions: string[];
-  validation: ProjectValidationResult;
+  scriptId?: string;
 }) {
   return {
     assumptions: input.assumptions,
@@ -484,7 +585,7 @@ function scriptPackage(input: {
     estimatedDurationSeconds: 5,
     exploration: { assumptions: [], productSurfaces: [], summary: "" },
     format: "16:9",
-    scriptId: "script_test",
+    scriptId: input.scriptId ?? "script_test",
     sections: [
       {
         id: "section_test",
@@ -503,7 +604,6 @@ function scriptPackage(input: {
       },
     ],
     title: "Demo",
-    validation: input.validation,
     version: 1,
   };
 }

@@ -1,8 +1,9 @@
 export type PrepareStylizedPlaywrightScriptInput = {
   baseUrl: string;
   headed: boolean;
+  mode?: "recording" | "validation";
   pauseAfterSceneMs: number;
-  videoDirectory: string;
+  videoDirectory?: string;
 };
 
 const humanTypingDelayMs = 100;
@@ -11,6 +12,10 @@ export function prepareStylizedPlaywrightScript(
   script: string,
   input: PrepareStylizedPlaywrightScriptInput,
 ) {
+  if ((input.mode ?? "recording") === "validation") {
+    return prepareValidationPlaywrightScript(script, input);
+  }
+
   if (!script.includes("chromium.launch")) {
     return wrapActionBody(stylizeBrowserActions(script), input);
   }
@@ -69,6 +74,35 @@ const page = await context.newPage();
 try {
 ${indentScriptBody(script)}
   ${pauseLine}
+} finally {
+  await context.close();
+  await browser.close();
+}
+void expect;
+`;
+}
+
+function prepareValidationPlaywrightScript(
+  script: string,
+  input: PrepareStylizedPlaywrightScriptInput,
+) {
+  if (script.includes("chromium.launch")) {
+    return script.replaceAll("http://localhost:3000", input.baseUrl);
+  }
+
+  const launchOptions = input.headed ? "{ headless: false }" : "";
+
+  return `import { chromium, expect } from "@playwright/test";
+
+const baseUrl = ${JSON.stringify(input.baseUrl)};
+const browser = await chromium.launch(${launchOptions});
+const context = await browser.newContext({
+  viewport: { width: 1280, height: 720 },
+});
+const page = await context.newPage();
+
+try {
+${indentScriptBody(script)}
 } finally {
   await context.close();
   await browser.close();

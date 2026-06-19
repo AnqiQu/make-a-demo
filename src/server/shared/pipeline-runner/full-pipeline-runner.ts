@@ -174,13 +174,13 @@ export async function runFullPipelineJob(
     throw new Error(`Stage 1 failed with status ${stage1.status}`);
   }
 
-  const browserUrl = stage1.validation.browserUrl;
+  const browserUrl = stage1.capturePathValidation.browserUrl;
   if (browserUrl === undefined || browserUrl.trim().length === 0) {
     await log({
       event: "pipeline-failed",
-      message: "Stage 1 did not return a validated browser URL.",
+      message: "Capture Path Validation did not return a browser URL.",
     });
-    throw new Error("Stage 1 did not return a validated browser URL.");
+    throw new Error("Capture Path Validation did not return a browser URL.");
   }
 
   const scriptSummary = summarizeScriptPackage(stage1.videoScriptPackage);
@@ -399,7 +399,6 @@ async function writeScriptGenerationResumeFile(input: {
         preparationWorkspaceId: input.event.preparationWorkspace.id,
         repoUrl: input.input.repoUrl,
         runDirectory: input.runDirectory,
-        validation: input.event.validation,
       },
       null,
       2,
@@ -498,12 +497,12 @@ function readStage1Failure(
     };
   }
 
-  if (stage1.status === "validation-failed") {
+  if (stage1.status === "capture-path-validation-failed") {
     return {
       blockers: [
-        stage1.validation.failureReason ?? "Project validation failed.",
+        "Capture Path Validation failed. Please report this issue to MakeADemo.",
       ],
-      suggestedChanges: stage1.validation.warnings,
+      suggestedChanges: stage1.capturePathValidation.warnings,
     };
   }
 

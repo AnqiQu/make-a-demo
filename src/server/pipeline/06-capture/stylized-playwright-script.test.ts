@@ -2,6 +2,29 @@ import { describe, expect, it } from "vitest";
 import { prepareStylizedPlaywrightScript } from "./stylized-playwright-script";
 
 describe("prepareStylizedPlaywrightScript", () => {
+  it("keeps validation dry runs fast and free of recording-only behavior", () => {
+    const prepared = prepareStylizedPlaywrightScript(
+      "await page.getByLabel(/message/i).fill('Show me the launch plan');\nawait page.getByRole('button', { name: /send/i }).click();",
+      {
+        baseUrl: "http://localhost:3000",
+        headed: false,
+        mode: "validation",
+        pauseAfterSceneMs: 900,
+      },
+    );
+
+    expect(prepared).toContain(
+      "await page.getByLabel(/message/i).fill('Show me the launch plan');",
+    );
+    expect(prepared).toContain(
+      "await page.getByRole('button', { name: /send/i }).click();",
+    );
+    expect(prepared).not.toContain("recordVideo");
+    expect(prepared).not.toContain("humanType");
+    expect(prepared).not.toContain("animatedClick");
+    expect(prepared).not.toContain("waitForTimeout(900)");
+  });
+
   it("types filled text with human pacing instead of instantly setting the input", () => {
     const prepared = prepareStylizedPlaywrightScript(
       "await page.getByLabel(/message/i).fill('Show me the launch plan');",

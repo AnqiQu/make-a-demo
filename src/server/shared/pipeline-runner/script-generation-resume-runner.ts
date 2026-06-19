@@ -5,7 +5,6 @@ import type { DemoBrief } from "../../pipeline/01-context-gathering/intake/demo-
 import type { NormalizedSupportingDocument } from "../../pipeline/01-context-gathering/supporting-documents";
 import type { PreparationManifest } from "../../pipeline/03-repo-preparation/preparation-manifest";
 import type { PreparationWorkspaceHandle } from "../../pipeline/03-repo-preparation/preparation-workspace-runner";
-import type { ProjectValidationResult } from "../../pipeline/04-project-validation/validation-result";
 import type { ScriptGenerationAgent } from "../../pipeline/05-script-generation/script-generation-agent.interface";
 import type { VideoScriptPackage } from "../../pipeline/05-script-generation/video-script-package";
 
@@ -17,7 +16,6 @@ export type ScriptGenerationResumeFile = {
   preparationWorkspaceId: string;
   repoUrl: string;
   runDirectory: string;
-  validation: ProjectValidationResult;
 };
 
 export type ScriptGenerationResumeResult = {
@@ -47,7 +45,6 @@ export async function runScriptGenerationResume(
       preparationManifest: resume.preparationManifest,
       preparationWorkspace: dependencies.preparationWorkspace,
       repoUrl: resume.repoUrl,
-      validation: resume.validation,
     });
   await writeFile(scriptPath, `${JSON.stringify(scriptPackage, null, 2)}\n`);
 

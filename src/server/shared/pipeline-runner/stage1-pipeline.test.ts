@@ -67,6 +67,11 @@ describe("createStage1PipelineDependencies", () => {
         browserValidator,
         repoPreparationAgent,
         sandboxRunner,
+        sceneValidator: {
+          async validateScene() {
+            return { logs: ["scene dry run passed"], status: "succeeded" };
+          },
+        },
       }),
     );
 

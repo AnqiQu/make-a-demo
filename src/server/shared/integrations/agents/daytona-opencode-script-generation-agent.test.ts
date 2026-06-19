@@ -4,7 +4,7 @@ import type { PreparationWorkspace } from "../../../pipeline/03-repo-preparation
 import { DaytonaOpenCodeScriptGenerationAgent } from "./daytona-opencode-script-generation-agent";
 
 describe("DaytonaOpenCodeScriptGenerationAgent", () => {
-  it("resumes the validated Repo Preparation OpenCode session and returns an interactive script package", async () => {
+  it("resumes the Repo Preparation OpenCode session and returns an interactive script package", async () => {
     const events: unknown[] = [];
     const stdout: string[] = [];
     const agent = new DaytonaOpenCodeScriptGenerationAgent({
@@ -26,7 +26,6 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
       type: "playwright-recording",
     });
     expect(result.demoPlan.featureOrder).toEqual(["article feed"]);
-    expect(result.validation.status).toBe("succeeded");
     expect(events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -204,13 +203,6 @@ function scriptGenerationInput() {
       workspaceId: "workspace_123",
     },
     repoUrl: "https://github.com/example/conduit",
-    validation: {
-      blockedNetworkAttempts: [],
-      browserUrl: "https://preview.example.test",
-      logs: ["validated"],
-      status: "succeeded" as const,
-      warnings: [],
-    },
   };
 }
 
