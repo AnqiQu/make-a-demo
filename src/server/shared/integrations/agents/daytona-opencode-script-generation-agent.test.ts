@@ -44,6 +44,9 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
     )?.execute;
     expect(openCodeCommand).toContain("--session 'session_prepare_123'");
     expect(openCodeCommand).not.toContain("OPENAI_API_KEY");
+    expect(openCodeCommand).toContain("scriptId");
+    expect(openCodeCommand).toContain("estimatedDurationSeconds");
+    expect(openCodeCommand).toContain("playwrightSceneId");
     expect(stdout.join("\n")).toContain(
       "Script Generation OpenCode attempt 1 starting in session session_prepare_123.",
     );
@@ -134,6 +137,9 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
       .map((event) => event.execute);
     expect(openCodeCommands).toHaveLength(2);
     expect(openCodeCommands[1]).toContain("placeholder actions");
+    expect(openCodeCommands[1]).toContain("scriptId");
+    expect(openCodeCommands[1]).toContain("estimatedDurationSeconds");
+    expect(openCodeCommands[1]).toContain("format");
     expect(openCodeCommands[1]).toContain("--session 'session_prepare_123'");
   });
 });

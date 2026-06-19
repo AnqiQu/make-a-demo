@@ -317,6 +317,8 @@ function createScriptGenerationPrompt(
     "## Artifact Path",
     scriptPackagePath,
     "",
+    createScriptPackageSchemaPrompt(),
+    "",
     "## Pipeline Context",
     "```json",
     JSON.stringify(
@@ -340,6 +342,54 @@ function createScriptGenerationRepairPrompt(reason: string): string {
     `The previous Script Generation output was rejected: ${reason}`,
     "Repair the script package and overwrite `/workspace/.makeademo/video-script-package.json`.",
     "Do not modify app source. Include real user interactions and feature-specific assertions.",
+    "",
+    createScriptPackageSchemaPrompt(),
+  ].join("\n");
+}
+
+function createScriptPackageSchemaPrompt(): string {
+  return [
+    "## Required Video Script Package Shape",
+    "The artifact must be one JSON object with every required top-level field present.",
+    "Use this exact shape, replacing example strings and scripts with repo-specific content:",
+    "```json",
+    JSON.stringify(
+      {
+        estimatedDurationSeconds: 18,
+        format: "16:9",
+        scriptId: "script_unique_demo_id",
+        sections: [
+          {
+            id: "section_main_flow",
+            scenes: [
+              {
+                description:
+                  "Show the requested feature with real UI interactions.",
+                durationSeconds: 6,
+                events: [
+                  "Navigate to the prepared app",
+                  "Interact with the feature",
+                  "Assert the feature result is visible",
+                ],
+                id: "scene_requested_feature",
+                playwrightSceneId: "scene_requested_feature",
+                playwrightScript:
+                  "await page.goto(baseUrl);\nawait page.getByRole('button', { name: /example/i }).click();\nawait expect(page.getByText(/result/i)).toBeVisible();",
+                type: "playwright-recording",
+              },
+            ],
+            title: "Main flow",
+          },
+        ],
+        title: "Concise demo title",
+        version: 1,
+      },
+      null,
+      2,
+    ),
+    "```",
+    "Top-level `scriptId`, `title`, `format`, `version`, `estimatedDurationSeconds`, and non-empty `sections` are mandatory on every attempt.",
+    'Each playwright scene must include `id`, `playwrightSceneId`, `type: "playwright-recording"`, `description`, positive `durationSeconds`, non-empty `events`, and non-empty `playwrightScript`.',
   ].join("\n");
 }
 
