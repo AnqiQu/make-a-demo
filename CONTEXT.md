@@ -12,7 +12,7 @@
 - **Repo Security Screen**: The non-agent, deterministic pipeline stage that performs a fast, static-only rough safety pass on a cloned submitted repo before any agent or runtime preparation work begins.
 - **Repo Preparation**: The pipeline stage where MakeADemo works in a locked-down ephemeral cloud workspace to discover existing demo setup, prepare a deterministic demo runtime, and gather context for later script and capture stages without modifying the maker's source repo.
 - **Preparation Fallback Prompt**: A targeted prompt generated when Repo Preparation fails, giving the maker and the maker's coding agent the blockers and context needed to prepare the demo manually.
-- **Project Validation**: The project-level checks inside Capture Path Validation that verify the prepared app satisfies the Demo Run Contract before generated Browser Actions or Capture Scripts run.
+- **Demo Runtime Preflight**: The project-level checks inside Capture Path Validation that verify the prepared app can start, load in a browser, remain basically interactable, and satisfy Runtime Network Lockdown before generated Browser Actions or Capture Scripts run.
 - **Demo Run Contract**: The requirement that the prepared app can start a deterministic browser-accessible demo inside an isolated sandbox, with no inbound or outbound network communication across the sandbox boundary after dependency installation.
 - **MakeADemo Config**: A legacy-compatible `makeademo.config.json` file that may describe a demo command and local URL, but is no longer the primary Stage 1 source of truth once Repo Preparation produces a Preparation Manifest.
 - **Preparation Manifest**: The durable internal pipeline artifact produced by Repo Preparation that records the prepared demo command, local URL, existing demo evidence, workspace changes, mocks, assumptions, risks, and context for later script and capture stages.
@@ -21,7 +21,7 @@
 - **Script Generation**: The stage where MakeADemo turns prepared repo context and key product features into a Video Script.
 - **Video Script**: A structured plan for the demo video that organizes what the video will communicate over time.
 - **Video Script Package**: The structured artifact produced by Script Generation before Footage Capture begins, containing the Video Script, Script Sections, Scene Descriptions, Browser Actions, and validation context.
-- **Capture Path Validation**: The deterministic dry-run validation stage that runs project-level checks and then runs the generated Browser Actions or Capture Scripts against the prepared app under Runtime Network Lockdown before Footage Capture accepts the Video Script Package.
+- **Capture Path Validation**: The deterministic dry-run validation stage that runs Demo Runtime Preflight and then runs the generated Browser Actions or Capture Scripts against the prepared app under Runtime Network Lockdown before Footage Capture accepts the Video Script Package.
 - **Script Section**: A top-level part of the Video Script, such as intro, feature demonstration, or use case, that groups related scenes.
 - **Scene Description**: A script item that summarizes one web-based scene and lists the browser actions needed to capture it.
 - **Browser Action**: One explicit interaction or wait condition in a Scene Description, such as clicking a button, typing into an input, or waiting for streamed output to finish.
@@ -56,7 +56,7 @@
 - Later pipeline stages may consume the **Preparation Manifest** directly, including non-agent stages and coding-agent stages that access it through tools or skills.
 - A **Video Script** contains one or more **Script Sections**, and each **Script Section** contains one or more **Scene Descriptions**.
 - A **Video Script Package** is accepted for Footage Capture only after **Capture Path Validation** succeeds.
-- **Capture Path Validation** proves that the prepared app satisfies project-level checks and that the generated capture path in a **Video Script Package** can run while **Runtime Network Lockdown** is enforced.
+- **Capture Path Validation** first runs **Demo Runtime Preflight** to prove the prepared app can load without external network access, then proves that the generated capture path in a **Video Script Package** can run while **Runtime Network Lockdown** is enforced.
 - **Capture Path Validation** does not produce final **Scene** footage; **Footage Capture** records Scenes separately with presentation-oriented browser behavior such as human-like typing and cursor movement.
 - **Footage Capture** starts from fresh deterministic app state after **Capture Path Validation** succeeds, so validation dry-runs cannot pollute the final recorded take.
 - If **Capture Path Validation** fails, the agent may repair the prepared workspace or **Video Script Package**, but the full **Capture Path Validation** stage must rerun before **Footage Capture** trusts the result.
