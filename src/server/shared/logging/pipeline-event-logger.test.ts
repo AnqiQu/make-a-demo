@@ -125,6 +125,32 @@ describe("createPipelineEventLogger", () => {
     });
   });
 
+  it("flushes writes from sinks that return promises", async () => {
+    const lines: string[] = [];
+    const logger = createPipelineEventLogger({
+      sinks: [
+        {
+          write(line) {
+            return new Promise<void>((resolve) => {
+              setTimeout(() => {
+                lines.push(line);
+                resolve();
+              }, 0);
+            });
+          },
+        },
+      ],
+      timestamp: () => "2026-06-17T00:00:00.000Z",
+    });
+
+    await logger.info({ event: "pipeline-started" });
+    await logger.flush();
+
+    expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
+      event: "pipeline-started",
+    });
+  });
+
   it("formats Pino JSON lines for stdout pretty streaming", async () => {
     const prettyLines: string[] = [];
     const logger = createPipelineEventLogger({

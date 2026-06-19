@@ -8,6 +8,7 @@ import { DaytonaSandboxRunner } from "../integrations/sandbox/daytona-sandbox-ru
 import { createR2UploadPresignerFromEnv } from "../integrations/storage/r2-client";
 import { R2FinalVideoStorage } from "../integrations/storage/r2-final-video-storage";
 import { R2SupportingDocumentLoader } from "../integrations/storage/r2-supporting-document-loader";
+import { createPipelineEventLogger } from "../logging/pipeline-event-logger";
 import { createNeonDemoRequestFinalVideoStore } from "../persistence/neon-demo-request-final-video-store";
 import { createNeonProjectDemoGenerationQueueStore } from "../persistence/neon-project-demo-generation-queue-store";
 import { runFullPipelineJob } from "./full-pipeline-runner";
@@ -36,6 +37,11 @@ const observer = createJsonPipelineObserver({
   service: "makeademo-demo-generation-worker",
   write: (line) => process.stdout.write(line),
 });
+const logger = createPipelineEventLogger({
+  base: { component: "demo-generation-worker" },
+  service: "makeademo-demo-generation-worker",
+  sinks: [{ write: (line) => void process.stdout.write(line) }],
+});
 const sandboxProvider = new DaytonaSdkPreparationWorkspaceProvider({
   apiKey: daytonaApiKey,
   ...(daytonaSnapshot === undefined ? {} : { snapshot: daytonaSnapshot }),
@@ -59,7 +65,14 @@ const publicAppBaseUrl = finalVideoEmailsEnabled(process.env)
   ? readRequiredEnv("PUBLIC_APP_BASE_URL")
   : undefined;
 
-process.stdout.write("MakeADemo demo generation worker started\n");
+await logger.info(
+  {
+    event: "demo-generation-worker.started",
+    pollIntervalMs,
+    runOnce,
+  },
+  "MakeADemo demo generation worker started.",
+);
 
 do {
   const result = await processNextProjectDemoGenerationJob(
@@ -69,6 +82,7 @@ do {
         const repoSecurity = await readRepoSecurityInput(
           sandboxProvider,
           job.repoUrl,
+          { logger: logger.child({ projectId: job.projectId }) },
         );
 
         const result = await runFullPipelineJob(
@@ -117,8 +131,13 @@ do {
   );
 
   if (result.status !== "idle") {
-    process.stdout.write(
-      `Project ${result.projectId} demo generation ${result.status}\n`,
+    await logger.info(
+      {
+        event: "demo-generation-worker.job.processed",
+        projectId: result.projectId,
+        status: result.status,
+      },
+      `Project demo generation ${result.status}.`,
     );
   }
 

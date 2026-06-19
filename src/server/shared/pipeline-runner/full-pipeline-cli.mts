@@ -11,7 +11,10 @@ import { DaytonaOpenCodeScriptGenerationAgent } from "../integrations/agents/day
 import { createRepoPreparationAgent } from "../integrations/agents/repo-preparation-agent-factory";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import { DaytonaSandboxRunner } from "../integrations/sandbox/daytona-sandbox-runner";
-import { createPrettyPipelineLogSink } from "../logging/pipeline-event-logger";
+import {
+  createPipelineEventLogger,
+  createPrettyPipelineLogSink,
+} from "../logging/pipeline-event-logger";
 import { runFullPipelineJob } from "./full-pipeline-runner";
 import { createOpenCodeOutputStream } from "./opencode-output-stream";
 import { createOpenCodeRawOutputLog } from "./opencode-raw-output-log";
@@ -55,9 +58,18 @@ const sandboxProvider = new DaytonaSdkPreparationWorkspaceProvider({
     ? {}
     : { snapshot: options.daytonaSnapshot }),
 });
+const cliLogger = createPipelineEventLogger({
+  base: { component: "full-pipeline-cli" },
+  sinks: [
+    createPrettyPipelineLogSink({
+      write: (text) => process.stdout.write(text),
+    }),
+  ],
+});
 const repoSecurity = await readRepoSecurityInput(
   sandboxProvider,
   options.repoUrl,
+  { logger: cliLogger.child({ component: "repo-security-screen" }) },
 );
 const normalizedSupportingDocuments = await Promise.all(
   options.docs.map(async (docPath) => {

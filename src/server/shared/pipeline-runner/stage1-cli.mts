@@ -11,6 +11,10 @@ import { DaytonaOpenCodeScriptGenerationAgent } from "../integrations/agents/day
 import { createRepoPreparationAgent } from "../integrations/agents/repo-preparation-agent-factory";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import { DaytonaSandboxRunner } from "../integrations/sandbox/daytona-sandbox-runner";
+import {
+  createPipelineEventLogger,
+  createPrettyPipelineLogSink,
+} from "../logging/pipeline-event-logger";
 import { createOpenCodeOutputStream } from "./opencode-output-stream";
 import { runPipelineJob } from "./pipeline-orchestrator";
 import { collectStage1CliOptions } from "./stage1-cli-interactive";
@@ -34,9 +38,18 @@ const sandboxProvider = new DaytonaSdkPreparationWorkspaceProvider({
     ? {}
     : { snapshot: options.daytonaSnapshot }),
 });
+const cliLogger = createPipelineEventLogger({
+  base: { component: "stage1-cli" },
+  sinks: [
+    createPrettyPipelineLogSink({
+      write: (text) => process.stderr.write(text),
+    }),
+  ],
+});
 const repoSecurity = await readRepoSecurityInput(
   sandboxProvider,
   options.repoUrl,
+  { logger: cliLogger.child({ component: "repo-security-screen" }) },
 );
 const normalizedSupportingDocuments = await Promise.all(
   options.docs.map(async (docPath) => {
@@ -89,8 +102,17 @@ const result = await runPipelineJob(
     scriptGenerationAgent,
   }),
   {
-    onProgress: (event) =>
-      process.stderr.write(`[pipeline] ${event.stage}: ${event.status}\n`),
+    onProgress: async (event) => {
+      await cliLogger.info(
+        {
+          event: "stage-progress",
+          message: `${event.stage} ${event.status}.`,
+          stage: event.stage,
+          status: event.status,
+        },
+        `${event.stage} ${event.status}.`,
+      );
+    },
   },
 );
 
