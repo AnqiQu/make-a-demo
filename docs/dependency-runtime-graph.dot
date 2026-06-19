@@ -15,6 +15,7 @@ strict digraph "dependency-cruiser output"{
     "src/app/main.tsx" -> "src/app/styles.css"
     subgraph "cluster_src" {label="src" subgraph "cluster_src/app" {label="app" "src/app/styles.css" [label=<styles.css> tooltip="styles.css" URL="src/app/styles.css" ] } }
     subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/api" {label="api" "src/server/api/app.test.ts" [label=<app.test.ts> tooltip="app.test.ts" URL="src/server/api/app.test.ts" fillcolor="#ddfeff"] } } }
+    "src/server/api/app.test.ts" -> "src/server/shared/logging/pipeline-event-logger.ts"
     "src/server/api/app.test.ts" -> "src/server/api/app.ts"
     subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/api" {label="api" "src/server/api/app.ts" [label=<app.ts> tooltip="app.ts" URL="src/server/api/app.ts" fillcolor="#ddfeff"] } } }
     "src/server/api/app.ts" -> "src/server/pipeline/01-context-gathering/context-gathering-submission.ts"
@@ -22,6 +23,7 @@ strict digraph "dependency-cruiser output"{
     subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/api" {label="api" "src/server/api/server.mts" [label=<server.mts> tooltip="server.mts" URL="src/server/api/server.mts" fillcolor="#ddfeff"] } } }
     "src/server/api/server.mts" -> "src/server/shared/integrations/github/github-app.ts"
     "src/server/api/server.mts" -> "src/server/shared/integrations/storage/r2-client.ts"
+    "src/server/api/server.mts" -> "src/server/shared/logging/pipeline-event-logger.ts"
     "src/server/api/server.mts" -> "src/server/shared/persistence/neon-context-gathering-store.ts"
     "src/server/api/server.mts" -> "src/server/shared/persistence/neon-demo-request-final-video-store.ts"
     "src/server/api/server.mts" -> "src/server/api/app.ts"
@@ -288,6 +290,7 @@ strict digraph "dependency-cruiser output"{
     "src/server/shared/pipeline-runner/project-demo-generation-worker.mts" -> "src/server/shared/integrations/storage/r2-client.ts"
     "src/server/shared/pipeline-runner/project-demo-generation-worker.mts" -> "src/server/shared/integrations/storage/r2-final-video-storage.ts"
     "src/server/shared/pipeline-runner/project-demo-generation-worker.mts" -> "src/server/shared/integrations/storage/r2-supporting-document-loader.ts"
+    "src/server/shared/pipeline-runner/project-demo-generation-worker.mts" -> "src/server/shared/logging/pipeline-event-logger.ts"
     "src/server/shared/pipeline-runner/project-demo-generation-worker.mts" -> "src/server/shared/persistence/neon-demo-request-final-video-store.ts"
     "src/server/shared/pipeline-runner/project-demo-generation-worker.mts" -> "src/server/shared/persistence/neon-project-demo-generation-queue-store.ts"
     "src/server/shared/pipeline-runner/project-demo-generation-worker.mts" -> "src/server/shared/pipeline-runner/full-pipeline-runner.ts"
@@ -323,6 +326,7 @@ strict digraph "dependency-cruiser output"{
     "src/server/shared/pipeline-runner/stage1-cli.mts" -> "src/server/shared/integrations/agents/repo-preparation-agent-factory.ts"
     "src/server/shared/pipeline-runner/stage1-cli.mts" -> "src/server/shared/integrations/daytona/daytona-sdk-preparation-workspace-provider.ts"
     "src/server/shared/pipeline-runner/stage1-cli.mts" -> "src/server/shared/integrations/sandbox/daytona-sandbox-runner.ts"
+    "src/server/shared/pipeline-runner/stage1-cli.mts" -> "src/server/shared/logging/pipeline-event-logger.ts"
     "src/server/shared/pipeline-runner/stage1-cli.mts" -> "src/server/shared/pipeline-runner/opencode-output-stream.ts"
     "src/server/shared/pipeline-runner/stage1-cli.mts" -> "src/server/shared/pipeline-runner/pipeline-orchestrator.ts"
     "src/server/shared/pipeline-runner/stage1-cli.mts" -> "src/server/shared/pipeline-runner/stage1-cli-interactive.ts"
@@ -342,5 +346,8 @@ strict digraph "dependency-cruiser output"{
     "src/server/shared/pipeline-runner/stage1-pipeline.ts" -> "src/server/pipeline/05-script-generation/script-generation-orchestrator.ts"
     "src/server/shared/pipeline-runner/stage1-pipeline.ts" -> "src/server/shared/integrations/agents/llm-project-explorer.ts"
     "src/server/shared/pipeline-runner/stage1-pipeline.ts" -> "src/server/shared/integrations/browser/playwright-browser-validator.ts"
+    subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/shared" {label="shared" subgraph "cluster_src/server/shared/pipeline-runner" {label="pipeline-runner" "src/server/shared/pipeline-runner/stage1-repo-security.test.ts" [label=<stage1-repo-security.test.ts> tooltip="stage1-repo-security.test.ts" URL="src/server/shared/pipeline-runner/stage1-repo-security.test.ts" fillcolor="#ddfeff"] } } } }
+    "src/server/shared/pipeline-runner/stage1-repo-security.test.ts" -> "src/server/shared/logging/pipeline-event-logger.ts"
+    "src/server/shared/pipeline-runner/stage1-repo-security.test.ts" -> "src/server/shared/pipeline-runner/stage1-repo-security.ts"
     subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/shared" {label="shared" subgraph "cluster_src/server/shared/pipeline-runner" {label="pipeline-runner" "src/server/shared/pipeline-runner/stage1-repo-security.ts" [label=<stage1-repo-security.ts> tooltip="stage1-repo-security.ts" URL="src/server/shared/pipeline-runner/stage1-repo-security.ts" fillcolor="#ddfeff"] } } } }
 }
