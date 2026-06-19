@@ -39,30 +39,40 @@ describe("ContextGatheringApp", () => {
     expect(styles).not.toContain(".owlet-shell-submitted .brand-attribution");
   });
 
-  it("keeps repository entry choices on one row above the compact demo submit button", () => {
+  it("places repo submission beside the URL field with one GitHub access guidance sentence", () => {
     const html = renderToStaticMarkup(createElement(ContextGatheringApp));
     const styles = readFileSync(
       new URL("../styles.css", import.meta.url),
       "utf8",
     );
 
-    expect(html).toContain('class="repo-connect-row"');
-    expect(html).toContain("OR");
+    expect(html).toContain('class="repo-url-submit-row"');
     expect(html).toContain('class="primary-hoot repo-submit-button"');
     expect(html).toContain('aria-label="Make me a demo"');
-    expect(styles).toContain("width: min(100%, 68rem);");
-    expect(styles).toContain("width: max-content;");
+    expect(html).toContain(
+      "Paste a public GitHub URL, or connect GitHub to use a private repository.",
+    );
+    expect(html).toContain(
+      "We currently support web apps built with JavaScript or TypeScript.",
+    );
+    expect(html).not.toContain('class="repo-or-divider"');
+    expect(html).not.toContain(">OR<");
+    expect(html).not.toContain("Paste a public GitHub URL</p>");
+    expect(styles).toContain(".repo-guidance,\n.repo-help");
+    expect(styles).toContain("grid-template-columns: minmax(0, 1fr) auto;");
     expect(styles).toContain("min-width: 0;");
   });
 
   it("uses the repository URL field as the connected repository dropdown", () => {
     const html = renderToStaticMarkup(
       createElement(RepoConnectionFields, {
+        canSubmitRepository: true,
         githubInstallationId: "installation-123",
         isLoadingRepositories: false,
         onConnectGitHub: () => undefined,
         onRepoInputChange: () => undefined,
         onRepositorySelect: () => undefined,
+        onSubmitRepository: () => undefined,
         repoInput: "",
         repositories: [
           {
@@ -90,22 +100,21 @@ describe("ContextGatheringApp", () => {
     expect(html).toContain('class="repo-select-chevron"');
     expect(html).not.toContain('class="repo-select-field"');
     expect(html).not.toContain('class="button-icon"');
-    expect(html).not.toContain(">OR<");
-    expect(html).toContain('class="or-label or-label-connected"');
-    expect(styles).toContain(
-      "grid-template-columns: minmax(0, 1fr) auto auto;",
-    );
+    expect(html).not.toContain('class="repo-or-divider"');
+    expect(styles).toContain("grid-template-columns: minmax(0, 1fr) auto;");
     expect(styles).toContain("grid-column: 3;");
   });
 
   it("shows GitHub as connected while connected repositories are still loading", () => {
     const html = renderToStaticMarkup(
       createElement(RepoConnectionFields, {
+        canSubmitRepository: false,
         githubInstallationId: "installation-123",
         isLoadingRepositories: true,
         onConnectGitHub: () => undefined,
         onRepoInputChange: () => undefined,
         onRepositorySelect: () => undefined,
+        onSubmitRepository: () => undefined,
         repoInput: "",
         repositories: [],
         selectedRepoUrl: "",
@@ -113,19 +122,22 @@ describe("ContextGatheringApp", () => {
     );
 
     expect(html).toContain("Connected");
+    expect(html).toContain("github-connected-check");
     expect(html).toContain("Loading repositories...");
-    expect(html).not.toContain("Connect GitHub");
+    expect(html).not.toContain(">Connect GitHub</button>");
     expect(html).not.toContain("https://github.com/org/repo");
   });
 
   it("lets users reconnect GitHub when connected repositories fail to load", () => {
     const html = renderToStaticMarkup(
       createElement(RepoConnectionFields, {
+        canSubmitRepository: false,
         githubInstallationId: "installation-123",
         isLoadingRepositories: false,
         onConnectGitHub: () => undefined,
         onRepoInputChange: () => undefined,
         onRepositorySelect: () => undefined,
+        onSubmitRepository: () => undefined,
         repoInput: "",
         repositories: [],
         selectedRepoUrl: "",

@@ -172,11 +172,16 @@ button:disabled {
   width: min(100%, 68rem);
 }
 
-.repo-connect-row {
+.repo-entry-stack {
+  display: grid;
+  gap: clamp(1.25rem, 3vh, 2rem);
+}
+
+.repo-url-submit-row {
   align-items: center;
   display: grid;
   gap: 1rem;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .repo-url-input,
@@ -270,23 +275,10 @@ button:disabled {
   -webkit-text-fill-color: #64748b;
 }
 
-.or-label {
-  color: #6b7280;
-  display: block;
-  font-size: 1rem;
-  font-weight: 700;
-  text-align: center;
-}
-
-.or-label-connected {
-  color: #16a34a;
+.repo-access-options {
+  align-items: center;
   display: grid;
-  place-items: center;
-}
-
-.or-label-connected svg {
-  height: 1.45rem;
-  width: 1.45rem;
+  justify-items: center;
 }
 
 .github-button,
@@ -312,6 +304,10 @@ button:disabled {
   padding: 0 1.05rem;
   white-space: nowrap;
   width: max-content;
+}
+
+.repo-access-options .github-button {
+  margin-top: 0.85rem;
 }
 
 .github-button-connected {
@@ -358,14 +354,28 @@ button:disabled {
   width: 1.7rem;
 }
 
+.github-connected-check {
+  flex: 0 0 auto;
+  height: 1.2rem;
+  width: 1.2rem;
+}
+
+.repo-guidance,
 .repo-help {
   color: #64748b;
   font-size: clamp(0.95rem, 1.8vw, 1.1rem);
   font-weight: 600;
   line-height: 1.5;
-  margin: clamp(1.25rem, 3vh, 2rem) auto 0;
   max-width: 58rem;
   text-align: center;
+}
+
+.repo-guidance {
+  margin: 0 auto;
+}
+
+.repo-help {
+  margin: clamp(1.25rem, 3vh, 2rem) auto 0;
 }
 
 .submitted-step p {
@@ -394,6 +404,7 @@ button:disabled {
   align-items: center;
   display: grid;
   justify-content: center;
+  margin: 0;
   min-width: 0;
   padding: 0 1.45rem;
   width: max-content;
@@ -829,10 +840,6 @@ button:disabled {
     margin-top: 2rem;
   }
 
-  .repo-connect-row {
-    grid-template-columns: 1fr;
-  }
-
   .repo-select-field,
   .repo-selected-note {
     grid-column: 1;
@@ -845,7 +852,7 @@ button:disabled {
 
   .repo-submit-button {
     justify-self: center;
-    margin: 1rem 0 0;
+    margin: 0;
     min-width: 0;
     width: max-content;
   }

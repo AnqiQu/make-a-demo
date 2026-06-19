@@ -534,8 +534,10 @@ export function ContextGatheringApp() {
         <section className="repo-step" aria-label="GitHub repository">
           <article className="repo-panel">
             <RepoConnectionFields
+              canSubmitRepository={canContinueRepoStep}
               githubInstallationId={draft.githubInstallationId}
               onConnectGitHub={() => void connectGitHub()}
+              onSubmitRepository={continueFromRepo}
               onRepoInputChange={setRepoInput}
               onRepositorySelect={selectRepositoryFromDropdown}
               repoInput={repoInput}
@@ -545,20 +547,8 @@ export function ContextGatheringApp() {
             />
           </article>
           <p className="repo-help">
-            Paste a public GitHub URL, or connect GitHub to grant access to a
-            private repository.
-            <br />
             We currently support web apps built with JavaScript or TypeScript.
           </p>
-          <button
-            aria-label="Make me a demo"
-            className="primary-hoot repo-submit-button"
-            disabled={!canContinueRepoStep}
-            onClick={continueFromRepo}
-            type="button"
-          >
-            <ArrowRight aria-hidden="true" strokeWidth={2.4} />
-          </button>
         </section>
       ) : null}
 
@@ -590,22 +580,26 @@ export function ContextGatheringApp() {
 }
 
 type RepoConnectionFieldsProps = {
+  canSubmitRepository: boolean;
   githubInstallationId: string | undefined;
   isLoadingRepositories: boolean;
   onConnectGitHub: () => void;
   onRepoInputChange: (value: string) => void;
   onRepositorySelect: (repoUrl: string) => void;
+  onSubmitRepository: () => void;
   repoInput: string;
   repositories: InstalledRepository[];
   selectedRepoUrl: string;
 };
 
 export function RepoConnectionFields({
+  canSubmitRepository,
   githubInstallationId,
   isLoadingRepositories,
   onConnectGitHub,
   onRepoInputChange,
   onRepositorySelect,
+  onSubmitRepository,
   repoInput,
   repositories,
   selectedRepoUrl,
@@ -623,76 +617,96 @@ export function RepoConnectionFields({
       : "Connect GitHub";
 
   return (
-    <div className="repo-connect-row">
-      {isConnected && repositories.length > 0 ? (
-        <label className="repo-url-input repo-url-select">
-          <span className="link-icon" aria-hidden="true">
-            <LinkIcon strokeWidth={2.4} />
+    <div className="repo-entry-stack">
+      <div className="repo-url-submit-row">
+        {isConnected && repositories.length > 0 ? (
+          <label className="repo-url-input repo-url-select">
+            <span className="link-icon" aria-hidden="true">
+              <LinkIcon strokeWidth={2.4} />
+            </span>
+            <select
+              aria-label="Select one GitHub repository to demo"
+              onChange={(event) =>
+                onRepositorySelect(event.currentTarget.value)
+              }
+              value={selectedRepoUrl}
+            >
+              <option value="">Choose a repository</option>
+              {repositories.map((repository) => (
+                <option key={repository.repoUrl} value={repository.repoUrl}>
+                  {repository.fullName}
+                </option>
+              ))}
+            </select>
+            <span className="repo-select-chevron" aria-hidden="true">
+              <ChevronDown strokeWidth={2.4} />
+            </span>
+          </label>
+        ) : isConnected ? (
+          <label className="repo-url-input repo-url-loading">
+            <span className="link-icon" aria-hidden="true">
+              <LinkIcon strokeWidth={2.4} />
+            </span>
+            <input
+              aria-label="GitHub repositories"
+              disabled
+              readOnly
+              value={connectedRepositoryStatus}
+            />
+          </label>
+        ) : (
+          <label className="repo-url-input">
+            <span className="link-icon" aria-hidden="true">
+              <LinkIcon strokeWidth={2.4} />
+            </span>
+            <input
+              aria-label="GitHub repository URL"
+              onChange={(event) => onRepoInputChange(event.currentTarget.value)}
+              placeholder="https://github.com/org/repo"
+              value={repoInput}
+            />
+          </label>
+        )}
+        <button
+          aria-label="Make me a demo"
+          className="primary-hoot repo-submit-button"
+          disabled={!canSubmitRepository}
+          onClick={onSubmitRepository}
+          type="button"
+        >
+          <ArrowRight aria-hidden="true" strokeWidth={2.4} />
+        </button>
+      </div>
+      <div className="repo-access-options">
+        <p className="repo-guidance">
+          Paste a public GitHub URL, or connect GitHub to use a private
+          repository.
+        </p>
+        <button
+          className={`github-button ${
+            isConnected ? "github-button-connected" : ""
+          }`}
+          disabled={isConnected && !canRetryGitHubConnection}
+          onClick={() =>
+            isConnected && !canRetryGitHubConnection
+              ? undefined
+              : onConnectGitHub()
+          }
+          type="button"
+        >
+          <span className="github-logo-frame" aria-hidden="true">
+            <img alt="" className="github-logo-image" src={githubLogoUrl} />
           </span>
-          <select
-            aria-label="Select one GitHub repository to demo"
-            onChange={(event) => onRepositorySelect(event.currentTarget.value)}
-            value={selectedRepoUrl}
-          >
-            <option value="">Choose a repository</option>
-            {repositories.map((repository) => (
-              <option key={repository.repoUrl} value={repository.repoUrl}>
-                {repository.fullName}
-              </option>
-            ))}
-          </select>
-          <span className="repo-select-chevron" aria-hidden="true">
-            <ChevronDown strokeWidth={2.4} />
-          </span>
-        </label>
-      ) : isConnected ? (
-        <label className="repo-url-input repo-url-loading">
-          <span className="link-icon" aria-hidden="true">
-            <LinkIcon strokeWidth={2.4} />
-          </span>
-          <input
-            aria-label="GitHub repositories"
-            disabled
-            readOnly
-            value={connectedRepositoryStatus}
-          />
-        </label>
-      ) : (
-        <label className="repo-url-input">
-          <span className="link-icon" aria-hidden="true">
-            <LinkIcon strokeWidth={2.4} />
-          </span>
-          <input
-            aria-label="GitHub repository URL"
-            onChange={(event) => onRepoInputChange(event.currentTarget.value)}
-            placeholder="https://github.com/org/repo"
-            value={repoInput}
-          />
-        </label>
-      )}
-      <span
-        aria-label={isConnected ? "GitHub connected" : undefined}
-        className={`or-label ${isConnected ? "or-label-connected" : ""}`}
-      >
-        {isConnected ? <Check aria-hidden="true" strokeWidth={2.4} /> : "OR"}
-      </span>
-      <button
-        className={`github-button ${
-          isConnected ? "github-button-connected" : ""
-        }`}
-        disabled={isConnected && !canRetryGitHubConnection}
-        onClick={() =>
-          isConnected && !canRetryGitHubConnection
-            ? undefined
-            : onConnectGitHub()
-        }
-        type="button"
-      >
-        <span className="github-logo-frame" aria-hidden="true">
-          <img alt="" className="github-logo-image" src={githubLogoUrl} />
-        </span>
-        {githubButtonLabel}
-      </button>
+          {isConnected ? (
+            <Check
+              aria-hidden="true"
+              className="github-connected-check"
+              strokeWidth={2.4}
+            />
+          ) : null}
+          {githubButtonLabel}
+        </button>
+      </div>
     </div>
   );
 }
