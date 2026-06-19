@@ -5,10 +5,12 @@ import { validateCapturePath } from "./capture-path-validator";
 describe("validateCapturePath", () => {
   it("runs project-level checks before generated capture actions", async () => {
     const calls: string[] = [];
+    const sandboxLogs: Array<Record<string, unknown>> = [];
 
     const result = await validateCapturePath(
       {
         preparationManifest: manifest(),
+        preparationWorkspace: workspaceHandle(sandboxLogs),
         videoScriptPackage: scriptPackage(),
       },
       {
@@ -25,7 +27,13 @@ describe("validateCapturePath", () => {
         sceneValidator: {
           async validateScene(input) {
             calls.push(`scene:${input.scene.id}:${input.baseUrl}`);
-            return { logs: ["scene dry run passed"], status: "succeeded" };
+            return {
+              logs: ["scene dry run passed"],
+              runDirectory: ".makeademo-capture-path-validation-runs/run_123",
+              scriptPath:
+                ".makeademo-capture-path-validation-runs/run_123/scene_validation.ts",
+              status: "succeeded",
+            };
           },
         },
       },
@@ -41,6 +49,35 @@ describe("validateCapturePath", () => {
     expect(calls).toEqual([
       "project-checks",
       "scene:scene_validation:https://preview.example.test/",
+    ]);
+    expect(sandboxLogs).toEqual([
+      expect.objectContaining({
+        event: "capture-path-validation.runtime-preflight.started",
+        stage: "capture-path-validation",
+        workspaceId: "workspace_123",
+      }),
+      expect.objectContaining({
+        event: "capture-path-validation.runtime-preflight.succeeded",
+        stage: "capture-path-validation",
+        workspaceId: "workspace_123",
+      }),
+      expect.objectContaining({
+        event: "capture-path-validation.scene.started",
+        sceneId: "scene_validation",
+        sectionId: "section_test",
+        stage: "capture-path-validation",
+        workspaceId: "workspace_123",
+      }),
+      expect.objectContaining({
+        event: "capture-path-validation.scene.succeeded",
+        runDirectory: ".makeademo-capture-path-validation-runs/run_123",
+        sceneId: "scene_validation",
+        scriptPath:
+          ".makeademo-capture-path-validation-runs/run_123/scene_validation.ts",
+        sectionId: "section_test",
+        stage: "capture-path-validation",
+        workspaceId: "workspace_123",
+      }),
     ]);
   });
 });
@@ -95,5 +132,25 @@ function scriptPackage() {
     ],
     title: "Demo",
     version: 1,
+  };
+}
+
+function workspaceHandle(logs: Array<Record<string, unknown>>) {
+  return {
+    async destroy() {},
+    id: "workspace_handle_123",
+    workspace: {
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async getPreviewUrl() {
+        return "https://preview.example.test/";
+      },
+      async setOutboundNetworkAccess() {},
+      async uploadFiles() {},
+      async writeSandboxLog(entry: Record<string, unknown>) {
+        logs.push(entry);
+      },
+    },
   };
 }

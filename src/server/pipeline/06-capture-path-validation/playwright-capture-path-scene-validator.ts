@@ -41,11 +41,13 @@ export class DefaultCapturePathSceneValidator
       return {
         failureReason: `Scene ${input.scene.id} failed during Capture Path Validation.`,
         logs,
+        runDirectory,
+        scriptPath: scenePath,
         status: "failed",
       };
     }
 
-    return { logs, status: "succeeded" };
+    return { logs, runDirectory, scriptPath: scenePath, status: "succeeded" };
   }
 }
 

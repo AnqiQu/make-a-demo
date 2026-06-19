@@ -18,6 +18,8 @@ export type CapturePathSceneValidationInput = {
 export type CapturePathSceneValidationResult =
   | {
       logs: string[];
+      runDirectory?: string;
+      scriptPath?: string;
       status: "succeeded";
     }
   | {
@@ -25,7 +27,9 @@ export type CapturePathSceneValidationResult =
       failedAction?: string;
       failureReason: string;
       logs: string[];
+      runDirectory?: string;
       screenshotArtifactId?: string;
+      scriptPath?: string;
       status: "failed";
     };
 
@@ -51,6 +55,9 @@ export async function validateCapturePath(
   input: CapturePathValidationInput,
   dependencies: CapturePathValidationDependencies,
 ): Promise<CapturePathValidationResult> {
+  await writeCapturePathSandboxLog(input, {
+    event: "capture-path-validation.runtime-preflight.started",
+  });
   const projectValidation = await dependencies.validateProject({
     preparationManifest: input.preparationManifest,
     ...(input.preparationWorkspace === undefined
@@ -59,8 +66,22 @@ export async function validateCapturePath(
   });
 
   if (projectValidation.status === "failed") {
+    await writeCapturePathSandboxLog(input, {
+      blockedNetworkAttemptCount:
+        projectValidation.blockedNetworkAttempts.length,
+      event: "capture-path-validation.runtime-preflight.failed",
+      failureReason: projectValidation.failureReason,
+      warningCount: projectValidation.warnings.length,
+    });
     return projectValidation;
   }
+
+  await writeCapturePathSandboxLog(input, {
+    blockedNetworkAttemptCount: projectValidation.blockedNetworkAttempts.length,
+    browserUrl: projectValidation.browserUrl,
+    event: "capture-path-validation.runtime-preflight.succeeded",
+    warningCount: projectValidation.warnings.length,
+  });
 
   const scriptPackage = parseVideoScriptPackage(input.videoScriptPackage);
   const logs = [...projectValidation.logs];
@@ -69,6 +90,11 @@ export async function validateCapturePath(
 
   for (const section of scriptPackage.sections) {
     for (const scene of section.scenes) {
+      await writeCapturePathSandboxLog(input, {
+        event: "capture-path-validation.scene.started",
+        sceneId: scene.id,
+        sectionId: section.id,
+      });
       const sceneResult = await dependencies.sceneValidator.validateScene({
         baseUrl: browserUrl,
         scene,
@@ -77,6 +103,18 @@ export async function validateCapturePath(
       logs.push(...sceneResult.logs);
 
       if (sceneResult.status === "failed") {
+        await writeCapturePathSandboxLog(input, {
+          blockedNetworkAttemptCount:
+            sceneResult.blockedNetworkAttempts?.length ?? 0,
+          event: "capture-path-validation.scene.failed",
+          failedAction: sceneResult.failedAction,
+          failureReason: sceneResult.failureReason,
+          runDirectory: sceneResult.runDirectory,
+          sceneId: scene.id,
+          scriptPath: sceneResult.scriptPath,
+          screenshotArtifactId: sceneResult.screenshotArtifactId,
+          sectionId: section.id,
+        });
         return {
           blockedNetworkAttempts: sceneResult.blockedNetworkAttempts ?? [],
           browserUrl,
@@ -93,6 +131,14 @@ export async function validateCapturePath(
           warnings: projectValidation.warnings,
         };
       }
+
+      await writeCapturePathSandboxLog(input, {
+        event: "capture-path-validation.scene.succeeded",
+        runDirectory: sceneResult.runDirectory,
+        sceneId: scene.id,
+        scriptPath: sceneResult.scriptPath,
+        sectionId: section.id,
+      });
     }
   }
 
@@ -106,4 +152,23 @@ export async function validateCapturePath(
     status: "succeeded",
     warnings: projectValidation.warnings,
   };
+}
+
+async function writeCapturePathSandboxLog(
+  input: CapturePathValidationInput,
+  entry: Record<string, unknown>,
+) {
+  await input.preparationWorkspace?.workspace.writeSandboxLog?.({
+    ...removeUndefinedValues(entry),
+    repoUrl: input.preparationManifest.repoUrl,
+    scriptId: input.videoScriptPackage.scriptId,
+    stage: "capture-path-validation",
+    workspaceId: input.preparationManifest.workspaceId,
+  });
+}
+
+function removeUndefinedValues(input: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(input).filter(([, value]) => value !== undefined),
+  );
 }
