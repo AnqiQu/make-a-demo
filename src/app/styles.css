@@ -307,7 +307,7 @@ button:disabled {
 }
 
 .repo-access-options .github-button {
-  margin-top: 0.85rem;
+  margin-top: 2rem;
 }
 
 .github-button-connected {
@@ -400,17 +400,21 @@ button:disabled {
   padding: 0 1.05rem;
 }
 
-.repo-submit-button {
+.repo-submit-button,
+.details-submit-button {
   align-items: center;
   display: grid;
+  height: 3.9rem;
   justify-content: center;
+  justify-self: center;
   margin: 0;
   min-width: 0;
-  padding: 0 1.45rem;
-  width: max-content;
+  padding: 0;
+  width: 5.4rem;
 }
 
-.repo-submit-button svg {
+.repo-submit-button svg,
+.details-submit-button svg {
   height: 2.5rem;
   width: 2.5rem;
 }
@@ -428,8 +432,7 @@ button:disabled {
   margin-top: 1.5rem;
 }
 
-.repo-picker button,
-.details-form button {
+.repo-picker button {
   background: #f59e0b;
   border: 0;
   color: #ffffff;
@@ -850,11 +853,12 @@ button:disabled {
     width: min(100%, 18rem);
   }
 
-  .repo-submit-button {
+  .repo-submit-button,
+  .details-submit-button {
     justify-self: center;
     margin: 0;
     min-width: 0;
-    width: max-content;
+    width: 5.4rem;
   }
 
   .details-field-grid {

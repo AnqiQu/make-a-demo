@@ -26,6 +26,7 @@ import {
   selectRepositoryForDemo,
   setRepoDetails,
   stagePendingSupportingFiles,
+  startContextGatheringSubmission,
 } from "./draft";
 
 type InstalledRepository = {
@@ -406,6 +407,7 @@ export function ContextGatheringApp() {
     let nextDraft: ContextGatheringDraft;
     try {
       nextDraft = collectIntakeDetails(draft, intakeDetailsForm);
+      nextDraft = startContextGatheringSubmission(nextDraft);
       setDraft(nextDraft);
       setError("");
     } catch (caught) {
@@ -446,7 +448,7 @@ export function ContextGatheringApp() {
         pendingSupportingFiles,
       );
       const supportingFiles = [
-        ...draft.supportingFiles,
+        ...draftToSubmit.supportingFiles,
         ...uploadedSupportingFiles,
       ];
       const response = await fetch("/api/context-gathering/submit", {
@@ -476,6 +478,14 @@ export function ContextGatheringApp() {
         supportingFiles,
       }));
     } catch (caught) {
+      setDraft((current) =>
+        current.chatStep === "submitting"
+          ? {
+              ...current,
+              chatStep: "details",
+            }
+          : current,
+      );
       setError(caught instanceof Error ? caught.message : "Submit failed.");
     } finally {
       setIsUploading(false);
@@ -546,9 +556,6 @@ export function ContextGatheringApp() {
               selectedRepoUrl={draft.repoUrl}
             />
           </article>
-          <p className="repo-help">
-            We currently support web apps built with JavaScript or TypeScript.
-          </p>
         </section>
       ) : null}
 
@@ -570,7 +577,7 @@ export function ContextGatheringApp() {
         />
       ) : null}
 
-      {draft.chatStep === "submitted" ? (
+      {draft.chatStep === "submitting" || draft.chatStep === "submitted" ? (
         <SubmittedDemoPanel progress={demoRequestProgress} />
       ) : null}
 
@@ -681,6 +688,8 @@ export function RepoConnectionFields({
         <p className="repo-guidance">
           Paste a public GitHub URL, or connect GitHub to use a private
           repository.
+          <br /> We currently support web apps built with JavaScript or
+          TypeScript.
         </p>
         <button
           className={`github-button ${
@@ -913,15 +922,12 @@ export function ContextDetailsForm({
           </div>
         </section>
         <button
-          className="primary-hoot"
+          aria-label="Submit demo intake"
+          className="primary-hoot details-submit-button"
           disabled={isSubmitting || isUploading}
           type="submit"
         >
-          {isUploading
-            ? "Uploading files..."
-            : isSubmitting
-              ? "Starting..."
-              : "Let's go!"}
+          <ArrowRight aria-hidden="true" strokeWidth={2.4} />
         </button>
       </form>
     </section>

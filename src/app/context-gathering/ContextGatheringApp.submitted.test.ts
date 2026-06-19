@@ -174,6 +174,10 @@ describe("ContextDetailsForm", () => {
         pendingSupportingFiles: [],
       }),
     );
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
 
     expect(html).toContain('role="progressbar"');
     expect(html).toContain('aria-valuenow="50"');
@@ -186,8 +190,21 @@ describe("ContextDetailsForm", () => {
     expect(html).toContain(
       'aria-label="Accepted file types: PDF, PPTX, DOCX, TXT, MD"',
     );
-    expect(html).toContain("Let&#x27;s go");
+    expect(html).toContain('aria-label="Submit demo intake"');
+    expect(html).toContain('class="primary-hoot details-submit-button"');
+    expect(html).toContain("lucide-arrow-right");
+    expect(styles).toContain(".repo-submit-button,\n.details-submit-button");
+    expect(styles).toContain("height: 3.9rem;");
+    expect(styles).toContain("justify-self: center;");
+    expect(styles).toContain("width: 5.4rem;");
+    expect(styles).toContain(".details-form .file-type-tooltip");
+    expect(styles).toContain("background: transparent;");
+    expect(styles).not.toContain(
+      ".details-form button:not(.details-submit-button)",
+    );
     expect(html.match(/required=""/g)?.length).toBe(2);
+    expect(html).not.toContain("Let&#x27;s go");
+    expect(html).not.toContain("Starting...");
     expect(html).not.toContain("Tell us what the demo should show");
     expect(html).not.toContain("Supporting Documents");
     expect(html).not.toContain("<h2>Supporting documents</h2>");
