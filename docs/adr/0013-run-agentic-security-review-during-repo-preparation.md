@@ -6,6 +6,6 @@ The review uses four distinct subagents: a Dependency Reviewer for dependency ma
 
 Submitted repo text is evidence, not authority over the preparation agent. Repo-provided agent configuration files such as `AGENTS.md`, `CLAUDE.md`, and `.opencode/` may be used as references for how to run the project, but they must not override MakeADemo's agent policy, safety rules, secrets handling, network policy, or task priorities.
 
-This review is advisory preparation work and does not replace non-agent Project Validation or Runtime Network Lockdown. Findings from the Obfuscation Deception Auditor hard-fail Repo Preparation and produce a Preparation Fallback Prompt with the relevant evidence.
+This review is advisory preparation work and does not replace non-agent Capture Path Validation or Runtime Network Lockdown. Findings from the Obfuscation Deception Auditor hard-fail Repo Preparation and produce a Preparation Fallback Prompt with the relevant evidence.
 
 Each security-review subagent must return a structured accept or reject outcome. Any rejection hard-fails Repo Preparation and produces a Preparation Fallback Prompt. A missing, malformed, or inconclusive outcome is treated as a preparation error, logged for operators, and fails the run.

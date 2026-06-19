@@ -1,3 +1,0 @@
-# Provide a Preparation Prompt Before Repo Submission
-
-MakeADemo v1 will first give makers a copy-paste preparation prompt for their own coding agent so they can add a demo run command that satisfies the Demo Run Contract before submitting a repo URL and supplementary info. MakeADemo will still validate the submitted repo programmatically after submission. We chose this over directly committing fixes, opening PRs, or waiting until validation failure to explain the contract because automatic repo modification adds GitHub permissioning, branch/PR UX, security risk, and failure modes, while a preparation-first flow makes the repo requirements explicit before MakeADemo tries to run untrusted code.
