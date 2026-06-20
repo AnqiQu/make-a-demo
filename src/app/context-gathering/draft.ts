@@ -236,6 +236,15 @@ export function collectIntakeDetails(
   };
 }
 
+export function startContextGatheringSubmission(
+  draft: ContextGatheringDraft,
+): ContextGatheringDraft {
+  return {
+    ...draft,
+    chatStep: "submitting",
+  };
+}
+
 export function connectGitHubInstallation(
   draft: ContextGatheringDraft,
   githubInstallationId: string,

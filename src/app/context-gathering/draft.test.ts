@@ -13,6 +13,7 @@ import {
   selectRepositoryForDemo,
   setRepoDetails,
   stagePendingSupportingFiles,
+  startContextGatheringSubmission,
 } from "./draft";
 
 describe("Context Gathering draft", () => {
@@ -145,6 +146,30 @@ describe("Context Gathering draft", () => {
       "How long do you want the demo video to be? Choose between 30s-3min.",
       "1 minute",
     ]);
+  });
+
+  it("moves collected Project Intake to submitting before the API returns", () => {
+    const draft = collectIntakeDetails(
+      setRepoDetails(createInitialContextGatheringDraft(), {
+        repoUrl: "https://github.com/example/app",
+        repoVisibility: "public",
+      }),
+      {
+        email: "founder@example.com",
+        importantFeatures: "Repo validation.",
+        name: "Anqi",
+        productSummary: "MakeADemo creates demo videos.",
+        requestedDurationSeconds: 60,
+        targetUsers: "Builders.",
+      },
+      { now: () => "2026-06-07T17:05:00.000Z" },
+    );
+
+    const submitting = startContextGatheringSubmission(draft);
+
+    expect(submitting.chatStep).toBe("submitting");
+    expect(submitting.contact).toEqual(draft.contact);
+    expect(submitting.structuredContext).toEqual(draft.structuredContext);
   });
 
   it("rejects image and video Supporting Documents", () => {

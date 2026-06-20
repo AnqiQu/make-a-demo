@@ -2,14 +2,20 @@ import { join, normalize } from "node:path";
 
 import { createGitHubAppIntegrationFromEnv } from "../shared/integrations/github/github-app";
 import { createR2UploadPresignerFromEnv } from "../shared/integrations/storage/r2-client";
+import { createPipelineEventLogger } from "../shared/logging/pipeline-event-logger";
 import { createNeonContextGatheringStore } from "../shared/persistence/neon-context-gathering-store";
 import { createNeonDemoRequestFinalVideoStore } from "../shared/persistence/neon-demo-request-final-video-store";
 import { type FrontendAssetReader, createApiApp } from "./app";
 
+const logger = createPipelineEventLogger({
+  base: { component: "api" },
+  sinks: [{ write: (line) => void process.stdout.write(line) }],
+});
 const app = createApiApp({
   demoRequests: createNeonDemoRequestFinalVideoStore(),
   frontend: createFileSystemFrontendAssetReader("dist"),
   github: createGitHubAppIntegrationFromEnv(),
+  logger,
   store: createNeonContextGatheringStore(),
   uploads: createR2UploadPresignerFromEnv(),
 });
@@ -30,7 +36,14 @@ Bun.serve({
   port,
 });
 
-process.stdout.write(`Owlet API listening on http://localhost:${port}\n`);
+await logger.info(
+  {
+    event: "api.server.started",
+    port,
+    url: `http://localhost:${port}`,
+  },
+  "Owlet API listening.",
+);
 
 function createFileSystemFrontendAssetReader(
   root: string,

@@ -108,14 +108,21 @@ function createPinoLogger(
     },
     {
       write(line) {
-        const asyncWrites: Array<() => Promise<void> | void> = [];
+        const asyncWrites: Array<() => Promise<void>> = [];
         for (const sink of sinks) {
           if (isAsyncFunction(sink.write)) {
-            asyncWrites.push(() => sink.write(line));
+            asyncWrites.push(() => Promise.resolve(sink.write(line)));
             continue;
           }
 
-          sink.write(line);
+          try {
+            const result = sink.write(line);
+            if (isPromiseLike(result)) {
+              asyncWrites.push(() => Promise.resolve(result));
+            }
+          } catch (error) {
+            asyncWrites.push(() => Promise.reject(error));
+          }
         }
         state.writeChain = state.writeChain.then(async () => {
           await Promise.all(asyncWrites.map((write) => write()));
@@ -128,6 +135,15 @@ function createPinoLogger(
 function isAsyncFunction(value: unknown): boolean {
   return (
     typeof value === "function" && value.constructor.name === "AsyncFunction"
+  );
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<void> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "then" in value &&
+    typeof value.then === "function"
   );
 }
 

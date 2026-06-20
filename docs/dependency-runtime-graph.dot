@@ -15,6 +15,7 @@ strict digraph "dependency-cruiser output"{
     "src/app/main.tsx" -> "src/app/styles.css"
     subgraph "cluster_src" {label="src" subgraph "cluster_src/app" {label="app" "src/app/styles.css" [label=<styles.css> tooltip="styles.css" URL="src/app/styles.css" ] } }
     subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/api" {label="api" "src/server/api/app.test.ts" [label=<app.test.ts> tooltip="app.test.ts" URL="src/server/api/app.test.ts" fillcolor="#ddfeff"] } } }
+    "src/server/api/app.test.ts" -> "src/server/shared/logging/pipeline-event-logger.ts"
     "src/server/api/app.test.ts" -> "src/server/api/app.ts"
     subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/api" {label="api" "src/server/api/app.ts" [label=<app.ts> tooltip="app.ts" URL="src/server/api/app.ts" fillcolor="#ddfeff"] } } }
     "src/server/api/app.ts" -> "src/server/pipeline/01-context-gathering/context-gathering-submission.ts"
@@ -22,6 +23,7 @@ strict digraph "dependency-cruiser output"{
     subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/api" {label="api" "src/server/api/server.mts" [label=<server.mts> tooltip="server.mts" URL="src/server/api/server.mts" fillcolor="#ddfeff"] } } }
     "src/server/api/server.mts" -> "src/server/shared/integrations/github/github-app.ts"
     "src/server/api/server.mts" -> "src/server/shared/integrations/storage/r2-client.ts"
+    "src/server/api/server.mts" -> "src/server/shared/logging/pipeline-event-logger.ts"
     "src/server/api/server.mts" -> "src/server/shared/persistence/neon-context-gathering-store.ts"
     "src/server/api/server.mts" -> "src/server/shared/persistence/neon-demo-request-final-video-store.ts"
     "src/server/api/server.mts" -> "src/server/api/app.ts"
@@ -155,6 +157,12 @@ strict digraph "dependency-cruiser output"{
     subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/pipeline" {label="pipeline" subgraph "cluster_src/server/pipeline/final-output" {label="final-output" "src/server/pipeline/final-output/final-video-email-notifier.interface.ts" [label=<final-video-email-notifier.interface.ts> tooltip="final-video-email-notifier.interface.ts" URL="src/server/pipeline/final-output/final-video-email-notifier.interface.ts" fillcolor="#ccffcc"] } } } }
     subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/shared" {label="shared" subgraph "cluster_src/server/shared/artifact-storage" {label="artifact-storage" "src/server/shared/artifact-storage/artifact-store.interface.ts" [label=<artifact-store.interface.ts> tooltip="artifact-store.interface.ts" URL="src/server/shared/artifact-storage/artifact-store.interface.ts" fillcolor="#ccffcc"] } } } }
     subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/shared" {label="shared" subgraph "cluster_src/server/shared/artifact-storage" {label="artifact-storage" "src/server/shared/artifact-storage/artifact-types.ts" [label=<artifact-types.ts> tooltip="artifact-types.ts" URL="src/server/shared/artifact-storage/artifact-types.ts" fillcolor="#ccffcc"] } } } }
+    subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/shared" {label="shared" subgraph "cluster_src/server/shared/benchmark" {label="benchmark" "src/server/shared/benchmark/benchmark-manifest.test.ts" [label=<benchmark-manifest.test.ts> tooltip="benchmark-manifest.test.ts" URL="src/server/shared/benchmark/benchmark-manifest.test.ts" fillcolor="#ddfeff"] } } } }
+    "src/server/shared/benchmark/benchmark-manifest.test.ts" -> "src/server/shared/benchmark/benchmark-manifest.ts"
+    subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/shared" {label="shared" subgraph "cluster_src/server/shared/benchmark" {label="benchmark" "src/server/shared/benchmark/benchmark-manifest.ts" [label=<benchmark-manifest.ts> tooltip="benchmark-manifest.ts" URL="src/server/shared/benchmark/benchmark-manifest.ts" fillcolor="#ddfeff"] } } } }
+    subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/shared" {label="shared" subgraph "cluster_src/server/shared/benchmark" {label="benchmark" "src/server/shared/benchmark/benchmark-results.test.ts" [label=<benchmark-results.test.ts> tooltip="benchmark-results.test.ts" URL="src/server/shared/benchmark/benchmark-results.test.ts" fillcolor="#ddfeff"] } } } }
+    "src/server/shared/benchmark/benchmark-results.test.ts" -> "src/server/shared/benchmark/benchmark-results.ts"
+    subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/shared" {label="shared" subgraph "cluster_src/server/shared/benchmark" {label="benchmark" "src/server/shared/benchmark/benchmark-results.ts" [label=<benchmark-results.ts> tooltip="benchmark-results.ts" URL="src/server/shared/benchmark/benchmark-results.ts" fillcolor="#ddfeff"] } } } }
     subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/shared" {label="shared" subgraph "cluster_src/server/shared/integrations" {label="integrations" subgraph "cluster_src/server/shared/integrations/agents" {label="agents" "src/server/shared/integrations/agents/daytona-opencode-activity-log.ts" [label=<daytona-opencode-activity-log.ts> tooltip="daytona-opencode-activity-log.ts" URL="src/server/shared/integrations/agents/daytona-opencode-activity-log.ts" fillcolor="#ddfeff"] } } } } }
     subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/shared" {label="shared" subgraph "cluster_src/server/shared/integrations" {label="integrations" subgraph "cluster_src/server/shared/integrations/agents" {label="agents" "src/server/shared/integrations/agents/daytona-opencode-repo-preparation-agent.test.ts" [label=<daytona-opencode-repo-preparation-agent.test.ts> tooltip="daytona-opencode-repo-preparation-agent.test.ts" URL="src/server/shared/integrations/agents/daytona-opencode-repo-preparation-agent.test.ts" fillcolor="#ddfeff"] } } } } }
     "src/server/shared/integrations/agents/daytona-opencode-repo-preparation-agent.test.ts" -> "src/server/shared/integrations/agents/daytona-opencode-repo-preparation-agent.ts"
@@ -295,6 +303,7 @@ strict digraph "dependency-cruiser output"{
     "src/server/shared/pipeline-runner/project-demo-generation-worker.mts" -> "src/server/shared/integrations/storage/r2-client.ts"
     "src/server/shared/pipeline-runner/project-demo-generation-worker.mts" -> "src/server/shared/integrations/storage/r2-final-video-storage.ts"
     "src/server/shared/pipeline-runner/project-demo-generation-worker.mts" -> "src/server/shared/integrations/storage/r2-supporting-document-loader.ts"
+    "src/server/shared/pipeline-runner/project-demo-generation-worker.mts" -> "src/server/shared/logging/pipeline-event-logger.ts"
     "src/server/shared/pipeline-runner/project-demo-generation-worker.mts" -> "src/server/shared/persistence/neon-demo-request-final-video-store.ts"
     "src/server/shared/pipeline-runner/project-demo-generation-worker.mts" -> "src/server/shared/persistence/neon-project-demo-generation-queue-store.ts"
     "src/server/shared/pipeline-runner/project-demo-generation-worker.mts" -> "src/server/shared/pipeline-runner/full-pipeline-runner.ts"
@@ -330,6 +339,7 @@ strict digraph "dependency-cruiser output"{
     "src/server/shared/pipeline-runner/stage1-cli.mts" -> "src/server/shared/integrations/agents/repo-preparation-agent-factory.ts"
     "src/server/shared/pipeline-runner/stage1-cli.mts" -> "src/server/shared/integrations/daytona/daytona-sdk-preparation-workspace-provider.ts"
     "src/server/shared/pipeline-runner/stage1-cli.mts" -> "src/server/shared/integrations/sandbox/daytona-sandbox-runner.ts"
+    "src/server/shared/pipeline-runner/stage1-cli.mts" -> "src/server/shared/logging/pipeline-event-logger.ts"
     "src/server/shared/pipeline-runner/stage1-cli.mts" -> "src/server/shared/pipeline-runner/opencode-output-stream.ts"
     "src/server/shared/pipeline-runner/stage1-cli.mts" -> "src/server/shared/pipeline-runner/pipeline-orchestrator.ts"
     "src/server/shared/pipeline-runner/stage1-cli.mts" -> "src/server/shared/pipeline-runner/stage1-cli-interactive.ts"
@@ -351,5 +361,8 @@ strict digraph "dependency-cruiser output"{
     "src/server/shared/pipeline-runner/stage1-pipeline.ts" -> "src/server/pipeline/06-capture-path-validation/playwright-capture-path-scene-validator.ts"
     "src/server/shared/pipeline-runner/stage1-pipeline.ts" -> "src/server/shared/integrations/agents/llm-project-explorer.ts"
     "src/server/shared/pipeline-runner/stage1-pipeline.ts" -> "src/server/shared/integrations/browser/playwright-browser-validator.ts"
+    subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/shared" {label="shared" subgraph "cluster_src/server/shared/pipeline-runner" {label="pipeline-runner" "src/server/shared/pipeline-runner/stage1-repo-security.test.ts" [label=<stage1-repo-security.test.ts> tooltip="stage1-repo-security.test.ts" URL="src/server/shared/pipeline-runner/stage1-repo-security.test.ts" fillcolor="#ddfeff"] } } } }
+    "src/server/shared/pipeline-runner/stage1-repo-security.test.ts" -> "src/server/shared/logging/pipeline-event-logger.ts"
+    "src/server/shared/pipeline-runner/stage1-repo-security.test.ts" -> "src/server/shared/pipeline-runner/stage1-repo-security.ts"
     subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/shared" {label="shared" subgraph "cluster_src/server/shared/pipeline-runner" {label="pipeline-runner" "src/server/shared/pipeline-runner/stage1-repo-security.ts" [label=<stage1-repo-security.ts> tooltip="stage1-repo-security.ts" URL="src/server/shared/pipeline-runner/stage1-repo-security.ts" fillcolor="#ddfeff"] } } } }
 }
