@@ -16,8 +16,12 @@ export type CapturePathValidationResult = {
   failedSceneId?: string;
   failureReason?: string;
   logs: string[];
+  runDirectory?: string;
   screenshotArtifactId?: string;
+  scriptPath?: string;
   status: "failed" | "succeeded";
+  stderrPath?: string;
+  stdoutPath?: string;
   warnings: string[];
 };
 

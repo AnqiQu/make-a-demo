@@ -1,15 +1,22 @@
+import { readPreparationManifest } from "../../../pipeline/03-repo-preparation/preparation-manifest";
 import type {
   AgenticScriptGenerationInput,
   ScriptGenerationAgent,
 } from "../../../pipeline/05-script-generation/script-generation-agent.interface";
 import { assertCaptureReadyScriptQuality } from "../../../pipeline/05-script-generation/script-package-quality";
 import type { VideoScriptPackage } from "../../../pipeline/05-script-generation/video-script-package";
+import type {
+  CapturePathRepairInput,
+  CapturePathRepairResult,
+  CapturePathRepairer,
+} from "../../../pipeline/06-capture-path-validation/capture-path-repairer.interface";
 import { parseVideoScriptPackage } from "../../../pipeline/06-capture/video-script-package.schema";
 import type { CaptureReadyVideoScriptPackage } from "../../../pipeline/06-capture/video-script-package.schema";
 import { writeDaytonaOpenCodeActivityLog } from "./daytona-opencode-activity-log";
 
 const makeADemoArtifactDirectory = "/workspace/.makeademo";
 const makeADemoOpenCodeConfigDirectory = `${makeADemoArtifactDirectory}/opencode`;
+const preparationManifestPath = `${makeADemoArtifactDirectory}/preparation-manifest.json`;
 const scriptPackagePath = `${makeADemoArtifactDirectory}/video-script-package.json`;
 
 export type DaytonaOpenCodeScriptGenerationAgentOptions = {
@@ -22,7 +29,7 @@ export type DaytonaOpenCodeScriptGenerationAgentOptions = {
 };
 
 export class DaytonaOpenCodeScriptGenerationAgent
-  implements ScriptGenerationAgent
+  implements CapturePathRepairer, ScriptGenerationAgent
 {
   private readonly maxAttempts: number;
   private readonly modelID: string;
@@ -165,6 +172,137 @@ export class DaytonaOpenCodeScriptGenerationAgent
     throw new Error(lastFailure);
   }
 
+  async repairCapturePathFailure(
+    input: CapturePathRepairInput,
+  ): Promise<CapturePathRepairResult> {
+    if (input.opencodeSessionID === undefined) {
+      throw new Error("Capture Path repair requires an OpenCode session ID.");
+    }
+    if (input.preparationWorkspace === undefined) {
+      throw new Error("Capture Path repair requires the prepared workspace.");
+    }
+    const preparationWorkspace = input.preparationWorkspace;
+
+    await writeRepairSandboxLog(input, {
+      attempt: input.attempt,
+      event: "capture-path-repair.opencode-attempt.started",
+      failedSceneId: input.failure.failedSceneId,
+      opencodeSessionID: input.opencodeSessionID,
+    });
+    this.writeStatus(
+      `Capture Path repair attempt ${input.attempt} starting in session ${input.opencodeSessionID}.`,
+    );
+
+    const outputWrites: Promise<void>[] = [];
+    const result = await preparationWorkspace.workspace.execute(
+      createOpenCodeRunCommand({
+        model: `${this.providerID}/${this.modelID}`,
+        prompt: createCapturePathRepairPrompt(input),
+        sessionID: input.opencodeSessionID,
+      }),
+      removeUndefinedOptions({
+        env: createOpenCodeEnv({
+          providerApiKey: this.providerApiKey,
+          providerID: this.providerID,
+        }),
+        onStderr: (chunk) => {
+          this.onStderr?.(chunk);
+          outputWrites.push(
+            writeDaytonaOpenCodeActivityLog(preparationWorkspace.workspace, {
+              attempt: input.attempt,
+              channel: "stderr",
+              raw: chunk,
+              stage: "capture-path-repair",
+            }),
+          );
+        },
+        onStdout: (chunk) => {
+          this.onStdout?.(chunk);
+          outputWrites.push(
+            writeDaytonaOpenCodeActivityLog(preparationWorkspace.workspace, {
+              attempt: input.attempt,
+              channel: "stdout",
+              raw: chunk,
+              stage: "capture-path-repair",
+            }),
+          );
+        },
+      }),
+    );
+    await Promise.all(outputWrites);
+
+    if (result.exitCode !== 0) {
+      const reason = `OpenCode Capture Path repair exited with ${result.exitCode}: ${[result.stderr, result.stdout].filter((line) => line.length > 0).join("\n")}`;
+      await writeRepairSandboxLog(input, {
+        attempt: input.attempt,
+        event: "capture-path-repair.opencode-attempt.failed",
+        exitCode: result.exitCode,
+        reason,
+      });
+      throw new Error(reason);
+    }
+
+    const [manifestArtifact, scriptArtifact] = await Promise.all([
+      readPreparationManifestArtifact({ preparationWorkspace }),
+      readScriptPackageArtifact({ preparationWorkspace }),
+    ]);
+    if (scriptArtifact.status === "failed") {
+      await writeRepairSandboxLog(input, {
+        attempt: input.attempt,
+        event: "capture-path-repair.artifact.missing",
+        reason: scriptArtifact.reason,
+      });
+      throw new Error(scriptArtifact.reason);
+    }
+
+    const preparationManifest =
+      manifestArtifact.status === "succeeded"
+        ? manifestArtifact.value
+        : input.preparationManifest;
+
+    try {
+      parseVideoScriptPackage(scriptArtifact.value);
+      assertCaptureReadyScriptQuality(
+        scriptArtifact.value as CaptureReadyVideoScriptPackage,
+      );
+    } catch (error) {
+      const reason = readErrorMessage(error);
+      await writeRepairSandboxLog(input, {
+        attempt: input.attempt,
+        event: "capture-path-repair.script-package.invalid",
+        reason,
+      });
+      throw new Error(reason);
+    }
+
+    await writeRepairSandboxLog(input, {
+      attempt: input.attempt,
+      event: "capture-path-repair.script-package.succeeded",
+      scriptId: (scriptArtifact.value as CaptureReadyVideoScriptPackage)
+        .scriptId,
+    });
+    this.writeStatus(
+      `Capture Path repair attempt ${input.attempt} produced a script package for revalidation.`,
+    );
+
+    return {
+      preparationManifest,
+      videoScriptPackage: attachPipelineMetadata(
+        scriptArtifact.value as CaptureReadyVideoScriptPackage,
+        {
+          demoBrief: {
+            keyProductFeatures: input.videoScriptPackage.demoPlan.featureOrder,
+          },
+          normalizedSupportingDocuments: [],
+          opencodeSessionID: input.opencodeSessionID,
+          preparationManifest,
+          preparationWorkspace,
+          repoUrl: input.repoUrl,
+        },
+      ),
+    };
+  }
+
   private writeStatus(message: string): void {
     this.onStdout?.(
       `${JSON.stringify({
@@ -174,6 +312,18 @@ export class DaytonaOpenCodeScriptGenerationAgent
       })}\n`,
     );
   }
+}
+
+async function writeRepairSandboxLog(
+  input: Parameters<CapturePathRepairer["repairCapturePathFailure"]>[0],
+  entry: Record<string, unknown>,
+): Promise<void> {
+  await input.preparationWorkspace?.workspace.writeSandboxLog?.({
+    ...entry,
+    repoUrl: input.repoUrl,
+    stage: "capture-path-repair",
+    workspaceId: input.preparationManifest.workspaceId,
+  });
 }
 
 async function writeScriptGenerationSandboxLog(
@@ -197,7 +347,7 @@ async function removePreviousScriptPackage(
 }
 
 async function readScriptPackageArtifact(
-  input: AgenticScriptGenerationInput,
+  input: Pick<AgenticScriptGenerationInput, "preparationWorkspace">,
 ): Promise<
   { status: "succeeded"; value: unknown } | { reason: string; status: "failed" }
 > {
@@ -216,6 +366,35 @@ async function readScriptPackageArtifact(
   } catch (error) {
     return {
       reason: `Script package artifact is not valid JSON: ${readErrorMessage(error)}`,
+      status: "failed",
+    };
+  }
+}
+
+async function readPreparationManifestArtifact(input: {
+  preparationWorkspace: AgenticScriptGenerationInput["preparationWorkspace"];
+}): Promise<
+  | { status: "succeeded"; value: ReturnType<typeof readPreparationManifest> }
+  | { reason: string; status: "failed" }
+> {
+  const result = await input.preparationWorkspace.workspace.execute(
+    `if test -f ${shellQuote(preparationManifestPath)}; then node -e ${shellQuote(`process.stdout.write(require("node:fs").readFileSync(${JSON.stringify(preparationManifestPath)}, "utf8"))`)}; else exit 1; fi`,
+  );
+  if (result.exitCode !== 0) {
+    return {
+      reason: `OpenCode did not write ${preparationManifestPath}.`,
+      status: "failed",
+    };
+  }
+
+  try {
+    return {
+      status: "succeeded",
+      value: readPreparationManifest(JSON.parse(result.stdout)),
+    };
+  } catch (error) {
+    return {
+      reason: `Preparation Manifest artifact is not valid: ${readErrorMessage(error)}`,
       status: "failed",
     };
   }
@@ -347,6 +526,50 @@ function createScriptGenerationRepairPrompt(reason: string): string {
   ].join("\n");
 }
 
+function createCapturePathRepairPrompt(
+  input: Parameters<CapturePathRepairer["repairCapturePathFailure"]>[0],
+): string {
+  return [
+    "# MakeADemo Capture Path Repair",
+    "",
+    "Capture Path Validation failed for the Video Script Package you generated.",
+    "Repair the prepared workspace, the Video Script Package, or both. The backend will rerun full Capture Path Validation after this attempt.",
+    "",
+    "## Hard Requirements",
+    `- Overwrite ${scriptPackagePath} with the repaired Video Script Package JSON before finishing.`,
+    `- If you change the prepared app command, URL, assumptions, risks, or workspace-change summary, update ${preparationManifestPath}.`,
+    "- Keep Browser Actions deterministic and use only the provided `baseUrl` variable in Playwright scripts.",
+    "- Do not run final Footage Capture. You may run fast local checks if useful.",
+    "",
+    "## Failure Evidence",
+    "```json",
+    truncateForPrompt(
+      JSON.stringify(
+        {
+          attempt: input.attempt,
+          failure: input.failure,
+          currentScriptId: input.videoScriptPackage.scriptId,
+        },
+        null,
+        2,
+      ),
+    ),
+    "```",
+    "",
+    "## Current Preparation Manifest",
+    "```json",
+    JSON.stringify(input.preparationManifest, null, 2),
+    "```",
+    "",
+    "## Current Video Script Package",
+    "```json",
+    truncateForPrompt(JSON.stringify(input.videoScriptPackage, null, 2)),
+    "```",
+    "",
+    createScriptPackageSchemaPrompt(),
+  ].join("\n");
+}
+
 function createScriptPackageSchemaPrompt(): string {
   return [
     "## Required Video Script Package Shape",
@@ -395,6 +618,13 @@ function createScriptPackageSchemaPrompt(): string {
 
 function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function truncateForPrompt(value: string): string {
+  const maxLength = 20_000;
+  return value.length <= maxLength
+    ? value
+    : `${value.slice(0, maxLength)}\n...[truncated ${value.length - maxLength} chars]`;
 }
 
 function shellQuote(value: string): string {

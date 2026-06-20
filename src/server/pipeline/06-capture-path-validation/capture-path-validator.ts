@@ -21,6 +21,8 @@ export type CapturePathSceneValidationResult =
       runDirectory?: string;
       scriptPath?: string;
       status: "succeeded";
+      stderrPath?: string;
+      stdoutPath?: string;
     }
   | {
       blockedNetworkAttempts?: CapturePathValidationResult["blockedNetworkAttempts"];
@@ -31,6 +33,8 @@ export type CapturePathSceneValidationResult =
       screenshotArtifactId?: string;
       scriptPath?: string;
       status: "failed";
+      stderrPath?: string;
+      stdoutPath?: string;
     };
 
 /**
@@ -112,6 +116,8 @@ export async function validateCapturePath(
           runDirectory: sceneResult.runDirectory,
           sceneId: scene.id,
           scriptPath: sceneResult.scriptPath,
+          stderrPath: sceneResult.stderrPath,
+          stdoutPath: sceneResult.stdoutPath,
           screenshotArtifactId: sceneResult.screenshotArtifactId,
           sectionId: section.id,
         });
@@ -127,6 +133,18 @@ export async function validateCapturePath(
           ...(sceneResult.screenshotArtifactId === undefined
             ? {}
             : { screenshotArtifactId: sceneResult.screenshotArtifactId }),
+          ...(sceneResult.runDirectory === undefined
+            ? {}
+            : { runDirectory: sceneResult.runDirectory }),
+          ...(sceneResult.scriptPath === undefined
+            ? {}
+            : { scriptPath: sceneResult.scriptPath }),
+          ...(sceneResult.stderrPath === undefined
+            ? {}
+            : { stderrPath: sceneResult.stderrPath }),
+          ...(sceneResult.stdoutPath === undefined
+            ? {}
+            : { stdoutPath: sceneResult.stdoutPath }),
           status: "failed",
           warnings: projectValidation.warnings,
         };
@@ -137,6 +155,8 @@ export async function validateCapturePath(
         runDirectory: sceneResult.runDirectory,
         sceneId: scene.id,
         scriptPath: sceneResult.scriptPath,
+        stderrPath: sceneResult.stderrPath,
+        stdoutPath: sceneResult.stdoutPath,
         sectionId: section.id,
       });
     }

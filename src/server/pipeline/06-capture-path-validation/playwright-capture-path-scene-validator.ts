@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -20,6 +21,8 @@ export class DefaultCapturePathSceneValidator
       input.scene.id,
     );
     const scenePath = join(runDirectory, `${input.scene.id}.ts`);
+    const stderrPath = join(runDirectory, `${input.scene.id}.stderr.log`);
+    const stdoutPath = join(runDirectory, `${input.scene.id}.stdout.log`);
 
     await mkdir(runDirectory, { recursive: true });
     await writeFile(
@@ -33,6 +36,10 @@ export class DefaultCapturePathSceneValidator
     );
 
     const result = await runSceneScript(scenePath);
+    await Promise.all([
+      writeFile(stdoutPath, result.stdout),
+      writeFile(stderrPath, result.stderr),
+    ]);
     const logs = [result.stdout, result.stderr].filter(
       (output) => output.length > 0,
     );
@@ -43,27 +50,48 @@ export class DefaultCapturePathSceneValidator
         logs,
         runDirectory,
         scriptPath: scenePath,
+        stderrPath,
         status: "failed",
+        stdoutPath,
       };
     }
 
-    return { logs, runDirectory, scriptPath: scenePath, status: "succeeded" };
+    return {
+      logs,
+      runDirectory,
+      scriptPath: scenePath,
+      status: "succeeded",
+      stderrPath,
+      stdoutPath,
+    };
   }
 }
 
 async function runSceneScript(scenePath: string) {
-  const child = Bun.spawn([process.execPath, scenePath], {
-    stderr: "pipe",
-    stdout: "pipe",
+  return await new Promise<{
+    exitCode: number | null;
+    stderr: string;
+    stdout: string;
+  }>((resolve, reject) => {
+    const child = spawn(process.execPath, [scenePath], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.once("error", reject);
+    child.once("close", (exitCode) => {
+      resolve({ exitCode, stderr, stdout });
+    });
   });
-
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
-
-  return { exitCode, stderr, stdout };
 }
 
 function createRunId() {

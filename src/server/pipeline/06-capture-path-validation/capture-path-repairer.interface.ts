@@ -3,7 +3,7 @@ import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparat
 import type { VideoScriptPackage } from "../05-script-generation/video-script-package";
 import type { CapturePathValidationResult } from "./capture-path-validator.interface";
 
-type CapturePathRepairInput = {
+export type CapturePathRepairInput = {
   attempt: number;
   failure: CapturePathValidationResult;
   opencodeSessionID?: string;
@@ -13,7 +13,7 @@ type CapturePathRepairInput = {
   videoScriptPackage: VideoScriptPackage;
 };
 
-type CapturePathRepairResult = {
+export type CapturePathRepairResult = {
   preparationManifest: PreparationManifest;
   videoScriptPackage: VideoScriptPackage;
 };
