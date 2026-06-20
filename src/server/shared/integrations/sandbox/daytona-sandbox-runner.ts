@@ -19,7 +19,7 @@ export class DaytonaSandboxRunner implements SandboxRunner {
       readinessTimeoutMs?: number;
     } = {},
   ) {
-    this.destroyWorkspaceOnCleanup = options.destroyWorkspaceOnCleanup ?? true;
+    this.destroyWorkspaceOnCleanup = options.destroyWorkspaceOnCleanup ?? false;
     this.readinessPollIntervalMs = options.readinessPollIntervalMs ?? 1_000;
     this.readinessTimeoutMs = options.readinessTimeoutMs ?? 30_000;
   }
@@ -75,7 +75,7 @@ export class DaytonaSandboxRunner implements SandboxRunner {
           stderr: installResult.stderr,
           stdout: installResult.stdout,
         });
-        await handle.destroy();
+        await this.cleanup(handle);
         return {
           blockedNetworkAttempts: [],
           logs: [
@@ -97,6 +97,7 @@ export class DaytonaSandboxRunner implements SandboxRunner {
         event: "project-validation.demo-command.started",
         url: input.url,
       });
+      await handle.workspace.execute(createStopDemoCommand());
       const runtimeResult = await handle.workspace.execute(
         createStartDemoCommand(input.demoCommand),
       );
@@ -168,7 +169,7 @@ export class DaytonaSandboxRunner implements SandboxRunner {
         runtimeExitCode: runtimeResult.exitCode,
       };
     } catch (error) {
-      await destroyQuietly(handle);
+      await this.cleanup(handle);
       throw error;
     }
   }
@@ -201,7 +202,11 @@ function collectLogs(result: { stderr: string; stdout: string }): string[] {
 }
 
 function createStartDemoCommand(demoCommand: string): string {
-  return `sh -lc ${shellQuote(`cd /workspace && nohup ${demoCommand} > /tmp/makeademo-demo.log 2>&1 & echo $!`)}`;
+  return `sh -lc ${shellQuote(`cd /workspace && nohup setsid sh -c ${shellQuote(`exec ${demoCommand}`)} > /tmp/makeademo-demo.log 2>&1 & echo $! > /tmp/makeademo-demo.pid && echo $!`)}`;
+}
+
+function createStopDemoCommand(): string {
+  return `sh -lc ${shellQuote("if test -f /tmp/makeademo-demo.pid; then kill -- -$(cat /tmp/makeademo-demo.pid) >/dev/null 2>&1 || true; rm -f /tmp/makeademo-demo.pid; fi")}`;
 }
 
 async function waitForDemoReadiness(input: {
@@ -277,14 +282,4 @@ function delay(milliseconds: number): Promise<void> {
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-async function destroyQuietly(
-  handle: PreparationWorkspaceHandle,
-): Promise<void> {
-  try {
-    await handle.destroy();
-  } catch {
-    // Preserve the original validation failure.
-  }
 }

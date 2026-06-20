@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type {
@@ -10,15 +11,18 @@ import { prepareStylizedPlaywrightScript } from "./stylized-playwright-script";
 export type PlaywrightSceneRecorderOptions = {
   headed?: boolean;
   pauseAfterSceneMs?: number;
+  sceneTimeoutMs?: number;
 };
 
 export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
   private readonly headed: boolean;
   private readonly pauseAfterSceneMs: number;
+  private readonly sceneTimeoutMs: number;
 
   constructor(options: PlaywrightSceneRecorderOptions = {}) {
     this.headed = options.headed ?? false;
     this.pauseAfterSceneMs = options.pauseAfterSceneMs ?? 0;
+    this.sceneTimeoutMs = options.sceneTimeoutMs ?? 120_000;
   }
 
   async recordScene(input: RecordSceneInput): Promise<RecordedScene> {
@@ -41,7 +45,7 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
     );
 
     const startedAt = Date.now();
-    const result = await runSceneScript(scenePath);
+    const result = await runSceneScript(scenePath, this.sceneTimeoutMs);
 
     if (result.exitCode !== 0) {
       throw new Error(formatSceneFailure(input.scene.id, result));
@@ -58,19 +62,44 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
   }
 }
 
-async function runSceneScript(scenePath: string) {
-  const child = Bun.spawn([process.execPath, scenePath], {
-    stderr: "pipe",
-    stdout: "pipe",
+async function runSceneScript(scenePath: string, timeoutMs: number) {
+  return await new Promise<{
+    exitCode: number | null;
+    stderr: string;
+    stdout: string;
+    timedOut: boolean;
+  }>((resolve, reject) => {
+    const child = spawn(process.execPath, [scenePath], {
+      detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      killChildProcessGroup(child.pid);
+    }, timeoutMs);
+
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once("close", (exitCode) => {
+      clearTimeout(timeout);
+      resolve({ exitCode, stderr, stdout, timedOut });
+    });
   });
-
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
-
-  return { exitCode, stderr, stdout };
 }
 
 function formatSceneFailure(
@@ -81,9 +110,25 @@ function formatSceneFailure(
     .filter((output) => output.length > 0)
     .join("\n");
 
+  if (result.timedOut) {
+    return `Scene ${sceneId} timed out.${details.length > 0 ? `\n${details}` : ""}`;
+  }
+
   return `Scene ${sceneId} failed with exit code ${result.exitCode}.${
     details.length > 0 ? `\n${details}` : ""
   }`;
+}
+
+function killChildProcessGroup(pid: number | undefined) {
+  if (pid === undefined) {
+    return;
+  }
+
+  try {
+    process.kill(process.platform === "win32" ? pid : -pid, "SIGTERM");
+  } catch {
+    // The child may already have exited between the timeout and signal delivery.
+  }
 }
 
 async function findSingleVideo(directory: string) {

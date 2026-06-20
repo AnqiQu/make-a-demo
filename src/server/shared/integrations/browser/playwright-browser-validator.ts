@@ -32,82 +32,149 @@ type BrowserValidationPageFactory = () => Promise<BrowserValidationPage>;
 
 export type PlaywrightBrowserValidatorOptions = {
   pageFactory?: BrowserValidationPageFactory;
+  validationTimeoutMs?: number;
 };
 
 export class PlaywrightBrowserValidator implements BrowserValidator {
   private readonly pageFactory: BrowserValidationPageFactory;
+  private readonly validationTimeoutMs: number;
 
   constructor(options: PlaywrightBrowserValidatorOptions = {}) {
     this.pageFactory = options.pageFactory ?? createPlaywrightPage;
+    this.validationTimeoutMs = options.validationTimeoutMs ?? 30_000;
   }
 
   async validate(
     input: BrowserValidationInput,
   ): Promise<BrowserValidationOutput> {
-    const page = await this.pageFactory();
+    const page = await withTimeout(
+      this.pageFactory(),
+      this.validationTimeoutMs,
+      "Browser page creation",
+    );
 
     try {
-      const localHost = new URL(input.url).hostname;
-      const blockedRequests: NetworkAttempt[] = [];
-      await page.route?.("**/*", async (route) => {
-        const blockedRequest = readForbiddenBrowserRequest(
-          route.request().url(),
-          localHost,
-        );
-        if (blockedRequest !== undefined) {
-          blockedRequests.push(blockedRequest);
-          await route.abort("blockedbyclient");
-          return;
-        }
-
-        await route.continue();
-      });
-
-      try {
-        await page.goto(input.url, {
-          timeout: 15_000,
-          waitUntil: "domcontentloaded",
-        });
-      } catch (error) {
-        return {
-          interactable: false,
-          logs: [`Failed to load ${input.url}: ${formatError(error)}`],
-          screenshotArtifactId: "",
-        };
-      }
-      if (blockedRequests.length > 0) {
-        return {
-          blockedNetworkAttempts: dedupeNetworkAttempts(blockedRequests),
-          interactable: false,
-          logs: dedupeNetworkAttempts(blockedRequests).map(
-            (request) => `Blocked forbidden browser request to ${request.host}`,
-          ),
-          screenshotArtifactId: "",
-        };
-      }
-      const bodyText = (await page.textContent("body")) ?? "";
-      const screenshotArtifactId = await page.screenshot();
-      const interactable =
-        bodyText.trim().length > 0 && !looksLikeRuntimeError(bodyText);
-      const blockedNetworkAttempts = findBlockedBrowserRequests(
-        input.url,
-        page.requestedUrls === undefined ? [] : await page.requestedUrls(),
+      return await withTimeout(
+        this.validatePage(input, page),
+        this.validationTimeoutMs,
+        `Browser validation for ${input.url}`,
       );
+    } catch (error) {
+      if (error instanceof BrowserValidationTimeoutError) {
+        return {
+          interactable: false,
+          logs: [
+            `Browser validation timed out after ${this.validationTimeoutMs}ms for ${input.url}`,
+          ],
+          screenshotArtifactId: "",
+        };
+      }
 
-      return {
-        ...(blockedNetworkAttempts.length === 0
-          ? {}
-          : { blockedNetworkAttempts }),
-        interactable,
-        logs: [
-          `Loaded ${input.url}`,
-          `Captured screenshot ${screenshotArtifactId}`,
-        ],
-        screenshotArtifactId,
-      };
+      throw error;
     } finally {
-      await page.close();
+      await closeQuietly(page);
     }
+  }
+
+  private async validatePage(
+    input: BrowserValidationInput,
+    page: BrowserValidationPage,
+  ): Promise<BrowserValidationOutput> {
+    const localHost = new URL(input.url).hostname;
+    const blockedRequests: NetworkAttempt[] = [];
+    await page.route?.("**/*", async (route) => {
+      const blockedRequest = readForbiddenBrowserRequest(
+        route.request().url(),
+        localHost,
+      );
+      if (blockedRequest !== undefined) {
+        blockedRequests.push(blockedRequest);
+        await route.abort("blockedbyclient");
+        return;
+      }
+
+      await route.continue();
+    });
+
+    try {
+      await page.goto(input.url, {
+        timeout: 15_000,
+        waitUntil: "domcontentloaded",
+      });
+    } catch (error) {
+      return {
+        interactable: false,
+        logs: [`Failed to load ${input.url}: ${formatError(error)}`],
+        screenshotArtifactId: "",
+      };
+    }
+    if (blockedRequests.length > 0) {
+      return {
+        blockedNetworkAttempts: dedupeNetworkAttempts(blockedRequests),
+        interactable: false,
+        logs: dedupeNetworkAttempts(blockedRequests).map(
+          (request) => `Blocked forbidden browser request to ${request.host}`,
+        ),
+        screenshotArtifactId: "",
+      };
+    }
+    const bodyText = (await page.textContent("body")) ?? "";
+    const screenshotArtifactId = await page.screenshot();
+    const interactable =
+      bodyText.trim().length > 0 && !looksLikeRuntimeError(bodyText);
+    const blockedNetworkAttempts = findBlockedBrowserRequests(
+      input.url,
+      page.requestedUrls === undefined ? [] : await page.requestedUrls(),
+    );
+
+    return {
+      ...(blockedNetworkAttempts.length === 0
+        ? {}
+        : { blockedNetworkAttempts }),
+      interactable,
+      logs: [
+        `Loaded ${input.url}`,
+        `Captured screenshot ${screenshotArtifactId}`,
+      ],
+      screenshotArtifactId,
+    };
+  }
+}
+
+class BrowserValidationTimeoutError extends Error {}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  operation: string,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(
+            new BrowserValidationTimeoutError(
+              `${operation} timed out after ${timeoutMs}ms`,
+            ),
+          );
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+async function closeQuietly(page: BrowserValidationPage) {
+  try {
+    await withTimeout(page.close(), 5_000, "Browser page close");
+  } catch {
+    // Preserve the browser validation result that triggered cleanup.
   }
 }
 
