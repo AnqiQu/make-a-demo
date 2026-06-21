@@ -10,36 +10,9 @@
     },
     "daytona": {
       "command": "daytona",
-      "sourceType": "github-release",
+      "sourceType": "github-release-latest",
       "repository": "daytonaio/daytona",
-      "version": "0.188.0",
-      "tag": "v0.188.0",
-      "assets": {
-        "darwin-amd64": {
-          "url": "https://github.com/daytonaio/daytona/releases/download/v0.188.0/daytona-darwin-amd64",
-          "sha256": "7938768174b3b38701c0580065f368a2650a9aa181fd42a7d050baefb9b9478b"
-        },
-        "darwin-arm64": {
-          "url": "https://github.com/daytonaio/daytona/releases/download/v0.188.0/daytona-darwin-arm64",
-          "sha256": "d9d74da333fd004ad11828e64b01423b8ae60faca4e7f87b99c3855bae7819e9"
-        },
-        "linux-amd64": {
-          "url": "https://github.com/daytonaio/daytona/releases/download/v0.188.0/daytona-linux-amd64",
-          "sha256": "526160d07894a152ad4caa08ce0213841890b1bf0241d4ee4514877a110e684c"
-        },
-        "linux-arm64": {
-          "url": "https://github.com/daytonaio/daytona/releases/download/v0.188.0/daytona-linux-arm64",
-          "sha256": "7bcf319850e9244d8779ddc5a4f58fa783d98ebeba39efc682a5ff59c4ed1018"
-        },
-        "windows-amd64": {
-          "url": "https://github.com/daytonaio/daytona/releases/download/v0.188.0/daytona-windows-amd64.exe",
-          "sha256": "d9a67c545968966fe70feb33f2d7728cfd91d115619113a4c6ad20ed269651af"
-        },
-        "windows-arm64": {
-          "url": "https://github.com/daytonaio/daytona/releases/download/v0.188.0/daytona-windows-arm64.exe",
-          "sha256": "abf84b274d78d85e5a4d1dddffcd714e5a88e84617317df4b989ec1e0cb88426"
-        }
-      }
+      "releaseChannel": "latest"
     }
   }
 }
