@@ -1,12 +1,12 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { DemoRequestScriptStore } from "../../pipeline/05-script-generation/demo-request-script-store.interface";
+import type { DemoRequestScriptStore } from "../../pipeline/04-script-generation/demo-request-script-store.interface";
 import type {
   CaptureManifest,
   CaptureScenesFromScriptInput,
-} from "../../pipeline/06-capture/capture-scenes";
-import { captureScenesFromScript } from "../../pipeline/06-capture/capture-scenes";
+} from "../../pipeline/06-footage-capture/capture-scenes";
+import { captureScenesFromScript } from "../../pipeline/06-footage-capture/capture-scenes";
 import type {
   CompositeVideoFromScriptInput,
   CompositedVideoManifest,

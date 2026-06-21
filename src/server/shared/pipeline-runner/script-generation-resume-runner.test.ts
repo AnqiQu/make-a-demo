@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import type { ScriptGenerationAgent } from "../../pipeline/05-script-generation/script-generation-agent.interface";
+import type { ScriptGenerationAgent } from "../../pipeline/04-script-generation/script-generation-agent.interface";
 import { runScriptGenerationResume } from "./script-generation-resume-runner";
 
 describe("runScriptGenerationResume", () => {

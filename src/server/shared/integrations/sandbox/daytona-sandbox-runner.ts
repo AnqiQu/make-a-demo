@@ -1,11 +1,11 @@
 import type { PreparationManifest } from "../../../pipeline/03-repo-preparation/preparation-manifest";
 import type { PreparationWorkspaceHandle } from "../../../pipeline/03-repo-preparation/preparation-workspace-runner";
-import { inferInstallPlan } from "../../../pipeline/04-project-validation/install-plan";
+import { inferInstallPlan } from "../../../pipeline/05-capture-path-validation/project-runtime-preflight/install-plan";
 import type {
   SandboxRunner,
   SandboxValidationInput,
   SandboxValidationOutput,
-} from "../../../pipeline/04-project-validation/sandbox-runner.interface";
+} from "../../../pipeline/05-capture-path-validation/project-runtime-preflight/sandbox-runner.interface";
 
 export class DaytonaSandboxRunner implements SandboxRunner {
   private readonly destroyWorkspaceOnCleanup: boolean;

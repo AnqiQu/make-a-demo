@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { prepareStylizedPlaywrightScript } from "../06-capture/stylized-playwright-script";
+import { prepareStylizedPlaywrightScript } from "../06-footage-capture/stylized-playwright-script";
 import type {
   CapturePathSceneValidationInput,
   CapturePathSceneValidationResult,

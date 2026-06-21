@@ -1,5 +1,5 @@
 import type { RepoPreparationAgent } from "../../../pipeline/03-repo-preparation/repo-preparation-agent.interface";
-import { validateProject } from "../../../pipeline/04-project-validation/project-validator";
+import { validateProject } from "../../../pipeline/05-capture-path-validation/project-runtime-preflight/project-validator";
 import { PlaywrightBrowserValidator } from "../browser/playwright-browser-validator";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../daytona/daytona-sdk-preparation-workspace-provider";
 import { DaytonaSandboxRunner } from "../sandbox/daytona-sandbox-runner";

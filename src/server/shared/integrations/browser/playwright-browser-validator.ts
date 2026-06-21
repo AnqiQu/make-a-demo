@@ -4,8 +4,8 @@ import type {
   BrowserValidationInput,
   BrowserValidationOutput,
   BrowserValidator,
-} from "../../../pipeline/04-project-validation/browser-validator.interface";
-import type { NetworkAttempt } from "../../../pipeline/04-project-validation/network-isolation-policy";
+} from "../../../pipeline/05-capture-path-validation/project-runtime-preflight/browser-validator.interface";
+import type { NetworkAttempt } from "../../../pipeline/05-capture-path-validation/project-runtime-preflight/network-isolation-policy";
 
 type BrowserValidationPage = {
   close(): Promise<void>;

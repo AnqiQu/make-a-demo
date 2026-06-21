@@ -5,8 +5,8 @@ import type { DemoBrief } from "../../pipeline/01-context-gathering/intake/demo-
 import type { NormalizedSupportingDocument } from "../../pipeline/01-context-gathering/supporting-documents";
 import type { PreparationManifest } from "../../pipeline/03-repo-preparation/preparation-manifest";
 import type { PreparationWorkspaceHandle } from "../../pipeline/03-repo-preparation/preparation-workspace-runner";
-import type { ScriptGenerationAgent } from "../../pipeline/05-script-generation/script-generation-agent.interface";
-import type { VideoScriptPackage } from "../../pipeline/05-script-generation/video-script-package";
+import type { ScriptGenerationAgent } from "../../pipeline/04-script-generation/script-generation-agent.interface";
+import type { VideoScriptPackage } from "../../pipeline/04-script-generation/video-script-package";
 
 export type ScriptGenerationResumeFile = {
   demoBrief: DemoBrief;

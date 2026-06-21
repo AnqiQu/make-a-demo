@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseVideoScriptPackage } from "../06-capture/video-script-package.schema";
+import { parseVideoScriptPackage } from "../06-footage-capture/video-script-package.schema";
 import { generateVideoScriptPackage } from "./script-generation-orchestrator";
 
 describe("generateVideoScriptPackage", () => {

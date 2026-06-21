@@ -1,13 +1,13 @@
-import type { ProjectValidationInput } from "../04-project-validation/project-validator";
-import type { ProjectValidationResult } from "../04-project-validation/validation-result";
 import {
   type SceneDescription,
   parseVideoScriptPackage,
-} from "../06-capture/video-script-package.schema";
+} from "../06-footage-capture/video-script-package.schema";
 import type {
   CapturePathValidationInput,
   CapturePathValidationResult,
 } from "./capture-path-validator.interface";
+import type { ProjectValidationInput } from "./project-runtime-preflight/project-validator";
+import type { ProjectValidationResult } from "./project-runtime-preflight/validation-result";
 
 export type CapturePathSceneValidationInput = {
   baseUrl: string;

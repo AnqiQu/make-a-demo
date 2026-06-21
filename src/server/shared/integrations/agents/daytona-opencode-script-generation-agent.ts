@@ -2,16 +2,16 @@ import { readPreparationManifest } from "../../../pipeline/03-repo-preparation/p
 import type {
   AgenticScriptGenerationInput,
   ScriptGenerationAgent,
-} from "../../../pipeline/05-script-generation/script-generation-agent.interface";
-import { assertCaptureReadyScriptQuality } from "../../../pipeline/05-script-generation/script-package-quality";
-import type { VideoScriptPackage } from "../../../pipeline/05-script-generation/video-script-package";
+} from "../../../pipeline/04-script-generation/script-generation-agent.interface";
+import { assertCaptureReadyScriptQuality } from "../../../pipeline/04-script-generation/script-package-quality";
+import type { VideoScriptPackage } from "../../../pipeline/04-script-generation/video-script-package";
 import type {
   CapturePathRepairInput,
   CapturePathRepairResult,
   CapturePathRepairer,
-} from "../../../pipeline/06-capture-path-validation/capture-path-repairer.interface";
-import { parseVideoScriptPackage } from "../../../pipeline/06-capture/video-script-package.schema";
-import type { CaptureReadyVideoScriptPackage } from "../../../pipeline/06-capture/video-script-package.schema";
+} from "../../../pipeline/05-capture-path-validation/capture-path-repairer.interface";
+import { parseVideoScriptPackage } from "../../../pipeline/06-footage-capture/video-script-package.schema";
+import type { CaptureReadyVideoScriptPackage } from "../../../pipeline/06-footage-capture/video-script-package.schema";
 import { writeDaytonaOpenCodeActivityLog } from "./daytona-opencode-activity-log";
 
 const makeADemoArtifactDirectory = "/workspace/.makeademo";

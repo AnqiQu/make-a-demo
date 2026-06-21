@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { RepoPreparationAgent } from "../../pipeline/03-repo-preparation/repo-preparation-agent.interface";
-import type { BrowserValidator } from "../../pipeline/04-project-validation/browser-validator.interface";
-import type { SandboxRunner } from "../../pipeline/04-project-validation/sandbox-runner.interface";
-import type { ScriptGenerationAgent } from "../../pipeline/05-script-generation/script-generation-agent.interface";
-import type { CapturePathRepairer } from "../../pipeline/06-capture-path-validation/capture-path-repairer.interface";
-import { parseVideoScriptPackage } from "../../pipeline/06-capture/video-script-package.schema";
+import type { ScriptGenerationAgent } from "../../pipeline/04-script-generation/script-generation-agent.interface";
+import type { CapturePathRepairer } from "../../pipeline/05-capture-path-validation/capture-path-repairer.interface";
+import type { BrowserValidator } from "../../pipeline/05-capture-path-validation/project-runtime-preflight/browser-validator.interface";
+import type { SandboxRunner } from "../../pipeline/05-capture-path-validation/project-runtime-preflight/sandbox-runner.interface";
+import { parseVideoScriptPackage } from "../../pipeline/06-footage-capture/video-script-package.schema";
 import { runPipelineJob } from "./pipeline-orchestrator";
 import { createStage1PipelineDependencies } from "./stage1-pipeline";
 

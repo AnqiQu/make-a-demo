@@ -1,4 +1,4 @@
-import type { CaptureReadyVideoScriptPackage } from "../06-capture/video-script-package.schema";
+import type { CaptureReadyVideoScriptPackage } from "../06-footage-capture/video-script-package.schema";
 
 const meaningfulInteractionPatterns = [
   /\.click\s*\(/,

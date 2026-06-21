@@ -1,4 +1,4 @@
-import type { CaptureReadyVideoScriptScene } from "../../06-capture/video-script-package.schema";
+import type { CaptureReadyVideoScriptScene } from "../../06-footage-capture/video-script-package.schema";
 import type { ScriptComposer } from "./script-composer.interface";
 import type { VideoScript } from "./video-script";
 

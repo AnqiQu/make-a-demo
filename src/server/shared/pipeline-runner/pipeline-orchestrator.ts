@@ -6,14 +6,14 @@ import type {
   RepoPreparationInput,
   RepoPreparationResult,
 } from "../../pipeline/03-repo-preparation/repo-preparation-agent.interface";
-import type { ScriptGenerationInput } from "../../pipeline/05-script-generation/script-generation-orchestrator";
-import type { VideoScriptPackage } from "../../pipeline/05-script-generation/video-script-package";
-import type { CapturePathRepairer } from "../../pipeline/06-capture-path-validation/capture-path-repairer.interface";
+import type { ScriptGenerationInput } from "../../pipeline/04-script-generation/script-generation-orchestrator";
+import type { VideoScriptPackage } from "../../pipeline/04-script-generation/video-script-package";
+import type { CapturePathRepairer } from "../../pipeline/05-capture-path-validation/capture-path-repairer.interface";
 import type {
   CapturePathValidationInput,
   CapturePathValidationResult,
   CapturePathValidator,
-} from "../../pipeline/06-capture-path-validation/capture-path-validator.interface";
+} from "../../pipeline/05-capture-path-validation/capture-path-validator.interface";
 import type { PipelineJobInput, PipelineJobResult } from "./pipeline-job";
 import {
   type PipelineObservabilityEvent,

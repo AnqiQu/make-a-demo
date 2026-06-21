@@ -1,5 +1,5 @@
-import type { PreparationManifest } from "../03-repo-preparation/preparation-manifest";
-import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
+import type { PreparationManifest } from "../../03-repo-preparation/preparation-manifest";
+import type { PreparationWorkspaceHandle } from "../../03-repo-preparation/preparation-workspace-runner";
 import type { BrowserValidator } from "./browser-validator.interface";
 import { inferInstallPlan } from "./install-plan";
 import { findRuntimeBoundaryViolations } from "./network-isolation-policy";

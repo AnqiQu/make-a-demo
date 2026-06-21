@@ -1,4 +1,4 @@
-import type { CaptureReadyVideoScriptPackage } from "../06-capture/video-script-package.schema";
+import type { CaptureReadyVideoScriptPackage } from "../06-footage-capture/video-script-package.schema";
 import type { DemoPlan } from "./demo-planning/demo-plan";
 import type { ProjectExplorationResult } from "./project-exploration/project-exploration-result";
 import type { VideoScript } from "./script-composition/video-script";

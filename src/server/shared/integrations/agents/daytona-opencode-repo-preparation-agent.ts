@@ -14,7 +14,7 @@ import type {
   RepoPreparationAgent,
   RepoPreparationInput,
 } from "../../../pipeline/03-repo-preparation/repo-preparation-agent.interface";
-import type { ProjectValidationResult } from "../../../pipeline/04-project-validation/validation-result";
+import type { ProjectValidationResult } from "../../../pipeline/05-capture-path-validation/project-runtime-preflight/validation-result";
 import { writeDaytonaOpenCodeActivityLog } from "./daytona-opencode-activity-log";
 import { createMakeADemoOpenCodeConfigFiles } from "./prepared-opencode-config";
 

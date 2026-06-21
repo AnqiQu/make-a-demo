@@ -1,6 +1,6 @@
 import type { PreparationManifest } from "../03-repo-preparation/preparation-manifest";
 import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
-import type { VideoScriptPackage } from "../05-script-generation/video-script-package";
+import type { VideoScriptPackage } from "../04-script-generation/video-script-package";
 import type { CapturePathValidationResult } from "./capture-path-validator.interface";
 
 export type CapturePathRepairInput = {
