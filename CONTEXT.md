@@ -20,8 +20,9 @@
 - **Sandbox**: The isolated execution environment that runs the submitted app, browser validation, capture path validation, and Playwright capture with the network boundary sealed after dependency installation.
 - **Script Generation**: The stage where MakeADemo turns prepared repo context and key product features into a Video Script.
 - **Video Script**: A structured plan for the demo video that organizes what the video will communicate over time.
-- **Video Script Package**: The structured artifact produced by Script Generation before Footage Capture begins, containing the Video Script, Script Sections, Scene Descriptions, Browser Actions, and validation context.
-- **Capture Path Validation**: The deterministic dry-run validation stage that runs Demo Runtime Preflight and then runs the generated Browser Actions or Capture Scripts against the prepared app under Runtime Network Lockdown before Footage Capture accepts the Video Script Package.
+- **Video Script Package**: The legacy structured artifact produced by Script Generation before Footage Capture, containing the Video Script, Script Sections, Scene Descriptions, Browser Actions, and validation context.
+- **Demo Script**: The capture-ready script artifact produced by Script Generation, replacing Video Script Package as the handoff into Capture Path Validation, Footage Capture, and Compositing. It describes the whole demo flow, including off-camera setup, on-camera Scene boundaries, and presentation metadata for final video assembly.
+- **Capture Path Validation**: The deterministic dry-run validation stage that runs Demo Runtime Preflight and then runs the generated capture path against the prepared app under Runtime Network Lockdown before Footage Capture accepts the Demo Script.
 - **Script Section**: A top-level part of the Video Script, such as intro, feature demonstration, or use case, that groups related scenes.
 - **Scene Description**: A script item that summarizes one web-based scene and lists the browser actions needed to capture it.
 - **Browser Action**: One explicit interaction or wait condition in a Scene Description, such as clicking a button, typing into an input, or waiting for streamed output to finish.
@@ -30,6 +31,7 @@
 - **Companion Video**: The user-facing view of a Scene shown alongside its Scene Description during review.
 - **Footage Capture**: The stage where MakeADemo records raw browser footage needed by the approved script.
 - **Compositing**: The stage where MakeADemo assembles captured footage into the final demo video with text, transitions, and other presentation effects.
+- **Draft Composite**: A temporary composited demo video produced for quality review before MakeADemo accepts it as the final output.
 
 - **Pipeline Stage**: One user-visible step in the MakeADemo Pipeline with clear inputs, outputs, and failure states.
 - **Pipeline Job**: One execution of the MakeADemo Pipeline for a submitted project.
@@ -55,16 +57,20 @@
 - **Preparation Manifest** supplies the prepared demo command and local URL used by **Capture Path Validation**.
 - Later pipeline stages may consume the **Preparation Manifest** directly, including non-agent stages and coding-agent stages that access it through tools or skills.
 - A **Video Script** contains one or more **Script Sections**, and each **Script Section** contains one or more **Scene Descriptions**.
-- A **Video Script Package** is accepted for Footage Capture only after **Capture Path Validation** succeeds.
-- **Capture Path Validation** first runs **Demo Runtime Preflight** to prove the prepared app can load without external network access, then proves that the generated capture path in a **Video Script Package** can run while **Runtime Network Lockdown** is enforced.
+- A **Demo Script** is accepted for Footage Capture only after **Capture Path Validation** succeeds.
+- A **Demo Script** can cover multiple **Scenes** in one continuous demo flow so setup can happen outside the final visible **Scene** footage.
+- **Footage Capture** executes an accepted **Demo Script** from a fresh deterministic starting state, then preserves browser and app state across its **Scenes**.
+- **Capture Path Validation** first runs **Demo Runtime Preflight** to prove the prepared app can load without external network access, then proves that the generated capture path in a **Demo Script** can run while **Runtime Network Lockdown** is enforced.
 - **Capture Path Validation** does not produce final **Scene** footage; **Footage Capture** records Scenes separately with presentation-oriented browser behavior such as human-like typing and cursor movement.
 - **Footage Capture** starts from fresh deterministic app state after **Capture Path Validation** succeeds, so validation dry-runs cannot pollute the final recorded take.
-- If **Capture Path Validation** fails, the agent may repair the prepared workspace or **Video Script Package**, but the full **Capture Path Validation** stage must rerun before **Footage Capture** trusts the result.
+- If **Capture Path Validation** fails, the agent may repair the prepared workspace or **Demo Script**, but the full **Capture Path Validation** stage must rerun before **Footage Capture** trusts the result.
 - If **Capture Path Validation** still fails after repair attempts are exhausted, the **Pipeline Job** fails and tells the user to report the issue to MakeADemo rather than returning a partially trusted script or preparation fallback.
+- If **Draft Composite** review requires changing the prepared workspace, **Capture Path Validation** must rerun before **Footage Capture** records a new take.
 - A **Scene Description** contains one or more **Browser Actions**.
 - A **Capture Script** mirrors the Browser Actions in one Scene Description.
 - Each **Scene Description** maps to exactly one **Scene** during **Footage Capture**.
 - Each **Scene Description** has one **Scene**, shown to the user as its **Companion Video** and later used by **Compositing**.
+- **Compositing** produces a **Draft Composite** before final output acceptance, so the full video can be reviewed for narrative, timing, presentation, and capture quality.
 
 ## Architectural Intent
 
