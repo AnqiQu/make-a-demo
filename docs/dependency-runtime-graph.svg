@@ -949,20 +949,20 @@
 </a>
 </g>
 </g>
-<!-- src/server/pipeline/06&#45;footage&#45;capture/video&#45;script&#45;package.schema.ts -->
+<!-- src/server/pipeline/06&#45;footage&#45;capture/demo&#45;script.schema.ts -->
 <g id="node59" class="node">
-<title>src/server/pipeline/06&#45;footage&#45;capture/video&#45;script&#45;package.schema.ts</title>
-<g id="a_node59"><a xlink:href="src/server/pipeline/06-footage-capture/video-script-package.schema.ts" xlink:title="video&#45;script&#45;package.schema.ts">
-<path fill="#ddfeff" stroke="black" d="M1218.83,-900.62C1218.83,-900.62 1071.67,-900.62 1071.67,-900.62 1068.46,-900.62 1065.25,-897.42 1065.25,-894.21 1065.25,-894.21 1065.25,-887.79 1065.25,-887.79 1065.25,-884.58 1068.46,-881.38 1071.67,-881.38 1071.67,-881.38 1218.83,-881.38 1218.83,-881.38 1222.04,-881.38 1225.25,-884.58 1225.25,-887.79 1225.25,-887.79 1225.25,-894.21 1225.25,-894.21 1225.25,-897.42 1222.04,-900.62 1218.83,-900.62"/>
-<text xml:space="preserve" text-anchor="start" x="1073.25" y="-887.62" font-family="Helvetica,sans-Serif" font-size="9.00">video&#45;script&#45;package.schema.ts</text>
+<title>src/server/pipeline/06&#45;footage&#45;capture/demo&#45;script.schema.ts</title>
+<g id="a_node59"><a xlink:href="src/server/pipeline/06-footage-capture/demo-script.schema.ts" xlink:title="demo&#45;script.schema.ts">
+<path fill="#ddfeff" stroke="black" d="M1198.96,-900.62C1198.96,-900.62 1091.54,-900.62 1091.54,-900.62 1088.33,-900.62 1085.12,-897.42 1085.12,-894.21 1085.12,-894.21 1085.12,-887.79 1085.12,-887.79 1085.12,-884.58 1088.33,-881.38 1091.54,-881.38 1091.54,-881.38 1198.96,-881.38 1198.96,-881.38 1202.17,-881.38 1205.38,-884.58 1205.38,-887.79 1205.38,-887.79 1205.38,-894.21 1205.38,-894.21 1205.38,-897.42 1202.17,-900.62 1198.96,-900.62"/>
+<text xml:space="preserve" text-anchor="start" x="1093.12" y="-887.62" font-family="Helvetica,sans-Serif" font-size="9.00">demo&#45;script.schema.ts</text>
 </a>
 </g>
 </g>
-<!-- src/server/pipeline/04&#45;script&#45;generation/script&#45;generation&#45;orchestrator.test.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/video&#45;script&#45;package.schema.ts -->
+<!-- src/server/pipeline/04&#45;script&#45;generation/script&#45;generation&#45;orchestrator.test.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/demo&#45;script.schema.ts -->
 <g id="edge37" class="edge">
-<title>src/server/pipeline/04&#45;script&#45;generation/script&#45;generation&#45;orchestrator.test.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/video&#45;script&#45;package.schema.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M1020.51,-1363.79C1047.54,-1363.79 1070,-1363.79 1070,-1363.79 1070,-1363.79 1070,-909.9 1070,-909.9"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1072.1,-909.9 1070,-903.9 1067.9,-909.9 1072.1,-909.9"/>
+<title>src/server/pipeline/04&#45;script&#45;generation/script&#45;generation&#45;orchestrator.test.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/demo&#45;script.schema.ts</title>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M1020.52,-1363.79C1041.12,-1363.79 1057,-1363.79 1057,-1363.79 1057,-1363.79 1057,-892.38 1057,-892.38 1057,-892.38 1075.9,-892.38 1075.9,-892.38"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1075.9,-894.48 1081.9,-892.38 1075.9,-890.28 1075.9,-894.48"/>
 </g>
 <!-- src/server/pipeline/04&#45;script&#45;generation/script&#45;generation&#45;orchestrator.ts -->
 <g id="node60" class="node">
@@ -976,8 +976,8 @@
 <!-- src/server/pipeline/04&#45;script&#45;generation/script&#45;generation&#45;orchestrator.test.ts&#45;&gt;src/server/pipeline/04&#45;script&#45;generation/script&#45;generation&#45;orchestrator.ts -->
 <g id="edge38" class="edge">
 <title>src/server/pipeline/04&#45;script&#45;generation/script&#45;generation&#45;orchestrator.test.ts&#45;&gt;src/server/pipeline/04&#45;script&#45;generation/script&#45;generation&#45;orchestrator.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M1020.23,-1370.21C1049.29,-1370.21 1074,-1370.21 1074,-1370.21 1074,-1370.21 1074,-1379.9 1074,-1379.9"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1071.9,-1379.9 1074,-1385.9 1076.1,-1379.9 1071.9,-1379.9"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M1020.25,-1370.21C1046.91,-1370.21 1069,-1370.21 1069,-1370.21 1069,-1370.21 1069,-1379.9 1069,-1379.9"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1066.9,-1379.9 1069,-1385.9 1071.1,-1379.9 1066.9,-1379.9"/>
 </g>
 <!-- src/server/pipeline/04&#45;script&#45;generation/video&#45;script&#45;package.ts -->
 <g id="node61" class="node">
@@ -1045,11 +1045,11 @@
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M743.63,-1458.79C743.63,-1458.79 855.32,-1458.79 855.32,-1458.79"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="855.32,-1460.89 861.32,-1458.79 855.32,-1456.69 855.32,-1460.89"/>
 </g>
-<!-- src/server/pipeline/05&#45;capture&#45;path&#45;validation/capture&#45;path&#45;validator.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/video&#45;script&#45;package.schema.ts -->
+<!-- src/server/pipeline/05&#45;capture&#45;path&#45;validation/capture&#45;path&#45;validator.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/demo&#45;script.schema.ts -->
 <g id="edge41" class="edge">
-<title>src/server/pipeline/05&#45;capture&#45;path&#45;validation/capture&#45;path&#45;validator.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/video&#45;script&#45;package.schema.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M992.87,-1462C1025.37,-1462 1058,-1462 1058,-1462 1058,-1462 1058,-894.21 1058,-894.21 1058,-894.21 1058.68,-894.21 1058.68,-894.21"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1055.82,-896.31 1061.82,-894.21 1055.82,-892.11 1055.82,-896.31"/>
+<title>src/server/pipeline/05&#45;capture&#45;path&#45;validation/capture&#45;path&#45;validator.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/demo&#45;script.schema.ts</title>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M992.87,-1462C1025.37,-1462 1058,-1462 1058,-1462 1058,-1462 1058,-895.12 1058,-895.12 1058,-895.12 1075.62,-895.12 1075.62,-895.12"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1075.62,-897.23 1081.62,-895.13 1075.62,-893.03 1075.62,-897.23"/>
 </g>
 <!-- src/server/pipeline/05&#45;capture&#45;path&#45;validation/playwright&#45;capture&#45;path&#45;scene&#45;validator.test.ts -->
 <g id="node67" class="node">
@@ -1249,11 +1249,11 @@
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M727.9,-859C750.49,-859 771,-859 771,-859 771,-859 771,-891 771,-891 771,-891 870.93,-891 870.93,-891"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="870.93,-893.1 876.93,-891 870.93,-888.9 870.93,-893.1"/>
 </g>
-<!-- src/server/pipeline/06&#45;footage&#45;capture/capture&#45;scenes.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/video&#45;script&#45;package.schema.ts -->
-<g id="edge52" class="edge">
-<title>src/server/pipeline/06&#45;footage&#45;capture/capture&#45;scenes.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/video&#45;script&#45;package.schema.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M976.87,-887.79C976.87,-887.79 1056.08,-887.79 1056.08,-887.79"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1056.08,-889.89 1062.08,-887.79 1056.08,-885.69 1056.08,-889.89"/>
+<!-- src/server/pipeline/06&#45;footage&#45;capture/capture&#45;scenes.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/demo&#45;script.schema.ts -->
+<g id="edge51" class="edge">
+<title>src/server/pipeline/06&#45;footage&#45;capture/capture&#45;scenes.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/demo&#45;script.schema.ts</title>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M976.87,-886.88C976.87,-886.88 1075.99,-886.88 1075.99,-886.88"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1075.99,-888.98 1081.99,-886.88 1075.99,-884.78 1075.99,-888.98"/>
 </g>
 <!-- src/server/pipeline/06&#45;footage&#45;capture/playwright&#45;scene&#45;recorder.ts -->
 <g id="node83" class="node">
@@ -1265,9 +1265,9 @@
 </g>
 </g>
 <!-- src/server/pipeline/06&#45;footage&#45;capture/capture&#45;scenes.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/playwright&#45;scene&#45;recorder.ts -->
-<g id="edge51" class="edge">
+<g id="edge52" class="edge">
 <title>src/server/pipeline/06&#45;footage&#45;capture/capture&#45;scenes.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/playwright&#45;scene&#45;recorder.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M977.08,-884.58C1013.47,-884.58 1057,-884.58 1057,-884.58 1057,-884.58 1057,-862.21 1057,-862.21 1057,-862.21 1063.34,-862.21 1063.34,-862.21"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M977.07,-884.12C1013.1,-884.12 1056,-884.12 1056,-884.12 1056,-884.12 1056,-862.21 1056,-862.21 1056,-862.21 1063.34,-862.21 1063.34,-862.21"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1063.34,-864.31 1069.34,-862.21 1063.34,-860.11 1063.34,-864.31"/>
 </g>
 <!-- src/server/pipeline/06&#45;footage&#45;capture/playwright&#45;scene&#45;recorder.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/stylized&#45;playwright&#45;script.ts -->
@@ -1312,8 +1312,8 @@
 <!-- src/server/pipeline/06&#45;footage&#45;capture/stylized&#45;playwright&#45;script.test.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/stylized&#45;playwright&#45;script.ts -->
 <g id="edge55" class="edge">
 <title>src/server/pipeline/06&#45;footage&#45;capture/stylized&#45;playwright&#45;script.test.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/stylized&#45;playwright&#45;script.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M1221,-837.07C1221,-845.37 1221,-855.79 1221,-855.79 1221,-855.79 1250.01,-855.79 1250.01,-855.79"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1250.01,-857.89 1256.01,-855.79 1250.01,-853.69 1250.01,-857.89"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M1222,-837.07C1222,-845.37 1222,-855.79 1222,-855.79 1222,-855.79 1250.05,-855.79 1250.05,-855.79"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1250.05,-857.89 1256.05,-855.79 1250.05,-853.69 1250.05,-857.89"/>
 </g>
 <!-- src/server/pipeline/07&#45;compositing/composite&#45;video.test.ts -->
 <g id="node87" class="node">
@@ -1624,11 +1624,11 @@
 <path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M1039.7,-2931.97C1132.26,-2931.97 1249,-2931.97 1249,-2931.97 1249,-2931.97 1249,-764 1249,-764 1249,-764 1215.53,-764 1215.53,-764"/>
 <polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1215.53,-761.9 1209.53,-764 1215.53,-766.1 1215.53,-761.9"/>
 </g>
-<!-- src/server/shared/integrations/agents/daytona&#45;opencode&#45;script&#45;generation&#45;agent.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/video&#45;script&#45;package.schema.ts -->
+<!-- src/server/shared/integrations/agents/daytona&#45;opencode&#45;script&#45;generation&#45;agent.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/demo&#45;script.schema.ts -->
 <g id="edge71" class="edge">
-<title>src/server/shared/integrations/agents/daytona&#45;opencode&#45;script&#45;generation&#45;agent.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/video&#45;script&#45;package.schema.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M1039.36,-2928.78C1128.17,-2928.78 1238,-2928.78 1238,-2928.78 1238,-2928.78 1238,-891 1238,-891 1238,-891 1234.52,-891 1234.52,-891"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1234.52,-888.9 1228.52,-891 1234.52,-893.1 1234.52,-888.9"/>
+<title>src/server/shared/integrations/agents/daytona&#45;opencode&#45;script&#45;generation&#45;agent.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/demo&#45;script.schema.ts</title>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M1039.36,-2928.78C1128.17,-2928.78 1238,-2928.78 1238,-2928.78 1238,-2928.78 1238,-891 1238,-891 1238,-891 1214.85,-891 1214.85,-891"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1214.85,-888.9 1208.85,-891 1214.85,-893.1 1214.85,-888.9"/>
 </g>
 <!-- src/server/shared/integrations/agents/daytona&#45;opencode&#45;script&#45;generation&#45;agent.ts&#45;&gt;src/server/pipeline/04&#45;script&#45;generation/script&#45;package&#45;quality.ts -->
 <g id="edge70" class="edge">
@@ -2068,8 +2068,8 @@
 <!-- src/server/shared/pipeline&#45;runner/full&#45;pipeline&#45;cli.mts&#45;&gt;src/server/shared/logging/pipeline&#45;event&#45;logger.ts -->
 <g id="edge109" class="edge">
 <title>src/server/shared/pipeline&#45;runner/full&#45;pipeline&#45;cli.mts&#45;&gt;src/server/shared/logging/pipeline&#45;event&#45;logger.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M144,-2627.91C144,-2623.6 144,-2619.54 144,-2619.54 144,-2619.54 1055,-2619.54 1055,-2619.54 1055,-2619.54 1055,-3724.19 1055,-3724.19 1055,-3724.19 1075.03,-3724.19 1075.03,-3724.19"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1075.03,-3726.29 1081.03,-3724.19 1075.03,-3722.09 1075.03,-3726.29"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M144,-2627.91C144,-2623.6 144,-2619.54 144,-2619.54 144,-2619.54 1054,-2619.54 1054,-2619.54 1054,-2619.54 1054,-3724.19 1054,-3724.19 1054,-3724.19 1074.85,-3724.19 1074.85,-3724.19"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1074.85,-3726.29 1080.85,-3724.19 1074.85,-3722.09 1074.85,-3726.29"/>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/full&#45;pipeline&#45;cli.mts&#45;&gt;src/server/pipeline/01&#45;context&#45;gathering/supporting&#45;documents.ts -->
 <g id="edge104" class="edge">
@@ -2215,14 +2215,14 @@
 <!-- src/server/shared/pipeline&#45;runner/full&#45;pipeline&#45;runner.ts&#45;&gt;src/server/shared/logging/pipeline&#45;event&#45;logger.ts -->
 <g id="edge120" class="edge">
 <title>src/server/shared/pipeline&#45;runner/full&#45;pipeline&#45;runner.ts&#45;&gt;src/server/shared/logging/pipeline&#45;event&#45;logger.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M470.07,-2557.88C626.82,-2557.88 1056,-2557.88 1056,-2557.88 1056,-2557.88 1056,-3721.78 1056,-3721.78 1056,-3721.78 1075.21,-3721.78 1075.21,-3721.78"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1075.21,-3723.88 1081.21,-3721.78 1075.21,-3719.68 1075.21,-3723.88"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M469.98,-2557.88C626.49,-2557.88 1055,-2557.88 1055,-2557.88 1055,-2557.88 1055,-3721.78 1055,-3721.78 1055,-3721.78 1075.03,-3721.78 1075.03,-3721.78"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1075.03,-3723.88 1081.03,-3721.78 1075.03,-3719.68 1075.03,-3723.88"/>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/full&#45;pipeline&#45;runner.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/capture&#45;scenes.ts -->
 <g id="edge118" class="edge">
 <title>src/server/shared/pipeline&#45;runner/full&#45;pipeline&#45;runner.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/capture&#45;scenes.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M469.93,-2554.38C624.68,-2554.38 1045,-2554.38 1045,-2554.38 1045,-2554.38 1045,-891 1045,-891 1045,-891 985.92,-891 985.92,-891"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="985.92,-888.9 979.92,-891 985.92,-893.1 985.92,-888.9"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M469.93,-2554.38C624.68,-2554.38 1045,-2554.38 1045,-2554.38 1045,-2554.38 1045,-889.62 1045,-889.62 1045,-889.62 985.92,-889.62 985.92,-889.62"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="985.92,-887.53 979.92,-889.63 985.92,-891.73 985.92,-887.53"/>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/full&#45;pipeline&#45;runner.ts&#45;&gt;src/server/pipeline/07&#45;compositing/composite&#45;video.ts -->
 <g id="edge119" class="edge">
@@ -2398,8 +2398,8 @@
 <!-- src/server/shared/pipeline&#45;runner/pipeline&#45;observer.ts&#45;&gt;src/server/shared/logging/pipeline&#45;event&#45;logger.ts -->
 <g id="edge126" class="edge">
 <title>src/server/shared/pipeline&#45;runner/pipeline&#45;observer.ts&#45;&gt;src/server/shared/logging/pipeline&#45;event&#45;logger.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M981,-2651C1015.39,-2651 1054,-2651 1054,-2651 1054,-2651 1054,-3726.59 1054,-3726.59 1054,-3726.59 1074.85,-3726.59 1074.85,-3726.59"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1074.85,-3728.69 1080.85,-3726.59 1074.85,-3724.49 1074.85,-3728.69"/>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M980.94,-2651C1014.96,-2651 1053,-2651 1053,-2651 1053,-2651 1053,-3726.59 1053,-3726.59 1053,-3726.59 1074.95,-3726.59 1074.95,-3726.59"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1074.95,-3728.69 1080.95,-3726.59 1074.95,-3724.49 1074.95,-3728.69"/>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/pipeline&#45;orchestrator.test.ts -->
 <g id="node156" class="node">
@@ -2806,11 +2806,11 @@
 </a>
 </g>
 </g>
-<!-- src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.test.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/video&#45;script&#45;package.schema.ts -->
+<!-- src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.test.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/demo&#45;script.schema.ts -->
 <g id="edge176" class="edge">
-<title>src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.test.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/video&#45;script&#45;package.schema.ts</title>
-<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M219.81,-2408.12C419.14,-2408.12 1059,-2408.12 1059,-2408.12 1059,-2408.12 1059,-897.42 1059,-897.42 1059,-897.42 1059.59,-897.42 1059.59,-897.42"/>
-<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1055.9,-899.52 1061.9,-897.42 1055.9,-895.32 1055.9,-899.52"/>
+<title>src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.test.ts&#45;&gt;src/server/pipeline/06&#45;footage&#45;capture/demo&#45;script.schema.ts</title>
+<path fill="none" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" d="M219.81,-2408.12C419.14,-2408.12 1059,-2408.12 1059,-2408.12 1059,-2408.12 1059,-897.88 1059,-897.88 1059,-897.88 1075.85,-897.88 1075.85,-897.88"/>
+<polygon fill="#000000" fill-opacity="0.200000" stroke="#000000" stroke-width="2" stroke-opacity="0.200000" points="1075.85,-899.98 1081.85,-897.88 1075.85,-895.78 1075.85,-899.98"/>
 </g>
 <!-- src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.test.ts&#45;&gt;src/server/shared/pipeline&#45;runner/stage1&#45;pipeline.ts -->
 <g id="edge178" class="edge">
