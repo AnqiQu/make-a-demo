@@ -6,7 +6,7 @@ import { captureScenesFromScript } from "./capture-scenes";
 import type { SceneRecorder } from "./scene-recorder.interface";
 
 describe("captureScenesFromScript", () => {
-  it("records each Playwright scene from a unified script and writes a temporary capture manifest in order", async () => {
+  it("accepts a Demo Script with a continuous Playwright flow and declared Scenes without durations", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
     const scriptPath = join(workspace, "script.json");
     const tempRoot = join(workspace, "runs");
@@ -14,55 +14,49 @@ describe("captureScenesFromScript", () => {
     await writeFile(
       scriptPath,
       JSON.stringify({
+        audio: { enabled: true, music: { id: "clean" } },
+        demoPlaywrightScript: [
+          "import { scene, setup } from './makeademo-capture-sdk';",
+          "await setup(async ({ page, baseUrl }) => { await page.goto(baseUrl); });",
+          "await scene('scene-001', async ({ page }) => { await expect(page.locator('body')).toBeVisible(); });",
+          "await scene('scene-002', async ({ page }) => { await expect(page.locator('body')).toBeVisible(); });",
+        ].join("\n"),
+        presentation: {
+          music: { enabled: true, trackId: "clean" },
+          textOverlays: [
+            {
+              content: "Demo Script",
+              font: "Inter",
+              position: "top-left",
+              sceneId: "scene-001",
+              size: "medium",
+            },
+          ],
+          transitions: [
+            {
+              durationSeconds: 0.25,
+              fromSceneId: "scene-001",
+              style: "fade",
+              toSceneId: "scene-002",
+            },
+          ],
+        },
+        scenes: [
+          {
+            description: "Open the app.",
+            expectedVisibleOutcome: "The prepared app shell is visible.",
+            id: "scene-001",
+          },
+          {
+            description: "Click the main action.",
+            expectedVisibleOutcome: "The main action result is visible.",
+            id: "scene-002",
+          },
+        ],
         scriptId: "script-001",
         title: "Demo Script",
         version: 1,
-        estimatedDurationSeconds: 9,
         format: "16:9",
-        sections: [
-          {
-            id: "section-001",
-            title: "First Section",
-            scenes: [
-              {
-                id: "video-scene-001",
-                type: "full-screen-text",
-                description: "Open with a title card.",
-                durationSeconds: 1,
-              },
-              {
-                id: "video-scene-002",
-                type: "playwright-recording",
-                playwrightSceneId: "scene-001",
-                description: "Open the app.",
-                durationSeconds: 4,
-                events: ["Navigate to the app."],
-                playwrightScript: "await page.goto(baseUrl);",
-              },
-            ],
-          },
-          {
-            id: "section-002",
-            title: "Second Section",
-            scenes: [
-              {
-                id: "video-scene-003",
-                type: "playwright-recording",
-                playwrightSceneId: "scene-002",
-                description: "Click the main action.",
-                durationSeconds: 5,
-                events: ["Click the main action."],
-                playwrightScript: "await page.getByRole('button').click();",
-              },
-              {
-                id: "video-scene-004",
-                type: "static-image",
-                description: "Close with a screenshot.",
-                durationSeconds: 1,
-              },
-            ],
-          },
-        ],
       }),
     );
 
@@ -71,7 +65,7 @@ describe("captureScenesFromScript", () => {
       async recordScene(input) {
         recordedSceneIds.push(input.scene.id);
         return {
-          durationSeconds: input.scene.durationSeconds,
+          durationSeconds: 4,
           videoPath: join(
             input.runDirectory,
             "raw-scenes",
@@ -95,13 +89,13 @@ describe("captureScenesFromScript", () => {
       {
         durationSeconds: 4,
         sceneId: "scene-001",
-        sectionId: "section-001",
+        sectionId: "demo-script",
         videoPath: join(manifest.runDirectory, "raw-scenes", "scene-001.webm"),
       },
       {
-        durationSeconds: 5,
+        durationSeconds: 4,
         sceneId: "scene-002",
-        sectionId: "section-002",
+        sectionId: "demo-script",
         videoPath: join(manifest.runDirectory, "raw-scenes", "scene-002.webm"),
       },
     ]);
@@ -112,78 +106,51 @@ describe("captureScenesFromScript", () => {
     expect(manifestJson).toEqual(manifest);
   });
 
-  it("skips sections with only compositing-native scenes while recording Playwright scenes", async () => {
+  it("rejects Demo Scripts with agent-authored recorded Scene durations before recording starts", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
     const tempRoot = join(workspace, "runs");
-    const recordedSceneIds: string[] = [];
+    let recordSceneWasCalled = false;
 
-    const manifest = await captureScenesFromScript({
-      baseUrl: "http://localhost:3000",
-      recorder: {
-        async recordScene(input) {
-          recordedSceneIds.push(input.scene.id);
-          return {
-            durationSeconds: input.scene.durationSeconds,
-            videoPath: join(
-              input.runDirectory,
-              "raw-scenes",
-              `${input.scene.id}.webm`,
-            ),
-          };
+    await expect(
+      captureScenesFromScript({
+        baseUrl: "http://localhost:3000",
+        recorder: {
+          async recordScene() {
+            recordSceneWasCalled = true;
+            return {
+              durationSeconds: 4,
+              videoPath: "should-not-exist.webm",
+            };
+          },
         },
-      },
-      scriptPackage: {
-        scriptId: "script-001",
-        title: "Demo Script",
-        version: 1,
-        estimatedDurationSeconds: 9,
-        format: "16:9",
-        sections: [
-          {
-            id: "intro",
-            title: "Intro",
-            scenes: [
-              {
-                id: "title-card",
-                type: "full-screen-text",
-                description: "Open with a title card.",
-                durationSeconds: 1,
-                background: { colour: "#000000", type: "solid" },
-              },
-            ],
+        scriptPackage: {
+          demoPlaywrightScript: "await scene('scene-001', async () => {});",
+          presentation: {
+            music: { enabled: false },
+            textOverlays: [],
+            transitions: [],
           },
-          {
-            id: "demo",
-            title: "Demo",
-            scenes: [
-              {
-                id: "video-scene-001",
-                type: "playwright-recording",
-                playwrightSceneId: "scene-001",
-                description: "Open the app.",
-                durationSeconds: 4,
-                events: ["Navigate to the app."],
-                playwrightScript: "await page.goto(baseUrl);",
-              },
-            ],
-          },
-        ],
-      },
-      tempRoot,
-    });
+          scenes: [
+            {
+              description: "Open the app.",
+              durationSeconds: 4,
+              expectedVisibleOutcome: "The app is visible.",
+              id: "scene-001",
+            },
+          ],
+          scriptId: "script-001",
+          title: "Demo Script",
+          version: 1,
+          format: "16:9",
+        },
+        tempRoot,
+      }),
+    ).rejects.toThrow("scenes[0].durationSeconds is not allowed");
 
-    expect(recordedSceneIds).toEqual(["scene-001"]);
-    expect(manifest.scenes).toEqual([
-      {
-        durationSeconds: 4,
-        sceneId: "scene-001",
-        sectionId: "demo",
-        videoPath: join(manifest.runDirectory, "raw-scenes", "scene-001.webm"),
-      },
-    ]);
+    expect(recordSceneWasCalled).toBe(false);
   });
 
-  it("rejects malformed Video Script Packages before recording starts", async () => {
+  it("rejects malformed Demo Scripts before recording starts", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
     const scriptPath = join(workspace, "script.json");
     const tempRoot = join(workspace, "runs");
@@ -195,9 +162,8 @@ describe("captureScenesFromScript", () => {
         scriptId: "script-001",
         title: "Demo Script",
         version: 1,
-        estimatedDurationSeconds: 9,
         format: "16:9",
-        sections: [],
+        scenes: [],
       }),
     );
 
@@ -216,7 +182,7 @@ describe("captureScenesFromScript", () => {
         scriptPath,
         tempRoot,
       }),
-    ).rejects.toThrow("sections must be a non-empty array");
+    ).rejects.toThrow("demoPlaywrightScript must be a non-empty string");
 
     expect(recordSceneWasCalled).toBe(false);
   });

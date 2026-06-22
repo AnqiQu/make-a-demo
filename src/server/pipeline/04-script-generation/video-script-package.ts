@@ -1,9 +1,9 @@
-import type { CaptureReadyVideoScriptPackage } from "../06-footage-capture/video-script-package.schema";
+import type { DemoScript } from "../06-footage-capture/demo-script.schema";
 import type { DemoPlan } from "./demo-planning/demo-plan";
 import type { ProjectExplorationResult } from "./project-exploration/project-exploration-result";
 import type { VideoScript } from "./script-composition/video-script";
 
-export type VideoScriptPackage = CaptureReadyVideoScriptPackage & {
+export type VideoScriptPackage = DemoScript & {
   assumptions: string[];
   demoPlan: DemoPlan;
   exploration: ProjectExplorationResult;

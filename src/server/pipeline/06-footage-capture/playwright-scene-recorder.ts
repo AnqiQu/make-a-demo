@@ -36,7 +36,7 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
     await mkdir(rawScenesDirectory, { recursive: true });
     await writeFile(
       scenePath,
-      prepareStylizedPlaywrightScript(input.scene.playwrightScript, {
+      prepareStylizedPlaywrightScript(input.demoPlaywrightScript, {
         baseUrl: input.baseUrl,
         headed: this.headed,
         pauseAfterSceneMs: this.pauseAfterSceneMs,

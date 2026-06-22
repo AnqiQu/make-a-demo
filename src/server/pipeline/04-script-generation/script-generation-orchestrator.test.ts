@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseVideoScriptPackage } from "../06-footage-capture/video-script-package.schema";
+import { parseDemoScript } from "../06-footage-capture/demo-script.schema";
 import { generateVideoScriptPackage } from "./script-generation-orchestrator";
 
 describe("generateVideoScriptPackage", () => {
@@ -34,26 +34,24 @@ describe("generateVideoScriptPackage", () => {
         scriptComposer: {
           async composeScript() {
             return {
-              estimatedDurationSeconds: 8,
+              demoPlaywrightScript:
+                "await scene('scene_validation', async () => { await page.goto(baseUrl); });",
               format: "16:9",
-              scriptId: "script_test",
-              sections: [
+              presentation: {
+                music: { enabled: false },
+                textOverlays: [],
+                transitions: [],
+              },
+              scenes: [
                 {
-                  id: "section_intro",
-                  scenes: [
-                    {
-                      description: "Show the validated project result.",
-                      durationSeconds: 8,
-                      events: ["Open the validation dashboard"],
-                      id: "scene_validation",
-                      playwrightSceneId: "scene_validation",
-                      playwrightScript: "await page.goto(baseUrl);",
-                      type: "playwright-recording",
-                    },
-                  ],
-                  title: "Validation",
+                  expectedVisibleOutcome:
+                    "The validated project result is visible.",
+                  humanReadableDescription:
+                    "Show the validated project result.",
+                  id: "scene_validation",
                 },
               ],
+              scriptId: "script_test",
               title: "MakeADemo validation demo",
               version: 1,
             };
@@ -62,15 +60,11 @@ describe("generateVideoScriptPackage", () => {
       },
     );
 
-    expect(parseVideoScriptPackage(packageResult).scriptId).toBe("script_test");
-    expect(packageResult.sections[0]?.scenes[0]).toEqual({
-      description: "Show the validated project result.",
-      durationSeconds: 8,
-      events: ["Open the validation dashboard"],
+    expect(parseDemoScript(packageResult).scriptId).toBe("script_test");
+    expect(packageResult.scenes[0]).toEqual({
+      expectedVisibleOutcome: "The validated project result is visible.",
+      humanReadableDescription: "Show the validated project result.",
       id: "scene_validation",
-      playwrightSceneId: "scene_validation",
-      playwrightScript: "await page.goto(baseUrl);",
-      type: "playwright-recording",
     });
     expect(packageResult.assumptions).toEqual(["single page app"]);
   });

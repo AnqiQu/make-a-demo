@@ -34,8 +34,7 @@ export async function runScriptGenerationResume(
   options: { rawOpenCodeLogPath?: string; scriptPath?: string } = {},
 ): Promise<ScriptGenerationResumeResult> {
   const scriptPath =
-    options.scriptPath ??
-    join(resume.runDirectory, "video-script-package.json");
+    options.scriptPath ?? join(resume.runDirectory, "demo-script.json");
   await mkdir(resume.runDirectory, { recursive: true });
   const scriptPackage =
     await dependencies.scriptGenerationAgent.generateScriptPackage({

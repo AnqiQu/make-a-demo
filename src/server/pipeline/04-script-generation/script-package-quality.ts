@@ -1,4 +1,4 @@
-import type { CaptureReadyVideoScriptPackage } from "../06-footage-capture/video-script-package.schema";
+import type { DemoScript } from "../06-footage-capture/demo-script.schema";
 
 const meaningfulInteractionPatterns = [
   /\.click\s*\(/,
@@ -14,30 +14,15 @@ const placeholderPatterns = [
   /toContainText\s*\(\s*\/\\S\//,
 ];
 
-export function assertCaptureReadyScriptQuality(
-  scriptPackage: CaptureReadyVideoScriptPackage,
-): void {
-  for (const [sectionIndex, section] of scriptPackage.sections.entries()) {
-    for (const [sceneIndex, scene] of section.scenes.entries()) {
-      if (scene.type !== "playwright-recording") {
-        continue;
-      }
+export function assertCaptureReadyScriptQuality(demoScript: DemoScript): void {
+  const script = demoScript.demoPlaywrightScript;
+  if (placeholderPatterns.some((pattern) => pattern.test(script))) {
+    throw new Error("demoPlaywrightScript contains placeholder actions");
+  }
 
-      const path = `sections[${sectionIndex}].scenes[${sceneIndex}]`;
-      const script = scene.playwrightScript;
-      if (placeholderPatterns.some((pattern) => pattern.test(script))) {
-        throw new Error(
-          `${path}.playwrightScript contains placeholder actions`,
-        );
-      }
-
-      if (
-        !meaningfulInteractionPatterns.some((pattern) => pattern.test(script))
-      ) {
-        throw new Error(
-          `${path}.playwrightScript must include a meaningful user interaction or feature-specific assertion`,
-        );
-      }
-    }
+  if (!meaningfulInteractionPatterns.some((pattern) => pattern.test(script))) {
+    throw new Error(
+      "demoPlaywrightScript must include a meaningful user interaction or feature-specific assertion",
+    );
   }
 }

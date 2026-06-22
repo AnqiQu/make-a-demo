@@ -1,11 +1,8 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { type DemoScript, parseDemoScript } from "./demo-script.schema";
 import { DefaultPlaywrightSceneRecorder } from "./playwright-scene-recorder";
 import type { SceneRecorder } from "./scene-recorder.interface";
-import {
-  type CaptureReadyVideoScriptPackage,
-  parseVideoScriptPackage,
-} from "./video-script-package.schema";
 
 type CapturedSceneManifestEntry = {
   durationSeconds: number;
@@ -32,7 +29,7 @@ export type CaptureScenesFromScriptInput = {
   keepTemp?: boolean;
   recorder?: SceneRecorder;
   runId?: string;
-  scriptPackage?: CaptureReadyVideoScriptPackage;
+  scriptPackage?: unknown;
   scriptPath?: string;
   tempRoot?: string;
 };
@@ -52,22 +49,21 @@ export async function captureScenesFromScript(
   const scenes: CapturedSceneManifestEntry[] = [];
 
   try {
-    for (const section of scriptPackage.sections) {
-      for (const scene of section.scenes) {
-        const recordedScene = await recorder.recordScene({
-          baseUrl: input.baseUrl,
-          runDirectory,
-          scene,
-          sectionId: section.id,
-        });
+    for (const scene of scriptPackage.scenes) {
+      const recordedScene = await recorder.recordScene({
+        baseUrl: input.baseUrl,
+        demoPlaywrightScript: scriptPackage.demoPlaywrightScript,
+        runDirectory,
+        scene,
+        sectionId: "demo-script",
+      });
 
-        scenes.push({
-          durationSeconds: recordedScene.durationSeconds,
-          sceneId: scene.id,
-          sectionId: section.id,
-          videoPath: recordedScene.videoPath,
-        });
-      }
+      scenes.push({
+        durationSeconds: recordedScene.durationSeconds,
+        sceneId: scene.id,
+        sectionId: "demo-script",
+        videoPath: recordedScene.videoPath,
+      });
     }
 
     const manifestPath = join(runDirectory, "capture-manifest.json");
@@ -96,16 +92,14 @@ export async function captureScenesFromScript(
 
 async function readScriptPackage(input: CaptureScenesFromScriptInput) {
   if (input.scriptPackage !== undefined) {
-    return parseVideoScriptPackage(input.scriptPackage);
+    return parseDemoScript(input.scriptPackage);
   }
 
   if (input.scriptPath === undefined) {
     throw new Error("scriptPath or scriptPackage is required");
   }
 
-  return parseVideoScriptPackage(
-    JSON.parse(await readFile(input.scriptPath, "utf8")),
-  );
+  return parseDemoScript(JSON.parse(await readFile(input.scriptPath, "utf8")));
 }
 
 async function createRunDirectory(tempRoot: string, runId: string) {

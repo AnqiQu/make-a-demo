@@ -27,7 +27,7 @@ export class DefaultCapturePathSceneValidator
     await mkdir(runDirectory, { recursive: true });
     await writeFile(
       scenePath,
-      prepareStylizedPlaywrightScript(input.scene.playwrightScript, {
+      prepareStylizedPlaywrightScript(input.demoPlaywrightScript, {
         baseUrl: input.baseUrl,
         headed: false,
         mode: "validation",

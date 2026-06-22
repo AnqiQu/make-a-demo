@@ -54,10 +54,8 @@ type FullPipelineArtifactSummary = {
   runDirectory: string;
   runId: string;
   script: {
-    estimatedDurationSeconds: number;
     sceneCount: number;
     scriptId: string;
-    sectionCount: number;
     title: string;
   };
   status: "succeeded";
@@ -285,10 +283,8 @@ export async function runFullPipelineJob(
     runDirectory,
     runId,
     script: {
-      estimatedDurationSeconds: scriptSummary.estimatedDurationSeconds,
       sceneCount: scriptSummary.sceneCount,
       scriptId: stage1.videoScriptPackage.scriptId,
-      sectionCount: scriptSummary.sectionCount,
       title: stage1.videoScriptPackage.title,
     },
     status: "succeeded",
@@ -325,19 +321,17 @@ async function persistGeneratedScript(input: {
   scriptSummary: ReturnType<typeof summarizeScriptPackage>;
 }): Promise<{ demoRequestId?: string; scriptPath?: string }> {
   if (input.scriptStore === undefined) {
-    const scriptPath = join(input.runDirectory, "video-script-package.json");
+    const scriptPath = join(input.runDirectory, "demo-script.json");
     await writeFile(
       scriptPath,
       `${JSON.stringify(input.scriptPackage, null, 2)}\n`,
     );
     await input.log({
-      event: "script-package-written",
+      event: "demo-script-written",
       message: scriptGeneratedMessage(input.scriptSummary),
-      estimatedDurationSeconds: input.scriptSummary.estimatedDurationSeconds,
       sceneCount: input.scriptSummary.sceneCount,
       scriptId: input.scriptPackage.scriptId,
       scriptPath,
-      sectionCount: input.scriptSummary.sectionCount,
       title: input.scriptPackage.title,
     });
 
@@ -356,12 +350,10 @@ async function persistGeneratedScript(input: {
   });
   await input.log({
     demoRequestId: input.demoRequestId,
-    event: "script-package-saved",
+    event: "demo-script-saved",
     message: scriptGeneratedMessage(input.scriptSummary),
-    estimatedDurationSeconds: input.scriptSummary.estimatedDurationSeconds,
     sceneCount: input.scriptSummary.sceneCount,
     scriptId: input.scriptPackage.scriptId,
-    sectionCount: input.scriptSummary.sectionCount,
     title: input.scriptPackage.title,
   });
 
@@ -371,7 +363,7 @@ async function persistGeneratedScript(input: {
 function scriptGeneratedMessage(
   scriptSummary: ReturnType<typeof summarizeScriptPackage>,
 ) {
-  return `Script package generated: ${scriptSummary.sectionCount} section(s), ${scriptSummary.sceneCount} scene(s), ${scriptSummary.estimatedDurationSeconds}s estimated.`;
+  return `Demo Script generated: ${scriptSummary.sceneCount} scene(s).`;
 }
 
 async function writeScriptGenerationResumeFile(input: {
@@ -444,12 +436,7 @@ function summarizeScriptPackage(
   >["videoScriptPackage"],
 ) {
   return {
-    estimatedDurationSeconds: scriptPackage.estimatedDurationSeconds,
-    sceneCount: scriptPackage.sections.reduce(
-      (total, section) => total + section.scenes.length,
-      0,
-    ),
-    sectionCount: scriptPackage.sections.length,
+    sceneCount: scriptPackage.scenes.length,
   };
 }
 

@@ -49,7 +49,7 @@ describe("runScriptGenerationResume", () => {
       ]);
       expect(result).toMatchObject({
         rawOpenCodeLogPath: join(outputRoot, "scriptgen-raw.jsonl"),
-        scriptPath: join(outputRoot, "video-script-package.json"),
+        scriptPath: join(outputRoot, "demo-script.json"),
         status: "succeeded",
       });
       await expect(readJsonFile(result.scriptPath)).resolves.toMatchObject({
@@ -105,15 +105,27 @@ function scriptPackage() {
       narrative: "Show the article feed.",
       risks: [],
     },
-    estimatedDurationSeconds: 5,
+    demoPlaywrightScript:
+      "await scene('scene_article_feed', async () => { await page.goto(baseUrl); });",
     exploration: {
       assumptions: [],
       productSurfaces: ["article feed"],
       summary: "Prepared app.",
     },
     format: "16:9" as const,
+    presentation: {
+      music: { enabled: false as const },
+      textOverlays: [],
+      transitions: [],
+    },
+    scenes: [
+      {
+        expectedVisibleOutcome: "The article feed is visible.",
+        humanReadableDescription: "Show article feed.",
+        id: "scene_article_feed",
+      },
+    ],
     scriptId: "script_test",
-    sections: [],
     title: "Demo",
     version: 1,
   };

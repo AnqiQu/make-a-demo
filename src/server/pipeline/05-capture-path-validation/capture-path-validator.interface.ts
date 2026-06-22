@@ -26,7 +26,7 @@ export type CapturePathValidationResult = {
 };
 
 /**
- * Validates that a Video Script Package's generated capture path can run against
+ * Validates that a Demo Script's generated capture path can run against
  * the prepared app under Runtime Network Lockdown. Implementations must run
  * project-level checks before generated Browser Actions, produce structured
  * failure evidence, and must not produce final Scene footage.

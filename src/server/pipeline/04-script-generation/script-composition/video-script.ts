@@ -1,3 +1,3 @@
-import type { CaptureReadyVideoScriptPackage } from "../../06-footage-capture/video-script-package.schema";
+import type { DemoScript } from "../../06-footage-capture/demo-script.schema";
 
-export type VideoScript = CaptureReadyVideoScriptPackage;
+export type VideoScript = DemoScript;

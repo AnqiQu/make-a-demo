@@ -582,27 +582,23 @@ function scriptPackage(input: {
       narrative: "Demo it",
       risks: [],
     },
-    estimatedDurationSeconds: 5,
+    demoPlaywrightScript:
+      "await scene('scene_validation', async () => { await page.goto(baseUrl); });",
     exploration: { assumptions: [], productSurfaces: [], summary: "" },
     format: "16:9",
-    scriptId: input.scriptId ?? "script_test",
-    sections: [
+    presentation: {
+      music: { enabled: false as const },
+      textOverlays: [],
+      transitions: [],
+    },
+    scenes: [
       {
-        id: "section_test",
-        scenes: [
-          {
-            description: "Show validation.",
-            durationSeconds: 5,
-            events: ["Open app"],
-            id: "scene_validation",
-            playwrightSceneId: "scene_validation",
-            playwrightScript: "await page.goto(baseUrl);",
-            type: "playwright-recording" as const,
-          },
-        ],
-        title: "Validation",
+        expectedVisibleOutcome: "Validation is visible.",
+        humanReadableDescription: "Show validation.",
+        id: "scene_validation",
       },
     ],
+    scriptId: input.scriptId ?? "script_test",
     title: "Demo",
     version: 1,
   };

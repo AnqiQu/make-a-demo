@@ -96,11 +96,7 @@ describe("runFullPipelineJob", () => {
         artifacts: {
           captureManifestPath: join(outputRoot, "capture-manifest.json"),
           finalVideoPath: join(outputRoot, "final-video.mp4"),
-          generatedScriptPath: join(
-            outputRoot,
-            "full-run",
-            "video-script-package.json",
-          ),
+          generatedScriptPath: join(outputRoot, "full-run", "demo-script.json"),
           logPath: join(outputRoot, "full-run", "pipeline-log.jsonl"),
           rawOpenCodeLogPath: join(
             outputRoot,
@@ -130,7 +126,7 @@ describe("runFullPipelineJob", () => {
         join(outputRoot, "full-run", "pipeline-log.jsonl"),
       );
       await expect(
-        stat(join(outputRoot, "full-run", "video-script-package.json")),
+        stat(join(outputRoot, "full-run", "demo-script.json")),
       ).resolves.toMatchObject({ isFile: expect.any(Function) });
     } finally {
       await rm(outputRoot, { force: true, recursive: true });
@@ -217,7 +213,7 @@ describe("runFullPipelineJob", () => {
       ]);
       expect(result.scriptPath).toBeUndefined();
       await expect(
-        stat(join(outputRoot, "full-run", "video-script-package.json")),
+        stat(join(outputRoot, "full-run", "demo-script.json")),
       ).rejects.toThrow();
       await expect(readJsonFile(result.resultPath)).resolves.toMatchObject({
         artifacts: {
@@ -501,7 +497,7 @@ describe("runFullPipelineJob", () => {
                 {
                   durationSeconds: 5,
                   sceneId: "scene_article_feed",
-                  sectionId: "section_test",
+                  sectionId: "demo-script",
                   videoPath: join(outputRoot, "scene.webm"),
                 },
               ],
@@ -538,7 +534,7 @@ describe("runFullPipelineJob", () => {
           "repo-preparation started.",
           "script-generation succeeded.",
           "capture-path-validation succeeded.",
-          "Script package generated: 1 section(s), 1 scene(s), 5s estimated.",
+          "Demo Script generated: 1 scene(s).",
           "Footage Capture started.",
           "Footage Capture succeeded: 1 scene video(s).",
           "Compositing started.",
@@ -554,9 +550,8 @@ describe("runFullPipelineJob", () => {
       expect(logEntries).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            event: "script-package-written",
-            message:
-              "Script package generated: 1 section(s), 1 scene(s), 5s estimated.",
+            event: "demo-script-written",
+            message: "Demo Script generated: 1 scene(s).",
             scriptPath: result.scriptPath,
           }),
           expect.objectContaining({
@@ -596,31 +591,27 @@ function stage1Dependencies(
           narrative: "Show the article feed.",
           risks: [],
         },
-        estimatedDurationSeconds: 5,
+        demoPlaywrightScript:
+          "await scene('scene_article_feed', async () => { await page.goto(baseUrl); });",
         exploration: {
           assumptions: [],
           productSurfaces: ["article feed"],
           summary: "Prepared app.",
         },
         format: "16:9",
-        scriptId: "script_test",
-        sections: [
+        presentation: {
+          music: { enabled: false as const },
+          textOverlays: [],
+          transitions: [],
+        },
+        scenes: [
           {
-            id: "section_test",
-            scenes: [
-              {
-                description: "Show article feed.",
-                durationSeconds: 5,
-                events: ["Open app"],
-                id: "scene_article_feed",
-                playwrightSceneId: "scene_article_feed",
-                playwrightScript: "await page.goto(baseUrl);",
-                type: "playwright-recording",
-              },
-            ],
-            title: "Article Feed",
+            expectedVisibleOutcome: "The article feed is visible.",
+            humanReadableDescription: "Show article feed.",
+            id: "scene_article_feed",
           },
         ],
+        scriptId: "script_test",
         title: "Demo",
         version: 1,
       };

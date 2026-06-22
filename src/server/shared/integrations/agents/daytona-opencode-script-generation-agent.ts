@@ -10,14 +10,16 @@ import type {
   CapturePathRepairResult,
   CapturePathRepairer,
 } from "../../../pipeline/05-capture-path-validation/capture-path-repairer.interface";
-import { parseVideoScriptPackage } from "../../../pipeline/06-footage-capture/video-script-package.schema";
-import type { CaptureReadyVideoScriptPackage } from "../../../pipeline/06-footage-capture/video-script-package.schema";
+import {
+  type DemoScript,
+  parseDemoScript,
+} from "../../../pipeline/06-footage-capture/demo-script.schema";
 import { writeDaytonaOpenCodeActivityLog } from "./daytona-opencode-activity-log";
 
 const makeADemoArtifactDirectory = "/workspace/.makeademo";
 const makeADemoOpenCodeConfigDirectory = `${makeADemoArtifactDirectory}/opencode`;
 const preparationManifestPath = `${makeADemoArtifactDirectory}/preparation-manifest.json`;
-const scriptPackagePath = `${makeADemoArtifactDirectory}/video-script-package.json`;
+const demoScriptPath = `${makeADemoArtifactDirectory}/demo-script.json`;
 
 export type DaytonaOpenCodeScriptGenerationAgentOptions = {
   modelID: string;
@@ -139,22 +141,17 @@ export class DaytonaOpenCodeScriptGenerationAgent
       }
 
       try {
-        parseVideoScriptPackage(artifact.value);
-        assertCaptureReadyScriptQuality(
-          artifact.value as CaptureReadyVideoScriptPackage,
-        );
+        const demoScript = parseDemoScript(artifact.value);
+        assertCaptureReadyScriptQuality(demoScript);
         await writeScriptGenerationSandboxLog(input, {
           attempt,
           event: "script-generation.script-package.succeeded",
-          scriptId: (artifact.value as CaptureReadyVideoScriptPackage).scriptId,
+          scriptId: demoScript.scriptId,
         });
         this.writeStatus(
-          `Script Generation OpenCode attempt ${attempt} produced a valid script package.`,
+          `Script Generation OpenCode attempt ${attempt} produced a valid Demo Script.`,
         );
-        return attachPipelineMetadata(
-          artifact.value as CaptureReadyVideoScriptPackage,
-          input,
-        );
+        return attachPipelineMetadata(demoScript, input);
       } catch (error) {
         lastFailure = readErrorMessage(error);
         await writeScriptGenerationSandboxLog(input, {
@@ -261,10 +258,8 @@ export class DaytonaOpenCodeScriptGenerationAgent
         : input.preparationManifest;
 
     try {
-      parseVideoScriptPackage(scriptArtifact.value);
-      assertCaptureReadyScriptQuality(
-        scriptArtifact.value as CaptureReadyVideoScriptPackage,
-      );
+      const demoScript = parseDemoScript(scriptArtifact.value);
+      assertCaptureReadyScriptQuality(demoScript);
     } catch (error) {
       const reason = readErrorMessage(error);
       await writeRepairSandboxLog(input, {
@@ -277,18 +272,17 @@ export class DaytonaOpenCodeScriptGenerationAgent
 
     await writeRepairSandboxLog(input, {
       attempt: input.attempt,
-      event: "capture-path-repair.script-package.succeeded",
-      scriptId: (scriptArtifact.value as CaptureReadyVideoScriptPackage)
-        .scriptId,
+      event: "capture-path-repair.demo-script.succeeded",
+      scriptId: parseDemoScript(scriptArtifact.value).scriptId,
     });
     this.writeStatus(
-      `Capture Path repair attempt ${input.attempt} produced a script package for revalidation.`,
+      `Capture Path repair attempt ${input.attempt} produced a Demo Script for revalidation.`,
     );
 
     return {
       preparationManifest,
       videoScriptPackage: attachPipelineMetadata(
-        scriptArtifact.value as CaptureReadyVideoScriptPackage,
+        parseDemoScript(scriptArtifact.value),
         {
           demoBrief: {
             keyProductFeatures: input.videoScriptPackage.demoPlan.featureOrder,
@@ -342,7 +336,7 @@ async function removePreviousScriptPackage(
   input: AgenticScriptGenerationInput,
 ): Promise<void> {
   await input.preparationWorkspace.workspace.execute(
-    `rm -f ${shellQuote(scriptPackagePath)}`,
+    `rm -f ${shellQuote(demoScriptPath)}`,
   );
 }
 
@@ -352,11 +346,11 @@ async function readScriptPackageArtifact(
   { status: "succeeded"; value: unknown } | { reason: string; status: "failed" }
 > {
   const result = await input.preparationWorkspace.workspace.execute(
-    `if test -f ${shellQuote(scriptPackagePath)}; then node -e ${shellQuote(`process.stdout.write(require("node:fs").readFileSync(${JSON.stringify(scriptPackagePath)}, "utf8"))`)}; else exit 1; fi`,
+    `if test -f ${shellQuote(demoScriptPath)}; then node -e ${shellQuote(`process.stdout.write(require("node:fs").readFileSync(${JSON.stringify(demoScriptPath)}, "utf8"))`)}; else exit 1; fi`,
   );
   if (result.exitCode !== 0) {
     return {
-      reason: `OpenCode did not write ${scriptPackagePath}.`,
+      reason: `OpenCode did not write ${demoScriptPath}.`,
       status: "failed",
     };
   }
@@ -365,7 +359,7 @@ async function readScriptPackageArtifact(
     return { status: "succeeded", value: JSON.parse(result.stdout) };
   } catch (error) {
     return {
-      reason: `Script package artifact is not valid JSON: ${readErrorMessage(error)}`,
+      reason: `Demo Script artifact is not valid JSON: ${readErrorMessage(error)}`,
       status: "failed",
     };
   }
@@ -401,7 +395,7 @@ async function readPreparationManifestArtifact(input: {
 }
 
 function attachPipelineMetadata(
-  scriptPackage: CaptureReadyVideoScriptPackage,
+  scriptPackage: DemoScript,
   input: AgenticScriptGenerationInput,
 ): VideoScriptPackage {
   const exploration = {
@@ -478,23 +472,26 @@ function createScriptGenerationPrompt(
     "",
     "Repo Preparation has produced a deterministic prepared workspace in this same OpenCode session.",
     "Do not modify application source, package files, lockfiles, or runtime setup during Script Generation.",
-    `Write exactly one artifact: ${scriptPackagePath}.`,
+    `Write exactly one artifact: ${demoScriptPath}.`,
     "",
     "## Goal",
-    "Explore the prepared repo enough to create a Video Script Package with real browser interactions for the requested features.",
+    "Explore the prepared repo enough to create a Demo Script with one continuous Playwright flow for the requested features.",
     "Use your existing session context from preparation, but inspect relevant routes, components, fixtures, and docs when needed.",
     "",
     "## Hard Requirements",
-    "- Output JSON matching the capture-ready Video Script Package schema.",
-    "- Every demonstrated feature must have a playwright-recording scene.",
+    "- Output JSON matching the capture-ready Demo Script schema.",
+    "- Every demonstrated feature must have a declared Scene with an expected visible outcome.",
     "- Playwright scripts must use the provided `baseUrl` variable, not hardcoded preview URLs.",
     "- Demonstrate real user flows with route changes, clicks, fills, presses, selectOption calls, or feature-specific assertions.",
+    "- Put login, seeding, navigation, and setup outside on-camera Scenes unless that setup is the feature being demonstrated.",
+    "- Do not provide Scene durations. Timing comes from Footage Capture.",
+    "- Do not use Playwright `recordVideo`, custom marker writers, or agent-authored timestamps.",
     "- Do not emit placeholder scripts that only load the page, wait, smoke-check body text, or set inert DOM attributes.",
     "- Keep scripts deterministic and short enough for capture.",
     "- Do not call Repo Preparation tools. Do not request dependency installs. Do not run backend validation.",
     "",
     "## Artifact Path",
-    scriptPackagePath,
+    demoScriptPath,
     "",
     createScriptPackageSchemaPrompt(),
     "",
@@ -519,7 +516,7 @@ function createScriptGenerationRepairPrompt(reason: string): string {
     "# MakeADemo Script Generation Repair",
     "",
     `The previous Script Generation output was rejected: ${reason}`,
-    "Repair the script package and overwrite `/workspace/.makeademo/video-script-package.json`.",
+    `Repair the Demo Script and overwrite ${demoScriptPath}.`,
     "Do not modify app source. Include real user interactions and feature-specific assertions.",
     "",
     createScriptPackageSchemaPrompt(),
@@ -532,13 +529,14 @@ function createCapturePathRepairPrompt(
   return [
     "# MakeADemo Capture Path Repair",
     "",
-    "Capture Path Validation failed for the Video Script Package you generated.",
-    "Repair the prepared workspace, the Video Script Package, or both. The backend will rerun full Capture Path Validation after this attempt.",
+    "Capture Path Validation failed for the Demo Script you generated.",
+    "Repair the prepared workspace, the Demo Script, or both. The backend will rerun full Capture Path Validation after this attempt.",
     "",
     "## Hard Requirements",
-    `- Overwrite ${scriptPackagePath} with the repaired Video Script Package JSON before finishing.`,
+    `- Overwrite ${demoScriptPath} with the repaired Demo Script JSON before finishing.`,
     `- If you change the prepared app command, URL, assumptions, risks, or workspace-change summary, update ${preparationManifestPath}.`,
-    "- Keep Browser Actions deterministic and use only the provided `baseUrl` variable in Playwright scripts.",
+    "- Keep Playwright interactions deterministic and use only the provided `baseUrl` variable in Playwright scripts.",
+    "- Do not add Scene durations, raw video recording, custom marker writers, or timestamps.",
     "- Do not run final Footage Capture. You may run fast local checks if useful.",
     "",
     "## Failure Evidence",
@@ -561,7 +559,7 @@ function createCapturePathRepairPrompt(
     JSON.stringify(input.preparationManifest, null, 2),
     "```",
     "",
-    "## Current Video Script Package",
+    "## Current Demo Script",
     "```json",
     truncateForPrompt(JSON.stringify(input.videoScriptPackage, null, 2)),
     "```",
@@ -572,38 +570,38 @@ function createCapturePathRepairPrompt(
 
 function createScriptPackageSchemaPrompt(): string {
   return [
-    "## Required Video Script Package Shape",
+    "## Required Demo Script Shape",
     "The artifact must be one JSON object with every required top-level field present.",
     "Use this exact shape, replacing example strings and scripts with repo-specific content:",
     "```json",
     JSON.stringify(
       {
-        estimatedDurationSeconds: 18,
+        audio: { enabled: true, music: { id: "clean" } },
+        demoPlaywrightScript:
+          "await setup(async ({ page, baseUrl }) => { await page.goto(baseUrl); });\nawait scene('scene_requested_feature', async ({ page }) => {\n  await page.getByRole('button', { name: /example/i }).click();\n  await expect(page.getByText(/result/i)).toBeVisible();\n});",
         format: "16:9",
-        scriptId: "script_unique_demo_id",
-        sections: [
+        presentation: {
+          music: { enabled: true, trackId: "clean" },
+          textOverlays: [
+            {
+              content: "Show the requested feature",
+              font: "Inter",
+              position: "bottom-left",
+              sceneId: "scene_requested_feature",
+              size: "medium",
+            },
+          ],
+          transitions: [],
+        },
+        scenes: [
           {
-            id: "section_main_flow",
-            scenes: [
-              {
-                description:
-                  "Show the requested feature with real UI interactions.",
-                durationSeconds: 6,
-                events: [
-                  "Navigate to the prepared app",
-                  "Interact with the feature",
-                  "Assert the feature result is visible",
-                ],
-                id: "scene_requested_feature",
-                playwrightSceneId: "scene_requested_feature",
-                playwrightScript:
-                  "await page.goto(baseUrl);\nawait page.getByRole('button', { name: /example/i }).click();\nawait expect(page.getByText(/result/i)).toBeVisible();",
-                type: "playwright-recording",
-              },
-            ],
-            title: "Main flow",
+            description:
+              "Show the requested feature with real UI interactions.",
+            expectedVisibleOutcome: "The feature result is visible.",
+            id: "scene_requested_feature",
           },
         ],
+        scriptId: "script_unique_demo_id",
         title: "Concise demo title",
         version: 1,
       },
@@ -611,8 +609,8 @@ function createScriptPackageSchemaPrompt(): string {
       2,
     ),
     "```",
-    "Top-level `scriptId`, `title`, `format`, `version`, `estimatedDurationSeconds`, and non-empty `sections` are mandatory on every attempt.",
-    'Each playwright scene must include `id`, `playwrightSceneId`, `type: "playwright-recording"`, `description`, positive `durationSeconds`, non-empty `events`, and non-empty `playwrightScript`.',
+    "Top-level `scriptId`, `title`, `format`, `version`, `demoPlaywrightScript`, non-empty `scenes`, and `presentation` are mandatory on every attempt.",
+    "Each Scene must include `id`, `description`, and `expectedVisibleOutcome`. Do not include `durationSeconds` on recorded Scenes.",
   ].join("\n");
 }
 

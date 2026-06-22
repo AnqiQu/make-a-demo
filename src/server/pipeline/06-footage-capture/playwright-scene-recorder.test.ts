@@ -21,13 +21,12 @@ describe("DefaultPlaywrightSceneRecorder", () => {
       await expect(
         recorder.recordScene({
           baseUrl: "data:text/html,<main>MakeADemo</main>",
+          demoPlaywrightScript: "await new Promise(() => {});",
           runDirectory,
           scene: {
-            durationSeconds: 1,
-            events: ["Wait forever"],
+            expectedVisibleOutcome: "The scene never completes.",
             humanReadableDescription: "A scene that never completes.",
             id: "scene-hangs",
-            playwrightScript: "await new Promise(() => {});",
           },
           sectionId: "section-1",
         }),

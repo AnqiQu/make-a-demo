@@ -1,7 +1,8 @@
-import type { SceneDescription } from "./video-script-package.schema";
+import type { SceneDescription } from "./demo-script.schema";
 
 export type RecordSceneInput = {
   baseUrl: string;
+  demoPlaywrightScript: string;
   runDirectory: string;
   scene: SceneDescription;
   sectionId: string;

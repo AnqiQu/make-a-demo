@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { DefaultScriptComposer } from "./default-script-composer";
 
 describe("DefaultScriptComposer", () => {
-  it("creates one readable Scene Description per planned feature", async () => {
+  it("creates one continuous Demo Script with declared Scenes and no durations", async () => {
     const composer = new DefaultScriptComposer();
 
     await expect(
@@ -21,42 +21,45 @@ describe("DefaultScriptComposer", () => {
         },
       }),
     ).resolves.toEqual({
-      estimatedDurationSeconds: 18,
+      demoPlaywrightScript: expect.stringContaining("scene-validation"),
       format: "16:9",
-      sections: [
+      presentation: {
+        music: { enabled: true, trackId: "clean" },
+        textOverlays: [
+          {
+            content: "Demonstrate validation.",
+            font: "Inter",
+            position: "bottom-left",
+            sceneId: "scene-validation",
+            size: "medium",
+          },
+          {
+            content: "Demonstrate script package.",
+            font: "Inter",
+            position: "bottom-left",
+            sceneId: "scene-script-package",
+            size: "medium",
+          },
+        ],
+        transitions: [
+          {
+            durationSeconds: 0.25,
+            fromSceneId: "scene-validation",
+            style: "fade",
+            toSceneId: "scene-script-package",
+          },
+        ],
+      },
+      scenes: [
         {
-          id: "section-main-demo",
-          scenes: [
-            {
-              description: "Demonstrate validation.",
-              durationSeconds: 9,
-              events: [
-                "Open the prepared local demo URL",
-                "Navigate to the validation area if it is not already visible",
-                "Show the validation workflow and its result",
-              ],
-              id: "scene-validation",
-              playwrightSceneId: "scene-validation",
-              playwrightScript: expect.stringContaining("validation"),
-              transition: { durationSeconds: 0.25, in: "cut", out: "fade" },
-              type: "playwright-recording",
-            },
-            {
-              description: "Demonstrate script package.",
-              durationSeconds: 9,
-              events: [
-                "Open the prepared local demo URL",
-                "Navigate to the script package area if it is not already visible",
-                "Show the script package workflow and its result",
-              ],
-              id: "scene-script-package",
-              playwrightSceneId: "scene-script-package",
-              playwrightScript: expect.stringContaining("script package"),
-              transition: { durationSeconds: 0.25, in: "cut", out: "fade" },
-              type: "playwright-recording",
-            },
-          ],
-          title: "Main Demo",
+          expectedVisibleOutcome: "The validation result is visible.",
+          humanReadableDescription: "Demonstrate validation.",
+          id: "scene-validation",
+        },
+        {
+          expectedVisibleOutcome: "The script package result is visible.",
+          humanReadableDescription: "Demonstrate script package.",
+          id: "scene-script-package",
         },
       ],
       scriptId: "generated-makeademo-script",

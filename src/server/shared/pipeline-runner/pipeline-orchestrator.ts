@@ -449,10 +449,7 @@ function reportStageFinished(
 }
 
 function countScenes(videoScriptPackage: VideoScriptPackage) {
-  return videoScriptPackage.sections.reduce(
-    (total, section) => total + section.scenes.length,
-    0,
-  );
+  return videoScriptPackage.scenes.length;
 }
 
 async function emitProgress(

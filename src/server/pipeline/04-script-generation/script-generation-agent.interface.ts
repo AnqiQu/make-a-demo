@@ -8,10 +8,10 @@ export type AgenticScriptGenerationInput = ScriptGenerationInput & {
 };
 
 /**
- * Generates a Video Script Package inside a prepared workspace.
+ * Generates a Demo Script inside a prepared workspace.
  * Implementations should resume the provided preparation OpenCode session and
  * write only Script Generation artifacts; Capture Path Validation decides later
- * whether the package is accepted for Footage Capture.
+ * whether the Demo Script is accepted for Footage Capture.
  */
 export interface ScriptGenerationAgent {
   generateScriptPackage(

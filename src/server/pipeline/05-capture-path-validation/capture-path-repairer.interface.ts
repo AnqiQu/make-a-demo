@@ -19,7 +19,7 @@ export type CapturePathRepairResult = {
 };
 
 /**
- * Repairs a prepared workspace, Video Script Package, or both after Capture Path
+ * Repairs a prepared workspace, Demo Script, or both after Capture Path
  * Validation fails. Implementations may use the existing agent session, but the
  * returned artifacts remain untrusted until full Capture Path Validation reruns.
  */

@@ -152,11 +152,6 @@ function readFlagValue(args: string[], index: number, flag: string): string {
   return value;
 }
 
-function countScenes(scriptPackage: {
-  sections: Array<{ scenes: unknown[] }>;
-}) {
-  return scriptPackage.sections.reduce(
-    (total, section) => total + section.scenes.length,
-    0,
-  );
+function countScenes(scriptPackage: { scenes: unknown[] }) {
+  return scriptPackage.scenes.length;
 }

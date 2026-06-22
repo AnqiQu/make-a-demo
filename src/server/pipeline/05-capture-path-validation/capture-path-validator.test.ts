@@ -11,7 +11,7 @@ describe("validateCapturePath", () => {
       {
         preparationManifest: manifest(),
         preparationWorkspace: workspaceHandle(sandboxLogs),
-        videoScriptPackage: scriptPackage(),
+        videoScriptPackage: demoScript(),
       },
       {
         async validateProject() {
@@ -26,7 +26,9 @@ describe("validateCapturePath", () => {
         },
         sceneValidator: {
           async validateScene(input) {
-            calls.push(`scene:${input.scene.id}:${input.baseUrl}`);
+            calls.push(
+              `scene:${input.scene.id}:${input.baseUrl}:${input.demoPlaywrightScript}`,
+            );
             return {
               logs: ["scene dry run passed"],
               runDirectory: ".makeademo-capture-path-validation-runs/run_123",
@@ -48,7 +50,7 @@ describe("validateCapturePath", () => {
     });
     expect(calls).toEqual([
       "project-checks",
-      "scene:scene_validation:https://preview.example.test/",
+      "scene:scene_validation:https://preview.example.test/:await scene('scene_validation', async () => {});",
     ]);
     expect(sandboxLogs).toEqual([
       expect.objectContaining({
@@ -64,7 +66,7 @@ describe("validateCapturePath", () => {
       expect.objectContaining({
         event: "capture-path-validation.scene.started",
         sceneId: "scene_validation",
-        sectionId: "section_test",
+        sectionId: "demo-script",
         stage: "capture-path-validation",
         workspaceId: "workspace_123",
       }),
@@ -74,7 +76,7 @@ describe("validateCapturePath", () => {
         sceneId: "scene_validation",
         scriptPath:
           ".makeademo-capture-path-validation-runs/run_123/scene_validation.ts",
-        sectionId: "section_test",
+        sectionId: "demo-script",
         stage: "capture-path-validation",
         workspaceId: "workspace_123",
       }),
@@ -101,7 +103,7 @@ function manifest() {
   };
 }
 
-function scriptPackage() {
+function demoScript() {
   return {
     assumptions: [],
     demoPlan: {
@@ -109,27 +111,22 @@ function scriptPackage() {
       narrative: "Demo it",
       risks: [],
     },
-    estimatedDurationSeconds: 5,
+    demoPlaywrightScript: "await scene('scene_validation', async () => {});",
     exploration: { assumptions: [], productSurfaces: [], summary: "" },
     format: "16:9",
-    scriptId: "script_test",
-    sections: [
+    presentation: {
+      music: { enabled: false as const },
+      textOverlays: [],
+      transitions: [],
+    },
+    scenes: [
       {
-        id: "section_test",
-        scenes: [
-          {
-            description: "Show validation.",
-            durationSeconds: 5,
-            events: ["Open app"],
-            id: "scene_validation",
-            playwrightSceneId: "scene_validation",
-            playwrightScript: "await page.goto(baseUrl);",
-            type: "playwright-recording" as const,
-          },
-        ],
-        title: "Validation",
+        expectedVisibleOutcome: "Validation is visible.",
+        humanReadableDescription: "Show validation.",
+        id: "scene_validation",
       },
     ],
+    scriptId: "script_test",
     title: "Demo",
     version: 1,
   };

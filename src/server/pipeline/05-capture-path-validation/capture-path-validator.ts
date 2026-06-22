@@ -1,7 +1,7 @@
 import {
   type SceneDescription,
-  parseVideoScriptPackage,
-} from "../06-footage-capture/video-script-package.schema";
+  parseDemoScript,
+} from "../06-footage-capture/demo-script.schema";
 import type {
   CapturePathValidationInput,
   CapturePathValidationResult,
@@ -11,6 +11,7 @@ import type { ProjectValidationResult } from "./project-runtime-preflight/valida
 
 export type CapturePathSceneValidationInput = {
   baseUrl: string;
+  demoPlaywrightScript: string;
   scene: SceneDescription;
   sectionId: string;
 };
@@ -87,79 +88,78 @@ export async function validateCapturePath(
     warningCount: projectValidation.warnings.length,
   });
 
-  const scriptPackage = parseVideoScriptPackage(input.videoScriptPackage);
+  const scriptPackage = parseDemoScript(input.videoScriptPackage);
   const logs = [...projectValidation.logs];
   const browserUrl =
     projectValidation.browserUrl ?? input.preparationManifest.url;
 
-  for (const section of scriptPackage.sections) {
-    for (const scene of section.scenes) {
-      await writeCapturePathSandboxLog(input, {
-        event: "capture-path-validation.scene.started",
-        sceneId: scene.id,
-        sectionId: section.id,
-      });
-      const sceneResult = await dependencies.sceneValidator.validateScene({
-        baseUrl: browserUrl,
-        scene,
-        sectionId: section.id,
-      });
-      logs.push(...sceneResult.logs);
+  for (const scene of scriptPackage.scenes) {
+    await writeCapturePathSandboxLog(input, {
+      event: "capture-path-validation.scene.started",
+      sceneId: scene.id,
+      sectionId: "demo-script",
+    });
+    const sceneResult = await dependencies.sceneValidator.validateScene({
+      baseUrl: browserUrl,
+      demoPlaywrightScript: scriptPackage.demoPlaywrightScript,
+      scene,
+      sectionId: "demo-script",
+    });
+    logs.push(...sceneResult.logs);
 
-      if (sceneResult.status === "failed") {
-        await writeCapturePathSandboxLog(input, {
-          blockedNetworkAttemptCount:
-            sceneResult.blockedNetworkAttempts?.length ?? 0,
-          event: "capture-path-validation.scene.failed",
-          failedAction: sceneResult.failedAction,
-          failureReason: sceneResult.failureReason,
-          runDirectory: sceneResult.runDirectory,
-          sceneId: scene.id,
-          scriptPath: sceneResult.scriptPath,
-          stderrPath: sceneResult.stderrPath,
-          stdoutPath: sceneResult.stdoutPath,
-          screenshotArtifactId: sceneResult.screenshotArtifactId,
-          sectionId: section.id,
-        });
-        return {
-          blockedNetworkAttempts: sceneResult.blockedNetworkAttempts ?? [],
-          browserUrl,
-          failedSceneId: scene.id,
-          failureReason: sceneResult.failureReason,
-          logs,
-          ...(sceneResult.failedAction === undefined
-            ? {}
-            : { failedAction: sceneResult.failedAction }),
-          ...(sceneResult.screenshotArtifactId === undefined
-            ? {}
-            : { screenshotArtifactId: sceneResult.screenshotArtifactId }),
-          ...(sceneResult.runDirectory === undefined
-            ? {}
-            : { runDirectory: sceneResult.runDirectory }),
-          ...(sceneResult.scriptPath === undefined
-            ? {}
-            : { scriptPath: sceneResult.scriptPath }),
-          ...(sceneResult.stderrPath === undefined
-            ? {}
-            : { stderrPath: sceneResult.stderrPath }),
-          ...(sceneResult.stdoutPath === undefined
-            ? {}
-            : { stdoutPath: sceneResult.stdoutPath }),
-          status: "failed",
-          warnings: projectValidation.warnings,
-        };
-      }
-
+    if (sceneResult.status === "failed") {
       await writeCapturePathSandboxLog(input, {
-        event: "capture-path-validation.scene.succeeded",
+        blockedNetworkAttemptCount:
+          sceneResult.blockedNetworkAttempts?.length ?? 0,
+        event: "capture-path-validation.scene.failed",
+        failedAction: sceneResult.failedAction,
+        failureReason: sceneResult.failureReason,
         runDirectory: sceneResult.runDirectory,
         sceneId: scene.id,
         scriptPath: sceneResult.scriptPath,
         stderrPath: sceneResult.stderrPath,
         stdoutPath: sceneResult.stdoutPath,
-        sectionId: section.id,
+        screenshotArtifactId: sceneResult.screenshotArtifactId,
+        sectionId: "demo-script",
       });
+      return {
+        blockedNetworkAttempts: sceneResult.blockedNetworkAttempts ?? [],
+        browserUrl,
+        failedSceneId: scene.id,
+        failureReason: sceneResult.failureReason,
+        logs,
+        ...(sceneResult.failedAction === undefined
+          ? {}
+          : { failedAction: sceneResult.failedAction }),
+        ...(sceneResult.screenshotArtifactId === undefined
+          ? {}
+          : { screenshotArtifactId: sceneResult.screenshotArtifactId }),
+        ...(sceneResult.runDirectory === undefined
+          ? {}
+          : { runDirectory: sceneResult.runDirectory }),
+        ...(sceneResult.scriptPath === undefined
+          ? {}
+          : { scriptPath: sceneResult.scriptPath }),
+        ...(sceneResult.stderrPath === undefined
+          ? {}
+          : { stderrPath: sceneResult.stderrPath }),
+        ...(sceneResult.stdoutPath === undefined
+          ? {}
+          : { stdoutPath: sceneResult.stdoutPath }),
+        status: "failed",
+        warnings: projectValidation.warnings,
+      };
     }
+
+    await writeCapturePathSandboxLog(input, {
+      event: "capture-path-validation.scene.succeeded",
+      runDirectory: sceneResult.runDirectory,
+      sceneId: scene.id,
+      scriptPath: sceneResult.scriptPath,
+      stderrPath: sceneResult.stderrPath,
+      stdoutPath: sceneResult.stdoutPath,
+      sectionId: "demo-script",
+    });
   }
 
   return {

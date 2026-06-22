@@ -10,12 +10,11 @@ describe("DefaultCapturePathSceneValidator", () => {
 
     const result = await validator.validateScene({
       baseUrl: "https://example.test/",
+      demoPlaywrightScript: 'throw new Error("selector exploded");',
       scene: {
-        durationSeconds: 1,
-        events: ["Throw an error"],
+        expectedVisibleOutcome: "The failure is visible.",
         humanReadableDescription: "Fail deterministically.",
         id: "scene_failure_evidence",
-        playwrightScript: 'throw new Error("selector exploded");',
       },
       sectionId: "section_failure",
     });

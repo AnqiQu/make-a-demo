@@ -5,7 +5,7 @@ import type { ScriptGenerationAgent } from "../../pipeline/04-script-generation/
 import type { CapturePathRepairer } from "../../pipeline/05-capture-path-validation/capture-path-repairer.interface";
 import type { BrowserValidator } from "../../pipeline/05-capture-path-validation/project-runtime-preflight/browser-validator.interface";
 import type { SandboxRunner } from "../../pipeline/05-capture-path-validation/project-runtime-preflight/sandbox-runner.interface";
-import { parseVideoScriptPackage } from "../../pipeline/06-footage-capture/video-script-package.schema";
+import { parseDemoScript } from "../../pipeline/06-footage-capture/demo-script.schema";
 import { runPipelineJob } from "./pipeline-orchestrator";
 import { createStage1PipelineDependencies } from "./stage1-pipeline";
 
@@ -79,19 +79,13 @@ describe("createStage1PipelineDependencies", () => {
 
     expect(result.status).toBe("succeeded");
     if (result.status === "succeeded") {
-      expect(parseVideoScriptPackage(result.videoScriptPackage).scriptId).toBe(
+      expect(parseDemoScript(result.videoScriptPackage).scriptId).toBe(
         "generated-makeademo-script",
       );
-      expect(result.videoScriptPackage.sections[0]?.scenes[0]).toMatchObject({
-        description: "Demonstrate validation.",
-        events: [
-          "Open the prepared local demo URL",
-          "Navigate to the validation area if it is not already visible",
-          "Show the validation workflow and its result",
-        ],
+      expect(result.videoScriptPackage.scenes[0]).toMatchObject({
+        expectedVisibleOutcome: "The validation result is visible.",
+        humanReadableDescription: "Demonstrate validation.",
         id: "scene-validation",
-        playwrightSceneId: "scene-validation",
-        type: "playwright-recording",
       });
     }
   });
@@ -171,27 +165,23 @@ function scriptPackage(scriptId: string) {
       narrative: "Demo it",
       risks: [],
     },
-    estimatedDurationSeconds: 5,
+    demoPlaywrightScript:
+      "await scene('scene_validation', async () => { await page.goto(baseUrl); });",
     exploration: { assumptions: [], productSurfaces: [], summary: "" },
     format: "16:9",
-    scriptId,
-    sections: [
+    presentation: {
+      music: { enabled: false as const },
+      textOverlays: [],
+      transitions: [],
+    },
+    scenes: [
       {
-        id: "section_validation",
-        scenes: [
-          {
-            description: "Show validation.",
-            durationSeconds: 5,
-            events: ["Open app"],
-            id: "scene_validation",
-            playwrightSceneId: "scene_validation",
-            playwrightScript: "await page.goto(baseUrl);",
-            type: "playwright-recording" as const,
-          },
-        ],
-        title: "Validation",
+        expectedVisibleOutcome: "Validation is visible.",
+        humanReadableDescription: "Show validation.",
+        id: "scene_validation",
       },
     ],
+    scriptId,
     title: "Demo",
     version: 1,
   };
