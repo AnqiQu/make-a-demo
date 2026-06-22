@@ -27,6 +27,7 @@ import type {
 
 export type FullPipelineResult = {
   captureManifest: CaptureManifest;
+  draftCompositeReview: DraftCompositeReviewSummary;
   finalVideo: CompositedVideoManifest;
   logPath: string;
   resultPath: string;
@@ -37,6 +38,11 @@ export type FullPipelineResult = {
   >;
   status: "succeeded";
 };
+
+type SucceededStage1 = Extract<
+  Awaited<ReturnType<typeof runPipelineJob>>,
+  { status: "succeeded" }
+>;
 
 type FullPipelineArtifactSummary = {
   artifacts: {
@@ -51,6 +57,7 @@ type FullPipelineArtifactSummary = {
     scriptGenerationRawOpenCodeLogPath?: string;
     viewUrl: string;
   };
+  draftCompositeReview: DraftCompositeReviewSummary;
   runDirectory: string;
   runId: string;
   script: {
@@ -72,6 +79,42 @@ type FullPipelineLogInput = {
   message: string;
 } & Record<string, unknown>;
 
+type DraftCompositeReviewInput = {
+  attempt: number;
+  captureManifest: CaptureManifest;
+  derivedEvidence: {
+    draftDurationSeconds: number;
+    markerSummary: Array<{
+      durationSeconds: number;
+      sceneId: string;
+    }>;
+    qualityFindings: string[];
+  };
+  draftComposite: CompositedVideoManifest;
+  scriptPackage: Extract<
+    Awaited<ReturnType<typeof runPipelineJob>>,
+    { status: "succeeded" }
+  >["videoScriptPackage"];
+};
+
+type DraftCompositeReviewDecision =
+  | {
+      decision: "accept";
+      reason?: string;
+    }
+  | {
+      decision: "repair";
+      reason: string;
+      repairScope: "demo-script" | "workspace";
+    };
+
+type DraftCompositeReviewSummary = {
+  attempts: number;
+  findings: string[];
+  status: "accepted" | "exhausted";
+  warnings: string[];
+};
+
 export type FullPipelineRunnerOptions = PipelineOrchestratorOptions & {
   captureScenes?: (
     input: CaptureScenesFromScriptInput,
@@ -84,6 +127,9 @@ export type FullPipelineRunnerOptions = PipelineOrchestratorOptions & {
   logSinks?: PipelineLogSink[];
   outputRoot?: string;
   rawOpenCodeLogPath?: string;
+  reviewDraftComposite?: (
+    input: DraftCompositeReviewInput,
+  ) => Promise<DraftCompositeReviewDecision>;
   runId?: string;
   scriptGenerationRawOpenCodeLogPath?: string;
 };
@@ -114,7 +160,7 @@ export async function runFullPipelineJob(
   });
 
   let scriptGenerationResumePath: string | undefined;
-  const stage1 = await runPipelineJob(input, dependencies, {
+  const initialStage1 = await runPipelineJob(input, dependencies, {
     ...options,
     onScriptGenerationReady: async (event) => {
       await options.onScriptGenerationReady?.(event);
@@ -141,12 +187,12 @@ export async function runFullPipelineJob(
       });
     },
   });
-  if (stage1.status !== "succeeded") {
+  if (initialStage1.status !== "succeeded") {
     const resultPath = join(runDirectory, "full-pipeline-result.json");
     await log({
       event: "pipeline-failed",
-      message: `Stage 1 failed with status ${stage1.status}.`,
-      status: stage1.status,
+      message: `Stage 1 failed with status ${initialStage1.status}.`,
+      status: initialStage1.status,
     });
     await writeFile(
       resultPath,
@@ -158,7 +204,7 @@ export async function runFullPipelineJob(
           runId,
           scriptGenerationRawOpenCodeLogPath:
             options.scriptGenerationRawOpenCodeLogPath,
-          stage1,
+          stage1: initialStage1,
         }),
         null,
         2,
@@ -169,8 +215,10 @@ export async function runFullPipelineJob(
       message: "Full pipeline failure result written.",
       resultPath,
     });
-    throw new Error(`Stage 1 failed with status ${stage1.status}`);
+    throw new Error(`Stage 1 failed with status ${initialStage1.status}`);
   }
+
+  let stage1: SucceededStage1 = initialStage1;
 
   const browserUrl = stage1.capturePathValidation.browserUrl;
   if (browserUrl === undefined || browserUrl.trim().length === 0) {
@@ -181,8 +229,8 @@ export async function runFullPipelineJob(
     throw new Error("Capture Path Validation did not return a browser URL.");
   }
 
-  const scriptSummary = summarizeScriptPackage(stage1.videoScriptPackage);
-  const scriptPersistence = await persistGeneratedScript({
+  let scriptSummary = summarizeScriptPackage(stage1.videoScriptPackage);
+  let scriptPersistence = await persistGeneratedScript({
     demoRequestId: options.context?.demoRequestId,
     log,
     runDirectory,
@@ -191,62 +239,20 @@ export async function runFullPipelineJob(
     scriptSummary,
   });
 
-  await log({
-    baseUrl: browserUrl,
-    event: "capture-started",
-    message: "Footage Capture started.",
-    ...(scriptPersistence.scriptPath === undefined
-      ? { generatedScriptDemoRequestId: scriptPersistence.demoRequestId }
-      : { scriptPath: scriptPersistence.scriptPath }),
+  const reviewResult = await captureCompositeAndReview({
+    browserUrl,
+    dependencies,
+    input,
+    log,
+    options,
+    runDirectory,
+    scriptPersistence,
+    stage1,
   });
-  const captureManifest = await (
-    options.captureScenes ?? captureScenesFromScript
-  )({
-    baseUrl: browserUrl,
-    keepTemp: true,
-    runId: "capture",
-    scriptPackage: stage1.videoScriptPackage,
-    ...(scriptPersistence.scriptPath === undefined
-      ? {}
-      : { scriptPath: scriptPersistence.scriptPath }),
-    tempRoot: join(runDirectory, "capture"),
-  });
-  await log({
-    event: "capture-succeeded",
-    manifestPath: captureManifest.manifestPath,
-    message: `Footage Capture succeeded: ${captureManifest.scenes.length} scene video(s).`,
-    runDirectory: captureManifest.runDirectory,
-    sceneCount: captureManifest.scenes.length,
-  });
-
-  await log({
-    captureManifestPath: captureManifest.manifestPath,
-    event: "compositing-started",
-    message: "Compositing started.",
-    ...(scriptPersistence.scriptPath === undefined
-      ? { generatedScriptDemoRequestId: scriptPersistence.demoRequestId }
-      : { scriptPath: scriptPersistence.scriptPath }),
-  });
-  const finalVideo = await (options.compositeVideo ?? compositeVideoFromScript)(
-    {
-      captureManifestPath: captureManifest.manifestPath,
-      outputRoot: join(runDirectory, "composite"),
-      runId: "composite",
-      scriptDirectory: runDirectory,
-      scriptPackage: stage1.videoScriptPackage,
-      ...(scriptPersistence.scriptPath === undefined
-        ? {}
-        : { scriptPath: scriptPersistence.scriptPath }),
-    },
-  );
-  await log({
-    event: "compositing-succeeded",
-    manifestPath: finalVideo.manifestPath,
-    message: "Compositing succeeded.",
-    outputVideoPath: finalVideo.outputVideoPath,
-    renderPlanPath: finalVideo.renderPlanPath,
-    viewUrl: finalVideo.viewUrl,
-  });
+  stage1 = reviewResult.stage1;
+  scriptSummary = summarizeScriptPackage(stage1.videoScriptPackage);
+  scriptPersistence = reviewResult.scriptPersistence;
+  const { captureManifest, finalVideo, reviewSummary } = reviewResult;
   await log({
     event: "pipeline-succeeded",
     message: "Full pipeline succeeded.",
@@ -280,6 +286,7 @@ export async function runFullPipelineJob(
           }),
       viewUrl: finalVideo.viewUrl,
     },
+    draftCompositeReview: reviewSummary,
     runDirectory,
     runId,
     script: {
@@ -298,6 +305,7 @@ export async function runFullPipelineJob(
 
   return {
     captureManifest,
+    draftCompositeReview: reviewSummary,
     finalVideo,
     logPath,
     resultPath,
@@ -306,6 +314,209 @@ export async function runFullPipelineJob(
       : { scriptPath: scriptPersistence.scriptPath }),
     stage1,
     status: "succeeded",
+  };
+}
+
+async function captureCompositeAndReview(input: {
+  browserUrl: string;
+  dependencies: PipelineOrchestratorDependencies;
+  input: PipelineJobInput;
+  log: (entry: FullPipelineLogInput) => Promise<void>;
+  options: FullPipelineRunnerOptions;
+  runDirectory: string;
+  scriptPersistence: { demoRequestId?: string; scriptPath?: string };
+  stage1: SucceededStage1;
+}): Promise<{
+  captureManifest: CaptureManifest;
+  finalVideo: CompositedVideoManifest;
+  reviewSummary: DraftCompositeReviewSummary;
+  scriptPersistence: { demoRequestId?: string; scriptPath?: string };
+  stage1: SucceededStage1;
+}> {
+  const reviewRepairLimit = readDraftCompositeReviewAttemptLimit();
+  const reviewer = input.options.reviewDraftComposite ?? defaultDraftReview;
+  let stage1 = input.stage1;
+  let scriptPersistence = input.scriptPersistence;
+  let latestCaptureManifest: CaptureManifest | undefined;
+  let latestFinalVideo: CompositedVideoManifest | undefined;
+  let latestFindings: string[] = [];
+  let latestRepairReason: string | undefined;
+
+  for (let attempt = 1; attempt <= reviewRepairLimit + 1; attempt += 1) {
+    const runSuffix = String(attempt);
+    await input.log({
+      attempt,
+      baseUrl: input.browserUrl,
+      event: "capture-started",
+      message: "Footage Capture started.",
+      ...(scriptPersistence.scriptPath === undefined
+        ? { generatedScriptDemoRequestId: scriptPersistence.demoRequestId }
+        : { scriptPath: scriptPersistence.scriptPath }),
+    });
+    const captureManifest = await (
+      input.options.captureScenes ?? captureScenesFromScript
+    )({
+      baseUrl: input.browserUrl,
+      keepTemp: true,
+      runId: `capture-${runSuffix}`,
+      scriptPackage: stage1.videoScriptPackage,
+      ...(scriptPersistence.scriptPath === undefined
+        ? {}
+        : { scriptPath: scriptPersistence.scriptPath }),
+      tempRoot: join(input.runDirectory, "capture"),
+    });
+    latestCaptureManifest = captureManifest;
+    await input.log({
+      attempt,
+      event: "capture-succeeded",
+      manifestPath: captureManifest.manifestPath,
+      message: `Footage Capture succeeded: ${captureManifest.scenes.length} scene video(s).`,
+      runDirectory: captureManifest.runDirectory,
+      sceneCount: captureManifest.scenes.length,
+    });
+
+    await input.log({
+      attempt,
+      captureManifestPath: captureManifest.manifestPath,
+      event: "compositing-started",
+      message: "Compositing started.",
+      ...(scriptPersistence.scriptPath === undefined
+        ? { generatedScriptDemoRequestId: scriptPersistence.demoRequestId }
+        : { scriptPath: scriptPersistence.scriptPath }),
+    });
+    const finalVideo = await (
+      input.options.compositeVideo ?? compositeVideoFromScript
+    )({
+      captureManifestPath: captureManifest.manifestPath,
+      outputRoot: join(input.runDirectory, "composite"),
+      runId: `composite-${runSuffix}`,
+      scriptDirectory: input.runDirectory,
+      scriptPackage: stage1.videoScriptPackage,
+      ...(scriptPersistence.scriptPath === undefined
+        ? {}
+        : { scriptPath: scriptPersistence.scriptPath }),
+    });
+    latestFinalVideo = finalVideo;
+    await input.log({
+      attempt,
+      event: "compositing-succeeded",
+      manifestPath: finalVideo.manifestPath,
+      message: "Compositing succeeded.",
+      outputVideoPath: finalVideo.outputVideoPath,
+      renderPlanPath: finalVideo.renderPlanPath,
+      viewUrl: finalVideo.viewUrl,
+    });
+
+    latestFindings = collectDeterministicQualityFindings({
+      captureManifest,
+      finalVideo,
+    });
+    const agentDecision = await reviewer({
+      attempt,
+      captureManifest,
+      derivedEvidence: {
+        draftDurationSeconds: finalVideo.durationInFrames / finalVideo.fps,
+        markerSummary: captureManifest.scenes.map((scene) => ({
+          durationSeconds: scene.durationSeconds,
+          sceneId: scene.sceneId,
+        })),
+        qualityFindings: latestFindings,
+      },
+      draftComposite: finalVideo,
+      scriptPackage: stage1.videoScriptPackage,
+    });
+    const decision: DraftCompositeReviewDecision =
+      latestFindings.length > 0
+        ? {
+            decision: "repair",
+            reason: latestFindings.join("; "),
+            repairScope: "demo-script",
+          }
+        : agentDecision;
+
+    await input.log({
+      attempt,
+      decision: decision.decision,
+      event: "draft-composite-review-completed",
+      findingCount: latestFindings.length,
+      message: `Draft Composite review ${decision.decision}.`,
+      ...(decision.decision === "repair"
+        ? { reason: decision.reason, repairScope: decision.repairScope }
+        : { reason: decision.reason }),
+    });
+
+    if (decision.decision === "accept") {
+      return {
+        captureManifest,
+        finalVideo,
+        reviewSummary: {
+          attempts: attempt,
+          findings: latestFindings,
+          status: "accepted",
+          warnings: [],
+        },
+        scriptPersistence,
+        stage1,
+      };
+    }
+
+    latestRepairReason = decision.reason;
+    if (attempt > reviewRepairLimit) {
+      break;
+    }
+
+    if (decision.repairScope === "workspace") {
+      const repairedStage1 = await runPipelineJob(
+        input.input,
+        input.dependencies,
+        input.options,
+      );
+      if (repairedStage1.status !== "succeeded") {
+        throw new Error(
+          `Workspace repair rerun failed with status ${repairedStage1.status}`,
+        );
+      }
+      stage1 = repairedStage1;
+      scriptPersistence = await persistGeneratedScript({
+        demoRequestId: input.options.context?.demoRequestId,
+        log: input.log,
+        runDirectory: input.runDirectory,
+        scriptPackage: stage1.videoScriptPackage,
+        scriptStore: input.options.demoRequestScriptStore,
+        scriptSummary: summarizeScriptPackage(stage1.videoScriptPackage),
+      });
+    }
+  }
+
+  if (latestCaptureManifest === undefined || latestFinalVideo === undefined) {
+    throw new Error("Draft Composite review did not produce a draft.");
+  }
+
+  const warnings = [
+    "Draft Composite review retry limit exceeded; using latest draft.",
+    ...(latestRepairReason === undefined
+      ? []
+      : [`Draft Composite review requested repair: ${latestRepairReason}`]),
+    ...latestFindings.map((finding) => `Remaining quality gate: ${finding}`),
+  ];
+  await input.log({
+    event: "draft-composite-review-exhausted",
+    message: warnings[0] as string,
+    warningCount: warnings.length,
+    warnings,
+  });
+
+  return {
+    captureManifest: latestCaptureManifest,
+    finalVideo: latestFinalVideo,
+    reviewSummary: {
+      attempts: reviewRepairLimit + 1,
+      findings: latestFindings,
+      status: "exhausted",
+      warnings,
+    },
+    scriptPersistence,
+    stage1,
   };
 }
 
@@ -364,6 +575,71 @@ function scriptGeneratedMessage(
   scriptSummary: ReturnType<typeof summarizeScriptPackage>,
 ) {
   return `Demo Script generated: ${scriptSummary.sceneCount} scene(s).`;
+}
+
+async function defaultDraftReview(): Promise<DraftCompositeReviewDecision> {
+  return { decision: "accept" };
+}
+
+function collectDeterministicQualityFindings(input: {
+  captureManifest: CaptureManifest;
+  finalVideo: CompositedVideoManifest;
+}) {
+  const findings: string[] = [];
+  const maxDraftDurationSeconds = readPositiveNumberEnv(
+    "MAKEADEMO_MAX_DRAFT_COMPOSITE_SECONDS",
+    120,
+  );
+  const maxSceneDurationSeconds = readPositiveNumberEnv(
+    "MAKEADEMO_MAX_SCENE_CLIP_SECONDS",
+    30,
+  );
+  const draftDurationSeconds =
+    input.finalVideo.durationInFrames / input.finalVideo.fps;
+
+  if (draftDurationSeconds > maxDraftDurationSeconds) {
+    findings.push(
+      `Draft Composite duration ${draftDurationSeconds.toFixed(2)}s exceeds ${maxDraftDurationSeconds}s`,
+    );
+  }
+
+  for (const scene of input.captureManifest.scenes) {
+    if (scene.durationSeconds > maxSceneDurationSeconds) {
+      findings.push(
+        `Scene ${scene.sceneId} duration ${scene.durationSeconds.toFixed(2)}s exceeds ${maxSceneDurationSeconds}s`,
+      );
+    }
+  }
+
+  return findings;
+}
+
+function readDraftCompositeReviewAttemptLimit() {
+  const rawValue = process.env.MAKEADEMO_DRAFT_COMPOSITE_REVIEW_ATTEMPTS;
+  if (rawValue === undefined || rawValue.trim().length === 0) {
+    return 2;
+  }
+
+  const parsedValue = Number(rawValue);
+  if (!Number.isInteger(parsedValue) || parsedValue < 0) {
+    return 2;
+  }
+
+  return parsedValue;
+}
+
+function readPositiveNumberEnv(name: string, defaultValue: number) {
+  const rawValue = process.env[name];
+  if (rawValue === undefined || rawValue.trim().length === 0) {
+    return defaultValue;
+  }
+
+  const parsedValue = Number(rawValue);
+  if (!Number.isFinite(parsedValue) || parsedValue <= 0) {
+    return defaultValue;
+  }
+
+  return parsedValue;
 }
 
 async function writeScriptGenerationResumeFile(input: {
