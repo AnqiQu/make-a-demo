@@ -553,6 +553,9 @@ function createCapturePathRepairPrompt(
       ),
     ),
     "```",
+    input.failure.diagnosticsLogPath === undefined
+      ? "No Capture Path diagnostics log path was returned. Use the structured failure evidence above."
+      : `Before editing, read the Capture Path diagnostics log at ${input.failure.diagnosticsLogPath}. It contains verbose validation stdout/stderr excerpts and is written inside the prepared workspace for agent inspection.`,
     "",
     "## Current Preparation Manifest",
     "```json",

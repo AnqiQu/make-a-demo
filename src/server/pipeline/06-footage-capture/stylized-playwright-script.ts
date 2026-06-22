@@ -102,7 +102,16 @@ const context = await browser.newContext({
 const page = await context.newPage();
 
 try {
+  console.log("[makeademo:validation] script started", JSON.stringify({ baseUrl }));
 ${indentScriptBody(script)}
+  console.log("[makeademo:validation] script succeeded", JSON.stringify({ title: await page.title(), url: page.url() }));
+} catch (error) {
+  console.error("[makeademo:validation] script failed", JSON.stringify({
+    message: error instanceof Error ? error.message : String(error),
+    title: await page.title().catch(() => ""),
+    url: page.url(),
+  }));
+  throw error;
 } finally {
   await context.close();
   await browser.close();

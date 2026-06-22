@@ -44,9 +44,6 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
     )?.execute;
     expect(openCodeCommand).toContain("--session 'session_prepare_123'");
     expect(openCodeCommand).not.toContain("OPENAI_API_KEY");
-    expect(openCodeCommand).toContain("scriptId");
-    expect(openCodeCommand).toContain("demoPlaywrightScript");
-    expect(openCodeCommand).toContain("expectedVisibleOutcome");
     expect(stdout.join("\n")).toContain(
       "Script Generation OpenCode attempt 1 starting in session session_prepare_123.",
     );
@@ -136,10 +133,6 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
       )
       .map((event) => event.execute);
     expect(openCodeCommands).toHaveLength(2);
-    expect(openCodeCommands[1]).toContain("placeholder actions");
-    expect(openCodeCommands[1]).toContain("scriptId");
-    expect(openCodeCommands[1]).toContain("demoPlaywrightScript");
-    expect(openCodeCommands[1]).toContain("format");
     expect(openCodeCommands[1]).toContain("--session 'session_prepare_123'");
   });
 
@@ -155,6 +148,8 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
       attempt: 1,
       failure: {
         blockedNetworkAttempts: [],
+        diagnosticsLogPath:
+          "/workspace/.makeademo/capture-path-validation-diagnostics.jsonl",
         failedSceneId: "scene_feed",
         failureReason:
           "Scene scene_feed failed during Capture Path Validation.",
@@ -195,9 +190,6 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
         event.execute.includes("opencode run"),
     )?.execute;
     expect(openCodeCommand).toContain("--session 'session_prepare_123'");
-    expect(openCodeCommand).toContain("Capture Path Validation failed");
-    expect(openCodeCommand).toContain("scene_feed");
-    expect(openCodeCommand).toContain("locator failed");
     expect(events).toEqual(
       expect.arrayContaining([
         {

@@ -22,7 +22,9 @@ describe("DefaultCapturePathSceneValidator", () => {
     expect(result.status).toBe("failed");
     expect(result.stdoutPath).toContain("scene_failure_evidence.stdout.log");
     expect(result.stderrPath).toContain("scene_failure_evidence.stderr.log");
-    expect(await readFile(result.stdoutPath as string, "utf8")).toBe("");
+    expect(await readFile(result.stdoutPath as string, "utf8")).toContain(
+      "[makeademo:validation] script started",
+    );
     expect(await readFile(result.stderrPath as string, "utf8")).toContain(
       "selector exploded",
     );

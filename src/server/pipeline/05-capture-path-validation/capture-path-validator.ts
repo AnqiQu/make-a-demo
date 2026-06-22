@@ -9,6 +9,9 @@ import type {
 import type { ProjectValidationInput } from "./project-runtime-preflight/project-validator";
 import type { ProjectValidationResult } from "./project-runtime-preflight/validation-result";
 
+const capturePathDiagnosticsLogPath =
+  "/workspace/.makeademo/capture-path-validation-diagnostics.jsonl";
+
 export type CapturePathSceneValidationInput = {
   baseUrl: string;
   demoPlaywrightScript: string;
@@ -60,7 +63,14 @@ export async function validateCapturePath(
   input: CapturePathValidationInput,
   dependencies: CapturePathValidationDependencies,
 ): Promise<CapturePathValidationResult> {
+  await writeCapturePathDiagnostics(input, {
+    event: "capture-path-validation.run.started",
+  });
   await writeCapturePathSandboxLog(input, {
+    diagnosticsLogPath: capturePathDiagnosticsLogPath,
+    event: "capture-path-validation.runtime-preflight.started",
+  });
+  await writeCapturePathDiagnostics(input, {
     event: "capture-path-validation.runtime-preflight.started",
   });
   const projectValidation = await dependencies.validateProject({
@@ -71,20 +81,43 @@ export async function validateCapturePath(
   });
 
   if (projectValidation.status === "failed") {
+    const failureLogExcerpt = createLogExcerpt(projectValidation.logs);
     await writeCapturePathSandboxLog(input, {
       blockedNetworkAttemptCount:
         projectValidation.blockedNetworkAttempts.length,
+      diagnosticsLogPath: capturePathDiagnosticsLogPath,
       event: "capture-path-validation.runtime-preflight.failed",
+      failureLogExcerpt,
       failureReason: projectValidation.failureReason,
       warningCount: projectValidation.warnings.length,
     });
-    return projectValidation;
+    await writeCapturePathDiagnostics(input, {
+      blockedNetworkAttemptCount:
+        projectValidation.blockedNetworkAttempts.length,
+      event: "capture-path-validation.runtime-preflight.failed",
+      failureLogExcerpt,
+      failureReason: projectValidation.failureReason,
+      logs: projectValidation.logs,
+      warningCount: projectValidation.warnings.length,
+    });
+    return {
+      ...projectValidation,
+      diagnosticsLogPath: capturePathDiagnosticsLogPath,
+    };
   }
 
   await writeCapturePathSandboxLog(input, {
     blockedNetworkAttemptCount: projectValidation.blockedNetworkAttempts.length,
     browserUrl: projectValidation.browserUrl,
+    diagnosticsLogPath: capturePathDiagnosticsLogPath,
     event: "capture-path-validation.runtime-preflight.succeeded",
+    warningCount: projectValidation.warnings.length,
+  });
+  await writeCapturePathDiagnostics(input, {
+    blockedNetworkAttemptCount: projectValidation.blockedNetworkAttempts.length,
+    browserUrl: projectValidation.browserUrl,
+    event: "capture-path-validation.runtime-preflight.succeeded",
+    logs: projectValidation.logs,
     warningCount: projectValidation.warnings.length,
   });
 
@@ -95,7 +128,15 @@ export async function validateCapturePath(
 
   for (const scene of scriptPackage.scenes) {
     await writeCapturePathSandboxLog(input, {
+      diagnosticsLogPath: capturePathDiagnosticsLogPath,
       event: "capture-path-validation.scene.started",
+      sceneId: scene.id,
+      sectionId: "demo-script",
+    });
+    await writeCapturePathDiagnostics(input, {
+      event: "capture-path-validation.scene.started",
+      expectedVisibleOutcome: scene.expectedVisibleOutcome,
+      sceneDescription: scene.humanReadableDescription,
       sceneId: scene.id,
       sectionId: "demo-script",
     });
@@ -108,11 +149,14 @@ export async function validateCapturePath(
     logs.push(...sceneResult.logs);
 
     if (sceneResult.status === "failed") {
+      const failureLogExcerpt = createLogExcerpt(sceneResult.logs);
       await writeCapturePathSandboxLog(input, {
         blockedNetworkAttemptCount:
           sceneResult.blockedNetworkAttempts?.length ?? 0,
+        diagnosticsLogPath: capturePathDiagnosticsLogPath,
         event: "capture-path-validation.scene.failed",
         failedAction: sceneResult.failedAction,
+        failureLogExcerpt,
         failureReason: sceneResult.failureReason,
         runDirectory: sceneResult.runDirectory,
         sceneId: scene.id,
@@ -122,9 +166,26 @@ export async function validateCapturePath(
         screenshotArtifactId: sceneResult.screenshotArtifactId,
         sectionId: "demo-script",
       });
+      await writeCapturePathDiagnostics(input, {
+        blockedNetworkAttemptCount:
+          sceneResult.blockedNetworkAttempts?.length ?? 0,
+        event: "capture-path-validation.scene.failed",
+        failedAction: sceneResult.failedAction,
+        failureLogExcerpt,
+        failureReason: sceneResult.failureReason,
+        logs: sceneResult.logs,
+        runDirectory: sceneResult.runDirectory,
+        sceneId: scene.id,
+        scriptPath: sceneResult.scriptPath,
+        screenshotArtifactId: sceneResult.screenshotArtifactId,
+        sectionId: "demo-script",
+        stderrPath: sceneResult.stderrPath,
+        stdoutPath: sceneResult.stdoutPath,
+      });
       return {
         blockedNetworkAttempts: sceneResult.blockedNetworkAttempts ?? [],
         browserUrl,
+        diagnosticsLogPath: capturePathDiagnosticsLogPath,
         failedSceneId: scene.id,
         failureReason: sceneResult.failureReason,
         logs,
@@ -152,6 +213,7 @@ export async function validateCapturePath(
     }
 
     await writeCapturePathSandboxLog(input, {
+      diagnosticsLogPath: capturePathDiagnosticsLogPath,
       event: "capture-path-validation.scene.succeeded",
       runDirectory: sceneResult.runDirectory,
       sceneId: scene.id,
@@ -160,11 +222,26 @@ export async function validateCapturePath(
       stdoutPath: sceneResult.stdoutPath,
       sectionId: "demo-script",
     });
+    await writeCapturePathDiagnostics(input, {
+      event: "capture-path-validation.scene.succeeded",
+      logs: sceneResult.logs,
+      runDirectory: sceneResult.runDirectory,
+      sceneId: scene.id,
+      scriptPath: sceneResult.scriptPath,
+      sectionId: "demo-script",
+      stderrPath: sceneResult.stderrPath,
+      stdoutPath: sceneResult.stdoutPath,
+    });
   }
 
+  await writeCapturePathDiagnostics(input, {
+    event: "capture-path-validation.run.succeeded",
+    sceneCount: scriptPackage.scenes.length,
+  });
   return {
     blockedNetworkAttempts: [],
     browserUrl,
+    diagnosticsLogPath: capturePathDiagnosticsLogPath,
     logs,
     ...(projectValidation.screenshotArtifactId === undefined
       ? {}
@@ -172,6 +249,34 @@ export async function validateCapturePath(
     status: "succeeded",
     warnings: projectValidation.warnings,
   };
+}
+
+async function writeCapturePathDiagnostics(
+  input: CapturePathValidationInput,
+  entry: Record<string, unknown>,
+) {
+  const line = JSON.stringify(
+    removeUndefinedValues({
+      ...entry,
+      repoUrl: input.preparationManifest.repoUrl,
+      scriptId: input.videoScriptPackage.scriptId,
+      stage: "capture-path-validation",
+      workspaceId: input.preparationManifest.workspaceId,
+    }),
+  );
+
+  const result = await input.preparationWorkspace?.workspace.execute(
+    `mkdir -p ${shellQuote(dirname(capturePathDiagnosticsLogPath))} && printf '%s\\n' ${shellQuote(line)} >> ${shellQuote(capturePathDiagnosticsLogPath)}`,
+  );
+
+  if (result !== undefined && result.exitCode !== 0) {
+    await writeCapturePathSandboxLog(input, {
+      diagnosticsLogPath: capturePathDiagnosticsLogPath,
+      event: "capture-path-validation.diagnostics.write_failed",
+      stderr: result.stderr,
+      stdout: result.stdout,
+    });
+  }
 }
 
 async function writeCapturePathSandboxLog(
@@ -191,4 +296,16 @@ function removeUndefinedValues(input: Record<string, unknown>) {
   return Object.fromEntries(
     Object.entries(input).filter(([, value]) => value !== undefined),
   );
+}
+
+function createLogExcerpt(logs: string[]) {
+  return logs.join("\n").slice(0, 4_000);
+}
+
+function dirname(path: string) {
+  return path.slice(0, path.lastIndexOf("/"));
+}
+
+function shellQuote(value: string) {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }

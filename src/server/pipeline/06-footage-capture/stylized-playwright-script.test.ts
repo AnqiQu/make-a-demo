@@ -23,6 +23,8 @@ describe("prepareStylizedPlaywrightScript", () => {
     expect(prepared).not.toContain("humanType");
     expect(prepared).not.toContain("animatedClick");
     expect(prepared).not.toContain("waitForTimeout(900)");
+    expect(prepared).toContain("[makeademo:validation] script started");
+    expect(prepared).toContain("[makeademo:validation] script failed");
   });
 
   it("types filled text with human pacing instead of instantly setting the input", () => {

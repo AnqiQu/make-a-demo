@@ -44,6 +44,8 @@ describe("validateCapturePath", () => {
     expect(result).toEqual({
       blockedNetworkAttempts: [],
       browserUrl: "https://preview.example.test/",
+      diagnosticsLogPath:
+        "/workspace/.makeademo/capture-path-validation-diagnostics.jsonl",
       logs: ["project checks passed", "scene dry run passed"],
       status: "succeeded",
       warnings: [],
@@ -81,6 +83,78 @@ describe("validateCapturePath", () => {
         workspaceId: "workspace_123",
       }),
     ]);
+  });
+
+  it("writes verbose failure diagnostics to sandbox logs and a workspace-visible log for agent repair", async () => {
+    const sandboxLogs: Array<Record<string, unknown>> = [];
+    const executedCommands: string[] = [];
+
+    const result = await validateCapturePath(
+      {
+        preparationManifest: manifest(),
+        preparationWorkspace: workspaceHandle(sandboxLogs, executedCommands),
+        videoScriptPackage: demoScript(),
+      },
+      {
+        async validateProject() {
+          return {
+            blockedNetworkAttempts: [],
+            browserUrl: "https://preview.example.test/",
+            logs: ["project checks passed"],
+            status: "succeeded",
+            warnings: [],
+          };
+        },
+        sceneValidator: {
+          async validateScene() {
+            return {
+              failureReason:
+                "Scene scene_validation failed during Capture Path Validation.",
+              logs: [
+                "stdout: loading page",
+                "stderr: expect(locator('.article-preview')).toBeVisible timed out",
+              ],
+              runDirectory: ".makeademo-capture-path-validation-runs/run_123",
+              scriptPath:
+                ".makeademo-capture-path-validation-runs/run_123/scene_validation.ts",
+              status: "failed",
+              stderrPath:
+                ".makeademo-capture-path-validation-runs/run_123/scene_validation.stderr.log",
+              stdoutPath:
+                ".makeademo-capture-path-validation-runs/run_123/scene_validation.stdout.log",
+            };
+          },
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      diagnosticsLogPath:
+        "/workspace/.makeademo/capture-path-validation-diagnostics.jsonl",
+      failedSceneId: "scene_validation",
+      failureReason:
+        "Scene scene_validation failed during Capture Path Validation.",
+      status: "failed",
+    });
+    expect(sandboxLogs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          diagnosticsLogPath:
+            "/workspace/.makeademo/capture-path-validation-diagnostics.jsonl",
+          event: "capture-path-validation.scene.failed",
+          failureLogExcerpt: expect.stringContaining("article-preview"),
+          sceneId: "scene_validation",
+        }),
+      ]),
+    );
+    expect(executedCommands).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          "/workspace/.makeademo/capture-path-validation-diagnostics.jsonl",
+        ),
+      ]),
+    );
+    expect(executedCommands.join("\n")).toContain("article-preview");
   });
 });
 
@@ -132,12 +206,16 @@ function demoScript() {
   };
 }
 
-function workspaceHandle(logs: Array<Record<string, unknown>>) {
+function workspaceHandle(
+  logs: Array<Record<string, unknown>>,
+  executedCommands: string[] = [],
+) {
   return {
     async destroy() {},
     id: "workspace_handle_123",
     workspace: {
-      async execute() {
+      async execute(command: string) {
+        executedCommands.push(command);
         return { exitCode: 0, stderr: "", stdout: "" };
       },
       async getPreviewUrl() {
