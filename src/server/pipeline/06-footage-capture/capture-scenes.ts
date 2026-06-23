@@ -20,6 +20,8 @@ export type CaptureManifest = {
   runId: string;
   scenes: CapturedSceneManifestEntry[];
   scriptId: string;
+  markerLogPath?: string;
+  rawTakePath?: string;
   temporary: true;
   title: string;
 };
@@ -49,22 +51,15 @@ export async function captureScenesFromScript(
   const scenes: CapturedSceneManifestEntry[] = [];
 
   try {
-    for (const scene of scriptPackage.scenes) {
-      const recordedScene = await recorder.recordScene({
-        baseUrl: input.baseUrl,
-        demoPlaywrightScript: scriptPackage.demoPlaywrightScript,
-        runDirectory,
-        scene,
-        sectionId: "demo-script",
-      });
+    const recordedScenes = await recorder.recordScenes({
+      baseUrl: input.baseUrl,
+      demoPlaywrightScript: scriptPackage.demoPlaywrightScript,
+      runDirectory,
+      scenes: scriptPackage.scenes,
+      sectionId: "demo-script",
+    });
 
-      scenes.push({
-        durationSeconds: recordedScene.durationSeconds,
-        sceneId: scene.id,
-        sectionId: "demo-script",
-        videoPath: recordedScene.videoPath,
-      });
-    }
+    scenes.push(...recordedScenes);
 
     const manifestPath = join(runDirectory, "capture-manifest.json");
     const manifest: CaptureManifest = {
@@ -76,6 +71,8 @@ export async function captureScenesFromScript(
       runId,
       scenes,
       scriptId: scriptPackage.scriptId,
+      markerLogPath: join(runDirectory, "scene-markers.jsonl"),
+      rawTakePath: join(runDirectory, "raw-scenes", "continuous-take.webm"),
       temporary: true,
       title: scriptPackage.title,
     };

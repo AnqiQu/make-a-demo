@@ -62,16 +62,20 @@ describe("captureScenesFromScript", () => {
 
     const recordedSceneIds: string[] = [];
     const recorder: SceneRecorder = {
-      async recordScene(input) {
-        recordedSceneIds.push(input.scene.id);
-        return {
+      async recordScenes(input) {
+        recordedSceneIds.push(...input.scenes.map((scene) => scene.id));
+        return input.scenes.map((scene, sceneIndex) => ({
           durationSeconds: 4,
+          markerEndMs: 2_000 + sceneIndex,
+          markerStartMs: 1_000 + sceneIndex,
+          sceneId: scene.id,
+          sectionId: input.sectionId,
           videoPath: join(
             input.runDirectory,
-            "raw-scenes",
-            `${input.scene.id}.webm`,
+            "scene-clips",
+            `${scene.id}.webm`,
           ),
-        };
+        }));
       },
     };
 
@@ -88,17 +92,27 @@ describe("captureScenesFromScript", () => {
     expect(manifest.scenes).toEqual([
       {
         durationSeconds: 4,
+        markerEndMs: 2000,
+        markerStartMs: 1000,
         sceneId: "scene-001",
         sectionId: "demo-script",
-        videoPath: join(manifest.runDirectory, "raw-scenes", "scene-001.webm"),
+        videoPath: join(manifest.runDirectory, "scene-clips", "scene-001.webm"),
       },
       {
         durationSeconds: 4,
+        markerEndMs: 2001,
+        markerStartMs: 1001,
         sceneId: "scene-002",
         sectionId: "demo-script",
-        videoPath: join(manifest.runDirectory, "raw-scenes", "scene-002.webm"),
+        videoPath: join(manifest.runDirectory, "scene-clips", "scene-002.webm"),
       },
     ]);
+    expect(manifest.markerLogPath).toBe(
+      join(manifest.runDirectory, "scene-markers.jsonl"),
+    );
+    expect(manifest.rawTakePath).toBe(
+      join(manifest.runDirectory, "raw-scenes", "continuous-take.webm"),
+    );
 
     const manifestJson = JSON.parse(
       await readFile(manifest.manifestPath, "utf8"),
@@ -115,12 +129,9 @@ describe("captureScenesFromScript", () => {
       captureScenesFromScript({
         baseUrl: "http://localhost:3000",
         recorder: {
-          async recordScene() {
+          async recordScenes() {
             recordSceneWasCalled = true;
-            return {
-              durationSeconds: 4,
-              videoPath: "should-not-exist.webm",
-            };
+            return [];
           },
         },
         scriptPackage: {
@@ -171,12 +182,9 @@ describe("captureScenesFromScript", () => {
       captureScenesFromScript({
         baseUrl: "http://localhost:3000",
         recorder: {
-          async recordScene() {
+          async recordScenes() {
             recordSceneWasCalled = true;
-            return {
-              durationSeconds: 1,
-              videoPath: "should-not-exist.webm",
-            };
+            return [];
           },
         },
         scriptPath,

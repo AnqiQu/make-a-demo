@@ -71,7 +71,14 @@ describe("createStage1PipelineDependencies", () => {
         sandboxRunner,
         sceneValidator: {
           async validateScene() {
-            return { logs: ["scene dry run passed"], status: "succeeded" };
+            return {
+              logs: [
+                '[makeademo:scene] {"elapsedMs":10,"event":"started","sceneId":"scene-validation"}',
+                '[makeademo:scene] {"elapsedMs":20,"event":"succeeded","sceneId":"scene-validation"}',
+                "scene dry run passed",
+              ],
+              status: "succeeded",
+            };
           },
         },
       }),

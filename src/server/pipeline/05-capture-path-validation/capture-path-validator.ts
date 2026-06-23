@@ -126,101 +126,71 @@ export async function validateCapturePath(
   const browserUrl =
     projectValidation.browserUrl ?? input.preparationManifest.url;
 
-  for (const scene of scriptPackage.scenes) {
-    await writeCapturePathSandboxLog(input, {
-      diagnosticsLogPath: capturePathDiagnosticsLogPath,
-      event: "capture-path-validation.scene.started",
-      sceneId: scene.id,
-      sectionId: "demo-script",
-    });
-    await writeCapturePathDiagnostics(input, {
-      event: "capture-path-validation.scene.started",
+  const firstScene = scriptPackage.scenes[0];
+  if (firstScene === undefined) {
+    throw new Error("Demo Script must declare at least one Scene.");
+  }
+  await writeCapturePathSandboxLog(input, {
+    diagnosticsLogPath: capturePathDiagnosticsLogPath,
+    event: "capture-path-validation.demo-script.started",
+    sceneCount: scriptPackage.scenes.length,
+  });
+  await writeCapturePathDiagnostics(input, {
+    event: "capture-path-validation.demo-script.started",
+    scenes: scriptPackage.scenes.map((scene) => ({
       expectedVisibleOutcome: scene.expectedVisibleOutcome,
       sceneDescription: scene.humanReadableDescription,
       sceneId: scene.id,
-      sectionId: "demo-script",
-    });
-    const sceneResult = await dependencies.sceneValidator.validateScene({
-      baseUrl: browserUrl,
-      demoPlaywrightScript: scriptPackage.demoPlaywrightScript,
-      scene,
-      sectionId: "demo-script",
-    });
-    logs.push(...sceneResult.logs);
+    })),
+  });
+  const sceneResult = await dependencies.sceneValidator.validateScene({
+    baseUrl: browserUrl,
+    demoPlaywrightScript: scriptPackage.demoPlaywrightScript,
+    scene: firstScene,
+    sectionId: "demo-script",
+  });
+  logs.push(...sceneResult.logs);
 
-    if (sceneResult.status === "failed") {
-      const failureLogExcerpt = createLogExcerpt(sceneResult.logs);
-      await writeCapturePathSandboxLog(input, {
-        blockedNetworkAttemptCount:
-          sceneResult.blockedNetworkAttempts?.length ?? 0,
-        diagnosticsLogPath: capturePathDiagnosticsLogPath,
-        event: "capture-path-validation.scene.failed",
-        failedAction: sceneResult.failedAction,
-        failureLogExcerpt,
-        failureReason: sceneResult.failureReason,
-        runDirectory: sceneResult.runDirectory,
-        sceneId: scene.id,
-        scriptPath: sceneResult.scriptPath,
-        stderrPath: sceneResult.stderrPath,
-        stdoutPath: sceneResult.stdoutPath,
-        screenshotArtifactId: sceneResult.screenshotArtifactId,
-        sectionId: "demo-script",
-      });
-      await writeCapturePathDiagnostics(input, {
-        blockedNetworkAttemptCount:
-          sceneResult.blockedNetworkAttempts?.length ?? 0,
-        event: "capture-path-validation.scene.failed",
-        failedAction: sceneResult.failedAction,
-        failureLogExcerpt,
-        failureReason: sceneResult.failureReason,
-        logs: sceneResult.logs,
-        runDirectory: sceneResult.runDirectory,
-        sceneId: scene.id,
-        scriptPath: sceneResult.scriptPath,
-        screenshotArtifactId: sceneResult.screenshotArtifactId,
-        sectionId: "demo-script",
-        stderrPath: sceneResult.stderrPath,
-        stdoutPath: sceneResult.stdoutPath,
-      });
-      return {
-        blockedNetworkAttempts: sceneResult.blockedNetworkAttempts ?? [],
-        browserUrl,
-        diagnosticsLogPath: capturePathDiagnosticsLogPath,
-        failedSceneId: scene.id,
-        failureReason: sceneResult.failureReason,
-        logs,
-        ...(sceneResult.failedAction === undefined
-          ? {}
-          : { failedAction: sceneResult.failedAction }),
-        ...(sceneResult.screenshotArtifactId === undefined
-          ? {}
-          : { screenshotArtifactId: sceneResult.screenshotArtifactId }),
-        ...(sceneResult.runDirectory === undefined
-          ? {}
-          : { runDirectory: sceneResult.runDirectory }),
-        ...(sceneResult.scriptPath === undefined
-          ? {}
-          : { scriptPath: sceneResult.scriptPath }),
-        ...(sceneResult.stderrPath === undefined
-          ? {}
-          : { stderrPath: sceneResult.stderrPath }),
-        ...(sceneResult.stdoutPath === undefined
-          ? {}
-          : { stdoutPath: sceneResult.stdoutPath }),
+  if (sceneResult.status === "failed") {
+    return await capturePathSceneFailure({
+      browserUrl,
+      input,
+      logs,
+      projectValidation,
+      sceneId: readFailedSceneId(sceneResult.logs) ?? firstScene.id,
+      sceneResult,
+    });
+  }
+
+  const markerValidation = validateSceneMarkers(
+    sceneResult.logs,
+    scriptPackage.scenes.map((scene) => scene.id),
+  );
+  if (markerValidation.status === "failed") {
+    return await capturePathSceneFailure({
+      browserUrl,
+      input,
+      logs,
+      projectValidation,
+      sceneId: markerValidation.sceneId ?? firstScene.id,
+      sceneResult: {
+        ...sceneResult,
+        failureReason: markerValidation.reason,
         status: "failed",
-        warnings: projectValidation.warnings,
-      };
-    }
+      },
+    });
+  }
 
+  for (const scene of scriptPackage.scenes) {
     await writeCapturePathSandboxLog(input, {
       diagnosticsLogPath: capturePathDiagnosticsLogPath,
       event: "capture-path-validation.scene.succeeded",
       runDirectory: sceneResult.runDirectory,
       sceneId: scene.id,
       scriptPath: sceneResult.scriptPath,
+      sectionId: "demo-script",
       stderrPath: sceneResult.stderrPath,
       stdoutPath: sceneResult.stdoutPath,
-      sectionId: "demo-script",
     });
     await writeCapturePathDiagnostics(input, {
       event: "capture-path-validation.scene.succeeded",
@@ -249,6 +219,183 @@ export async function validateCapturePath(
     status: "succeeded",
     warnings: projectValidation.warnings,
   };
+}
+
+async function capturePathSceneFailure(input: {
+  browserUrl: string;
+  input: CapturePathValidationInput;
+  logs: string[];
+  projectValidation: ProjectValidationResult & { warnings: string[] };
+  sceneId: string;
+  sceneResult: Extract<CapturePathSceneValidationResult, { status: "failed" }>;
+}): Promise<CapturePathValidationResult> {
+  const failureLogExcerpt = createLogExcerpt(input.sceneResult.logs);
+  await writeCapturePathSandboxLog(input.input, {
+    blockedNetworkAttemptCount:
+      input.sceneResult.blockedNetworkAttempts?.length ?? 0,
+    diagnosticsLogPath: capturePathDiagnosticsLogPath,
+    event: "capture-path-validation.scene.failed",
+    failedAction: input.sceneResult.failedAction,
+    failureLogExcerpt,
+    failureReason: input.sceneResult.failureReason,
+    runDirectory: input.sceneResult.runDirectory,
+    sceneId: input.sceneId,
+    scriptPath: input.sceneResult.scriptPath,
+    screenshotArtifactId: input.sceneResult.screenshotArtifactId,
+    sectionId: "demo-script",
+    stderrPath: input.sceneResult.stderrPath,
+    stdoutPath: input.sceneResult.stdoutPath,
+  });
+  await writeCapturePathDiagnostics(input.input, {
+    blockedNetworkAttemptCount:
+      input.sceneResult.blockedNetworkAttempts?.length ?? 0,
+    event: "capture-path-validation.scene.failed",
+    failedAction: input.sceneResult.failedAction,
+    failureLogExcerpt,
+    failureReason: input.sceneResult.failureReason,
+    logs: input.sceneResult.logs,
+    runDirectory: input.sceneResult.runDirectory,
+    sceneId: input.sceneId,
+    scriptPath: input.sceneResult.scriptPath,
+    screenshotArtifactId: input.sceneResult.screenshotArtifactId,
+    sectionId: "demo-script",
+    stderrPath: input.sceneResult.stderrPath,
+    stdoutPath: input.sceneResult.stdoutPath,
+  });
+
+  return {
+    blockedNetworkAttempts: input.sceneResult.blockedNetworkAttempts ?? [],
+    browserUrl: input.browserUrl,
+    diagnosticsLogPath: capturePathDiagnosticsLogPath,
+    failedSceneId: input.sceneId,
+    failureReason: input.sceneResult.failureReason,
+    logs: input.logs,
+    ...(input.sceneResult.failedAction === undefined
+      ? {}
+      : { failedAction: input.sceneResult.failedAction }),
+    ...(input.sceneResult.runDirectory === undefined
+      ? {}
+      : { runDirectory: input.sceneResult.runDirectory }),
+    ...(input.sceneResult.screenshotArtifactId === undefined
+      ? {}
+      : { screenshotArtifactId: input.sceneResult.screenshotArtifactId }),
+    ...(input.sceneResult.scriptPath === undefined
+      ? {}
+      : { scriptPath: input.sceneResult.scriptPath }),
+    ...(input.sceneResult.stderrPath === undefined
+      ? {}
+      : { stderrPath: input.sceneResult.stderrPath }),
+    ...(input.sceneResult.stdoutPath === undefined
+      ? {}
+      : { stdoutPath: input.sceneResult.stdoutPath }),
+    status: "failed",
+    warnings: input.projectValidation.warnings,
+  };
+}
+
+function validateSceneMarkers(logs: string[], sceneIds: string[]) {
+  const markers = readSceneMarkers(logs);
+  const completed = new Set<string>();
+  const open = new Set<string>();
+
+  for (const marker of markers) {
+    if (!sceneIds.includes(marker.sceneId)) {
+      return {
+        reason: `Capture Path emitted undeclared Scene marker ${marker.sceneId}.`,
+        sceneId: marker.sceneId,
+        status: "failed" as const,
+      };
+    }
+
+    if (marker.event === "started") {
+      if (open.size > 0) {
+        return {
+          reason: "Capture Path emitted nested Scene markers.",
+          sceneId: marker.sceneId,
+          status: "failed" as const,
+        };
+      }
+      if (completed.has(marker.sceneId) || open.has(marker.sceneId)) {
+        return {
+          reason: `Capture Path emitted duplicate Scene marker ${marker.sceneId}.`,
+          sceneId: marker.sceneId,
+          status: "failed" as const,
+        };
+      }
+      open.add(marker.sceneId);
+      continue;
+    }
+
+    if (!open.has(marker.sceneId)) {
+      return {
+        reason: `Capture Path emitted ${marker.event} marker before start for Scene ${marker.sceneId}.`,
+        sceneId: marker.sceneId,
+        status: "failed" as const,
+      };
+    }
+    open.delete(marker.sceneId);
+
+    if (marker.event === "failed") {
+      return {
+        reason: `Scene ${marker.sceneId} failed during Capture Path Validation.${
+          marker.message === undefined ? "" : ` ${marker.message}`
+        }`,
+        sceneId: marker.sceneId,
+        status: "failed" as const,
+      };
+    }
+
+    completed.add(marker.sceneId);
+  }
+
+  if (open.size > 0) {
+    return {
+      reason: "Capture Path emitted Scene start marker without an end marker.",
+      sceneId: [...open][0],
+      status: "failed" as const,
+    };
+  }
+
+  for (const sceneId of sceneIds) {
+    if (!completed.has(sceneId)) {
+      return {
+        reason: `Scene ${sceneId} did not emit complete Capture Path markers.`,
+        sceneId,
+        status: "failed" as const,
+      };
+    }
+  }
+
+  return { status: "succeeded" as const };
+}
+
+function readFailedSceneId(logs: string[]) {
+  return readSceneMarkers(logs).find((marker) => marker.event === "failed")
+    ?.sceneId;
+}
+
+function readSceneMarkers(logs: string[]) {
+  return logs
+    .join("\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("[makeademo:scene] "))
+    .map((line) => JSON.parse(line.slice("[makeademo:scene] ".length)))
+    .filter(
+      (
+        marker,
+      ): marker is {
+        event: "failed" | "started" | "succeeded";
+        message?: string;
+        sceneId: string;
+      } =>
+        typeof marker === "object" &&
+        marker !== null &&
+        typeof marker.sceneId === "string" &&
+        (marker.event === "started" ||
+          marker.event === "succeeded" ||
+          marker.event === "failed"),
+    );
 }
 
 async function writeCapturePathDiagnostics(

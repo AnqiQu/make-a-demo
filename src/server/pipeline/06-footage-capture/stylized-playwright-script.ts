@@ -12,15 +12,16 @@ export function prepareStylizedPlaywrightScript(
   script: string,
   input: PrepareStylizedPlaywrightScriptInput,
 ) {
+  const demoScript = removeCaptureSdkImports(script);
   if ((input.mode ?? "recording") === "validation") {
-    return prepareValidationPlaywrightScript(script, input);
+    return prepareValidationPlaywrightScript(demoScript, input);
   }
 
-  if (!script.includes("chromium.launch")) {
-    return wrapActionBody(stylizeBrowserActions(script), input);
+  if (!demoScript.includes("chromium.launch")) {
+    return wrapActionBody(stylizeBrowserActions(demoScript), input);
   }
 
-  let prepared = script.replaceAll("http://localhost:3000", input.baseUrl);
+  let prepared = demoScript.replaceAll("http://localhost:3000", input.baseUrl);
   prepared = prepared.replace(
     /dir:\s*(['"`])[^'"`]+?\1/,
     `dir: ${JSON.stringify(input.videoDirectory)}`,
@@ -58,6 +59,8 @@ function wrapActionBody(
 
   return `import { chromium, expect } from "@playwright/test";
 
+${captureSdkHelperSource()}
+
 ${recordingHelperSource()}
 
 const baseUrl = ${JSON.stringify(input.baseUrl)};
@@ -70,6 +73,8 @@ const context = await browser.newContext({
   },
 });
 const page = await context.newPage();
+const makeADemoCaptureStartedAt = performance.now();
+const makeADemoCaptureContext = { page, baseUrl, expect };
 
 try {
 ${indentScriptBody(script)}
@@ -94,12 +99,16 @@ function prepareValidationPlaywrightScript(
 
   return `import { chromium, expect } from "@playwright/test";
 
+${captureSdkHelperSource()}
+
 const baseUrl = ${JSON.stringify(input.baseUrl)};
 const browser = await chromium.launch(${launchOptions});
 const context = await browser.newContext({
   viewport: { width: 1280, height: 720 },
 });
 const page = await context.newPage();
+const makeADemoCaptureStartedAt = performance.now();
+const makeADemoCaptureContext = { page, baseUrl, expect };
 
 try {
   console.log("[makeademo:validation] script started", JSON.stringify({ baseUrl }));
@@ -118,6 +127,39 @@ ${indentScriptBody(script)}
 }
 void expect;
 `;
+}
+
+function captureSdkHelperSource() {
+  return `async function setup(callback) {
+  await callback(makeADemoCaptureContext);
+}
+
+async function scene(id, callback) {
+  console.log("[makeademo:scene]", JSON.stringify({ elapsedMs: makeADemoElapsedMs(), event: "started", sceneId: id }));
+  try {
+    await callback(makeADemoCaptureContext);
+    console.log("[makeademo:scene]", JSON.stringify({ elapsedMs: makeADemoElapsedMs(), event: "succeeded", sceneId: id }));
+  } catch (error) {
+    console.log("[makeademo:scene]", JSON.stringify({
+      elapsedMs: makeADemoElapsedMs(),
+      event: "failed",
+      message: error instanceof Error ? error.message : String(error),
+      sceneId: id,
+    }));
+    throw error;
+  }
+}
+
+function makeADemoElapsedMs() {
+  return Math.max(0, Math.round(performance.now() - makeADemoCaptureStartedAt));
+}`;
+}
+
+function removeCaptureSdkImports(script: string) {
+  return script
+    .split("\n")
+    .filter((line) => !/from\s+['"].*makeademo-capture-sdk['"]/.test(line))
+    .join("\n");
 }
 
 function injectRecordingHelpers(script: string) {

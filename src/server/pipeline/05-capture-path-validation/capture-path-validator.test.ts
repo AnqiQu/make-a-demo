@@ -30,7 +30,11 @@ describe("validateCapturePath", () => {
               `scene:${input.scene.id}:${input.baseUrl}:${input.demoPlaywrightScript}`,
             );
             return {
-              logs: ["scene dry run passed"],
+              logs: [
+                '[makeademo:scene] {"elapsedMs":10,"event":"started","sceneId":"scene_validation"}',
+                '[makeademo:scene] {"elapsedMs":20,"event":"succeeded","sceneId":"scene_validation"}',
+                "scene dry run passed",
+              ],
               runDirectory: ".makeademo-capture-path-validation-runs/run_123",
               scriptPath:
                 ".makeademo-capture-path-validation-runs/run_123/scene_validation.ts",
@@ -46,7 +50,12 @@ describe("validateCapturePath", () => {
       browserUrl: "https://preview.example.test/",
       diagnosticsLogPath:
         "/workspace/.makeademo/capture-path-validation-diagnostics.jsonl",
-      logs: ["project checks passed", "scene dry run passed"],
+      logs: [
+        "project checks passed",
+        '[makeademo:scene] {"elapsedMs":10,"event":"started","sceneId":"scene_validation"}',
+        '[makeademo:scene] {"elapsedMs":20,"event":"succeeded","sceneId":"scene_validation"}',
+        "scene dry run passed",
+      ],
       status: "succeeded",
       warnings: [],
     });
@@ -66,9 +75,8 @@ describe("validateCapturePath", () => {
         workspaceId: "workspace_123",
       }),
       expect.objectContaining({
-        event: "capture-path-validation.scene.started",
-        sceneId: "scene_validation",
-        sectionId: "demo-script",
+        event: "capture-path-validation.demo-script.started",
+        sceneCount: 1,
         stage: "capture-path-validation",
         workspaceId: "workspace_123",
       }),
