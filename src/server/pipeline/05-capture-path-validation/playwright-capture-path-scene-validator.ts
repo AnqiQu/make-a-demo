@@ -2,6 +2,10 @@ import { spawn } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import {
+  validateDemoScriptCaptureSdkTypes,
+  writeGeneratedCaptureSdkHarness,
+} from "../06-footage-capture/capture-sdk-contract";
 import { prepareStylizedPlaywrightScript } from "../06-footage-capture/stylized-playwright-script";
 import type {
   CapturePathSceneValidationInput,
@@ -25,6 +29,20 @@ export class DefaultCapturePathSceneValidator
     const stdoutPath = join(runDirectory, `${input.scene.id}.stdout.log`);
 
     await mkdir(runDirectory, { recursive: true });
+    await writeGeneratedCaptureSdkHarness(runDirectory);
+    try {
+      await validateDemoScriptCaptureSdkTypes({
+        demoPlaywrightScript: input.demoPlaywrightScript,
+        directory: runDirectory,
+      });
+    } catch (error) {
+      return {
+        failureReason: "Demo Script failed Capture SDK TypeScript validation.",
+        logs: [error instanceof Error ? error.message : String(error)],
+        runDirectory,
+        status: "failed",
+      };
+    }
     await writeFile(
       scenePath,
       prepareStylizedPlaywrightScript(input.demoPlaywrightScript, {

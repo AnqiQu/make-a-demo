@@ -110,14 +110,46 @@ describe("captureScenesFromScript", () => {
     expect(manifest.markerLogPath).toBe(
       join(manifest.runDirectory, "scene-markers.jsonl"),
     );
-    expect(manifest.rawTakePath).toBe(
-      join(manifest.runDirectory, "raw-scenes", "continuous-take.webm"),
-    );
+    expect(manifest.qualityFindings).toEqual([]);
+    expect(manifest.rawTakePath).toBeUndefined();
 
     const manifestJson = JSON.parse(
       await readFile(manifest.manifestPath, "utf8"),
     ) as typeof manifest;
     expect(manifestJson).toEqual(manifest);
+  });
+
+  it("records the diagnostic raw take path only when capture retention is enabled", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
+    const tempRoot = join(workspace, "runs");
+    const recorder: SceneRecorder = {
+      async recordScenes(input) {
+        return input.scenes.map((scene) => ({
+          durationSeconds: 4,
+          markerEndMs: 2_000,
+          markerStartMs: 1_000,
+          sceneId: scene.id,
+          sectionId: input.sectionId,
+          videoPath: join(
+            input.runDirectory,
+            "scene-clips",
+            `${scene.id}.webm`,
+          ),
+        }));
+      },
+    };
+
+    const manifest = await captureScenesFromScript({
+      baseUrl: "http://localhost:3000",
+      keepTemp: true,
+      recorder,
+      scriptPackage: validDemoScript(),
+      tempRoot,
+    });
+
+    expect(manifest.rawTakePath).toBe(
+      join(manifest.runDirectory, "raw-scenes", "continuous-take.webm"),
+    );
   });
 
   it("rejects Demo Scripts with agent-authored recorded Scene durations before recording starts", async () => {
@@ -195,3 +227,29 @@ describe("captureScenesFromScript", () => {
     expect(recordSceneWasCalled).toBe(false);
   });
 });
+
+function validDemoScript() {
+  return {
+    demoPlaywrightScript: [
+      "import { scene, setup } from './makeademo-capture-sdk';",
+      "await setup(async ({ page, baseUrl, expect }) => { await page.goto(baseUrl); await expect(page.locator('body')).toBeVisible(); });",
+      "await scene('scene-001', async ({ page, expect }) => { await expect(page.locator('body')).toBeVisible(); });",
+    ].join("\n"),
+    format: "16:9",
+    presentation: {
+      music: { enabled: false as const },
+      textOverlays: [],
+      transitions: [],
+    },
+    scenes: [
+      {
+        description: "Open the app.",
+        expectedVisibleOutcome: "The prepared app shell is visible.",
+        id: "scene-001",
+      },
+    ],
+    scriptId: "script-001",
+    title: "Demo Script",
+    version: 1,
+  };
+}

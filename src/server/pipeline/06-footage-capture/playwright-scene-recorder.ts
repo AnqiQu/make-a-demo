@@ -1,6 +1,10 @@
 import { spawn } from "node:child_process";
 import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  validateDemoScriptCaptureSdkTypes,
+  writeGeneratedCaptureSdkHarness,
+} from "./capture-sdk-contract";
 import type {
   RecordSceneInput,
   RecordedScene,
@@ -61,6 +65,11 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
     await mkdir(videoScratchDirectory, { recursive: true });
     await mkdir(rawScenesDirectory, { recursive: true });
     await mkdir(sceneClipsDirectory, { recursive: true });
+    await writeGeneratedCaptureSdkHarness(sceneWorkspace);
+    await validateDemoScriptCaptureSdkTypes({
+      demoPlaywrightScript: input.demoPlaywrightScript,
+      directory: sceneWorkspace,
+    });
     await writeFile(
       scenePath,
       prepareStylizedPlaywrightScript(input.demoPlaywrightScript, {
@@ -147,7 +156,34 @@ async function trimSceneClipWithFfmpeg(input: {
     );
   }
 
-  return { durationSeconds };
+  return {
+    durationSeconds: await probeVideoDurationSeconds(input.outputVideoPath),
+  };
+}
+
+async function probeVideoDurationSeconds(videoPath: string): Promise<number> {
+  const result = await runCommand("ffprobe", [
+    "-v",
+    "error",
+    "-show_entries",
+    "format=duration",
+    "-of",
+    "default=noprint_wrappers=1:nokey=1",
+    videoPath,
+  ]);
+
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `Failed to probe trimmed Scene clip duration.\n${[result.stdout, result.stderr].filter(Boolean).join("\n")}`,
+    );
+  }
+
+  const durationSeconds = Number(result.stdout.trim());
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    throw new Error(`ffprobe returned invalid duration for ${videoPath}`);
+  }
+
+  return durationSeconds;
 }
 
 async function runSceneScript(scenePath: string, timeoutMs: number) {

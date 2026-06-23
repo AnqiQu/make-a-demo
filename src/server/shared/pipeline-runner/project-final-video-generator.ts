@@ -63,9 +63,13 @@ export class CompositeProjectFinalVideoGenerator
     const workspace = join(this.options.tempRoot ?? tmpdir(), runId);
     await mkdir(workspace, { recursive: true });
 
-    const scriptPath = join(workspace, "video-script-package.json");
+    const scriptPath = join(workspace, "demo-script.json");
     const captureManifestPath = join(workspace, "capture-manifest.json");
-    const scriptPackage = buildCompositingScriptPackage(input.pipelineResult);
+    const scriptPackage = input.pipelineResult.videoScriptPackage;
+    const capturedScenes = await writeQueueGeneratedSceneClips({
+      scriptPackage,
+      workspace,
+    });
     await writeFile(scriptPath, `${JSON.stringify(scriptPackage, null, 2)}\n`);
     await writeFile(
       captureManifestPath,
@@ -75,9 +79,10 @@ export class CompositeProjectFinalVideoGenerator
           createdAt: new Date().toISOString(),
           keepTemp: false,
           manifestPath: captureManifestPath,
+          qualityFindings: [],
           runDirectory: workspace,
           runId: `capture-${input.projectId}`,
-          scenes: [],
+          scenes: capturedScenes,
           scriptId: scriptPackage.scriptId,
           temporary: true,
           title: scriptPackage.title,
@@ -156,52 +161,35 @@ export class CompositeProjectFinalVideoGenerator
   }
 }
 
-function buildCompositingScriptPackage(
-  pipelineResult: Extract<PipelineJobResult, { status: "succeeded" }>,
-) {
-  const scenes = pipelineResult.videoScriptPackage.scenes.map((scene) => {
-    const description = scene.humanReadableDescription;
+async function writeQueueGeneratedSceneClips(input: {
+  scriptPackage: Extract<
+    PipelineJobResult,
+    { status: "succeeded" }
+  >["videoScriptPackage"];
+  workspace: string;
+}) {
+  const sceneDirectory = join(input.workspace, "scene-clips");
+  await mkdir(sceneDirectory, { recursive: true });
 
-    return {
-      background: {
-        colour: "#111827",
-        type: "solid",
-      },
-      description,
-      durationSeconds: 3,
-      id: scene.id,
-      text: {
-        content: description,
-        font: "Inter",
-        "text-position": "center",
-        "text-size": "large",
-        "text-colour": "#f9fafb",
-      },
-      type: "full-screen-text",
-    };
-  });
-
-  return {
-    estimatedDurationSeconds: scenes.length * 3,
-    format: "16:9",
-    scriptId: `script-${pipelineResult.preparationManifest.workspaceId}`,
-    sections: [
-      {
-        id: "demo-script",
-        scenes,
-        title: pipelineResult.videoScriptPackage.title,
-      },
-    ],
-    title: pipelineResult.videoScriptPackage.title,
-    version: 1,
-  };
+  return await Promise.all(
+    input.scriptPackage.scenes.map(async (scene) => {
+      const videoPath = join(sceneDirectory, `${scene.id}.webm`);
+      await writeFile(videoPath, `placeholder clip for ${scene.id}`);
+      return {
+        durationSeconds: 3,
+        sceneId: scene.id,
+        sectionId: "demo-script",
+        videoPath,
+      };
+    }),
+  );
 }
 
 function countScenes(
-  scriptPackage: ReturnType<typeof buildCompositingScriptPackage>,
+  scriptPackage: Extract<
+    PipelineJobResult,
+    { status: "succeeded" }
+  >["videoScriptPackage"],
 ) {
-  return scriptPackage.sections.reduce(
-    (total, section) => total + section.scenes.length,
-    0,
-  );
+  return scriptPackage.scenes.length;
 }

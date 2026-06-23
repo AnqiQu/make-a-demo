@@ -480,6 +480,7 @@ function createScriptGenerationPrompt(
     "",
     "## Hard Requirements",
     "- Output JSON matching the capture-ready Demo Script schema.",
+    "- The demoPlaywrightScript must import `{ setup, scene }` from `./makeademo-capture-sdk`.",
     "- Every demonstrated feature must have a declared Scene with an expected visible outcome.",
     "- Playwright scripts must use the provided `baseUrl` variable, not hardcoded preview URLs.",
     "- Demonstrate real user flows with route changes, clicks, fills, presses, selectOption calls, or feature-specific assertions.",
@@ -534,6 +535,7 @@ function createCapturePathRepairPrompt(
     "",
     "## Hard Requirements",
     `- Overwrite ${demoScriptPath} with the repaired Demo Script JSON before finishing.`,
+    "- The demoPlaywrightScript must import `{ setup, scene }` from `./makeademo-capture-sdk`.",
     `- If you change the prepared app command, URL, assumptions, risks, or workspace-change summary, update ${preparationManifestPath}.`,
     "- Keep Playwright interactions deterministic and use only the provided `baseUrl` variable in Playwright scripts.",
     "- Do not add Scene durations, raw video recording, custom marker writers, or timestamps.",
@@ -581,7 +583,7 @@ function createScriptPackageSchemaPrompt(): string {
       {
         audio: { enabled: true, music: { id: "clean" } },
         demoPlaywrightScript:
-          "await setup(async ({ page, baseUrl }) => { await page.goto(baseUrl); });\nawait scene('scene_requested_feature', async ({ page }) => {\n  await page.getByRole('button', { name: /example/i }).click();\n  await expect(page.getByText(/result/i)).toBeVisible();\n});",
+          "import { setup, scene } from './makeademo-capture-sdk';\n\nawait setup(async ({ page, baseUrl, expect }) => { await page.goto(baseUrl); await expect(page.locator('body')).toBeVisible(); });\nawait scene('scene_requested_feature', async ({ page, expect }) => {\n  await page.getByRole('button', { name: /example/i }).click();\n  await expect(page.getByText(/result/i)).toBeVisible();\n});",
         format: "16:9",
         presentation: {
           music: { enabled: true, trackId: "clean" },

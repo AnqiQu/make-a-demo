@@ -5,6 +5,45 @@ import { describe, expect, it } from "vitest";
 import { DefaultPlaywrightSceneRecorder } from "./playwright-scene-recorder";
 
 describe("DefaultPlaywrightSceneRecorder", () => {
+  it("rejects SDK type errors before recording browser footage", async () => {
+    const runDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-recorder-test-"),
+    );
+    await symlink(
+      join(process.cwd(), "node_modules"),
+      join(runDirectory, "node_modules"),
+    );
+    const recorder = new DefaultPlaywrightSceneRecorder();
+
+    try {
+      await expect(
+        recorder.recordScenes({
+          baseUrl: "data:text/html,<main>MakeADemo</main>",
+          demoPlaywrightScript: [
+            "import { setup, scene } from './makeademo-capture-sdk';",
+            "await setup(async ({ missingThing }) => {",
+            "  await missingThing();",
+            "});",
+            "await scene('scene-type-error', async ({ page, expect }) => {",
+            "  await expect(page.locator('main')).toBeVisible();",
+            "});",
+          ].join("\n"),
+          runDirectory,
+          scenes: [
+            {
+              expectedVisibleOutcome: "Main content is visible.",
+              humanReadableDescription: "Show main content.",
+              id: "scene-type-error",
+            },
+          ],
+          sectionId: "demo-script",
+        }),
+      ).rejects.toThrow("failed Capture SDK TypeScript validation");
+    } finally {
+      await rm(runDirectory, { force: true, recursive: true });
+    }
+  }, 20_000);
+
   it("fails a Scene that does not complete instead of hanging indefinitely", async () => {
     const runDirectory = await mkdtemp(
       join(tmpdir(), "makeademo-recorder-test-"),
@@ -21,7 +60,16 @@ describe("DefaultPlaywrightSceneRecorder", () => {
       await expect(
         recorder.recordScenes({
           baseUrl: "data:text/html,<main>MakeADemo</main>",
-          demoPlaywrightScript: "await new Promise(() => {});",
+          demoPlaywrightScript: [
+            "import { setup, scene } from './makeademo-capture-sdk';",
+            "await setup(async ({ page, baseUrl, expect }) => {",
+            "  await page.goto(baseUrl);",
+            "  await expect(page.locator('main')).toBeVisible();",
+            "});",
+            "await scene('scene-hangs', async () => {",
+            "  await new Promise(() => {});",
+            "});",
+          ].join("\n"),
           runDirectory,
           scenes: [
             {

@@ -47,13 +47,17 @@ export class DefaultScriptComposer implements ScriptComposer {
 
 function createPlaywrightScript(features: string[]): string {
   const lines = [
-    "await page.goto(baseUrl);",
-    "await expect(page.locator('body')).toContainText(/\\S/);",
+    "import { scene, setup } from './makeademo-capture-sdk';",
+    "",
+    "await setup(async ({ page, baseUrl, expect }) => {",
+    "  await page.goto(baseUrl);",
+    "  await expect(page.locator('body')).toContainText(/\\S/);",
+    "});",
   ];
 
   for (const feature of features) {
     lines.push(
-      `await scene(${JSON.stringify(`scene-${slug(feature)}`)}, async () => {`,
+      `await scene(${JSON.stringify(`scene-${slug(feature)}`)}, async ({ page, expect }) => {`,
       `  await page.locator('body').evaluate(() => document.body.setAttribute('data-makeademo-feature', ${JSON.stringify(feature)}));`,
       "  await expect(page.locator('body')).toContainText(/\\S/);",
       "});",

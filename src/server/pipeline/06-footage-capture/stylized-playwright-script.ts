@@ -12,7 +12,7 @@ export function prepareStylizedPlaywrightScript(
   script: string,
   input: PrepareStylizedPlaywrightScriptInput,
 ) {
-  const demoScript = removeCaptureSdkImports(script);
+  const demoScript = removeCaptureSdkImportsFromBody(script);
   if ((input.mode ?? "recording") === "validation") {
     return prepareValidationPlaywrightScript(demoScript, input);
   }
@@ -58,8 +58,7 @@ function wrapActionBody(
       : "";
 
   return `import { chromium, expect } from "@playwright/test";
-
-${captureSdkHelperSource()}
+import { setup, scene } from "./makeademo-capture-sdk.js";
 
 ${recordingHelperSource()}
 
@@ -75,6 +74,7 @@ const context = await browser.newContext({
 const page = await context.newPage();
 const makeADemoCaptureStartedAt = performance.now();
 const makeADemoCaptureContext = { page, baseUrl, expect };
+globalThis.__makeademoCaptureSdk = { context: makeADemoCaptureContext, startedAt: makeADemoCaptureStartedAt };
 
 try {
 ${indentScriptBody(script)}
@@ -84,6 +84,8 @@ ${indentScriptBody(script)}
   await browser.close();
 }
 void expect;
+void setup;
+void scene;
 `;
 }
 
@@ -98,8 +100,7 @@ function prepareValidationPlaywrightScript(
   const launchOptions = input.headed ? "{ headless: false }" : "";
 
   return `import { chromium, expect } from "@playwright/test";
-
-${captureSdkHelperSource()}
+import { setup, scene } from "./makeademo-capture-sdk.js";
 
 const baseUrl = ${JSON.stringify(input.baseUrl)};
 const browser = await chromium.launch(${launchOptions});
@@ -109,6 +110,7 @@ const context = await browser.newContext({
 const page = await context.newPage();
 const makeADemoCaptureStartedAt = performance.now();
 const makeADemoCaptureContext = { page, baseUrl, expect };
+globalThis.__makeademoCaptureSdk = { context: makeADemoCaptureContext, startedAt: makeADemoCaptureStartedAt };
 
 try {
   console.log("[makeademo:validation] script started", JSON.stringify({ baseUrl }));
@@ -126,36 +128,12 @@ ${indentScriptBody(script)}
   await browser.close();
 }
 void expect;
+void setup;
+void scene;
 `;
 }
 
-function captureSdkHelperSource() {
-  return `async function setup(callback) {
-  await callback(makeADemoCaptureContext);
-}
-
-async function scene(id, callback) {
-  console.log("[makeademo:scene]", JSON.stringify({ elapsedMs: makeADemoElapsedMs(), event: "started", sceneId: id }));
-  try {
-    await callback(makeADemoCaptureContext);
-    console.log("[makeademo:scene]", JSON.stringify({ elapsedMs: makeADemoElapsedMs(), event: "succeeded", sceneId: id }));
-  } catch (error) {
-    console.log("[makeademo:scene]", JSON.stringify({
-      elapsedMs: makeADemoElapsedMs(),
-      event: "failed",
-      message: error instanceof Error ? error.message : String(error),
-      sceneId: id,
-    }));
-    throw error;
-  }
-}
-
-function makeADemoElapsedMs() {
-  return Math.max(0, Math.round(performance.now() - makeADemoCaptureStartedAt));
-}`;
-}
-
-function removeCaptureSdkImports(script: string) {
+function removeCaptureSdkImportsFromBody(script: string) {
   return script
     .split("\n")
     .filter((line) => !/from\s+['"].*makeademo-capture-sdk['"]/.test(line))

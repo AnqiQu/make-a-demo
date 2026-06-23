@@ -3,6 +3,7 @@ import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { writeGeneratedCaptureSdkHarness } from "./capture-sdk-contract";
 import { prepareStylizedPlaywrightScript } from "./stylized-playwright-script";
 
 describe("prepareStylizedPlaywrightScript", () => {
@@ -40,6 +41,7 @@ describe("prepareStylizedPlaywrightScript", () => {
       join(runDirectory, "node_modules"),
     );
     const scriptPath = join(runDirectory, "demo-script.ts");
+    await writeGeneratedCaptureSdkHarness(runDirectory);
     const prepared = prepareStylizedPlaywrightScript(
       [
         "await setup(async ({ page, baseUrl, expect }) => {",
@@ -121,13 +123,16 @@ describe("prepareStylizedPlaywrightScript", () => {
       },
     );
 
-    expect(prepared).toContain("async function setup(callback)");
-    expect(prepared).toContain("async function scene(id, callback)");
+    expect(prepared).toContain(
+      'import { setup, scene } from "./makeademo-capture-sdk.js";',
+    );
+    expect(prepared).not.toContain("async function setup(callback)");
+    expect(prepared).not.toContain("async function scene(id, callback)");
     expect(prepared).toContain(
       "const makeADemoCaptureContext = { page, baseUrl, expect };",
     );
+    expect(prepared).toContain("globalThis.__makeademoCaptureSdk");
     expect(prepared).toContain("recordVideo");
-    expect(prepared).toContain("await callback(makeADemoCaptureContext);");
     expect(prepared).toContain(
       "await animatedClick(page, page.getByRole('button', { name: /send/i }));",
     );
@@ -142,6 +147,7 @@ describe("prepareStylizedPlaywrightScript", () => {
       join(runDirectory, "node_modules"),
     );
     const scriptPath = join(runDirectory, "demo-script.ts");
+    await writeGeneratedCaptureSdkHarness(runDirectory);
     const prepared = prepareStylizedPlaywrightScript(
       [
         "await scene('scene_failure', async () => {",

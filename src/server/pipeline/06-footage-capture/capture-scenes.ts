@@ -1,5 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { assertDemoScriptCaptureSdkContract } from "./capture-sdk-contract";
 import { type DemoScript, parseDemoScript } from "./demo-script.schema";
 import { DefaultPlaywrightSceneRecorder } from "./playwright-scene-recorder";
 import type { SceneRecorder } from "./scene-recorder.interface";
@@ -15,6 +16,7 @@ export type CaptureManifest = {
   baseUrl: string;
   createdAt: string;
   keepTemp: boolean;
+  qualityFindings: string[];
   manifestPath: string;
   runDirectory: string;
   runId: string;
@@ -47,6 +49,7 @@ export async function captureScenesFromScript(
   await mkdir(rawScenesDirectory, { recursive: true });
 
   const scriptPackage = await readScriptPackage(input);
+  assertDemoScriptCaptureSdkContract(scriptPackage);
   const recorder = input.recorder ?? new DefaultPlaywrightSceneRecorder();
   const scenes: CapturedSceneManifestEntry[] = [];
 
@@ -72,7 +75,16 @@ export async function captureScenesFromScript(
       scenes,
       scriptId: scriptPackage.scriptId,
       markerLogPath: join(runDirectory, "scene-markers.jsonl"),
-      rawTakePath: join(runDirectory, "raw-scenes", "continuous-take.webm"),
+      ...(keepTemp
+        ? {
+            rawTakePath: join(
+              runDirectory,
+              "raw-scenes",
+              "continuous-take.webm",
+            ),
+          }
+        : {}),
+      qualityFindings: [],
       temporary: true,
       title: scriptPackage.title,
     };

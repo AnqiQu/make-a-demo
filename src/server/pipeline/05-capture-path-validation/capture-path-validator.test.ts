@@ -61,7 +61,7 @@ describe("validateCapturePath", () => {
     });
     expect(calls).toEqual([
       "project-checks",
-      "scene:scene_validation:https://preview.example.test/:await scene('scene_validation', async () => {});",
+      "scene:scene_validation:https://preview.example.test/:import { setup, scene } from './makeademo-capture-sdk';\n\nawait setup(async ({ page, baseUrl, expect }) => {\n  await page.goto(baseUrl);\n  await expect(page.locator('body')).toBeVisible();\n});\nawait scene('scene_validation', async ({ page, expect }) => {\n  await expect(page.locator('body')).toBeVisible();\n});",
     ]);
     expect(sandboxLogs).toEqual([
       expect.objectContaining({
@@ -164,6 +164,165 @@ describe("validateCapturePath", () => {
     );
     expect(executedCommands.join("\n")).toContain("article-preview");
   });
+
+  it("rejects Demo Scripts that bypass the generated Capture SDK contract", async () => {
+    await expect(
+      validateCapturePath(
+        {
+          preparationManifest: manifest(),
+          preparationWorkspace: workspaceHandle([]),
+          videoScriptPackage: demoScript({
+            demoPlaywrightScript:
+              "import { setup, scene } from './makeademo-capture-sdk';\nawait scene('scene_validation', async ({ page, expect }) => {\n  await page.context().newPage({ recordVideo: { dir: 'videos' } });\n  console.log('[makeademo:scene]', '{}');\n  await expect(page.locator('body')).toBeVisible();\n});",
+          }),
+        },
+        {
+          async validateProject() {
+            return {
+              blockedNetworkAttempts: [],
+              browserUrl: "https://preview.example.test/",
+              logs: [],
+              status: "succeeded",
+              warnings: [],
+            };
+          },
+          sceneValidator: {
+            async validateScene() {
+              throw new Error("scene validator should not run");
+            },
+          },
+        },
+      ),
+    ).rejects.toThrow("Playwright recordVideo is owned by MakeADemo");
+  });
+
+  it("rejects declared Scenes without visible assertions", async () => {
+    await expect(
+      validateCapturePath(
+        {
+          preparationManifest: manifest(),
+          preparationWorkspace: workspaceHandle([]),
+          videoScriptPackage: demoScript({
+            demoPlaywrightScript:
+              "import { setup, scene } from './makeademo-capture-sdk';\nawait scene('scene_validation', async ({ page }) => {\n  await page.getByRole('button', { name: 'Save' }).click();\n});",
+          }),
+        },
+        {
+          async validateProject() {
+            return {
+              blockedNetworkAttempts: [],
+              browserUrl: "https://preview.example.test/",
+              logs: [],
+              status: "succeeded",
+              warnings: [],
+            };
+          },
+          sceneValidator: {
+            async validateScene() {
+              throw new Error("scene validator should not run");
+            },
+          },
+        },
+      ),
+    ).rejects.toThrow(
+      "Scene scene_validation must include a visible Playwright assertion",
+    );
+  });
+
+  it.each([
+    {
+      expectedReason: "Capture Path emitted malformed Scene marker",
+      logs: ['[makeademo:scene] {"event":"started"}'],
+      name: "malformed marker",
+    },
+    {
+      expectedReason:
+        "Capture Path emitted undeclared Scene marker scene_extra.",
+      logs: [
+        '[makeademo:scene] {"elapsedMs":10,"event":"started","sceneId":"scene_extra"}',
+        '[makeademo:scene] {"elapsedMs":20,"event":"succeeded","sceneId":"scene_extra"}',
+      ],
+      name: "undeclared marker",
+    },
+    {
+      expectedReason: "Capture Path emitted nested Scene markers.",
+      logs: [
+        '[makeademo:scene] {"elapsedMs":10,"event":"started","sceneId":"scene_validation"}',
+        '[makeademo:scene] {"elapsedMs":11,"event":"started","sceneId":"scene_second"}',
+      ],
+      name: "nested markers",
+    },
+    {
+      expectedReason:
+        "Capture Path emitted duplicate Scene marker scene_validation.",
+      logs: [
+        '[makeademo:scene] {"elapsedMs":10,"event":"started","sceneId":"scene_validation"}',
+        '[makeademo:scene] {"elapsedMs":20,"event":"succeeded","sceneId":"scene_validation"}',
+        '[makeademo:scene] {"elapsedMs":30,"event":"started","sceneId":"scene_validation"}',
+      ],
+      name: "duplicate markers",
+    },
+    {
+      expectedReason:
+        "Capture Path emitted succeeded marker before start for Scene scene_validation.",
+      logs: [
+        '[makeademo:scene] {"elapsedMs":20,"event":"succeeded","sceneId":"scene_validation"}',
+      ],
+      name: "out-of-order markers",
+    },
+    {
+      expectedReason:
+        "Scene scene_second did not emit complete Capture Path markers.",
+      logs: [
+        '[makeademo:scene] {"elapsedMs":10,"event":"started","sceneId":"scene_validation"}',
+        '[makeademo:scene] {"elapsedMs":20,"event":"succeeded","sceneId":"scene_validation"}',
+      ],
+      name: "uncovered declared scene",
+    },
+  ])("rejects $name", async ({ expectedReason, logs }) => {
+    const result = await validateCapturePath(
+      {
+        preparationManifest: manifest(),
+        preparationWorkspace: workspaceHandle([]),
+        videoScriptPackage: demoScript({
+          demoPlaywrightScript: validTwoSceneDemoPlaywrightScript(),
+          scenes: [
+            {
+              expectedVisibleOutcome: "Validation is visible.",
+              humanReadableDescription: "Show validation.",
+              id: "scene_validation",
+            },
+            {
+              expectedVisibleOutcome: "Second scene is visible.",
+              humanReadableDescription: "Show second scene.",
+              id: "scene_second",
+            },
+          ],
+        }),
+      },
+      {
+        async validateProject() {
+          return {
+            blockedNetworkAttempts: [],
+            browserUrl: "https://preview.example.test/",
+            logs: [],
+            status: "succeeded",
+            warnings: [],
+          };
+        },
+        sceneValidator: {
+          async validateScene() {
+            return { logs, status: "succeeded" };
+          },
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      failureReason: expect.stringContaining(expectedReason),
+      status: "failed",
+    });
+  });
 });
 
 function manifest() {
@@ -185,7 +344,16 @@ function manifest() {
   };
 }
 
-function demoScript() {
+function demoScript(
+  overrides: {
+    demoPlaywrightScript?: string;
+    scenes?: Array<{
+      expectedVisibleOutcome: string;
+      humanReadableDescription: string;
+      id: string;
+    }>;
+  } = {},
+) {
   return {
     assumptions: [],
     demoPlan: {
@@ -193,7 +361,9 @@ function demoScript() {
       narrative: "Demo it",
       risks: [],
     },
-    demoPlaywrightScript: "await scene('scene_validation', async () => {});",
+    demoPlaywrightScript:
+      overrides.demoPlaywrightScript ??
+      "import { setup, scene } from './makeademo-capture-sdk';\n\nawait setup(async ({ page, baseUrl, expect }) => {\n  await page.goto(baseUrl);\n  await expect(page.locator('body')).toBeVisible();\n});\nawait scene('scene_validation', async ({ page, expect }) => {\n  await expect(page.locator('body')).toBeVisible();\n});",
     exploration: { assumptions: [], productSurfaces: [], summary: "" },
     format: "16:9",
     presentation: {
@@ -201,7 +371,7 @@ function demoScript() {
       textOverlays: [],
       transitions: [],
     },
-    scenes: [
+    scenes: overrides.scenes ?? [
       {
         expectedVisibleOutcome: "Validation is visible.",
         humanReadableDescription: "Show validation.",
@@ -212,6 +382,15 @@ function demoScript() {
     title: "Demo",
     version: 1,
   };
+}
+
+function validTwoSceneDemoPlaywrightScript() {
+  return [
+    "import { setup, scene } from './makeademo-capture-sdk';",
+    "await setup(async ({ page, baseUrl, expect }) => { await page.goto(baseUrl); await expect(page.locator('body')).toBeVisible(); });",
+    "await scene('scene_validation', async ({ page, expect }) => { await expect(page.locator('body')).toBeVisible(); });",
+    "await scene('scene_second', async ({ page, expect }) => { await expect(page.locator('body')).toBeVisible(); });",
+  ].join("\n");
 }
 
 function workspaceHandle(

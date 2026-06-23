@@ -177,7 +177,7 @@ function successfulPipelineResult(): Extract<
         risks: [],
       },
       demoPlaywrightScript:
-        "await scene('scene-script-generation', async () => { await page.goto(baseUrl); });",
+        "import { setup, scene } from './makeademo-capture-sdk';\nawait setup(async ({ page, baseUrl, expect }) => { await page.goto(baseUrl); await expect(page.locator('body')).toBeVisible(); });\nawait scene('scene-script-generation', async ({ page, expect }) => { await expect(page.locator('body')).toBeVisible(); });",
       exploration: {
         assumptions: [],
         productSurfaces: [],

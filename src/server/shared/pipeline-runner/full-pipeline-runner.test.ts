@@ -35,6 +35,7 @@ describe("runFullPipelineJob", () => {
               createdAt: "2026-01-01T00:00:00.000Z",
               keepTemp: true,
               manifestPath: join(outputRoot, "capture-manifest.json"),
+              qualityFindings: [],
               runDirectory: outputRoot,
               runId: "capture",
               scenes: [],
@@ -161,6 +162,7 @@ describe("runFullPipelineJob", () => {
               createdAt: "2026-01-01T00:00:00.000Z",
               keepTemp: true,
               manifestPath: join(outputRoot, "capture-manifest.json"),
+              qualityFindings: [],
               runDirectory: outputRoot,
               runId: "capture",
               scenes: [],
@@ -491,6 +493,7 @@ describe("runFullPipelineJob", () => {
               createdAt: "2026-01-01T00:00:00.000Z",
               keepTemp: true,
               manifestPath: join(outputRoot, "capture-manifest.json"),
+              qualityFindings: [],
               runDirectory: outputRoot,
               runId: "capture",
               scenes: [
@@ -643,6 +646,174 @@ describe("runFullPipelineJob", () => {
     }
   });
 
+  it("repairs Demo Script scoped Draft Composite rejections before recapturing", async () => {
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
+    const calls: string[] = [];
+    const dependencies = stage1Dependencies(calls);
+    dependencies.repairCapturePathFailure = async (input) => {
+      calls.push(
+        `draft-repair:${input.attempt}:${input.videoScriptPackage.scriptId}:${input.opencodeSessionID}`,
+      );
+      return {
+        preparationManifest: input.preparationManifest,
+        videoScriptPackage: {
+          ...input.videoScriptPackage,
+          scriptId: "script_repaired_after_review",
+        },
+      };
+    };
+
+    try {
+      const result = await runFullPipelineJob(
+        {
+          demoBrief: { keyProductFeatures: ["article feed"] },
+          normalizedSupportingDocuments: [],
+          repoSecurity: {
+            files: [{ path: "package.json", text: "{}" }],
+            repoStats: { fileCount: 1, sizeBytes: 100 },
+          },
+          repoUrl: "https://github.com/example/app",
+          workspaceId: "workspace_123",
+        },
+        dependencies,
+        {
+          async captureScenes(input) {
+            const scriptPackage = input.scriptPackage as { scriptId: string };
+            calls.push(
+              `capture:${input.runId}:${scriptPackage.scriptId}:${input.baseUrl}`,
+            );
+            return {
+              ...captureManifest(outputRoot, input.runId ?? "capture"),
+              scriptId: scriptPackage.scriptId,
+            };
+          },
+          async compositeVideo(input) {
+            const scriptPackage = input.scriptPackage as { scriptId: string };
+            calls.push(`composite:${input.runId}:${scriptPackage.scriptId}`);
+            return {
+              ...compositeManifest(outputRoot, input.runId ?? "composite"),
+              scriptId: scriptPackage.scriptId,
+            };
+          },
+          async reviewDraftComposite(input) {
+            calls.push(
+              `review:${input.attempt}:${input.scriptPackage.scriptId}:${input.opencodeSessionID}`,
+            );
+            return input.attempt === 1
+              ? {
+                  decision: "repair",
+                  reason: "Tighten the Demo Script pacing.",
+                  repairScope: "demo-script",
+                }
+              : { decision: "accept", reason: "Repaired script is concise." };
+          },
+          outputRoot,
+          runId: "full-run",
+        },
+      );
+
+      expect(result.stage1.videoScriptPackage.scriptId).toBe(
+        "script_repaired_after_review",
+      );
+      expect(result.finalVideo.scriptId).toBe("script_repaired_after_review");
+      expect(calls).toEqual([
+        "repo-security-screen",
+        "repo-preparation",
+        "script-generation",
+        "capture-path-validation",
+        "capture:capture-1:script_test:https://preview.example.test/",
+        "composite:composite-1:script_test",
+        "review:1:script_test:session_prepare_123",
+        "draft-repair:1:script_test:session_prepare_123",
+        "capture-path-validation",
+        "capture:capture-2:script_repaired_after_review:https://preview.example.test/",
+        "composite:composite-2:script_repaired_after_review",
+        "review:2:script_repaired_after_review:session_prepare_123",
+      ]);
+    } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("reruns Stage 1 for workspace-scoped Draft Composite repairs before recapturing", async () => {
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
+    const calls: string[] = [];
+    const dependencies = stage1Dependencies(calls);
+    let validationCount = 0;
+    dependencies.validateCapturePath = async () => {
+      validationCount += 1;
+      calls.push(`capture-path-validation:${validationCount}`);
+      return {
+        blockedNetworkAttempts: [],
+        browserUrl:
+          validationCount === 1
+            ? "https://preview.example.test/"
+            : "https://repaired-preview.example.test/",
+        logs: ["validated capture path"],
+        status: "succeeded",
+        warnings: [],
+      };
+    };
+
+    try {
+      const result = await runFullPipelineJob(
+        {
+          demoBrief: { keyProductFeatures: ["article feed"] },
+          normalizedSupportingDocuments: [],
+          repoSecurity: {
+            files: [{ path: "package.json", text: "{}" }],
+            repoStats: { fileCount: 1, sizeBytes: 100 },
+          },
+          repoUrl: "https://github.com/example/app",
+          workspaceId: "workspace_123",
+        },
+        dependencies,
+        {
+          async captureScenes(input) {
+            calls.push(`capture:${input.runId}:${input.baseUrl}`);
+            return captureManifest(outputRoot, input.runId ?? "capture");
+          },
+          async compositeVideo(input) {
+            calls.push(`composite:${input.runId}`);
+            return compositeManifest(outputRoot, input.runId ?? "composite");
+          },
+          async reviewDraftComposite(input) {
+            calls.push(`review:${input.attempt}:${input.opencodeSessionID}`);
+            return input.attempt === 1
+              ? {
+                  decision: "repair",
+                  reason: "Workspace state needs repair.",
+                  repairScope: "workspace",
+                }
+              : { decision: "accept", reason: "Workspace repair worked." };
+          },
+          outputRoot,
+          runId: "full-run",
+        },
+      );
+
+      expect(result.finalVideo.runId).toBe("composite-2");
+      expect(calls).toEqual([
+        "repo-security-screen",
+        "repo-preparation",
+        "script-generation",
+        "capture-path-validation:1",
+        "capture:capture-1:https://preview.example.test/",
+        "composite:composite-1",
+        "review:1:session_prepare_123",
+        "repo-security-screen",
+        "repo-preparation",
+        "script-generation",
+        "capture-path-validation:2",
+        "capture:capture-2:https://repaired-preview.example.test/",
+        "composite:composite-2",
+        "review:2:session_prepare_123",
+      ]);
+    } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
   it("returns the latest Draft Composite with warnings when review repair attempts are exhausted", async () => {
     const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
     const previousReviewAttempts =
@@ -787,11 +958,180 @@ describe("runFullPipelineJob", () => {
       await rm(outputRoot, { force: true, recursive: true });
     }
   });
+
+  it("routes audio and static-footage evidence through the Draft Composite repair loop", async () => {
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
+    const previousReviewAttempts =
+      process.env.MAKEADEMO_DRAFT_COMPOSITE_REVIEW_ATTEMPTS;
+    process.env.MAKEADEMO_DRAFT_COMPOSITE_REVIEW_ATTEMPTS = "0";
+    const reviewEvidence: unknown[] = [];
+
+    try {
+      const result = await runFullPipelineJob(
+        {
+          demoBrief: { keyProductFeatures: ["article feed"] },
+          normalizedSupportingDocuments: [],
+          repoSecurity: {
+            files: [{ path: "package.json", text: "{}" }],
+            repoStats: { fileCount: 1, sizeBytes: 100 },
+          },
+          repoUrl: "https://github.com/example/app",
+          workspaceId: "workspace_123",
+        },
+        stage1Dependencies([], { musicEnabled: true }),
+        {
+          async captureScenes(input) {
+            return captureManifest(outputRoot, input.runId ?? "capture");
+          },
+          async compositeVideo(input) {
+            return compositeManifest(outputRoot, input.runId ?? "composite");
+          },
+          async inspectDraftCompositeEvidence() {
+            return {
+              audioPresent: false,
+              contactSheetPaths: [join(outputRoot, "contact-sheet.jpg")],
+              ffmpegFindings: ["no audio streams found"],
+              sampledFramePaths: [join(outputRoot, "frame-001.jpg")],
+              staticSceneIds: ["scene_article_feed"],
+            };
+          },
+          async reviewDraftComposite(input) {
+            reviewEvidence.push(input.derivedEvidence);
+            return { decision: "accept" };
+          },
+          outputRoot,
+          runId: "full-run",
+        },
+      );
+
+      expect(result.draftCompositeReview).toEqual({
+        attempts: 1,
+        findings: [
+          "Draft Composite is missing audio while music is enabled",
+          "Scene scene_article_feed contains fully static footage",
+        ],
+        status: "exhausted",
+        warnings: [
+          "Draft Composite review retry limit exceeded; using latest draft.",
+          "Draft Composite review requested repair: Draft Composite is missing audio while music is enabled; Scene scene_article_feed contains fully static footage",
+          "Remaining quality gate: Draft Composite is missing audio while music is enabled",
+          "Remaining quality gate: Scene scene_article_feed contains fully static footage",
+        ],
+      });
+      expect(reviewEvidence).toEqual([
+        expect.objectContaining({
+          contactSheetPaths: [join(outputRoot, "contact-sheet.jpg")],
+          ffmpegFindings: ["no audio streams found"],
+          qualityFindings: [
+            "Draft Composite is missing audio while music is enabled",
+            "Scene scene_article_feed contains fully static footage",
+          ],
+          rawDraftCompositePath: join(outputRoot, "composite-1.mp4"),
+          rawTakePath: join(outputRoot, "capture-1-raw.webm"),
+          sampledFramePaths: [join(outputRoot, "frame-001.jpg")],
+        }),
+      ]);
+    } finally {
+      if (previousReviewAttempts === undefined) {
+        Reflect.deleteProperty(
+          process.env,
+          "MAKEADEMO_DRAFT_COMPOSITE_REVIEW_ATTEMPTS",
+        );
+      } else {
+        process.env.MAKEADEMO_DRAFT_COMPOSITE_REVIEW_ATTEMPTS =
+          previousReviewAttempts;
+      }
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("includes per-Scene duration and capture findings in deterministic review gates", async () => {
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
+    const previousMaxSceneDuration =
+      process.env.MAKEADEMO_MAX_SCENE_CLIP_SECONDS;
+    const previousReviewAttempts =
+      process.env.MAKEADEMO_DRAFT_COMPOSITE_REVIEW_ATTEMPTS;
+    process.env.MAKEADEMO_MAX_SCENE_CLIP_SECONDS = "4";
+    process.env.MAKEADEMO_DRAFT_COMPOSITE_REVIEW_ATTEMPTS = "0";
+
+    try {
+      const result = await runFullPipelineJob(
+        {
+          demoBrief: { keyProductFeatures: ["article feed"] },
+          normalizedSupportingDocuments: [],
+          repoSecurity: {
+            files: [{ path: "package.json", text: "{}" }],
+            repoStats: { fileCount: 1, sizeBytes: 100 },
+          },
+          repoUrl: "https://github.com/example/app",
+          workspaceId: "workspace_123",
+        },
+        stage1Dependencies([]),
+        {
+          async captureScenes(input) {
+            return {
+              ...captureManifest(outputRoot, input.runId ?? "capture"),
+              qualityFindings: ["Capture clip has low visual entropy"],
+              scenes: [
+                {
+                  durationSeconds: 5,
+                  sceneId: "scene_article_feed",
+                  sectionId: "demo-script",
+                  videoPath: join(outputRoot, "scene.webm"),
+                },
+              ],
+            };
+          },
+          async compositeVideo(input) {
+            return {
+              ...compositeManifest(outputRoot, input.runId ?? "composite"),
+              durationInFrames: 90,
+            };
+          },
+          async reviewDraftComposite() {
+            return { decision: "accept" };
+          },
+          outputRoot,
+          runId: "full-run",
+        },
+      );
+
+      expect(result.draftCompositeReview.findings).toEqual([
+        "Capture clip has low visual entropy",
+        "Scene scene_article_feed duration 5.00s exceeds 4s",
+      ]);
+      expect(result.draftCompositeReview.warnings).toEqual(
+        expect.arrayContaining([
+          "Remaining quality gate: Capture clip has low visual entropy",
+          "Remaining quality gate: Scene scene_article_feed duration 5.00s exceeds 4s",
+        ]),
+      );
+    } finally {
+      if (previousMaxSceneDuration === undefined) {
+        Reflect.deleteProperty(process.env, "MAKEADEMO_MAX_SCENE_CLIP_SECONDS");
+      } else {
+        process.env.MAKEADEMO_MAX_SCENE_CLIP_SECONDS = previousMaxSceneDuration;
+      }
+      if (previousReviewAttempts === undefined) {
+        Reflect.deleteProperty(
+          process.env,
+          "MAKEADEMO_DRAFT_COMPOSITE_REVIEW_ATTEMPTS",
+        );
+      } else {
+        process.env.MAKEADEMO_DRAFT_COMPOSITE_REVIEW_ATTEMPTS =
+          previousReviewAttempts;
+      }
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
 });
 
 function stage1Dependencies(
   calls: string[],
-  options: { includeBrowserUrl?: boolean } = { includeBrowserUrl: true },
+  options: { includeBrowserUrl?: boolean; musicEnabled?: boolean } = {
+    includeBrowserUrl: true,
+    musicEnabled: false,
+  },
 ): PipelineOrchestratorDependencies {
   return {
     async generateScriptPackage() {
@@ -804,7 +1144,7 @@ function stage1Dependencies(
           risks: [],
         },
         demoPlaywrightScript:
-          "await scene('scene_article_feed', async () => { await page.goto(baseUrl); });",
+          "import { setup, scene } from './makeademo-capture-sdk';\nawait setup(async ({ page, baseUrl, expect }) => { await page.goto(baseUrl); await expect(page.locator('body')).toBeVisible(); });\nawait scene('scene_article_feed', async ({ page, expect }) => { await expect(page.locator('body')).toBeVisible(); });",
         exploration: {
           assumptions: [],
           productSurfaces: ["article feed"],
@@ -812,7 +1152,9 @@ function stage1Dependencies(
         },
         format: "16:9",
         presentation: {
-          music: { enabled: false as const },
+          music: options.musicEnabled
+            ? { enabled: true as const, trackId: "focus" as const }
+            : { enabled: false as const },
           textOverlays: [],
           transitions: [],
         },
@@ -894,6 +1236,8 @@ function captureManifest(outputRoot: string, runId: string): CaptureManifest {
     createdAt: "2026-01-01T00:00:00.000Z",
     keepTemp: true,
     manifestPath: join(outputRoot, `${runId}-capture-manifest.json`),
+    qualityFindings: [],
+    rawTakePath: join(outputRoot, `${runId}-raw.webm`),
     runDirectory: outputRoot,
     runId,
     scenes: [
