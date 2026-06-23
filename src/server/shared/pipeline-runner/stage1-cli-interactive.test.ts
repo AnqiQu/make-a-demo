@@ -8,9 +8,6 @@ describe("collectStage1CliOptions", () => {
       "https://github.com/example/app",
       "validation dashboard, script package",
       "./brief.md, ./setup-notes.txt",
-      "openai",
-      "gpt-5.5",
-      "workspace-demo",
     ];
 
     const options = await collectStage1CliOptions(
@@ -28,8 +25,9 @@ describe("collectStage1CliOptions", () => {
       modelID: "gpt-5.5",
       providerID: "openai",
       repoUrl: "https://github.com/example/app",
-      workspaceId: "workspace-demo",
+      workspaceId: expect.stringMatching(/^workspace-example-app-\d+$/),
     });
+    expect(answers).toEqual([]);
   });
 
   it("re-prompts with guidance when an answer is invalid", async () => {
@@ -38,9 +36,6 @@ describe("collectStage1CliOptions", () => {
       "https://github.com/example/app",
       "",
       "validation dashboard",
-      "",
-      "",
-      "",
       "",
     ];
     const messages: string[] = [];

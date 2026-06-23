@@ -28,11 +28,7 @@ export function parseStage1CliArgs(
 ): Stage1CliOptions {
   const docs: string[] = [];
   const features: string[] = [];
-  let modelID = "gpt-5.5";
-  let providerID = "openai";
   let repoUrl: string | undefined;
-  let workspaceId: string | undefined;
-  let daytonaSnapshot = defaults.daytonaSnapshot;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -46,24 +42,8 @@ export function parseStage1CliArgs(
         features.push(readValue(args, index, arg));
         index += 1;
         break;
-      case "--model":
-        modelID = readValue(args, index, arg);
-        index += 1;
-        break;
-      case "--provider":
-        providerID = readValue(args, index, arg);
-        index += 1;
-        break;
-      case "--daytona-snapshot":
-        daytonaSnapshot = readValue(args, index, arg);
-        index += 1;
-        break;
       case "--repo":
         repoUrl = readValue(args, index, arg);
-        index += 1;
-        break;
-      case "--workspace-id":
-        workspaceId = readValue(args, index, arg);
         index += 1;
         break;
       default:
@@ -80,13 +60,15 @@ export function parseStage1CliArgs(
   }
 
   return {
-    ...(daytonaSnapshot === undefined ? {} : { daytonaSnapshot }),
+    ...(defaults.daytonaSnapshot === undefined
+      ? {}
+      : { daytonaSnapshot: defaults.daytonaSnapshot }),
     docs,
     features,
-    modelID,
-    providerID,
+    modelID: "gpt-5.5",
+    providerID: "openai",
     repoUrl,
-    workspaceId: workspaceId ?? createWorkspaceId(repoUrl),
+    workspaceId: createWorkspaceId(repoUrl),
   };
 }
 

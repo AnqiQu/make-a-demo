@@ -85,15 +85,6 @@ export function buildBenchmarkPipelineArgs(input: BenchmarkPipelineArgsInput) {
   for (const feature of input.repo.features) {
     args.push("--feature", feature);
   }
-  args.push("--model", input.repo.effectiveModel);
-  args.push("--provider", input.repo.effectiveProvider);
-
-  if (input.repo.workspaceId !== undefined) {
-    args.push("--workspace-id", input.repo.workspaceId);
-  }
-  if (input.repo.effectiveDaytonaSnapshot !== undefined) {
-    args.push("--daytona-snapshot", input.repo.effectiveDaytonaSnapshot);
-  }
   for (const doc of input.repo.docs) {
     args.push("--doc", doc);
   }
