@@ -19,24 +19,23 @@ describe("ContextGatheringApp", () => {
     );
   });
 
-  it("brands the product as MakeADemo with Owlet attribution", () => {
+  it("brands the product as MakeADemo without Owlet attribution", () => {
     const html = renderToStaticMarkup(createElement(ContextGatheringApp));
 
     expect(html).toContain("MakeADemo");
-    expect(html).toContain("by Owlet");
+    expect(html).not.toContain("by Owlet");
     expect(html).toContain("Make me a demo");
     expect(html).not.toContain("A peak into our personalised demo machine");
     expect(html).not.toContain("Let&#x27;s Hoot");
   });
 
-  it("keeps the Owlet attribution in one stable brand position across Context Gathering pages", () => {
+  it("does not reserve layout for removed Owlet attribution", () => {
     const styles = readFileSync(
       new URL("../styles.css", import.meta.url),
       "utf8",
     );
 
-    expect(styles).not.toContain(".owlet-shell-details .brand-attribution");
-    expect(styles).not.toContain(".owlet-shell-submitted .brand-attribution");
+    expect(styles).not.toContain("brand-attribution");
   });
 
   it("places repo submission beside the URL field with one GitHub access guidance sentence", () => {

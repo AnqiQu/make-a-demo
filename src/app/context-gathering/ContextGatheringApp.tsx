@@ -11,7 +11,6 @@ import {
 import { useEffect, useState } from "react";
 
 import githubLogoUrl from "../../../assets/github-logo.png";
-import owletLogoUrl from "../../../assets/owl-logo.png";
 import {
   type ContextGatheringDraft,
   type IntakeDetailsInput,
@@ -534,10 +533,6 @@ export function ContextGatheringApp() {
     <main className={`owlet-shell owlet-shell-${draft.chatStep}`}>
       <section className="brand" aria-label="MakeADemo">
         <span className="brand-name">MakeADemo</span>
-        <aside className="brand-attribution" aria-label="by Owlet">
-          <span>by Owlet</span>
-          <img alt="" src={owletLogoUrl} />
-        </aside>
       </section>
 
       {draft.chatStep === "repo" ? (
