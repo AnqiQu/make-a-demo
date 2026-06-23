@@ -1,7 +1,6 @@
 import { compositeVideoFromScript } from "../../pipeline/07-compositing/composite-video";
 import { finalVideoEmailsEnabled } from "../../pipeline/final-output/final-video-email-feature";
-import { DaytonaOpenCodeScriptGenerationAgent } from "../integrations/agents/daytona-opencode-script-generation-agent";
-import { createRepoPreparationAgent } from "../integrations/agents/repo-preparation-agent-factory";
+import { DaytonaOpenCodeAgent } from "../integrations/agents/daytona-opencode-agent";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import { createResendFinalVideoEmailNotifierFromEnv } from "../integrations/email/resend-final-video-email-notifier";
 import { DaytonaSandboxRunner } from "../integrations/sandbox/daytona-sandbox-runner";
@@ -46,14 +45,9 @@ const sandboxProvider = new DaytonaSdkPreparationWorkspaceProvider({
   apiKey: daytonaApiKey,
   ...(daytonaSnapshot === undefined ? {} : { snapshot: daytonaSnapshot }),
 });
-const repoPreparationAgent = createRepoPreparationAgent({
+const openCodeAgent = new DaytonaOpenCodeAgent({
   daytonaApiKey,
   ...(daytonaSnapshot === undefined ? {} : { daytonaSnapshot }),
-  modelID,
-  providerApiKey: readProviderApiKey(providerID),
-  providerID,
-});
-const scriptGenerationAgent = new DaytonaOpenCodeScriptGenerationAgent({
   modelID,
   providerApiKey: readProviderApiKey(providerID),
   providerID,
@@ -94,9 +88,9 @@ do {
             workspaceId: job.workspaceId,
           },
           createStage1PipelineDependencies({
-            repoPreparationAgent,
+            repoPreparationAgent: openCodeAgent,
             sandboxRunner: new DaytonaSandboxRunner(),
-            scriptGenerationAgent,
+            scriptGenerationAgent: openCodeAgent,
           }),
           {
             async compositeVideo(input) {

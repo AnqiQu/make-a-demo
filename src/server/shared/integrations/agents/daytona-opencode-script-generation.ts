@@ -21,7 +21,7 @@ const makeADemoOpenCodeConfigDirectory = `${makeADemoArtifactDirectory}/opencode
 const preparationManifestPath = `${makeADemoArtifactDirectory}/preparation-manifest.json`;
 const demoScriptPath = `${makeADemoArtifactDirectory}/demo-script.json`;
 
-export type DaytonaOpenCodeScriptGenerationAgentOptions = {
+export type DaytonaOpenCodeScriptGenerationOptions = {
   modelID: string;
   onStderr?: (chunk: string) => void;
   onStdout?: (chunk: string) => void;
@@ -30,7 +30,7 @@ export type DaytonaOpenCodeScriptGenerationAgentOptions = {
   maxAttempts?: number;
 };
 
-export class DaytonaOpenCodeScriptGenerationAgent
+export class DaytonaOpenCodeScriptGeneration
   implements CapturePathRepairer, ScriptGenerationAgent
 {
   private readonly maxAttempts: number;
@@ -40,7 +40,7 @@ export class DaytonaOpenCodeScriptGenerationAgent
   private readonly providerApiKey: string;
   private readonly providerID: string;
 
-  constructor(options: DaytonaOpenCodeScriptGenerationAgentOptions) {
+  constructor(options: DaytonaOpenCodeScriptGenerationOptions) {
     this.maxAttempts = options.maxAttempts ?? 3;
     this.modelID = options.modelID;
     this.onStderr = options.onStderr;

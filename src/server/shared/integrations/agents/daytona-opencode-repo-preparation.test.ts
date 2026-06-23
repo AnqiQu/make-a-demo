@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import type { PreparationWorkspaceProvider } from "../../../pipeline/03-repo-preparation/preparation-workspace-runner";
 import type { PreparationWorkspace } from "../../../pipeline/03-repo-preparation/preparation-workspace.interface";
-import { DaytonaOpenCodeRepoPreparationAgent } from "./daytona-opencode-repo-preparation-agent";
+import { DaytonaOpenCodeRepoPreparation } from "./daytona-opencode-repo-preparation";
 
-describe("DaytonaOpenCodeRepoPreparationAgent", () => {
+describe("DaytonaOpenCodeRepoPreparation", () => {
   it("clones the submitted repo and runs OpenCode inside Daytona", async () => {
     const events: unknown[] = [];
     const streamed: string[] = [];
-    const agent = new DaytonaOpenCodeRepoPreparationAgent({
+    const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
       onStderr: (chunk) => streamed.push(`stderr:${chunk}`),
       onStdout: (chunk) => streamed.push(`stdout:${chunk}`),
@@ -82,7 +82,7 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
 
   it("handles custom tool dependency install requests in the retained Daytona workspace", async () => {
     const events: unknown[] = [];
-    const agent = new DaytonaOpenCodeRepoPreparationAgent({
+    const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
       providerApiKey: "openai_key",
       provider: fakeProvider(events, {
@@ -170,7 +170,7 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
   it("returns a successful preparation result as soon as backend validation passes", async () => {
     const events: unknown[] = [];
     const validations: unknown[] = [];
-    const agent = new DaytonaOpenCodeRepoPreparationAgent({
+    const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
       providerApiKey: "openai_key",
       provider: fakeProvider(events, {
@@ -239,7 +239,7 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
   });
 
   it("preserves the OpenCode session ID from streamed output when validation passes", async () => {
-    const agent = new DaytonaOpenCodeRepoPreparationAgent({
+    const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
       providerApiKey: "openai_key",
       provider: fakeProvider([], {
@@ -277,7 +277,7 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
   it("returns malformed manifest handoff failures to the agent as validation feedback", async () => {
     const events: unknown[] = [];
     let validationStarted = false;
-    const agent = new DaytonaOpenCodeRepoPreparationAgent({
+    const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
       providerApiKey: "openai_key",
       provider: fakeProvider(events, {
@@ -342,7 +342,7 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
 
   it("writes Repo Preparation lifecycle events to the sandbox Pino log seam", async () => {
     const events: unknown[] = [];
-    const agent = new DaytonaOpenCodeRepoPreparationAgent({
+    const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
       provider: fakeProvider(events, {
         commandStdout: ["Submitted preparation result."],
@@ -387,7 +387,7 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
   it("mirrors meaningful streamed OpenCode output into the sandbox Pino log seam", async () => {
     const events: unknown[] = [];
     const streamed: string[] = [];
-    const agent = new DaytonaOpenCodeRepoPreparationAgent({
+    const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
       onStderr: (chunk) => streamed.push(`stderr:${chunk}`),
       onStdout: (chunk) => streamed.push(`stdout:${chunk}`),
@@ -442,7 +442,7 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
 
   it("filters terminal-control-only OpenCode chunks out of the sandbox audit log", async () => {
     const events: unknown[] = [];
-    const agent = new DaytonaOpenCodeRepoPreparationAgent({
+    const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
       provider: fakeProvider(events, {
         commandStderrChunks: ["\r"],
@@ -476,7 +476,7 @@ describe("DaytonaOpenCodeRepoPreparationAgent", () => {
   it("fails fast instead of starting backend validation when the preparation deadline is nearly exhausted", async () => {
     const events: unknown[] = [];
     let validationStarted = false;
-    const agent = new DaytonaOpenCodeRepoPreparationAgent({
+    const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
       providerApiKey: "openai_key",
       provider: fakeProvider(events, {

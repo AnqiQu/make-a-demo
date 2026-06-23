@@ -2,6 +2,7 @@ import { screenRepoSecurity } from "../../pipeline/02-repo-security-screen/repo-
 import type { RepoPreparationAgent } from "../../pipeline/03-repo-preparation/repo-preparation-agent.interface";
 import { prepareRepo } from "../../pipeline/03-repo-preparation/repo-preparer";
 import { DefaultDemoPlanner } from "../../pipeline/04-script-generation/demo-planning/default-demo-planner";
+import { PreparationManifestProjectExplorer } from "../../pipeline/04-script-generation/project-exploration/preparation-manifest-project-explorer";
 import { DefaultScriptComposer } from "../../pipeline/04-script-generation/script-composition/default-script-composer";
 import type { ScriptGenerationAgent } from "../../pipeline/04-script-generation/script-generation-agent.interface";
 import { generateVideoScriptPackage } from "../../pipeline/04-script-generation/script-generation-orchestrator";
@@ -12,7 +13,6 @@ import { DefaultCapturePathSceneValidator } from "../../pipeline/05-capture-path
 import type { BrowserValidator } from "../../pipeline/05-capture-path-validation/project-runtime-preflight/browser-validator.interface";
 import { validateProject } from "../../pipeline/05-capture-path-validation/project-runtime-preflight/project-validator";
 import type { SandboxRunner } from "../../pipeline/05-capture-path-validation/project-runtime-preflight/sandbox-runner.interface";
-import { LlmProjectExplorer } from "../integrations/agents/llm-project-explorer";
 import { PlaywrightBrowserValidator } from "../integrations/browser/playwright-browser-validator";
 import type { PipelineOrchestratorDependencies } from "./pipeline-orchestrator";
 
@@ -39,7 +39,7 @@ export function createStage1PipelineDependencies(
     generateScriptPackage(input) {
       return generateVideoScriptPackage(input, {
         demoPlanner: new DefaultDemoPlanner(),
-        projectExplorer: new LlmProjectExplorer(),
+        projectExplorer: new PreparationManifestProjectExplorer(),
         ...(options.scriptGenerationAgent === undefined
           ? {}
           : { scriptGenerationAgent: options.scriptGenerationAgent }),

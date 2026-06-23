@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { LlmProjectExplorer } from "./llm-project-explorer";
+import { PreparationManifestProjectExplorer } from "./preparation-manifest-project-explorer";
 
-describe("LlmProjectExplorer", () => {
+describe("PreparationManifestProjectExplorer", () => {
   it("summarizes preparation context and supporting documents without a separate agent", async () => {
-    const explorer = new LlmProjectExplorer();
+    const explorer = new PreparationManifestProjectExplorer();
 
     await expect(
       explorer.exploreProject({

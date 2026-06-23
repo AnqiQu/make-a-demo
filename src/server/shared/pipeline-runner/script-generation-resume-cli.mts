@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { DaytonaOpenCodeScriptGenerationAgent } from "../integrations/agents/daytona-opencode-script-generation-agent";
+import { DaytonaOpenCodeScriptGeneration } from "../integrations/agents/daytona-opencode-script-generation";
 import { createDaytonaSdkPreparationWorkspaceHandle } from "../integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import { createOpenCodeOutputStream } from "./opencode-output-stream";
 import { createOpenCodeRawOutputLog } from "./opencode-raw-output-log";
@@ -39,7 +39,7 @@ const preparationWorkspace = await createDaytonaSdkPreparationWorkspaceHandle({
   apiKey: daytonaApiKey,
   sandboxId: resume.preparationWorkspaceId,
 });
-const scriptGenerationAgent = new DaytonaOpenCodeScriptGenerationAgent({
+const scriptGenerationAgent = new DaytonaOpenCodeScriptGeneration({
   modelID: options.modelID,
   onStderr: (chunk) => {
     rawOpenCodeLog.write("stderr", chunk);

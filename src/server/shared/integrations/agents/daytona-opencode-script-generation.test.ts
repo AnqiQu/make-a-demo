@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import type { PreparationWorkspace } from "../../../pipeline/03-repo-preparation/preparation-workspace.interface";
-import { DaytonaOpenCodeScriptGenerationAgent } from "./daytona-opencode-script-generation-agent";
+import { DaytonaOpenCodeScriptGeneration } from "./daytona-opencode-script-generation";
 
-describe("DaytonaOpenCodeScriptGenerationAgent", () => {
+describe("DaytonaOpenCodeScriptGeneration", () => {
   it("resumes the Repo Preparation OpenCode session and returns an interactive Demo Script", async () => {
     const events: unknown[] = [];
     const stdout: string[] = [];
-    const agent = new DaytonaOpenCodeScriptGenerationAgent({
+    const agent = new DaytonaOpenCodeScriptGeneration({
       modelID: "gpt-5.5",
       onStdout: (chunk) => stdout.push(chunk),
       providerApiKey: "openai_key",
@@ -56,7 +56,7 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
     const events: unknown[] = [];
     const stderr: string[] = [];
     const stdout: string[] = [];
-    const agent = new DaytonaOpenCodeScriptGenerationAgent({
+    const agent = new DaytonaOpenCodeScriptGeneration({
       modelID: "gpt-5.5",
       onStderr: (chunk) => stderr.push(chunk),
       onStdout: (chunk) => stdout.push(chunk),
@@ -105,7 +105,7 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
 
   it("repairs static placeholder Demo Scripts in the same OpenCode session", async () => {
     const events: unknown[] = [];
-    const agent = new DaytonaOpenCodeScriptGenerationAgent({
+    const agent = new DaytonaOpenCodeScriptGeneration({
       maxAttempts: 2,
       modelID: "gpt-5.5",
       providerApiKey: "openai_key",
@@ -138,7 +138,7 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
 
   it("sends Capture Path Validation failure evidence back to the same OpenCode session for repair", async () => {
     const events: unknown[] = [];
-    const agent = new DaytonaOpenCodeScriptGenerationAgent({
+    const agent = new DaytonaOpenCodeScriptGeneration({
       modelID: "gpt-5.5",
       providerApiKey: "openai_key",
       providerID: "openai",
