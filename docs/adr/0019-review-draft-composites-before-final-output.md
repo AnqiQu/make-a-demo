@@ -1,0 +1,7 @@
+# Review Draft Composites Before Final Output
+
+MakeADemo will produce a Draft Composite and require the same long-lived OpenCode session to return a structured `accept` or `repair` decision before final output is accepted. We chose draft-video review rather than raw-clip-only review because the quality problems that matter include narrative flow, text overlays, transitions, music, scene boundaries, and final timing, which only exist in the composited video.
+
+Backend deterministic gates will stay intentionally narrow: duration bounds, audio presence when music is enabled, and each Scene containing non-static footage. Other findings such as blank frames, weak composition, repeated setup, poor narrative, or missing viewer context are sent to the agent as review evidence; if repair is requested, MakeADemo reruns capture and draft compositing within a bounded retry budget, rerunning full Capture Path Validation first when the prepared workspace changes.
+
+If the Draft Composite review limit is exceeded, MakeADemo will still output the latest Draft Composite as a successful Pipeline Job with structured warning metadata and a limit-exceeded pipeline log entry, including any remaining deterministic gate failures. We chose this degraded-success behavior because returning a usable artifact with an operator-visible warning is preferable to failing after all generation work has produced a video.

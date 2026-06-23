@@ -9,7 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { CaptureManifest } from "../06-capture/capture-scenes";
+import type { CaptureManifest } from "../06-footage-capture/capture-scenes";
 import type { FinalVideoEmailNotifier } from "../final-output/final-video-email-notifier.interface";
 import type {
   DemoRequestFinalVideoStore,

@@ -5,7 +5,7 @@ import postgres from "postgres";
 import type {
   DemoRequestScriptStore,
   SaveGeneratedScriptInput,
-} from "../../pipeline/05-script-generation/demo-request-script-store.interface";
+} from "../../pipeline/04-script-generation/demo-request-script-store.interface";
 import type {
   DemoRequestFinalVideoStore,
   LinkFinalVideoInput,

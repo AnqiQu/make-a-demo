@@ -112,8 +112,7 @@ function readResumeFile(contents: string): ScriptGenerationResumeFile {
     typeof resume.repoUrl !== "string" ||
     typeof resume.runDirectory !== "string" ||
     resume.demoBrief === undefined ||
-    resume.preparationManifest === undefined ||
-    resume.validation === undefined
+    resume.preparationManifest === undefined
   ) {
     throw new Error(
       "Script Generation resume file is missing required fields.",
@@ -128,7 +127,6 @@ function readResumeFile(contents: string): ScriptGenerationResumeFile {
     preparationWorkspaceId: resume.preparationWorkspaceId,
     repoUrl: resume.repoUrl,
     runDirectory: resume.runDirectory,
-    validation: resume.validation,
   };
 }
 
@@ -154,11 +152,6 @@ function readFlagValue(args: string[], index: number, flag: string): string {
   return value;
 }
 
-function countScenes(scriptPackage: {
-  sections: Array<{ scenes: unknown[] }>;
-}) {
-  return scriptPackage.sections.reduce(
-    (total, section) => total + section.scenes.length,
-    0,
-  );
+function countScenes(scriptPackage: { scenes: unknown[] }) {
+  return scriptPackage.scenes.length;
 }

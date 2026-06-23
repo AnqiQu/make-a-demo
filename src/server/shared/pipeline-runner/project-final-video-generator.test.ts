@@ -161,14 +161,14 @@ function successfulPipelineResult(): Extract<
       url: "http://localhost:3000",
       workspaceId: "project-1",
     },
-    status: "succeeded",
-    validation: {
+    capturePathValidation: {
       blockedNetworkAttempts: [],
       browserUrl: "https://preview.example.test/",
-      logs: ["validated"],
+      logs: ["validated capture path"],
       status: "succeeded",
       warnings: [],
     },
+    status: "succeeded",
     videoScriptPackage: {
       assumptions: [],
       demoPlan: {
@@ -176,39 +176,28 @@ function successfulPipelineResult(): Extract<
         narrative: "Demo script generation.",
         risks: [],
       },
-      estimatedDurationSeconds: 3,
+      demoPlaywrightScript:
+        "await scene('scene-script-generation', async () => { await page.goto(baseUrl); });",
       exploration: {
         assumptions: [],
         productSurfaces: [],
         summary: "A demo generator.",
       },
       format: "16:9",
-      scriptId: "script-project-1",
-      sections: [
+      presentation: {
+        music: { enabled: false },
+        textOverlays: [],
+        transitions: [],
+      },
+      scenes: [
         {
-          id: "section-main",
-          scenes: [
-            {
-              description: "Demonstrate script generation.",
-              durationSeconds: 3,
-              events: ["Show script generation"],
-              id: "scene-script-generation",
-              playwrightSceneId: "scene-script-generation",
-              playwrightScript: "await page.goto(baseUrl);",
-              type: "playwright-recording",
-            },
-          ],
-          title: "Main flow",
+          expectedVisibleOutcome: "Script generation is visible.",
+          humanReadableDescription: "Demonstrate script generation.",
+          id: "scene-script-generation",
         },
       ],
+      scriptId: "script-project-1",
       title: "Generated Demo",
-      validation: {
-        blockedNetworkAttempts: [],
-        browserUrl: "https://preview.example.test/",
-        logs: ["validated"],
-        status: "succeeded",
-        warnings: [],
-      },
       version: 1,
     },
   };

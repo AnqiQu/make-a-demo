@@ -35,39 +35,28 @@ describe("NeonDemoRequestFinalVideoStore", () => {
           narrative: "Show the article feed.",
           risks: [],
         },
-        estimatedDurationSeconds: 5,
+        demoPlaywrightScript:
+          "await scene('scene_article_feed', async () => { await page.goto(baseUrl); });",
         exploration: {
           assumptions: [],
           productSurfaces: ["article feed"],
           summary: "Prepared app.",
         },
         format: "16:9",
-        scriptId: "script_test",
-        sections: [
+        presentation: {
+          music: { enabled: false },
+          textOverlays: [],
+          transitions: [],
+        },
+        scenes: [
           {
-            id: "section_test",
-            scenes: [
-              {
-                description: "Show article feed.",
-                durationSeconds: 5,
-                events: ["Open app"],
-                id: "scene_article_feed",
-                playwrightSceneId: "scene_article_feed",
-                playwrightScript: "await page.goto(baseUrl);",
-                type: "playwright-recording",
-              },
-            ],
-            title: "Article Feed",
+            expectedVisibleOutcome: "The article feed is visible.",
+            humanReadableDescription: "Show article feed.",
+            id: "scene_article_feed",
           },
         ],
+        scriptId: "script_test",
         title: "Demo",
-        validation: {
-          blockedNetworkAttempts: [],
-          browserUrl: "https://preview.example.test/",
-          logs: ["validated"],
-          status: "succeeded",
-          warnings: [],
-        },
         version: 1,
       },
     });

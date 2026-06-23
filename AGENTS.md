@@ -2,7 +2,7 @@
 
 Repo skills are pinned in `skills-lock.json`. Do not commit installed skill copies under `.agents/`; that directory is local generated state and is ignored by git.
 
-Agent-facing CLI tools are pinned separately in `tools-lock.json`. `railway` is installed from the pinned `@railway/cli` package in `package.json`/`bun.lock`; `daytona` is pinned to an exact GitHub release asset and checksum because it is not distributed as an npm CLI.
+Agent-facing CLI tools are tracked separately in `tools-lock.json`. `railway` is installed from the pinned `@railway/cli` package in `package.json`/`bun.lock`; `daytona` follows the latest GitHub release because it is not distributed as an npm CLI.
 
 Before using repo-level skills in OpenCode, restore them locally:
 
@@ -22,7 +22,7 @@ This repo uses the default triage label vocabulary. See `docs/agents/triage-labe
 
 ### Domain docs
 
-This is a single-context repo. See `docs/agents/domain.md`. You should always take a look at this info BEFORE DOING ANYTHING to facilitate better communication. 
+This is a single-context repo. See `docs/agents/domain.md`. You should always take a look at this info BEFORE DOING ANYTHING to facilitate better communication.
 
 ## Project Introduction
 
@@ -64,7 +64,11 @@ For runtime-code changes, always use the `tdd` skill if you have to it. If you d
 - Use `infra:` for deployment, CI, environment, sandbox, cloud, or operational tooling changes.
 - Use `generated:` for regenerated artifacts such as dependency graphs, schemas, lockfiles, or other machine-generated outputs when committed separately.
 - Prefer a specific subject that explains the exact change, such as `bugfix: preserve Daytona preview paths` rather than `bugfix: fix pipeline`.
-- N.B. When asked to commit, split staged work into multiple small commits if one concise message would omit important nuance; each commit should be fully described by its short subject.
+- Before committing, ask the user whether the work completes or relates to any Linear issues. If it does, ask them to open the relevant Linear issue and copy the issue text into their response so the commit can be tied to the correct issue context.
+- When a commit or PR is about a Linear issue, include the relevant Linear issue key in the commit subject or PR title, for example `feature(OWL-22): add draft composite review`.
+- When a commit or PR should close a Linear issue, include a Linear closing magic word and issue key in the title/subject, not only in the body. Use a closing form such as `Closes OWL-22: add draft composite review` in the PR title, or `feature: closes OWL-22 add draft composite review` in a commit subject when committing directly to the default branch.
+- Use non-closing Linear words such as `Refs OWL-22` only when the work is related but should not move the issue to Done after merge.
+- N.B. When asked to commit, split staged work into multiple small commits. N.B.: Commits should be atomic: each commit should be fully described by its short subject and should not be able to be split apart anymore without losing important context.
 
 ### Testing
 

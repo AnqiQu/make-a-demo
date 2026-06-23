@@ -1,6 +1,6 @@
 import type { DemoBrief } from "../01-context-gathering/intake/demo-brief.schema";
 import type { NormalizedSupportingDocument } from "../01-context-gathering/supporting-documents";
-import type { ProjectValidationResult } from "../04-project-validation/validation-result";
+import type { ProjectValidationResult } from "../05-capture-path-validation/project-runtime-preflight/validation-result";
 import type { PreparationManifest } from "./preparation-manifest";
 import type { PreparationWorkspaceHandle } from "./preparation-workspace-runner";
 

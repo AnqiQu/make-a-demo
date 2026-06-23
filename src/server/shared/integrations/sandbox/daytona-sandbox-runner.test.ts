@@ -3,10 +3,17 @@ import { describe, expect, it } from "vitest";
 import type { PreparationWorkspaceHandle } from "../../../pipeline/03-repo-preparation/preparation-workspace-runner";
 import { DaytonaSandboxRunner } from "./daytona-sandbox-runner";
 
+const STOP_DEMO_COMMAND =
+  "sh -lc 'if test -f /tmp/makeademo-demo.pid; then kill -- -$(cat /tmp/makeademo-demo.pid) >/dev/null 2>&1 || true; rm -f /tmp/makeademo-demo.pid; fi'";
+const START_DEMO_COMMAND =
+  "sh -lc 'cd /workspace && nohup setsid sh -c '\\''exec npm run demo'\\'' > /tmp/makeademo-demo.log 2>&1 & echo $! > /tmp/makeademo-demo.pid && echo $!'";
+
 describe("DaytonaSandboxRunner", () => {
   it("validates the retained prepared Daytona workspace", async () => {
     const workspace = new FakePreparationWorkspaceHandle();
-    const runner = new DaytonaSandboxRunner();
+    const runner = new DaytonaSandboxRunner({
+      destroyWorkspaceOnCleanup: true,
+    });
 
     const result = await runner.runValidation({
       demoCommand: "npm run demo",
@@ -19,7 +26,8 @@ describe("DaytonaSandboxRunner", () => {
     expect(workspace.commands).toEqual([
       "find /workspace -maxdepth 1 -mindepth 1 -printf '%f\\n' | sort",
       "npm ci",
-      "sh -lc 'cd /workspace && nohup npm run demo > /tmp/makeademo-demo.log 2>&1 & echo $!'",
+      STOP_DEMO_COMMAND,
+      START_DEMO_COMMAND,
       "node -e 'fetch(process.argv[1]).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));' 'http://localhost:3000'",
       "if test -f /tmp/makeademo-demo.log; then cat /tmp/makeademo-demo.log; fi",
     ]);
@@ -30,7 +38,7 @@ describe("DaytonaSandboxRunner", () => {
       logs: [
         "package-lock.json\npackage.json\n",
         "ran npm ci",
-        "ran sh -lc 'cd /workspace && nohup npm run demo > /tmp/makeademo-demo.log 2>&1 & echo $!'",
+        `ran ${START_DEMO_COMMAND}`,
       ],
       repoFiles: ["package-lock.json", "package.json"],
       runtimeExitCode: 0,
@@ -41,9 +49,28 @@ describe("DaytonaSandboxRunner", () => {
     expect(workspace.destroyed).toBe(true);
   });
 
-  it("writes Project Validation progress and demo server output to sandbox logs", async () => {
+  it("preserves the prepared Daytona workspace by default after validation", async () => {
     const workspace = new FakePreparationWorkspaceHandle();
     const runner = new DaytonaSandboxRunner();
+
+    const result = await runner.runValidation({
+      demoCommand: "npm run demo",
+      preparationManifest: manifest("workspace_123"),
+      preparationWorkspace: workspace,
+      repoUrl: "https://github.com/example/app",
+      url: "http://localhost:3000",
+    });
+
+    await result.cleanup?.();
+
+    expect(workspace.destroyed).toBe(false);
+  });
+
+  it("writes Project Validation progress and demo server output to sandbox logs", async () => {
+    const workspace = new FakePreparationWorkspaceHandle();
+    const runner = new DaytonaSandboxRunner({
+      destroyWorkspaceOnCleanup: true,
+    });
 
     await runner.runValidation({
       demoCommand: "npm run demo",
@@ -77,7 +104,9 @@ describe("DaytonaSandboxRunner", () => {
   });
 
   it("requires the retained Repo Preparation workspace", async () => {
-    const runner = new DaytonaSandboxRunner();
+    const runner = new DaytonaSandboxRunner({
+      destroyWorkspaceOnCleanup: true,
+    });
 
     await expect(
       runner.runValidation({
@@ -93,7 +122,9 @@ describe("DaytonaSandboxRunner", () => {
     const workspace = new FakePreparationWorkspaceHandle(
       new Map([["npm ci", 1]]),
     );
-    const runner = new DaytonaSandboxRunner();
+    const runner = new DaytonaSandboxRunner({
+      destroyWorkspaceOnCleanup: true,
+    });
 
     const result = await runner.runValidation({
       demoCommand: "npm run demo",
@@ -113,7 +144,9 @@ describe("DaytonaSandboxRunner", () => {
 
   it("closes outbound network and destroys the workspace when install execution throws", async () => {
     const workspace = new FakePreparationWorkspaceHandle(new Map(), "npm ci");
-    const runner = new DaytonaSandboxRunner();
+    const runner = new DaytonaSandboxRunner({
+      destroyWorkspaceOnCleanup: true,
+    });
 
     await expect(
       runner.runValidation({
@@ -144,10 +177,26 @@ describe("DaytonaSandboxRunner", () => {
     });
 
     expect(workspace.commands).not.toContain("npm run demo");
-    expect(workspace.commands).toContain(
-      "sh -lc 'cd /workspace && nohup npm run demo > /tmp/makeademo-demo.log 2>&1 & echo $!'",
-    );
+    expect(workspace.commands).toContain(START_DEMO_COMMAND);
     expect(result.runtimeExitCode).toBe(0);
+  });
+
+  it("stops the previous MakeADemo demo process before launching validation", async () => {
+    const workspace = new FakePreparationWorkspaceHandle();
+    const runner = new DaytonaSandboxRunner();
+
+    await runner.runValidation({
+      demoCommand: "npm run demo",
+      preparationManifest: manifest("workspace_123"),
+      preparationWorkspace: workspace,
+      repoUrl: "https://github.com/example/app",
+      url: "http://localhost:3000",
+    });
+
+    expect(workspace.commands).toContain(STOP_DEMO_COMMAND);
+    expect(workspace.commands.indexOf(STOP_DEMO_COMMAND)).toBeLessThan(
+      workspace.commands.indexOf(START_DEMO_COMMAND),
+    );
   });
 
   it("waits for the prepared demo URL before browser validation can run", async () => {

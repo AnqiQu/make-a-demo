@@ -4,13 +4,13 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import type { CaptureManifest } from "../../pipeline/06-capture/capture-scenes";
+import type { CaptureManifest } from "../../pipeline/06-footage-capture/capture-scenes";
 import type { CompositedVideoManifest } from "../../pipeline/07-compositing/composite-video";
 import { runFullPipelineJob } from "./full-pipeline-runner";
 import type { PipelineOrchestratorDependencies } from "./pipeline-orchestrator";
 
 describe("runFullPipelineJob", () => {
-  it("runs Stage 1, captures scenes from the validated browser URL, and composites the final video", async () => {
+  it("runs Stage 1, captures scenes from the capture-path browser URL, and composites the final video", async () => {
     const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
     const calls: string[] = [];
 
@@ -81,6 +81,7 @@ describe("runFullPipelineJob", () => {
         "repo-security-screen",
         "repo-preparation",
         "script-generation",
+        "capture-path-validation",
         "capture:https://preview.example.test/",
         `composite:${join(outputRoot, "capture-manifest.json")}`,
       ]);
@@ -95,11 +96,7 @@ describe("runFullPipelineJob", () => {
         artifacts: {
           captureManifestPath: join(outputRoot, "capture-manifest.json"),
           finalVideoPath: join(outputRoot, "final-video.mp4"),
-          generatedScriptPath: join(
-            outputRoot,
-            "full-run",
-            "video-script-package.json",
-          ),
+          generatedScriptPath: join(outputRoot, "full-run", "demo-script.json"),
           logPath: join(outputRoot, "full-run", "pipeline-log.jsonl"),
           rawOpenCodeLogPath: join(
             outputRoot,
@@ -124,13 +121,12 @@ describe("runFullPipelineJob", () => {
         preparationWorkspaceId: "daytona_workspace",
         repoUrl: "https://github.com/example/app",
         runDirectory: join(outputRoot, "full-run"),
-        validation: { browserUrl: "https://preview.example.test/" },
       });
       expect(result.logPath).toBe(
         join(outputRoot, "full-run", "pipeline-log.jsonl"),
       );
       await expect(
-        stat(join(outputRoot, "full-run", "video-script-package.json")),
+        stat(join(outputRoot, "full-run", "demo-script.json")),
       ).resolves.toMatchObject({ isFile: expect.any(Function) });
     } finally {
       await rm(outputRoot, { force: true, recursive: true });
@@ -217,7 +213,7 @@ describe("runFullPipelineJob", () => {
       ]);
       expect(result.scriptPath).toBeUndefined();
       await expect(
-        stat(join(outputRoot, "full-run", "video-script-package.json")),
+        stat(join(outputRoot, "full-run", "demo-script.json")),
       ).rejects.toThrow();
       await expect(readJsonFile(result.resultPath)).resolves.toMatchObject({
         artifacts: {
@@ -230,7 +226,7 @@ describe("runFullPipelineJob", () => {
     }
   });
 
-  it("fails before capture when Stage 1 did not produce a validated browser URL", async () => {
+  it("fails before capture when Capture Path Validation did not produce a browser URL", async () => {
     await expect(
       runFullPipelineJob(
         {
@@ -253,7 +249,7 @@ describe("runFullPipelineJob", () => {
           },
         },
       ),
-    ).rejects.toThrow("Stage 1 did not return a validated browser URL");
+    ).rejects.toThrow("Capture Path Validation did not return a browser URL");
   });
 
   it("writes a local result file with failure details when Stage 1 fails", async () => {
@@ -286,8 +282,8 @@ describe("runFullPipelineJob", () => {
             screenRepoSecurity() {
               return { rejections: [], status: "passed", warnings: [] };
             },
-            async validateProject() {
-              throw new Error("validation should not run");
+            async validateCapturePath() {
+              throw new Error("capture path validation should not run");
             },
           },
           {
@@ -324,6 +320,80 @@ describe("runFullPipelineJob", () => {
         status: "preparation-failed",
       });
     } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("reports Capture Path Validation exhaustion as a MakeADemo issue instead of preparation advice", async () => {
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
+    const previousRepairAttempts =
+      process.env.MAKEADEMO_CAPTURE_PATH_REPAIR_ATTEMPTS;
+    process.env.MAKEADEMO_CAPTURE_PATH_REPAIR_ATTEMPTS = "0";
+
+    try {
+      await expect(
+        runFullPipelineJob(
+          {
+            demoBrief: { keyProductFeatures: ["article feed"] },
+            normalizedSupportingDocuments: [],
+            repoSecurity: {
+              files: [{ path: "package.json", text: "{}" }],
+              repoStats: { fileCount: 1, sizeBytes: 100 },
+            },
+            repoUrl: "https://github.com/example/app",
+            workspaceId: "workspace_123",
+          },
+          {
+            ...stage1Dependencies([]),
+            async validateCapturePath() {
+              return {
+                blockedNetworkAttempts: [],
+                browserUrl: "https://preview.example.test/",
+                failedSceneId: "scene_article_feed",
+                failureReason: "Generated selector did not match.",
+                logs: ["selector failed"],
+                status: "failed",
+                warnings: ["Retry with more seeded data."],
+              };
+            },
+          },
+          {
+            async captureScenes() {
+              throw new Error("capture should not run");
+            },
+            async compositeVideo() {
+              throw new Error("compositing should not run");
+            },
+            outputRoot,
+            runId: "capture-path-fails",
+          },
+        ),
+      ).rejects.toThrow(
+        "Stage 1 failed with status capture-path-validation-failed",
+      );
+
+      await expect(
+        readJsonFile(
+          join(outputRoot, "capture-path-fails", "full-pipeline-result.json"),
+        ),
+      ).resolves.toMatchObject({
+        failure: {
+          blockers: [
+            "Capture Path Validation failed. Please report this issue to MakeADemo.",
+          ],
+        },
+        status: "capture-path-validation-failed",
+      });
+    } finally {
+      if (previousRepairAttempts === undefined) {
+        Reflect.deleteProperty(
+          process.env,
+          "MAKEADEMO_CAPTURE_PATH_REPAIR_ATTEMPTS",
+        );
+      } else {
+        process.env.MAKEADEMO_CAPTURE_PATH_REPAIR_ATTEMPTS =
+          previousRepairAttempts;
+      }
       await rm(outputRoot, { force: true, recursive: true });
     }
   });
@@ -368,21 +438,16 @@ describe("runFullPipelineJob", () => {
                 },
                 opencodeSessionID: "session_prepare_123",
                 status: "succeeded",
-                validation: {
-                  blockedNetworkAttempts: [],
-                  browserUrl: "https://preview.example.test/",
-                  logs: ["validated"],
-                  status: "succeeded",
-                  warnings: [],
-                },
                 workspace: fakePreparationWorkspaceHandle(),
               };
             },
             screenRepoSecurity() {
               return { rejections: [], status: "passed", warnings: [] };
             },
-            async validateProject() {
-              throw new Error("validation should not rerun");
+            async validateCapturePath() {
+              throw new Error(
+                "capture path validation should not run after script generation fails",
+              );
             },
           },
           { outputRoot, runId: "scriptgen-fails" },
@@ -396,7 +461,6 @@ describe("runFullPipelineJob", () => {
       ).resolves.toMatchObject({
         opencodeSessionID: "session_prepare_123",
         preparationWorkspaceId: "daytona_workspace",
-        validation: { browserUrl: "https://preview.example.test/" },
       });
     } finally {
       await rm(outputRoot, { force: true, recursive: true });
@@ -433,7 +497,7 @@ describe("runFullPipelineJob", () => {
                 {
                   durationSeconds: 5,
                   sceneId: "scene_article_feed",
-                  sectionId: "section_test",
+                  sectionId: "demo-script",
                   videoPath: join(outputRoot, "scene.webm"),
                 },
               ],
@@ -469,7 +533,8 @@ describe("runFullPipelineJob", () => {
           "repo-security-screen started.",
           "repo-preparation started.",
           "script-generation succeeded.",
-          "Script package generated: 1 section(s), 1 scene(s), 5s estimated.",
+          "capture-path-validation succeeded.",
+          "Demo Script generated: 1 scene(s).",
           "Footage Capture started.",
           "Footage Capture succeeded: 1 scene video(s).",
           "Compositing started.",
@@ -485,9 +550,8 @@ describe("runFullPipelineJob", () => {
       expect(logEntries).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            event: "script-package-written",
-            message:
-              "Script package generated: 1 section(s), 1 scene(s), 5s estimated.",
+            event: "demo-script-written",
+            message: "Demo Script generated: 1 scene(s).",
             scriptPath: result.scriptPath,
           }),
           expect.objectContaining({
@@ -511,6 +575,218 @@ describe("runFullPipelineJob", () => {
       await rm(outputRoot, { force: true, recursive: true });
     }
   });
+
+  it("reviews the Draft Composite, repairs rejected drafts, and returns the accepted retry", async () => {
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
+    const calls: string[] = [];
+
+    try {
+      const result = await runFullPipelineJob(
+        {
+          demoBrief: { keyProductFeatures: ["article feed"] },
+          normalizedSupportingDocuments: [],
+          repoSecurity: {
+            files: [{ path: "package.json", text: "{}" }],
+            repoStats: { fileCount: 1, sizeBytes: 100 },
+          },
+          repoUrl: "https://github.com/example/app",
+          workspaceId: "workspace_123",
+        },
+        stage1Dependencies(calls),
+        {
+          async captureScenes(input) {
+            calls.push(`capture:${input.runId}`);
+            return captureManifest(outputRoot, input.runId ?? "capture");
+          },
+          async compositeVideo(input) {
+            calls.push(`composite:${input.runId}`);
+            return compositeManifest(outputRoot, input.runId ?? "composite");
+          },
+          async reviewDraftComposite(input) {
+            calls.push(
+              `review:${input.attempt}:${input.draftComposite.viewUrl}`,
+            );
+            return input.attempt === 1
+              ? {
+                  decision: "repair",
+                  reason: "First draft repeats setup.",
+                  repairScope: "demo-script",
+                }
+              : { decision: "accept", reason: "Retry is concise." };
+          },
+          outputRoot,
+          runId: "full-run",
+        },
+      );
+
+      expect(result.finalVideo.runId).toBe("composite-2");
+      expect(result.draftCompositeReview).toEqual({
+        attempts: 2,
+        findings: [],
+        status: "accepted",
+        warnings: [],
+      });
+      expect(calls).toEqual([
+        "repo-security-screen",
+        "repo-preparation",
+        "script-generation",
+        "capture-path-validation",
+        "capture:capture-1",
+        "composite:composite-1",
+        "review:1:file:///tmp/composite-1.mp4",
+        "capture:capture-2",
+        "composite:composite-2",
+        "review:2:file:///tmp/composite-2.mp4",
+      ]);
+    } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("returns the latest Draft Composite with warnings when review repair attempts are exhausted", async () => {
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
+    const previousReviewAttempts =
+      process.env.MAKEADEMO_DRAFT_COMPOSITE_REVIEW_ATTEMPTS;
+    process.env.MAKEADEMO_DRAFT_COMPOSITE_REVIEW_ATTEMPTS = "1";
+
+    try {
+      const result = await runFullPipelineJob(
+        {
+          demoBrief: { keyProductFeatures: ["article feed"] },
+          normalizedSupportingDocuments: [],
+          repoSecurity: {
+            files: [{ path: "package.json", text: "{}" }],
+            repoStats: { fileCount: 1, sizeBytes: 100 },
+          },
+          repoUrl: "https://github.com/example/app",
+          workspaceId: "workspace_123",
+        },
+        stage1Dependencies([]),
+        {
+          async captureScenes(input) {
+            return captureManifest(outputRoot, input.runId ?? "capture");
+          },
+          async compositeVideo(input) {
+            return compositeManifest(outputRoot, input.runId ?? "composite");
+          },
+          async reviewDraftComposite() {
+            return {
+              decision: "repair",
+              reason: "Draft still lacks visible payoff.",
+              repairScope: "demo-script",
+            };
+          },
+          outputRoot,
+          runId: "full-run",
+        },
+      );
+
+      expect(result.status).toBe("succeeded");
+      expect(result.finalVideo.runId).toBe("composite-2");
+      expect(result.draftCompositeReview).toEqual({
+        attempts: 2,
+        findings: [],
+        status: "exhausted",
+        warnings: [
+          "Draft Composite review retry limit exceeded; using latest draft.",
+          "Draft Composite review requested repair: Draft still lacks visible payoff.",
+        ],
+      });
+      await expect(readJsonFile(result.resultPath)).resolves.toMatchObject({
+        draftCompositeReview: {
+          attempts: 2,
+          status: "exhausted",
+          warnings: [
+            "Draft Composite review retry limit exceeded; using latest draft.",
+            "Draft Composite review requested repair: Draft still lacks visible payoff.",
+          ],
+        },
+        status: "succeeded",
+      });
+    } finally {
+      if (previousReviewAttempts === undefined) {
+        Reflect.deleteProperty(
+          process.env,
+          "MAKEADEMO_DRAFT_COMPOSITE_REVIEW_ATTEMPTS",
+        );
+      } else {
+        process.env.MAKEADEMO_DRAFT_COMPOSITE_REVIEW_ATTEMPTS =
+          previousReviewAttempts;
+      }
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("routes deterministic Draft Composite duration failures through the repair loop", async () => {
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
+    const previousMaxDuration =
+      process.env.MAKEADEMO_MAX_DRAFT_COMPOSITE_SECONDS;
+    process.env.MAKEADEMO_MAX_DRAFT_COMPOSITE_SECONDS = "4";
+    const calls: string[] = [];
+
+    try {
+      const result = await runFullPipelineJob(
+        {
+          demoBrief: { keyProductFeatures: ["article feed"] },
+          normalizedSupportingDocuments: [],
+          repoSecurity: {
+            files: [{ path: "package.json", text: "{}" }],
+            repoStats: { fileCount: 1, sizeBytes: 100 },
+          },
+          repoUrl: "https://github.com/example/app",
+          workspaceId: "workspace_123",
+        },
+        stage1Dependencies([]),
+        {
+          async captureScenes(input) {
+            calls.push(`capture:${input.runId}`);
+            return captureManifest(outputRoot, input.runId ?? "capture");
+          },
+          async compositeVideo(input) {
+            calls.push(`composite:${input.runId}`);
+            return {
+              ...compositeManifest(outputRoot, input.runId ?? "composite"),
+              durationInFrames: input.runId === "composite-1" ? 150 : 90,
+            };
+          },
+          async reviewDraftComposite(input) {
+            calls.push(
+              `review:${input.attempt}:${input.derivedEvidence.qualityFindings.length}`,
+            );
+            return { decision: "accept" };
+          },
+          outputRoot,
+          runId: "full-run",
+        },
+      );
+
+      expect(result.finalVideo.runId).toBe("composite-2");
+      expect(result.draftCompositeReview).toEqual({
+        attempts: 2,
+        findings: [],
+        status: "accepted",
+        warnings: [],
+      });
+      expect(calls).toEqual([
+        "capture:capture-1",
+        "composite:composite-1",
+        "review:1:1",
+        "capture:capture-2",
+        "composite:composite-2",
+        "review:2:0",
+      ]);
+    } finally {
+      if (previousMaxDuration === undefined) {
+        Reflect.deleteProperty(
+          process.env,
+          "MAKEADEMO_MAX_DRAFT_COMPOSITE_SECONDS",
+        );
+      } else {
+        process.env.MAKEADEMO_MAX_DRAFT_COMPOSITE_SECONDS = previousMaxDuration;
+      }
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
 });
 
 function stage1Dependencies(
@@ -527,39 +803,28 @@ function stage1Dependencies(
           narrative: "Show the article feed.",
           risks: [],
         },
-        estimatedDurationSeconds: 5,
+        demoPlaywrightScript:
+          "await scene('scene_article_feed', async () => { await page.goto(baseUrl); });",
         exploration: {
           assumptions: [],
           productSurfaces: ["article feed"],
           summary: "Prepared app.",
         },
         format: "16:9",
-        scriptId: "script_test",
-        sections: [
+        presentation: {
+          music: { enabled: false as const },
+          textOverlays: [],
+          transitions: [],
+        },
+        scenes: [
           {
-            id: "section_test",
-            scenes: [
-              {
-                description: "Show article feed.",
-                durationSeconds: 5,
-                events: ["Open app"],
-                id: "scene_article_feed",
-                playwrightSceneId: "scene_article_feed",
-                playwrightScript: "await page.goto(baseUrl);",
-                type: "playwright-recording",
-              },
-            ],
-            title: "Article Feed",
+            expectedVisibleOutcome: "The article feed is visible.",
+            humanReadableDescription: "Show article feed.",
+            id: "scene_article_feed",
           },
         ],
+        scriptId: "script_test",
         title: "Demo",
-        validation: {
-          blockedNetworkAttempts: [],
-          browserUrl: "https://preview.example.test/",
-          logs: ["validated"],
-          status: "succeeded",
-          warnings: [],
-        },
         version: 1,
       };
     },
@@ -584,15 +849,6 @@ function stage1Dependencies(
         },
         opencodeSessionID: "session_prepare_123",
         status: "succeeded",
-        validation: {
-          blockedNetworkAttempts: [],
-          ...(options.includeBrowserUrl === false
-            ? {}
-            : { browserUrl: "https://preview.example.test/" }),
-          logs: ["validated"],
-          status: "succeeded",
-          warnings: [],
-        },
         workspace: fakePreparationWorkspaceHandle(),
       };
     },
@@ -600,8 +856,17 @@ function stage1Dependencies(
       calls.push("repo-security-screen");
       return { rejections: [], status: "passed", warnings: [] };
     },
-    async validateProject() {
-      throw new Error("validation should not rerun");
+    async validateCapturePath() {
+      calls.push("capture-path-validation");
+      return {
+        blockedNetworkAttempts: [],
+        ...(options.includeBrowserUrl === false
+          ? {}
+          : { browserUrl: "https://preview.example.test/" }),
+        logs: ["validated capture path"],
+        status: "succeeded",
+        warnings: [],
+      };
     },
   };
 }
@@ -620,6 +885,47 @@ function fakePreparationWorkspaceHandle() {
       async setOutboundNetworkAccess() {},
       async uploadFiles() {},
     },
+  };
+}
+
+function captureManifest(outputRoot: string, runId: string): CaptureManifest {
+  return {
+    baseUrl: "https://preview.example.test/",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    keepTemp: true,
+    manifestPath: join(outputRoot, `${runId}-capture-manifest.json`),
+    runDirectory: outputRoot,
+    runId,
+    scenes: [
+      {
+        durationSeconds: 5,
+        sceneId: "scene_article_feed",
+        sectionId: "demo-script",
+        videoPath: join(outputRoot, `${runId}.webm`),
+      },
+    ],
+    scriptId: "script_test",
+    temporary: true,
+    title: "Demo",
+  };
+}
+
+function compositeManifest(
+  outputRoot: string,
+  runId: string,
+): CompositedVideoManifest {
+  return {
+    createdAt: "2026-01-01T00:00:00.000Z",
+    durationInFrames: 150,
+    fps: 30,
+    manifestPath: join(outputRoot, `${runId}-composite-manifest.json`),
+    outputVideoPath: join(outputRoot, `${runId}.mp4`),
+    renderPlanPath: join(outputRoot, `${runId}-render-plan.json`),
+    runDirectory: outputRoot,
+    runId,
+    scriptId: "script_test",
+    title: "Demo",
+    viewUrl: `file:///tmp/${runId}.mp4`,
   };
 }
 

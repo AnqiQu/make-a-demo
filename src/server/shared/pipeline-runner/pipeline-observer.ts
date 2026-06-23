@@ -2,6 +2,7 @@ import { createPipelineEventLogger } from "../logging/pipeline-event-logger";
 
 export type PipelineStage =
   | "compositing"
+  | "capture-path-validation"
   | "project-validation"
   | "repo-preparation"
   | "repo-security-screen"

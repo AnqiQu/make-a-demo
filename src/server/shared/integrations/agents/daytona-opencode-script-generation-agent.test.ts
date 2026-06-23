@@ -4,7 +4,7 @@ import type { PreparationWorkspace } from "../../../pipeline/03-repo-preparation
 import { DaytonaOpenCodeScriptGenerationAgent } from "./daytona-opencode-script-generation-agent";
 
 describe("DaytonaOpenCodeScriptGenerationAgent", () => {
-  it("resumes the validated Repo Preparation OpenCode session and returns an interactive script package", async () => {
+  it("resumes the Repo Preparation OpenCode session and returns an interactive Demo Script", async () => {
     const events: unknown[] = [];
     const stdout: string[] = [];
     const agent = new DaytonaOpenCodeScriptGenerationAgent({
@@ -21,12 +21,11 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
     });
 
     expect(result.scriptId).toBe("script_conduit");
-    expect(result.sections[0]?.scenes[0]).toMatchObject({
-      playwrightSceneId: "scene_feed",
-      type: "playwright-recording",
+    expect(result.scenes[0]).toMatchObject({
+      expectedVisibleOutcome: "Filtered demo articles are visible.",
+      id: "scene_feed",
     });
     expect(result.demoPlan.featureOrder).toEqual(["article feed"]);
-    expect(result.validation.status).toBe("succeeded");
     expect(events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -45,11 +44,14 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
     )?.execute;
     expect(openCodeCommand).toContain("--session 'session_prepare_123'");
     expect(openCodeCommand).not.toContain("OPENAI_API_KEY");
+    expect(openCodeCommand).toContain("scriptId");
+    expect(openCodeCommand).toContain("demoPlaywrightScript");
+    expect(openCodeCommand).toContain("expectedVisibleOutcome");
     expect(stdout.join("\n")).toContain(
       "Script Generation OpenCode attempt 1 starting in session session_prepare_123.",
     );
     expect(stdout.join("\n")).toContain(
-      "Script Generation OpenCode attempt 1 produced a valid script package.",
+      "Script Generation OpenCode attempt 1 produced a valid Demo Script.",
     );
   });
 
@@ -104,7 +106,7 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
     );
   });
 
-  it("repairs static placeholder script packages in the same OpenCode session", async () => {
+  it("repairs static placeholder Demo Scripts in the same OpenCode session", async () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeScriptGenerationAgent({
       maxAttempts: 2,
@@ -135,7 +137,83 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
       .map((event) => event.execute);
     expect(openCodeCommands).toHaveLength(2);
     expect(openCodeCommands[1]).toContain("placeholder actions");
+    expect(openCodeCommands[1]).toContain("scriptId");
+    expect(openCodeCommands[1]).toContain("demoPlaywrightScript");
+    expect(openCodeCommands[1]).toContain("format");
     expect(openCodeCommands[1]).toContain("--session 'session_prepare_123'");
+  });
+
+  it("sends Capture Path Validation failure evidence back to the same OpenCode session for repair", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeScriptGenerationAgent({
+      modelID: "gpt-5.5",
+      providerApiKey: "openai_key",
+      providerID: "openai",
+    });
+
+    const result = await agent.repairCapturePathFailure({
+      attempt: 1,
+      failure: {
+        blockedNetworkAttempts: [],
+        failedSceneId: "scene_feed",
+        failureReason:
+          "Scene scene_feed failed during Capture Path Validation.",
+        logs: ["locator failed: getByRole('button', { name: /react/i })"],
+        scriptPath: ".makeademo-capture-path-validation-runs/run/scene_feed.ts",
+        stderrPath:
+          ".makeademo-capture-path-validation-runs/run/scene_feed.stderr.log",
+        status: "failed",
+        warnings: [],
+      },
+      opencodeSessionID: "session_prepare_123",
+      preparationManifest: scriptGenerationInput().preparationManifest,
+      preparationWorkspace: workspaceHandle(events, [interactivePackage()]),
+      repoUrl: "https://github.com/example/conduit",
+      videoScriptPackage: {
+        ...interactivePackage(),
+        assumptions: [],
+        demoPlan: {
+          featureOrder: ["article feed"],
+          narrative: "Conduit article feed demo",
+          risks: [],
+        },
+        exploration: {
+          assumptions: [],
+          productSurfaces: [],
+          summary: "Prepared Conduit with local articles.",
+        },
+      },
+    });
+
+    expect(result.videoScriptPackage.scriptId).toBe("script_conduit");
+    const openCodeCommand = events.find(
+      (event): event is { execute: string } =>
+        typeof event === "object" &&
+        event !== null &&
+        "execute" in event &&
+        typeof event.execute === "string" &&
+        event.execute.includes("opencode run"),
+    )?.execute;
+    expect(openCodeCommand).toContain("--session 'session_prepare_123'");
+    expect(openCodeCommand).toContain("Capture Path Validation failed");
+    expect(openCodeCommand).toContain("scene_feed");
+    expect(openCodeCommand).toContain("locator failed");
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "capture-path-repair.opencode-attempt.started",
+            stage: "capture-path-repair",
+          }),
+        },
+        {
+          sandboxLog: expect.objectContaining({
+            event: "capture-path-repair.demo-script.succeeded",
+            stage: "capture-path-repair",
+          }),
+        },
+      ]),
+    );
   });
 });
 
@@ -156,6 +234,14 @@ function workspaceHandle(events: unknown[], artifacts: unknown[]) {
         options?.onStdout?.("script generation output");
         options?.onStderr?.("script generation warning");
         return { exitCode: 0, stderr: "", stdout: "generated" };
+      }
+
+      if (command.includes("preparation-manifest.json")) {
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout: JSON.stringify(scriptGenerationInput().preparationManifest),
+        };
       }
 
       if (command.startsWith("if test -f")) {
@@ -204,39 +290,36 @@ function scriptGenerationInput() {
       workspaceId: "workspace_123",
     },
     repoUrl: "https://github.com/example/conduit",
-    validation: {
-      blockedNetworkAttempts: [],
-      browserUrl: "https://preview.example.test",
-      logs: ["validated"],
-      status: "succeeded" as const,
-      warnings: [],
-    },
   };
 }
 
 function interactivePackage() {
   return {
-    estimatedDurationSeconds: 8,
+    audio: { enabled: true, music: { id: "clean" as const } },
+    demoPlaywrightScript:
+      "await setup(async ({ page, baseUrl }) => { await page.goto(baseUrl + '#/'); });\nawait scene('scene_feed', async ({ page }) => {\n  await page.getByText('Global Feed').click();\n  await page.getByText('demo').click();\n  await expect(page.getByText('demo')).toBeVisible();\n});",
     format: "16:9",
-    scriptId: "script_conduit",
-    sections: [
+    presentation: {
+      music: { enabled: true, trackId: "clean" as const },
+      textOverlays: [
+        {
+          content: "Filter the global feed",
+          font: "Inter" as const,
+          position: "bottom-left" as const,
+          sceneId: "scene_feed",
+          size: "medium" as const,
+        },
+      ],
+      transitions: [],
+    },
+    scenes: [
       {
-        id: "section_feed",
-        scenes: [
-          {
-            description: "Filter the global feed by a popular tag.",
-            durationSeconds: 8,
-            events: ["Open the feed", "Select a tag", "Verify articles update"],
-            id: "scene_feed",
-            playwrightSceneId: "scene_feed",
-            playwrightScript:
-              "await page.goto(baseUrl + '#/');\nawait page.getByText('Global Feed').click();\nawait page.getByText('demo').click();\nawait expect(page.getByText('demo')).toBeVisible();",
-            type: "playwright-recording",
-          },
-        ],
-        title: "Article feed",
+        expectedVisibleOutcome: "Filtered demo articles are visible.",
+        humanReadableDescription: "Filter the global feed by a popular tag.",
+        id: "scene_feed",
       },
     ],
+    scriptId: "script_conduit",
     title: "Conduit article feed demo",
     version: 1,
   };
@@ -245,23 +328,7 @@ function interactivePackage() {
 function staticPlaceholderPackage() {
   return {
     ...interactivePackage(),
-    sections: [
-      {
-        id: "section_feed",
-        scenes: [
-          {
-            description: "Open the app.",
-            durationSeconds: 8,
-            events: ["Open the app"],
-            id: "scene_feed",
-            playwrightSceneId: "scene_feed",
-            playwrightScript:
-              "await page.goto(baseUrl);\nawait expect(page.locator('body')).toContainText(/\\S/);\nawait page.locator('body').evaluate(() => document.body.setAttribute('data-makeademo-feature', 'feed'));\nawait page.waitForTimeout(2500);",
-            type: "playwright-recording",
-          },
-        ],
-        title: "Article feed",
-      },
-    ],
+    demoPlaywrightScript:
+      "await page.goto(baseUrl);\nawait expect(page.locator('body')).toContainText(/\\S/);\nawait page.locator('body').evaluate(() => document.body.setAttribute('data-makeademo-feature', 'feed'));\nawait page.waitForTimeout(2500);",
   };
 }

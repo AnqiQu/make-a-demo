@@ -159,43 +159,39 @@ export class CompositeProjectFinalVideoGenerator
 function buildCompositingScriptPackage(
   pipelineResult: Extract<PipelineJobResult, { status: "succeeded" }>,
 ) {
-  const sections = pipelineResult.videoScriptPackage.sections.map(
-    (section) => ({
-      id: section.id,
-      scenes: section.scenes.map((scene) => {
-        const description =
-          "description" in scene ? scene.description : "MakeADemo scene";
+  const scenes = pipelineResult.videoScriptPackage.scenes.map((scene) => {
+    const description = scene.humanReadableDescription;
 
-        return {
-          background: {
-            colour: "#111827",
-            type: "solid",
-          },
-          description,
-          durationSeconds: 3,
-          id: scene.id,
-          text: {
-            content: description,
-            font: "Inter",
-            "text-position": "center",
-            "text-size": "large",
-            "text-colour": "#f9fafb",
-          },
-          type: "full-screen-text",
-        };
-      }),
-      title: section.title,
-    }),
-  );
+    return {
+      background: {
+        colour: "#111827",
+        type: "solid",
+      },
+      description,
+      durationSeconds: 3,
+      id: scene.id,
+      text: {
+        content: description,
+        font: "Inter",
+        "text-position": "center",
+        "text-size": "large",
+        "text-colour": "#f9fafb",
+      },
+      type: "full-screen-text",
+    };
+  });
 
   return {
-    estimatedDurationSeconds: sections.reduce(
-      (total, section) => total + section.scenes.length * 3,
-      0,
-    ),
+    estimatedDurationSeconds: scenes.length * 3,
     format: "16:9",
     scriptId: `script-${pipelineResult.preparationManifest.workspaceId}`,
-    sections,
+    sections: [
+      {
+        id: "demo-script",
+        scenes,
+        title: pipelineResult.videoScriptPackage.title,
+      },
+    ],
     title: pipelineResult.videoScriptPackage.title,
     version: 1,
   };

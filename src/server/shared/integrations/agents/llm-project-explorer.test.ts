@@ -33,12 +33,6 @@ describe("LlmProjectExplorer", () => {
           workspaceId: "workspace_123",
         },
         repoUrl: "https://github.com/example/app",
-        validation: {
-          blockedNetworkAttempts: [],
-          logs: ["validated"],
-          status: "succeeded",
-          warnings: [],
-        },
       }),
     ).resolves.toEqual({
       assumptions: ["uses local fixtures"],

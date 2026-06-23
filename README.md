@@ -26,7 +26,7 @@ Open `http://localhost:5173`.
 
 Agent skills are pinned in `skills-lock.json` but installed copies are not committed. `.agents/` is local generated state and is ignored by git.
 
-Agent-facing CLI tools are pinned in `tools-lock.json`. Railway is installed through the pinned `@railway/cli` package in `package.json`/`bun.lock`; Daytona is pinned to exact GitHub release assets and checksums because it is not distributed as an npm CLI.
+Agent-facing CLI tools are tracked in `tools-lock.json`. Railway is installed through the pinned `@railway/cli` package in `package.json`/`bun.lock`; Daytona follows the latest GitHub release because it is not distributed as an npm CLI.
 
 Restore the repo-level skills locally before using OpenCode in this repo:
 
