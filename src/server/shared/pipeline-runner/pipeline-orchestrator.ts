@@ -6,8 +6,8 @@ import type {
   RepoPreparationInput,
   RepoPreparationResult,
 } from "../../pipeline/03-repo-preparation/repo-preparation-agent.interface";
+import type { DemoScriptPackage } from "../../pipeline/04-script-generation/demo-script-package";
 import type { ScriptGenerationInput } from "../../pipeline/04-script-generation/script-generation-orchestrator";
-import type { VideoScriptPackage } from "../../pipeline/04-script-generation/video-script-package";
 import type { CapturePathRepairer } from "../../pipeline/05-capture-path-validation/capture-path-repairer.interface";
 import type {
   CapturePathValidationInput,
@@ -27,7 +27,7 @@ import {
 export type PipelineOrchestratorDependencies = {
   generateScriptPackage(
     input: ScriptGenerationInput,
-  ): Promise<VideoScriptPackage>;
+  ): Promise<DemoScriptPackage>;
   prepareRepo(input: RepoPreparationInput): Promise<RepoPreparationResult>;
   repairCapturePathFailure?: CapturePathRepairer["repairCapturePathFailure"];
   screenRepoSecurity(input: RepoSecurityInput): RepoSecurityResult;
@@ -200,7 +200,7 @@ export async function runPipelineJob(
     status: "started",
   });
 
-  let videoScriptPackage: VideoScriptPackage;
+  let demoScriptPackage: DemoScriptPackage;
   const scriptGenerationInput = {
     demoBrief: input.demoBrief,
     normalizedSupportingDocuments: input.normalizedSupportingDocuments,
@@ -216,7 +216,7 @@ export async function runPipelineJob(
   let preparationManifest = preparation.manifest;
   try {
     await options.onScriptGenerationReady?.(scriptGenerationInput);
-    videoScriptPackage = await dependencies.generateScriptPackage(
+    demoScriptPackage = await dependencies.generateScriptPackage(
       scriptGenerationInput,
     );
   } catch (error) {
@@ -239,8 +239,8 @@ export async function runPipelineJob(
     now,
     observer,
     onProgress: options.onProgress,
-    riskCount: videoScriptPackage.demoPlan.risks.length,
-    sceneCount: countScenes(videoScriptPackage),
+    riskCount: demoScriptPackage.demoPlan.risks.length,
+    sceneCount: countScenes(demoScriptPackage),
     startedAt: scriptStartedAt,
   });
   await emitProgress(options, {
@@ -259,7 +259,7 @@ export async function runPipelineJob(
       observer,
       preparationManifest,
       preparationWorkspace: preparation.workspace,
-      videoScriptPackage,
+      demoScriptPackage,
     });
 
     if (capturePathValidation.status === "succeeded") {
@@ -287,10 +287,10 @@ export async function runPipelineJob(
         ? {}
         : { preparationWorkspace: preparation.workspace }),
       repoUrl: input.repoUrl,
-      videoScriptPackage,
+      demoScriptPackage,
     });
     preparationManifest = repair.preparationManifest;
-    videoScriptPackage = repair.videoScriptPackage;
+    demoScriptPackage = repair.demoScriptPackage;
   }
 
   return {
@@ -303,7 +303,7 @@ export async function runPipelineJob(
       ? {}
       : { preparationWorkspace: preparation.workspace }),
     status: "succeeded",
-    videoScriptPackage,
+    demoScriptPackage,
   };
 }
 
@@ -327,7 +327,7 @@ async function runCapturePathValidation(input: {
     | undefined;
   preparationManifest: CapturePathValidationInput["preparationManifest"];
   preparationWorkspace: CapturePathValidationInput["preparationWorkspace"];
-  videoScriptPackage: VideoScriptPackage;
+  demoScriptPackage: DemoScriptPackage;
 }) {
   const startedAt = reportStageStarted("capture-path-validation", {
     context: input.context,
@@ -347,7 +347,7 @@ async function runCapturePathValidation(input: {
       ...(input.preparationWorkspace === undefined
         ? {}
         : { preparationWorkspace: input.preparationWorkspace }),
-      videoScriptPackage: input.videoScriptPackage,
+      demoScriptPackage: input.demoScriptPackage,
     });
   } catch (error) {
     reportStageFinished("capture-path-validation", "failed", {
@@ -371,7 +371,7 @@ async function runCapturePathValidation(input: {
     now: input.now,
     observer: input.observer,
     onProgress: input.onProgress,
-    sceneCount: countScenes(input.videoScriptPackage),
+    sceneCount: countScenes(input.demoScriptPackage),
     startedAt,
     warningCount: result.warnings.length,
   });
@@ -448,8 +448,8 @@ function reportStageFinished(
   });
 }
 
-function countScenes(videoScriptPackage: VideoScriptPackage) {
-  return videoScriptPackage.scenes.length;
+function countScenes(demoScriptPackage: DemoScriptPackage) {
+  return demoScriptPackage.scenes.length;
 }
 
 async function emitProgress(

@@ -86,10 +86,10 @@ describe("createStage1PipelineDependencies", () => {
 
     expect(result.status).toBe("succeeded");
     if (result.status === "succeeded") {
-      expect(parseDemoScript(result.videoScriptPackage).scriptId).toBe(
+      expect(parseDemoScript(result.demoScriptPackage).scriptId).toBe(
         "generated-makeademo-script",
       );
-      expect(result.videoScriptPackage.scenes[0]).toMatchObject({
+      expect(result.demoScriptPackage.scenes[0]).toMatchObject({
         expectedVisibleOutcome: "The validation result is visible.",
         humanReadableDescription: "Demonstrate validation.",
         id: "scene-validation",
@@ -105,7 +105,7 @@ describe("createStage1PipelineDependencies", () => {
       async repairCapturePathFailure(input) {
         return {
           preparationManifest: input.preparationManifest,
-          videoScriptPackage: scriptPackage("script_repaired"),
+          demoScriptPackage: scriptPackage("script_repaired"),
         };
       },
     };
@@ -137,10 +137,10 @@ describe("createStage1PipelineDependencies", () => {
         },
         preparationManifest: manifest(),
         repoUrl: "https://github.com/example/app",
-        videoScriptPackage: scriptPackage("script_initial"),
+        demoScriptPackage: scriptPackage("script_initial"),
       }),
     ).resolves.toMatchObject({
-      videoScriptPackage: { scriptId: "script_repaired" },
+      demoScriptPackage: { scriptId: "script_repaired" },
     });
   });
 });

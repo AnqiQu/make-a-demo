@@ -5,7 +5,7 @@ import { DefaultDemoPlanner } from "../../pipeline/04-script-generation/demo-pla
 import { PreparationManifestProjectExplorer } from "../../pipeline/04-script-generation/project-exploration/preparation-manifest-project-explorer";
 import { DefaultScriptComposer } from "../../pipeline/04-script-generation/script-composition/default-script-composer";
 import type { ScriptGenerationAgent } from "../../pipeline/04-script-generation/script-generation-agent.interface";
-import { generateVideoScriptPackage } from "../../pipeline/04-script-generation/script-generation-orchestrator";
+import { generateDemoScriptPackage } from "../../pipeline/04-script-generation/script-generation-orchestrator";
 import type { CapturePathRepairer } from "../../pipeline/05-capture-path-validation/capture-path-repairer.interface";
 import { validateCapturePath } from "../../pipeline/05-capture-path-validation/capture-path-validator";
 import type { CapturePathSceneValidator } from "../../pipeline/05-capture-path-validation/capture-path-validator";
@@ -37,7 +37,7 @@ export function createStage1PipelineDependencies(
 
   return {
     generateScriptPackage(input) {
-      return generateVideoScriptPackage(input, {
+      return generateDemoScriptPackage(input, {
         demoPlanner: new DefaultDemoPlanner(),
         projectExplorer: new PreparationManifestProjectExplorer(),
         ...(options.scriptGenerationAgent === undefined

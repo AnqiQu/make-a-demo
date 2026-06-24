@@ -40,7 +40,7 @@ describe("runPipelineJob", () => {
         async validateCapturePath(input) {
           calls.push("capture-path-validation");
           expect(input.preparationWorkspace?.id).toBe("daytona_workspace");
-          expect(input.videoScriptPackage.scriptId).toBe("script_test");
+          expect(input.demoScriptPackage.scriptId).toBe("script_test");
           return {
             blockedNetworkAttempts: [],
             browserUrl: "https://preview.example.test/",
@@ -374,13 +374,10 @@ describe("runPipelineJob", () => {
           calls.push("repo-security-screen");
           return { rejections: [], status: "passed", warnings: [] };
         },
-        async validateCapturePath({
-          preparationWorkspace,
-          videoScriptPackage,
-        }) {
+        async validateCapturePath({ preparationWorkspace, demoScriptPackage }) {
           calls.push("capture-path-validation");
           expect(preparationWorkspace?.id).toBe("daytona_workspace");
-          expect(videoScriptPackage.scriptId).toBe("script_test");
+          expect(demoScriptPackage.scriptId).toBe("script_test");
           return {
             blockedNetworkAttempts: [],
             browserUrl: "https://preview.example.test/",
@@ -450,7 +447,7 @@ describe("runPipelineJob", () => {
             );
             return {
               preparationManifest: input.preparationManifest,
-              videoScriptPackage: scriptPackage({
+              demoScriptPackage: scriptPackage({
                 assumptions: [],
                 scriptId: "script_repaired",
               }),
@@ -462,9 +459,9 @@ describe("runPipelineJob", () => {
           },
           async validateCapturePath(input) {
             calls.push(
-              `capture-path-validation:${input.videoScriptPackage.scriptId}`,
+              `capture-path-validation:${input.demoScriptPackage.scriptId}`,
             );
-            if (input.videoScriptPackage.scriptId === "script_bad") {
+            if (input.demoScriptPackage.scriptId === "script_bad") {
               return {
                 blockedNetworkAttempts: [],
                 browserUrl: "https://preview.example.test/",
@@ -489,7 +486,7 @@ describe("runPipelineJob", () => {
 
       expect(result.status).toBe("succeeded");
       if (result.status === "succeeded") {
-        expect(result.videoScriptPackage.scriptId).toBe("script_repaired");
+        expect(result.demoScriptPackage.scriptId).toBe("script_repaired");
       }
       expect(calls).toEqual([
         "repo-security-screen",

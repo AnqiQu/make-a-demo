@@ -1,21 +1,21 @@
 import type { DemoScript } from "../06-footage-capture/demo-script.schema";
 import type { DemoPlan } from "./demo-planning/demo-plan";
 import type { ProjectExplorationResult } from "./project-exploration/project-exploration-result";
-import type { VideoScript } from "./script-composition/video-script";
+import type { ComposedDemoScript } from "./script-composition/composed-demo-script";
 
-export type VideoScriptPackage = DemoScript & {
+export type DemoScriptPackage = DemoScript & {
   assumptions: string[];
   demoPlan: DemoPlan;
   exploration: ProjectExplorationResult;
 };
 
-export function buildVideoScriptPackage(input: {
+export function buildDemoScriptPackage(input: {
   demoPlan: DemoPlan;
   exploration: ProjectExplorationResult;
-  videoScript: VideoScript;
-}): VideoScriptPackage {
+  demoScript: ComposedDemoScript;
+}): DemoScriptPackage {
   return {
-    ...input.videoScript,
+    ...input.demoScript,
     assumptions: input.exploration.assumptions,
     demoPlan: input.demoPlan,
     exploration: input.exploration,

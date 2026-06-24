@@ -1,12 +1,12 @@
 import type { PreparationManifest } from "../03-repo-preparation/preparation-manifest";
 import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
-import type { VideoScriptPackage } from "../04-script-generation/video-script-package";
+import type { DemoScriptPackage } from "../04-script-generation/demo-script-package";
 import type { NetworkAttempt } from "./project-runtime-preflight/network-isolation-policy";
 
 export type CapturePathValidationInput = {
   preparationManifest: PreparationManifest;
   preparationWorkspace?: PreparationWorkspaceHandle;
-  videoScriptPackage: VideoScriptPackage;
+  demoScriptPackage: DemoScriptPackage;
 };
 
 export type CapturePathValidationResult = {
