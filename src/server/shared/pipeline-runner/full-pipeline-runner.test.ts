@@ -663,6 +663,9 @@ describe("runFullPipelineJob", () => {
                 }
               : { decision: "accept", reason: "Retry is concise." };
           },
+          async inspectDraftCompositeEvidence() {
+            return cleanDraftEvidence();
+          },
           outputRoot,
           runId: "full-run",
         },
@@ -763,6 +766,9 @@ describe("runFullPipelineJob", () => {
                 }
               : { decision: "accept", reason: "Repaired script is concise." };
           },
+          async inspectDraftCompositeEvidence() {
+            return cleanDraftEvidence();
+          },
           outputRoot,
           async prepareFreshCaptureState(input) {
             calls.push(`fresh-capture:${input.attempt}:${input.browserUrl}`);
@@ -851,6 +857,9 @@ describe("runFullPipelineJob", () => {
                 }
               : { decision: "accept", reason: "Workspace repair worked." };
           },
+          async inspectDraftCompositeEvidence() {
+            return cleanDraftEvidence();
+          },
           outputRoot,
           runId: "full-run",
         },
@@ -910,6 +919,9 @@ describe("runFullPipelineJob", () => {
               reason: "Draft still lacks visible payoff.",
               repairScope: "demo-script",
             };
+          },
+          async inspectDraftCompositeEvidence() {
+            return cleanDraftEvidence();
           },
           outputRoot,
           runId: "full-run",
@@ -989,6 +1001,9 @@ describe("runFullPipelineJob", () => {
               `review:${input.attempt}:${input.derivedEvidence.qualityFindings.length}`,
             );
             return { decision: "accept" };
+          },
+          async inspectDraftCompositeEvidence() {
+            return cleanDraftEvidence();
           },
           outputRoot,
           runId: "full-run",
@@ -1109,8 +1124,11 @@ describe("runFullPipelineJob", () => {
     }
   });
 
-  it("passes generated ffmpeg evidence to review without hard-failing the draft", async () => {
+  it("routes generated ffmpeg probe failures through review without failing the pipeline", async () => {
     const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
+    const previousReviewAttempts =
+      process.env.MAKEADEMO_DRAFT_COMPOSITE_REVIEW_ATTEMPTS;
+    process.env.MAKEADEMO_DRAFT_COMPOSITE_REVIEW_ATTEMPTS = "0";
     const ffmpegFindings: string[][] = [];
 
     try {
@@ -1150,9 +1168,15 @@ describe("runFullPipelineJob", () => {
       expect(result.finalVideo.runId).toBe("composite-1");
       expect(result.draftCompositeReview).toEqual({
         attempts: 1,
-        findings: [],
-        status: "accepted",
-        warnings: [],
+        findings: [
+          "Scene scene_article_feed static-footage gate could not be verified",
+        ],
+        status: "exhausted",
+        warnings: [
+          "Draft Composite review retry limit exceeded; using latest draft.",
+          "Draft Composite review requested repair: Scene scene_article_feed static-footage gate could not be verified",
+          "Remaining quality gate: Scene scene_article_feed static-footage gate could not be verified",
+        ],
       });
       expect(ffmpegFindings[0]).toEqual(
         expect.arrayContaining([
@@ -1162,6 +1186,15 @@ describe("runFullPipelineJob", () => {
         ]),
       );
     } finally {
+      if (previousReviewAttempts === undefined) {
+        Reflect.deleteProperty(
+          process.env,
+          "MAKEADEMO_DRAFT_COMPOSITE_REVIEW_ATTEMPTS",
+        );
+      } else {
+        process.env.MAKEADEMO_DRAFT_COMPOSITE_REVIEW_ATTEMPTS =
+          previousReviewAttempts;
+      }
       await rm(outputRoot, { force: true, recursive: true });
     }
   });
@@ -1220,6 +1253,75 @@ describe("runFullPipelineJob", () => {
         Reflect.deleteProperty(process.env, "PATH");
       } else {
         process.env.PATH = previousPath;
+      }
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("routes unverified audio presence through the Draft Composite repair loop when music is enabled", async () => {
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
+    const previousReviewAttempts =
+      process.env.MAKEADEMO_DRAFT_COMPOSITE_REVIEW_ATTEMPTS;
+    process.env.MAKEADEMO_DRAFT_COMPOSITE_REVIEW_ATTEMPTS = "0";
+
+    try {
+      const result = await runFullPipelineJob(
+        {
+          demoBrief: { keyProductFeatures: ["article feed"] },
+          normalizedSupportingDocuments: [],
+          repoSecurity: {
+            files: [{ path: "package.json", text: "{}" }],
+            repoStats: { fileCount: 1, sizeBytes: 100 },
+          },
+          repoUrl: "https://github.com/example/app",
+          workspaceId: "workspace_123",
+        },
+        stage1Dependencies([], { musicEnabled: true }),
+        {
+          async captureScenes(input) {
+            return captureManifest(outputRoot, input.runId ?? "capture");
+          },
+          async compositeVideo(input) {
+            return compositeManifest(outputRoot, input.runId ?? "composite");
+          },
+          async inspectDraftCompositeEvidence() {
+            return {
+              contactSheetPaths: [],
+              ffmpegFindings: ["ffprobe audio probe failed: unavailable"],
+              sampledFramePaths: [],
+              staticProbeFailedSceneIds: [],
+              staticSceneIds: [],
+            };
+          },
+          async reviewDraftComposite() {
+            return { decision: "accept" };
+          },
+          outputRoot,
+          runId: "full-run",
+        },
+      );
+
+      expect(result.draftCompositeReview).toEqual({
+        attempts: 1,
+        findings: [
+          "Draft Composite audio presence could not be verified while music is enabled",
+        ],
+        status: "exhausted",
+        warnings: [
+          "Draft Composite review retry limit exceeded; using latest draft.",
+          "Draft Composite review requested repair: Draft Composite audio presence could not be verified while music is enabled",
+          "Remaining quality gate: Draft Composite audio presence could not be verified while music is enabled",
+        ],
+      });
+    } finally {
+      if (previousReviewAttempts === undefined) {
+        Reflect.deleteProperty(
+          process.env,
+          "MAKEADEMO_DRAFT_COMPOSITE_REVIEW_ATTEMPTS",
+        );
+      } else {
+        process.env.MAKEADEMO_DRAFT_COMPOSITE_REVIEW_ATTEMPTS =
+          previousReviewAttempts;
       }
       await rm(outputRoot, { force: true, recursive: true });
     }
@@ -1340,6 +1442,9 @@ describe("runFullPipelineJob", () => {
           },
           async reviewDraftComposite() {
             return { decision: "accept" };
+          },
+          async inspectDraftCompositeEvidence() {
+            return cleanDraftEvidence();
           },
           outputRoot,
           runId: "full-run",
@@ -1520,6 +1625,17 @@ function compositeManifest(
     scriptId: "script_test",
     title: "Demo",
     viewUrl: `file:///tmp/${runId}.mp4`,
+  };
+}
+
+function cleanDraftEvidence() {
+  return {
+    audioPresent: true,
+    contactSheetPaths: [],
+    ffmpegFindings: [],
+    sampledFramePaths: [],
+    staticProbeFailedSceneIds: [],
+    staticSceneIds: [],
   };
 }
 

@@ -107,10 +107,12 @@ export type DraftCompositeReviewInput = {
 };
 
 type DraftCompositeEvidence = {
+  audioProbeFailed?: boolean;
   audioPresent?: boolean;
   contactSheetPaths: string[];
   ffmpegFindings: string[];
   sampledFramePaths: string[];
+  staticProbeFailedSceneIds?: string[];
   staticSceneIds: string[];
 };
 
@@ -753,9 +755,20 @@ function collectDeterministicQualityFindings(input: {
   ) {
     findings.push("Draft Composite is missing audio while music is enabled");
   }
+  if (
+    input.scriptPackage.presentation.music.enabled &&
+    input.draftEvidence.audioPresent === undefined
+  ) {
+    findings.push(
+      "Draft Composite audio presence could not be verified while music is enabled",
+    );
+  }
 
   for (const sceneId of input.draftEvidence.staticSceneIds) {
     findings.push(`Scene ${sceneId} contains fully static footage`);
+  }
+  for (const sceneId of input.draftEvidence.staticProbeFailedSceneIds ?? []) {
+    findings.push(`Scene ${sceneId} static-footage gate could not be verified`);
   }
 
   return findings;
@@ -789,22 +802,30 @@ async function generateDraftCompositeEvidence(input: {
   const { captureManifest, finalVideo } = input;
   if (finalVideo.outputVideoPath === undefined) {
     return {
+      audioProbeFailed: true,
       contactSheetPaths: [],
       ffmpegFindings: [
         "Draft Composite video is stored remotely; local sampled-frame evidence was not generated.",
       ],
       sampledFramePaths: [],
+      staticProbeFailedSceneIds: captureManifest.scenes.map(
+        (scene) => scene.sceneId,
+      ),
       staticSceneIds: [],
     };
   }
 
   if (!(await exists(finalVideo.outputVideoPath))) {
     return {
+      audioProbeFailed: true,
       contactSheetPaths: [],
       ffmpegFindings: [
         `Draft Composite video was unavailable for evidence generation: ${finalVideo.outputVideoPath}`,
       ],
       sampledFramePaths: [],
+      staticProbeFailedSceneIds: captureManifest.scenes.map(
+        (scene) => scene.sceneId,
+      ),
       staticSceneIds: [],
     };
   }
@@ -863,13 +884,14 @@ async function generateDraftCompositeEvidence(input: {
       `ffprobe audio probe failed: ${formatCommandOutput(audioProbe)}`,
     );
   }
-  const staticSceneIds = await detectStaticScenes({
+  const staticFootageProbe = await detectStaticScenes({
     captureManifest,
     findings,
     videoPath: finalVideo.outputVideoPath,
   });
 
   return {
+    ...(audioProbe.exitCode === 0 ? {} : { audioProbeFailed: true }),
     ...(audioProbe.exitCode === 0
       ? { audioPresent: audioProbe.stdout.trim().length > 0 }
       : {}),
@@ -884,7 +906,8 @@ async function generateDraftCompositeEvidence(input: {
             ),
           )
         : [],
-    staticSceneIds,
+    staticProbeFailedSceneIds: staticFootageProbe.failedSceneIds,
+    staticSceneIds: staticFootageProbe.staticSceneIds,
   };
 }
 
@@ -893,6 +916,7 @@ async function detectStaticScenes(input: {
   findings: string[];
   videoPath: string;
 }) {
+  const failedSceneIds: string[] = [];
   const staticSceneIds: string[] = [];
   let sceneStartSeconds = 0;
 
@@ -925,6 +949,7 @@ async function detectStaticScenes(input: {
     ]);
 
     if (probe.exitCode !== 0) {
+      failedSceneIds.push(scene.sceneId);
       input.findings.push(
         `ffmpeg static-footage probe failed for Scene ${scene.sceneId}: ${formatCommandOutput(probe)}`,
       );
@@ -935,7 +960,7 @@ async function detectStaticScenes(input: {
     sceneStartSeconds += durationSeconds;
   }
 
-  return staticSceneIds;
+  return { failedSceneIds, staticSceneIds };
 }
 
 function isStaticSceneProbe(
