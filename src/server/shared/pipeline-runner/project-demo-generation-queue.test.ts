@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import type { PipelineJobResult } from "./pipeline-job";
 import { createRecordingPipelineObserver } from "./pipeline-observer";
 import { processNextProjectDemoGenerationJob } from "./project-demo-generation-queue";
 
 describe("processNextProjectDemoGenerationJob", () => {
-  it("claims one queued Project and completes it only after script and video generation finish", async () => {
+  it("claims one queued Project and completes it only after the reviewed full pipeline stores the video", async () => {
     const calls: string[] = [];
     const store = {
       async claimNextQueuedProject() {
@@ -28,21 +27,16 @@ describe("processNextProjectDemoGenerationJob", () => {
     };
 
     const result = await processNextProjectDemoGenerationJob(store, {
-      async generateFinalVideo(input) {
-        calls.push("video-generation");
+      async runFullPipeline(input) {
+        calls.push("full-pipeline");
         expect(input.demoRequestId).toBe("demo-request-1");
-        expect(input.pipelineResult.status).toBe("succeeded");
-        return {
-          generatedDemoUrl: "r2://owlet/demo-videos/demo-request-1/final.mp4",
-        };
-      },
-      async runPipeline(input) {
-        calls.push("script-generation");
         expect(input.repoUrl).toBe("https://github.com/example/app");
         expect(input.demoBrief.keyProductFeatures).toEqual([
           "script generation",
         ]);
-        return successfulPipelineResult();
+        return {
+          generatedDemoUrl: "r2://owlet/demo-videos/demo-request-1/final.mp4",
+        };
       },
     });
 
@@ -50,12 +44,7 @@ describe("processNextProjectDemoGenerationJob", () => {
       projectId: "project-1",
       status: "completed",
     });
-    expect(calls).toEqual([
-      "claim",
-      "script-generation",
-      "video-generation",
-      "complete",
-    ]);
+    expect(calls).toEqual(["claim", "full-pipeline", "complete"]);
   });
 
   it("claims one queued Project and completes it after the full pipeline stores the generated video", async () => {
@@ -115,15 +104,11 @@ describe("processNextProjectDemoGenerationJob", () => {
         },
       },
       {
-        async generateFinalVideo() {
-          now += 60;
+        async runFullPipeline() {
+          now += 200;
           return {
             generatedDemoUrl: "r2://owlet/demo-videos/demo-request-1/final.mp4",
           };
-        },
-        async runPipeline() {
-          now += 140;
-          return successfulPipelineResult();
         },
       },
       {
@@ -175,13 +160,9 @@ describe("processNextProjectDemoGenerationJob", () => {
     };
 
     const result = await processNextProjectDemoGenerationJob(store, {
-      async generateFinalVideo() {
-        calls.push("video-generation");
+      async runFullPipeline() {
+        calls.push("full-pipeline");
         throw new Error("renderer failed");
-      },
-      async runPipeline() {
-        calls.push("script-generation");
-        return successfulPipelineResult();
       },
     });
 
@@ -189,12 +170,7 @@ describe("processNextProjectDemoGenerationJob", () => {
       projectId: "project-1",
       status: "failed",
     });
-    expect(calls).toEqual([
-      "claim",
-      "script-generation",
-      "video-generation",
-      "fail",
-    ]);
+    expect(calls).toEqual(["claim", "full-pipeline", "fail"]);
   });
 
   it("stays idle when no Project is queued", async () => {
@@ -211,10 +187,7 @@ describe("processNextProjectDemoGenerationJob", () => {
         },
       },
       {
-        async generateFinalVideo() {
-          throw new Error("video generation should not run");
-        },
-        async runPipeline() {
+        async runFullPipeline() {
           throw new Error("pipeline should not run");
         },
       },
@@ -235,65 +208,5 @@ function queuedProjectJob() {
     projectId: "project-1",
     repoUrl: "https://github.com/example/app",
     workspaceId: "project-1",
-  };
-}
-
-function successfulPipelineResult(): PipelineJobResult {
-  return {
-    preparationManifest: {
-      assumptions: [],
-      createdFiles: [],
-      demoCommand: "npm run demo:makeademo",
-      diffArtifactId: "artifact_diff",
-      existingDemoEvidence: [],
-      mockedServices: [],
-      modifiedFiles: [],
-      repoUrl: "https://github.com/example/app",
-      risks: [],
-      scriptGenerationContext: [],
-      setupSummary: "Prepared demo runtime.",
-      status: "created-new-demo",
-      url: "http://localhost:3000",
-      workspaceId: "project-1",
-    },
-    capturePathValidation: {
-      blockedNetworkAttempts: [],
-      browserUrl: "https://preview.example.test/",
-      logs: ["validated capture path"],
-      status: "succeeded",
-      warnings: [],
-    },
-    status: "succeeded",
-    videoScriptPackage: {
-      assumptions: [],
-      demoPlan: {
-        featureOrder: ["script generation"],
-        narrative: "Demo script generation.",
-        risks: [],
-      },
-      demoPlaywrightScript:
-        "await scene('scene-script-generation', async () => { await page.goto(baseUrl); });",
-      exploration: {
-        assumptions: [],
-        productSurfaces: [],
-        summary: "A demo generator.",
-      },
-      format: "16:9",
-      presentation: {
-        music: { enabled: false },
-        textOverlays: [],
-        transitions: [],
-      },
-      scenes: [
-        {
-          expectedVisibleOutcome: "Script generation is visible.",
-          humanReadableDescription: "Demonstrate script generation.",
-          id: "scene-script-generation",
-        },
-      ],
-      scriptId: "script-project-1",
-      title: "Demo",
-      version: 1,
-    },
   };
 }
