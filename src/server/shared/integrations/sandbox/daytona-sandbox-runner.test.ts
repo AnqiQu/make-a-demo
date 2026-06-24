@@ -10,6 +10,10 @@ const STOP_DEMO_COMMAND =
   "sh -lc 'if test -f /tmp/makeademo-demo.pid; then kill -- -$(cat /tmp/makeademo-demo.pid) >/dev/null 2>&1 || true; rm -f /tmp/makeademo-demo.pid; fi'";
 const START_DEMO_COMMAND =
   "sh -lc 'cd /workspace && nohup setsid sh -c '\\''exec npm run demo'\\'' > /tmp/makeademo-demo.log 2>&1 & echo $! > /tmp/makeademo-demo.pid && echo $!'";
+const FRESH_CAPTURE_BASELINE_COMMAND =
+  "sh -lc 'mkdir -p /workspace/.makeademo && tar --exclude='\\''./.makeademo'\\'' --exclude='\\''./node_modules'\\'' -czf /workspace/.makeademo/fresh-capture-baseline.tgz -C /workspace .'";
+const FRESH_CAPTURE_RESTORE_COMMAND =
+  "sh -lc 'test -f /workspace/.makeademo/fresh-capture-baseline.tgz && find /workspace -mindepth 1 ! -path '\\''/workspace/.makeademo'\\'' ! -path '\\''/workspace/.makeademo/*'\\'' ! -path '\\''/workspace/node_modules'\\'' ! -path '\\''/workspace/node_modules/*'\\'' -exec rm -rf {} + && tar -xzf /workspace/.makeademo/fresh-capture-baseline.tgz -C /workspace'";
 
 describe("DaytonaSandboxRunner", () => {
   it("validates the retained prepared Daytona workspace", async () => {
@@ -32,6 +36,7 @@ describe("DaytonaSandboxRunner", () => {
       STOP_DEMO_COMMAND,
       START_DEMO_COMMAND,
       "node -e 'fetch(process.argv[1]).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));' 'http://localhost:3000'",
+      FRESH_CAPTURE_BASELINE_COMMAND,
       "if test -f /tmp/makeademo-demo.log; then cat /tmp/makeademo-demo.log; fi",
     ]);
     expect(workspace.networkAccess).toEqual([true, false]);
@@ -274,7 +279,7 @@ describe("DaytonaSandboxRunner", () => {
     );
   });
 
-  it("restarts the prepared demo before Footage Capture and returns a fresh preview URL", async () => {
+  it("restores the prepared baseline before Footage Capture and returns a fresh preview URL", async () => {
     const workspace = new FakePreparationWorkspaceHandle();
 
     const result = await restartPreparedDemoForFreshCapture({
@@ -284,8 +289,9 @@ describe("DaytonaSandboxRunner", () => {
     });
 
     expect(workspace.commands[0]).toBe(STOP_DEMO_COMMAND);
-    expect(workspace.commands[1]).toContain("exec npm run demo:makeademo");
-    expect(workspace.commands[2]).toBe(
+    expect(workspace.commands[1]).toBe(FRESH_CAPTURE_RESTORE_COMMAND);
+    expect(workspace.commands[2]).toContain("exec npm run demo:makeademo");
+    expect(workspace.commands[3]).toBe(
       "node -e 'fetch(process.argv[1]).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));' 'http://localhost:3000'",
     );
     expect(result.browserUrl).toBe("https://preview.example.test:3000/");
@@ -293,6 +299,10 @@ describe("DaytonaSandboxRunner", () => {
       expect.arrayContaining([
         expect.objectContaining({
           event: "footage-capture.fresh-state.restart.started",
+          stage: "footage-capture",
+        }),
+        expect.objectContaining({
+          event: "footage-capture.fresh-state.restore.succeeded",
           stage: "footage-capture",
         }),
         expect.objectContaining({
@@ -320,6 +330,29 @@ describe("DaytonaSandboxRunner", () => {
       expect.arrayContaining([
         expect.objectContaining({
           event: "footage-capture.fresh-state.restart.failed",
+          stage: "footage-capture",
+        }),
+      ]),
+    );
+  });
+
+  it("fails the fresh capture boundary when the prepared baseline cannot be restored", async () => {
+    const workspace = new FakePreparationWorkspaceHandle(
+      new Map([[FRESH_CAPTURE_RESTORE_COMMAND, 1]]),
+    );
+
+    await expect(
+      restartPreparedDemoForFreshCapture({
+        preparationManifest: manifest("workspace_123"),
+        preparationWorkspace: workspace,
+        readinessPollIntervalMs: 0,
+      }),
+    ).rejects.toThrow("Fresh Footage Capture baseline could not be restored");
+    expect(workspace.commands).not.toContain(START_DEMO_COMMAND);
+    expect(workspace.sandboxLogs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "footage-capture.fresh-state.restore.failed",
           stage: "footage-capture",
         }),
       ]),

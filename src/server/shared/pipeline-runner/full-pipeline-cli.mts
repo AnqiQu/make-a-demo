@@ -9,14 +9,12 @@ import {
 } from "../../pipeline/01-context-gathering/supporting-documents";
 import { DaytonaOpenCodeAgent } from "../integrations/agents/daytona-opencode-agent";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../integrations/daytona/daytona-sdk-preparation-workspace-provider";
-import {
-  DaytonaSandboxRunner,
-  restartPreparedDemoForFreshCapture,
-} from "../integrations/sandbox/daytona-sandbox-runner";
+import { DaytonaSandboxRunner } from "../integrations/sandbox/daytona-sandbox-runner";
 import {
   createPipelineEventLogger,
   createPrettyPipelineLogSink,
 } from "../logging/pipeline-event-logger";
+import { createDaytonaFreshCaptureStatePreparer } from "./fresh-capture-state";
 import { runFullPipelineJob } from "./full-pipeline-runner";
 import { createOpenCodeOutputStream } from "./opencode-output-stream";
 import { createOpenCodeRawOutputLog } from "./opencode-raw-output-log";
@@ -116,18 +114,7 @@ const result = await runFullPipelineJob(
       }),
     ],
     outputRoot: fullPipelineOutputRoot,
-    async prepareFreshCaptureState({ stage1 }) {
-      if (stage1.preparationWorkspace === undefined) {
-        throw new Error(
-          "Fresh Footage Capture state requires the prepared workspace.",
-        );
-      }
-
-      return await restartPreparedDemoForFreshCapture({
-        preparationManifest: stage1.preparationManifest,
-        preparationWorkspace: stage1.preparationWorkspace,
-      });
-    },
+    prepareFreshCaptureState: createDaytonaFreshCaptureStatePreparer(),
     rawOpenCodeLogPath: rawOpenCodeLog.logPath,
     reviewDraftComposite:
       openCodeAgent.reviewDraftComposite.bind(openCodeAgent),
