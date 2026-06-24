@@ -257,6 +257,10 @@ strict digraph "dependency-cruiser output"{
     subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/shared" {label="shared" subgraph "cluster_src/server/shared/persistence" {label="persistence" "src/server/shared/persistence/neon-project-demo-generation-queue-store.ts" [label=<neon-project-demo-generation-queue-store.ts> tooltip="neon-project-demo-generation-queue-store.ts" URL="src/server/shared/persistence/neon-project-demo-generation-queue-store.ts" fillcolor="#ddfeff"] } } } }
     "src/server/shared/persistence/neon-project-demo-generation-queue-store.ts" -> "src/server/shared/persistence/schema.ts"
     subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/shared" {label="shared" subgraph "cluster_src/server/shared/persistence" {label="persistence" "src/server/shared/persistence/schema.ts" [label=<schema.ts> tooltip="schema.ts" URL="src/server/shared/persistence/schema.ts" fillcolor="#ddfeff"] } } } }
+    subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/shared" {label="shared" subgraph "cluster_src/server/shared/pipeline-runner" {label="pipeline-runner" "src/server/shared/pipeline-runner/fresh-capture-state.test.ts" [label=<fresh-capture-state.test.ts> tooltip="fresh-capture-state.test.ts" URL="src/server/shared/pipeline-runner/fresh-capture-state.test.ts" fillcolor="#ddfeff"] } } } }
+    "src/server/shared/pipeline-runner/fresh-capture-state.test.ts" -> "src/server/shared/pipeline-runner/fresh-capture-state.ts"
+    subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/shared" {label="shared" subgraph "cluster_src/server/shared/pipeline-runner" {label="pipeline-runner" "src/server/shared/pipeline-runner/fresh-capture-state.ts" [label=<fresh-capture-state.ts> tooltip="fresh-capture-state.ts" URL="src/server/shared/pipeline-runner/fresh-capture-state.ts" fillcolor="#ddfeff"] } } } }
+    "src/server/shared/pipeline-runner/fresh-capture-state.ts" -> "src/server/shared/integrations/sandbox/daytona-sandbox-runner.ts"
     subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/shared" {label="shared" subgraph "cluster_src/server/shared/pipeline-runner" {label="pipeline-runner" "src/server/shared/pipeline-runner/full-pipeline-cli.mts" [label=<full-pipeline-cli.mts> tooltip="full-pipeline-cli.mts" URL="src/server/shared/pipeline-runner/full-pipeline-cli.mts" fillcolor="#ddfeff"] } } } }
     "src/server/shared/pipeline-runner/full-pipeline-cli.mts" -> "src/server/pipeline/01-context-gathering/intake/project-intake.ts"
     "src/server/shared/pipeline-runner/full-pipeline-cli.mts" -> "src/server/pipeline/01-context-gathering/supporting-documents.ts"
@@ -264,6 +268,7 @@ strict digraph "dependency-cruiser output"{
     "src/server/shared/pipeline-runner/full-pipeline-cli.mts" -> "src/server/shared/integrations/daytona/daytona-sdk-preparation-workspace-provider.ts"
     "src/server/shared/pipeline-runner/full-pipeline-cli.mts" -> "src/server/shared/integrations/sandbox/daytona-sandbox-runner.ts"
     "src/server/shared/pipeline-runner/full-pipeline-cli.mts" -> "src/server/shared/logging/pipeline-event-logger.ts"
+    "src/server/shared/pipeline-runner/full-pipeline-cli.mts" -> "src/server/shared/pipeline-runner/fresh-capture-state.ts"
     "src/server/shared/pipeline-runner/full-pipeline-cli.mts" -> "src/server/shared/pipeline-runner/full-pipeline-runner.ts"
     "src/server/shared/pipeline-runner/full-pipeline-cli.mts" -> "src/server/shared/pipeline-runner/opencode-output-stream.ts"
     "src/server/shared/pipeline-runner/full-pipeline-cli.mts" -> "src/server/shared/pipeline-runner/opencode-raw-output-log.ts"
@@ -313,6 +318,7 @@ strict digraph "dependency-cruiser output"{
     "src/server/shared/pipeline-runner/project-demo-generation-worker.mts" -> "src/server/shared/logging/pipeline-event-logger.ts"
     "src/server/shared/pipeline-runner/project-demo-generation-worker.mts" -> "src/server/shared/persistence/neon-demo-request-final-video-store.ts"
     "src/server/shared/pipeline-runner/project-demo-generation-worker.mts" -> "src/server/shared/persistence/neon-project-demo-generation-queue-store.ts"
+    "src/server/shared/pipeline-runner/project-demo-generation-worker.mts" -> "src/server/shared/pipeline-runner/fresh-capture-state.ts"
     "src/server/shared/pipeline-runner/project-demo-generation-worker.mts" -> "src/server/shared/pipeline-runner/full-pipeline-runner.ts"
     "src/server/shared/pipeline-runner/project-demo-generation-worker.mts" -> "src/server/shared/pipeline-runner/pipeline-observer.ts"
     "src/server/shared/pipeline-runner/project-demo-generation-worker.mts" -> "src/server/shared/pipeline-runner/project-demo-generation-queue.ts"
