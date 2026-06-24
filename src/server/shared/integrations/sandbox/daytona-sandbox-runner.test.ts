@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { PreparationWorkspaceHandle } from "../../../pipeline/03-repo-preparation/preparation-workspace-runner";
-import { DaytonaSandboxRunner } from "./daytona-sandbox-runner";
+import {
+  DaytonaSandboxRunner,
+  restartPreparedDemoForFreshCapture,
+} from "./daytona-sandbox-runner";
 
 const STOP_DEMO_COMMAND =
   "sh -lc 'if test -f /tmp/makeademo-demo.pid; then kill -- -$(cat /tmp/makeademo-demo.pid) >/dev/null 2>&1 || true; rm -f /tmp/makeademo-demo.pid; fi'";
@@ -268,6 +271,58 @@ describe("DaytonaSandboxRunner", () => {
 
     expect(result.browserUrl).toBe(
       "https://preview.example.test:4173/articles?tab=global#/feed",
+    );
+  });
+
+  it("restarts the prepared demo before Footage Capture and returns a fresh preview URL", async () => {
+    const workspace = new FakePreparationWorkspaceHandle();
+
+    const result = await restartPreparedDemoForFreshCapture({
+      preparationManifest: manifest("workspace_123"),
+      preparationWorkspace: workspace,
+      readinessPollIntervalMs: 0,
+    });
+
+    expect(workspace.commands[0]).toBe(STOP_DEMO_COMMAND);
+    expect(workspace.commands[1]).toContain("exec npm run demo:makeademo");
+    expect(workspace.commands[2]).toBe(
+      "node -e 'fetch(process.argv[1]).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));' 'http://localhost:3000'",
+    );
+    expect(result.browserUrl).toBe("https://preview.example.test:3000/");
+    expect(workspace.sandboxLogs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "footage-capture.fresh-state.restart.started",
+          stage: "footage-capture",
+        }),
+        expect.objectContaining({
+          browserUrl: "https://preview.example.test:3000/",
+          event: "footage-capture.fresh-state.restart.succeeded",
+          stage: "footage-capture",
+        }),
+      ]),
+    );
+  });
+
+  it("fails the fresh capture boundary when the restarted demo never becomes ready", async () => {
+    const workspace = new FakePreparationWorkspaceHandle();
+    workspace.readinessResults = [1];
+
+    await expect(
+      restartPreparedDemoForFreshCapture({
+        preparationManifest: manifest("workspace_123"),
+        preparationWorkspace: workspace,
+        readinessPollIntervalMs: 0,
+        readinessTimeoutMs: 1,
+      }),
+    ).rejects.toThrow("Fresh Footage Capture state did not become ready");
+    expect(workspace.sandboxLogs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "footage-capture.fresh-state.restart.failed",
+          stage: "footage-capture",
+        }),
+      ]),
     );
   });
 });

@@ -181,6 +181,63 @@ export class DaytonaSandboxRunner implements SandboxRunner {
   }
 }
 
+export async function restartPreparedDemoForFreshCapture(input: {
+  preparationManifest: PreparationManifest;
+  preparationWorkspace: PreparationWorkspaceHandle;
+  readinessPollIntervalMs?: number;
+  readinessTimeoutMs?: number;
+}): Promise<{ browserUrl: string }> {
+  const writeSandboxLog = (entry: Record<string, unknown>) =>
+    input.preparationWorkspace.workspace.writeSandboxLog?.({
+      ...entry,
+      repoUrl: input.preparationManifest.repoUrl,
+      stage: "footage-capture",
+      workspaceId: input.preparationManifest.workspaceId,
+    });
+
+  await writeSandboxLog({
+    command: input.preparationManifest.demoCommand,
+    event: "footage-capture.fresh-state.restart.started",
+    url: input.preparationManifest.url,
+  });
+  await input.preparationWorkspace.workspace.execute(createStopDemoCommand());
+  const runtimeResult = await input.preparationWorkspace.workspace.execute(
+    createStartDemoCommand(input.preparationManifest.demoCommand),
+  );
+  await writeSandboxLog({
+    event: "footage-capture.fresh-state.restart.launched",
+    exitCode: runtimeResult.exitCode,
+    stdout: runtimeResult.stdout,
+  });
+  const readinessResult = await waitForDemoReadiness({
+    pollIntervalMs: input.readinessPollIntervalMs ?? 1_000,
+    timeoutMs: input.readinessTimeoutMs ?? 30_000,
+    url: input.preparationManifest.url,
+    workspace: input.preparationWorkspace.workspace,
+  });
+  if (runtimeResult.exitCode !== 0 || readinessResult.exitCode !== 0) {
+    await writeSandboxLog({
+      event: "footage-capture.fresh-state.restart.failed",
+      runtimeExitCode: runtimeResult.exitCode,
+      stderr: readinessResult.stderr,
+      stdout: readinessResult.stdout,
+      url: input.preparationManifest.url,
+    });
+    throw new Error("Fresh Footage Capture state did not become ready.");
+  }
+
+  const browserUrl = await createBrowserPreviewUrl({
+    localUrl: input.preparationManifest.url,
+    workspace: input.preparationWorkspace.workspace,
+  });
+  await writeSandboxLog({
+    browserUrl,
+    event: "footage-capture.fresh-state.restart.succeeded",
+  });
+
+  return { browserUrl };
+}
+
 async function writeDemoServerLog(
   writeSandboxLog: (
     entry: Record<string, unknown>,
