@@ -3,13 +3,14 @@ import type { NormalizedSupportingDocument } from "../01-context-gathering/suppo
 import type { PreparationManifest } from "../03-repo-preparation/preparation-manifest";
 import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
 import type { DemoPlanner } from "./demo-planning/demo-planner.interface";
+import {
+  type DemoScriptPackage,
+  buildDemoScriptPackage,
+} from "./demo-script-package";
 import type { ProjectExplorer } from "./project-exploration/project-explorer.interface";
 import type { ScriptComposer } from "./script-composition/script-composer.interface";
 import type { ScriptGenerationAgent } from "./script-generation-agent.interface";
-import {
-  type VideoScriptPackage,
-  buildVideoScriptPackage,
-} from "./video-script-package";
+import { assertCaptureReadyScriptQuality } from "./script-package-quality";
 
 export type ScriptGenerationInput = {
   demoBrief: DemoBrief;
@@ -27,10 +28,10 @@ export type ScriptGenerationDependencies = {
   scriptComposer: ScriptComposer;
 };
 
-export async function generateVideoScriptPackage(
+export async function generateDemoScriptPackage(
   input: ScriptGenerationInput,
   dependencies: ScriptGenerationDependencies,
-): Promise<VideoScriptPackage> {
+): Promise<DemoScriptPackage> {
   if (dependencies.scriptGenerationAgent !== undefined) {
     if (
       input.preparationWorkspace === undefined ||
@@ -53,15 +54,16 @@ export async function generateVideoScriptPackage(
     demoBrief: input.demoBrief,
     exploration,
   });
-  const videoScript = await dependencies.scriptComposer.composeScript({
+  const demoScript = await dependencies.scriptComposer.composeScript({
     demoBrief: input.demoBrief,
     demoPlan,
     exploration,
   });
+  assertCaptureReadyScriptQuality(demoScript);
 
-  return buildVideoScriptPackage({
+  return buildDemoScriptPackage({
     demoPlan,
+    demoScript,
     exploration,
-    videoScript,
   });
 }

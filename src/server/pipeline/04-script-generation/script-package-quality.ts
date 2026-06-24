@@ -11,6 +11,7 @@ const meaningfulInteractionPatterns = [
 
 const placeholderPatterns = [
   /document\.body\.setAttribute\s*\(\s*['"]data-makeademo-feature['"]/,
+  /expect\s*\(\s*page\.locator\(\s*['"]body['"]\s*\)\s*\)\.toBeVisible\s*\(\s*\)/,
   /toContainText\s*\(\s*\/\\S\//,
 ];
 
