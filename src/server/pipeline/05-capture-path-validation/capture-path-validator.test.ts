@@ -11,7 +11,7 @@ describe("validateCapturePath", () => {
       {
         preparationManifest: manifest(),
         preparationWorkspace: workspaceHandle(sandboxLogs),
-        videoScriptPackage: demoScript(),
+        demoScriptPackage: demoScript(),
       },
       {
         async validateProject() {
@@ -101,7 +101,7 @@ describe("validateCapturePath", () => {
       {
         preparationManifest: manifest(),
         preparationWorkspace: workspaceHandle(sandboxLogs, executedCommands),
-        videoScriptPackage: demoScript(),
+        demoScriptPackage: demoScript(),
       },
       {
         async validateProject() {
@@ -171,7 +171,7 @@ describe("validateCapturePath", () => {
         {
           preparationManifest: manifest(),
           preparationWorkspace: workspaceHandle([]),
-          videoScriptPackage: demoScript({
+          demoScriptPackage: demoScript({
             demoPlaywrightScript:
               "import { setup, scene } from './makeademo-capture-sdk';\nawait scene('scene_validation', async ({ page, expect }) => {\n  await page.context().newPage({ recordVideo: { dir: 'videos' } });\n  console.log('[makeademo:scene]', '{}');\n  await expect(page.locator('body')).toBeVisible();\n});",
           }),
@@ -202,7 +202,7 @@ describe("validateCapturePath", () => {
         {
           preparationManifest: manifest(),
           preparationWorkspace: workspaceHandle([]),
-          videoScriptPackage: demoScript({
+          demoScriptPackage: demoScript({
             demoPlaywrightScript:
               "import { setup, scene } from './makeademo-capture-sdk';\nawait scene('scene_validation', async ({ page }) => {\n  await page.getByRole('button', { name: 'Save' }).click();\n});",
           }),
@@ -279,12 +279,20 @@ describe("validateCapturePath", () => {
       ],
       name: "uncovered declared scene",
     },
+    {
+      expectedReason:
+        "Capture Path emitted Scene start marker without an end marker.",
+      logs: [
+        '[makeademo:scene] {"elapsedMs":10,"event":"started","sceneId":"scene_validation"}',
+      ],
+      name: "missing terminal marker",
+    },
   ])("rejects $name", async ({ expectedReason, logs }) => {
     const result = await validateCapturePath(
       {
         preparationManifest: manifest(),
         preparationWorkspace: workspaceHandle([]),
-        videoScriptPackage: demoScript({
+        demoScriptPackage: demoScript({
           demoPlaywrightScript: validTwoSceneDemoPlaywrightScript(),
           scenes: [
             {

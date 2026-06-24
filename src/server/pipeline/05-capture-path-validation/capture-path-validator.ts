@@ -16,6 +16,7 @@ const capturePathDiagnosticsLogPath =
 export type CapturePathSceneValidationInput = {
   baseUrl: string;
   demoPlaywrightScript: string;
+  preparationWorkspace?: CapturePathValidationInput["preparationWorkspace"];
   scene: SceneDescription;
   sectionId: string;
 };
@@ -131,7 +132,7 @@ export async function validateCapturePath(
     warningCount: projectValidation.warnings.length,
   });
 
-  const scriptPackage = parseDemoScript(input.videoScriptPackage);
+  const scriptPackage = parseDemoScript(input.demoScriptPackage);
   assertDemoScriptCaptureSdkContract(scriptPackage);
   const logs = [...projectValidation.logs];
   const browserUrl =
@@ -157,6 +158,9 @@ export async function validateCapturePath(
   const sceneResult = await dependencies.sceneValidator.validateScene({
     baseUrl: browserUrl,
     demoPlaywrightScript: scriptPackage.demoPlaywrightScript,
+    ...(input.preparationWorkspace === undefined
+      ? {}
+      : { preparationWorkspace: input.preparationWorkspace }),
     scene: firstScene,
     sectionId: "demo-script",
   });
@@ -434,7 +438,7 @@ async function writeCapturePathDiagnostics(
     removeUndefinedValues({
       ...entry,
       repoUrl: input.preparationManifest.repoUrl,
-      scriptId: input.videoScriptPackage.scriptId,
+      scriptId: input.demoScriptPackage.scriptId,
       stage: "capture-path-validation",
       workspaceId: input.preparationManifest.workspaceId,
     }),
@@ -461,7 +465,7 @@ async function writeCapturePathSandboxLog(
   await input.preparationWorkspace?.workspace.writeSandboxLog?.({
     ...removeUndefinedValues(entry),
     repoUrl: input.preparationManifest.repoUrl,
-    scriptId: input.videoScriptPackage.scriptId,
+    scriptId: input.demoScriptPackage.scriptId,
     stage: "capture-path-validation",
     workspaceId: input.preparationManifest.workspaceId,
   });

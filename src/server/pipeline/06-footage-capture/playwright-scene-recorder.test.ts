@@ -127,9 +127,11 @@ describe("DefaultPlaywrightSceneRecorder", () => {
           "  await expect(page.locator('main')).toContainText('MakeADemo');",
           "});",
           "await scene('scene-one', async ({ page, expect }) => {",
+          "  await page.evaluate(() => document.body.insertAdjacentHTML('beforeend', '<p>Scene one state carried forward</p>'));",
           "  await expect(page.getByRole('heading', { name: 'MakeADemo' })).toBeVisible();",
           "});",
           "await scene('scene-two', async ({ page, expect }) => {",
+          "  await expect(page.locator('body')).toContainText('Scene one state carried forward');",
           "  await expect(page.getByRole('button', { name: 'Next' })).toBeVisible();",
           "});",
         ].join("\n"),
@@ -173,4 +175,401 @@ describe("DefaultPlaywrightSceneRecorder", () => {
       await rm(runDirectory, { force: true, recursive: true });
     }
   }, 30_000);
+
+  it("clamps pre-roll at the start of the continuous take", async () => {
+    const runDirectory = await recorderWorkspace();
+    const rawVideoPath = join(runDirectory, "raw.webm");
+    const trims: Array<{ durationMs: number; startMs: number }> = [];
+    await writeFile(rawVideoPath, "raw video");
+    const recorder = new DefaultPlaywrightSceneRecorder({
+      clipTrimmer: async (input) => {
+        trims.push({ durationMs: input.durationMs, startMs: input.startMs });
+        await writeFile(input.outputVideoPath, "trimmed");
+        return { durationSeconds: input.durationMs / 1000 };
+      },
+      postRollMs: 350,
+      preRollMs: 250,
+      rawVideoFinder: async () => rawVideoPath,
+      sceneScriptRunner: async () => ({
+        exitCode: 0,
+        stderr: "",
+        stdout: [
+          sceneMarker({
+            elapsedMs: 100,
+            event: "started",
+            sceneId: "scene-one",
+          }),
+          sceneMarker({
+            elapsedMs: 200,
+            event: "succeeded",
+            sceneId: "scene-one",
+          }),
+        ].join("\n"),
+        timedOut: false,
+      }),
+    });
+
+    try {
+      await recorder.recordScenes({
+        baseUrl: "data:text/html,<main>MakeADemo</main>",
+        demoPlaywrightScript: validDemoScript("scene-one"),
+        runDirectory,
+        scenes: [sceneDescription("scene-one")],
+        sectionId: "demo-script",
+      });
+
+      expect(trims).toEqual([{ durationMs: 550, startMs: 0 }]);
+    } finally {
+      await rm(runDirectory, { force: true, recursive: true });
+    }
+  }, 20_000);
+
+  it("excludes setup time before the first Scene and extends post-roll after the Scene", async () => {
+    const runDirectory = await recorderWorkspace();
+    const rawVideoPath = join(runDirectory, "raw.webm");
+    const trims: Array<{ durationMs: number; startMs: number }> = [];
+    await writeFile(rawVideoPath, "raw video");
+    const recorder = new DefaultPlaywrightSceneRecorder({
+      clipTrimmer: async (input) => {
+        trims.push({ durationMs: input.durationMs, startMs: input.startMs });
+        await writeFile(input.outputVideoPath, "trimmed");
+        return { durationSeconds: input.durationMs / 1000 };
+      },
+      postRollMs: 350,
+      preRollMs: 250,
+      rawVideoFinder: async () => rawVideoPath,
+      sceneScriptRunner: async () => ({
+        exitCode: 0,
+        stderr: "",
+        stdout: [
+          sceneMarker({
+            elapsedMs: 2_000,
+            event: "started",
+            sceneId: "scene-one",
+          }),
+          sceneMarker({
+            elapsedMs: 3_000,
+            event: "succeeded",
+            sceneId: "scene-one",
+          }),
+        ].join("\n"),
+        timedOut: false,
+      }),
+    });
+
+    try {
+      await recorder.recordScenes({
+        baseUrl: "data:text/html,<main>MakeADemo</main>",
+        demoPlaywrightScript: validDemoScript("scene-one"),
+        runDirectory,
+        scenes: [sceneDescription("scene-one")],
+        sectionId: "demo-script",
+      });
+
+      expect(trims).toEqual([{ durationMs: 1_600, startMs: 1_750 }]);
+    } finally {
+      await rm(runDirectory, { force: true, recursive: true });
+    }
+  }, 20_000);
+
+  it("keeps post-roll trim requests bounded by marker-derived ranges", async () => {
+    const runDirectory = await recorderWorkspace();
+    const rawVideoPath = join(runDirectory, "raw.webm");
+    const trims: Array<{ durationMs: number; startMs: number }> = [];
+    await writeFile(rawVideoPath, "raw video");
+    const recorder = new DefaultPlaywrightSceneRecorder({
+      clipTrimmer: async (input) => {
+        trims.push({ durationMs: input.durationMs, startMs: input.startMs });
+        await writeFile(input.outputVideoPath, "trimmed");
+        return { durationSeconds: input.durationMs / 1000 };
+      },
+      postRollMs: 350,
+      preRollMs: 250,
+      rawVideoFinder: async () => rawVideoPath,
+      sceneScriptRunner: async () => ({
+        exitCode: 0,
+        stderr: "",
+        stdout: [
+          sceneMarker({
+            elapsedMs: 9_900,
+            event: "started",
+            sceneId: "scene-one",
+          }),
+          sceneMarker({
+            elapsedMs: 10_000,
+            event: "succeeded",
+            sceneId: "scene-one",
+          }),
+        ].join("\n"),
+        timedOut: false,
+      }),
+    });
+
+    try {
+      await recorder.recordScenes({
+        baseUrl: "data:text/html,<main>MakeADemo</main>",
+        demoPlaywrightScript: validDemoScript("scene-one"),
+        runDirectory,
+        scenes: [sceneDescription("scene-one")],
+        sectionId: "demo-script",
+      });
+
+      expect(trims).toEqual([{ durationMs: 700, startMs: 9_650 }]);
+    } finally {
+      await rm(runDirectory, { force: true, recursive: true });
+    }
+  }, 20_000);
+
+  it.each([
+    {
+      expectedError: "not-json",
+      markers: "[makeademo:scene] not-json",
+      name: "malformed marker JSON",
+    },
+    {
+      expectedError: "undeclared Scene marker scene-extra",
+      markers: [
+        sceneMarker({
+          elapsedMs: 100,
+          event: "started",
+          sceneId: "scene-extra",
+        }),
+        sceneMarker({
+          elapsedMs: 200,
+          event: "succeeded",
+          sceneId: "scene-extra",
+        }),
+      ].join("\n"),
+      name: "undeclared Scene",
+    },
+    {
+      expectedError: "nested Scene markers",
+      markers: [
+        sceneMarker({ elapsedMs: 100, event: "started", sceneId: "scene-one" }),
+        sceneMarker({ elapsedMs: 150, event: "started", sceneId: "scene-two" }),
+        sceneMarker({
+          elapsedMs: 200,
+          event: "succeeded",
+          sceneId: "scene-two",
+        }),
+        sceneMarker({
+          elapsedMs: 250,
+          event: "succeeded",
+          sceneId: "scene-one",
+        }),
+      ].join("\n"),
+      name: "nested markers",
+    },
+    {
+      expectedError: "duplicate markers for Scene scene-one",
+      markers: [
+        sceneMarker({ elapsedMs: 100, event: "started", sceneId: "scene-one" }),
+        sceneMarker({
+          elapsedMs: 200,
+          event: "succeeded",
+          sceneId: "scene-one",
+        }),
+        sceneMarker({ elapsedMs: 300, event: "started", sceneId: "scene-one" }),
+        sceneMarker({
+          elapsedMs: 400,
+          event: "succeeded",
+          sceneId: "scene-one",
+        }),
+      ].join("\n"),
+      name: "duplicate markers",
+    },
+    {
+      expectedError: "succeeded marker before start for Scene scene-one",
+      markers: sceneMarker({
+        elapsedMs: 100,
+        event: "succeeded",
+        sceneId: "scene-one",
+      }),
+      name: "terminal marker before start",
+    },
+  ])(
+    "fails on capture-side $name",
+    async ({ expectedError, markers }) => {
+      const runDirectory = await recorderWorkspace();
+      const rawVideoPath = join(runDirectory, "raw.webm");
+      await writeFile(rawVideoPath, "raw video");
+      const recorder = new DefaultPlaywrightSceneRecorder({
+        rawVideoFinder: async () => rawVideoPath,
+        sceneScriptRunner: async () => ({
+          exitCode: 0,
+          stderr: "",
+          stdout: markers,
+          timedOut: false,
+        }),
+      });
+
+      try {
+        await expect(
+          recorder.recordScenes({
+            baseUrl: "data:text/html,<main>MakeADemo</main>",
+            demoPlaywrightScript: validDemoScript("scene-one"),
+            runDirectory,
+            scenes: [
+              sceneDescription("scene-one"),
+              sceneDescription("scene-two"),
+            ],
+            sectionId: "demo-script",
+          }),
+        ).rejects.toThrow(expectedError);
+      } finally {
+        await rm(runDirectory, { force: true, recursive: true });
+      }
+    },
+    20_000,
+  );
+
+  it("fails when a declared Scene starts but never emits an end marker", async () => {
+    const runDirectory = await recorderWorkspace();
+    const rawVideoPath = join(runDirectory, "raw.webm");
+    await writeFile(rawVideoPath, "raw video");
+    const recorder = new DefaultPlaywrightSceneRecorder({
+      rawVideoFinder: async () => rawVideoPath,
+      sceneScriptRunner: async () => ({
+        exitCode: 0,
+        stderr: "",
+        stdout: sceneMarker({
+          elapsedMs: 100,
+          event: "started",
+          sceneId: "scene-one",
+        }),
+        timedOut: false,
+      }),
+    });
+
+    try {
+      await expect(
+        recorder.recordScenes({
+          baseUrl: "data:text/html,<main>MakeADemo</main>",
+          demoPlaywrightScript: validDemoScript("scene-one"),
+          runDirectory,
+          scenes: [sceneDescription("scene-one")],
+          sectionId: "demo-script",
+        }),
+      ).rejects.toThrow("Scene start marker without an end marker");
+    } finally {
+      await rm(runDirectory, { force: true, recursive: true });
+    }
+  }, 20_000);
+
+  it("fails when Playwright does not create a raw video", async () => {
+    const runDirectory = await recorderWorkspace();
+    const recorder = new DefaultPlaywrightSceneRecorder({
+      sceneScriptRunner: async () => ({
+        exitCode: 0,
+        stderr: "",
+        stdout: [
+          sceneMarker({
+            elapsedMs: 100,
+            event: "started",
+            sceneId: "scene-one",
+          }),
+          sceneMarker({
+            elapsedMs: 200,
+            event: "succeeded",
+            sceneId: "scene-one",
+          }),
+        ].join("\n"),
+        timedOut: false,
+      }),
+    });
+
+    try {
+      await expect(
+        recorder.recordScenes({
+          baseUrl: "data:text/html,<main>MakeADemo</main>",
+          demoPlaywrightScript: validDemoScript("scene-one"),
+          runDirectory,
+          scenes: [sceneDescription("scene-one")],
+          sectionId: "demo-script",
+        }),
+      ).rejects.toThrow("No Playwright video was created");
+    } finally {
+      await rm(runDirectory, { force: true, recursive: true });
+    }
+  }, 20_000);
+
+  it("reports ffmpeg trim failures with the Scene ID", async () => {
+    const runDirectory = await recorderWorkspace();
+    const rawVideoPath = join(runDirectory, "raw.webm");
+    await writeFile(rawVideoPath, "not a video");
+    const recorder = new DefaultPlaywrightSceneRecorder({
+      rawVideoFinder: async () => rawVideoPath,
+      sceneScriptRunner: async () => ({
+        exitCode: 0,
+        stderr: "",
+        stdout: [
+          sceneMarker({
+            elapsedMs: 100,
+            event: "started",
+            sceneId: "scene-one",
+          }),
+          sceneMarker({
+            elapsedMs: 200,
+            event: "succeeded",
+            sceneId: "scene-one",
+          }),
+        ].join("\n"),
+        timedOut: false,
+      }),
+    });
+
+    try {
+      await expect(
+        recorder.recordScenes({
+          baseUrl: "data:text/html,<main>MakeADemo</main>",
+          demoPlaywrightScript: validDemoScript("scene-one"),
+          runDirectory,
+          scenes: [sceneDescription("scene-one")],
+          sectionId: "demo-script",
+        }),
+      ).rejects.toThrow("Failed to trim Scene scene-one with ffmpeg");
+    } finally {
+      await rm(runDirectory, { force: true, recursive: true });
+    }
+  }, 20_000);
 });
+
+async function recorderWorkspace() {
+  const runDirectory = await mkdtemp(
+    join(tmpdir(), "makeademo-recorder-test-"),
+  );
+  await symlink(
+    join(process.cwd(), "node_modules"),
+    join(runDirectory, "node_modules"),
+  );
+  return runDirectory;
+}
+
+function validDemoScript(sceneId: string) {
+  return [
+    "import { setup, scene } from './makeademo-capture-sdk';",
+    "await setup(async ({ page, baseUrl, expect }) => {",
+    "  await page.goto(baseUrl);",
+    "  await expect(page.locator('main')).toBeVisible();",
+    "});",
+    `await scene(${JSON.stringify(sceneId)}, async ({ page, expect }) => {`,
+    "  await expect(page.locator('main')).toBeVisible();",
+    "});",
+  ].join("\n");
+}
+
+function sceneDescription(id: string) {
+  return {
+    expectedVisibleOutcome: "Main content is visible.",
+    humanReadableDescription: "Show main content.",
+    id,
+  };
+}
+
+function sceneMarker(input: {
+  elapsedMs: number;
+  event: "failed" | "started" | "succeeded";
+  sceneId: string;
+}) {
+  return `[makeademo:scene] ${JSON.stringify(input)}`;
+}

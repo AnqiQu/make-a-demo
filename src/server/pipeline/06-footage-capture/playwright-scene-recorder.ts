@@ -18,6 +18,8 @@ export type PlaywrightSceneRecorderOptions = {
   pauseAfterSceneMs?: number;
   postRollMs?: number;
   preRollMs?: number;
+  rawVideoFinder?: RawVideoFinder;
+  sceneScriptRunner?: SceneScriptRunner;
   sceneTimeoutMs?: number;
 };
 
@@ -28,6 +30,20 @@ export type SceneClipTrimmer = (input: {
   sceneId: string;
   startMs: number;
 }) => Promise<{ durationSeconds: number }>;
+
+type SceneScriptRunner = (
+  scenePath: string,
+  timeoutMs: number,
+) => Promise<SceneScriptResult>;
+
+type SceneScriptResult = {
+  exitCode: number | null;
+  stderr: string;
+  stdout: string;
+  timedOut: boolean;
+};
+
+type RawVideoFinder = (directory: string) => Promise<string>;
 
 type SceneMarker = {
   elapsedMs: number;
@@ -43,6 +59,8 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
   private readonly preRollMs: number;
   private readonly sceneTimeoutMs: number;
   private readonly clipTrimmer: SceneClipTrimmer;
+  private readonly rawVideoFinder: RawVideoFinder;
+  private readonly sceneScriptRunner: SceneScriptRunner;
 
   constructor(options: PlaywrightSceneRecorderOptions = {}) {
     this.clipTrimmer = options.clipTrimmer ?? trimSceneClipWithFfmpeg;
@@ -50,6 +68,8 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
     this.pauseAfterSceneMs = options.pauseAfterSceneMs ?? 0;
     this.postRollMs = options.postRollMs ?? 350;
     this.preRollMs = options.preRollMs ?? 250;
+    this.rawVideoFinder = options.rawVideoFinder ?? findSingleVideo;
+    this.sceneScriptRunner = options.sceneScriptRunner ?? runSceneScript;
     this.sceneTimeoutMs = options.sceneTimeoutMs ?? 120_000;
   }
 
@@ -80,14 +100,20 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
       }),
     );
 
-    const result = await runSceneScript(scenePath, this.sceneTimeoutMs);
+    const result = await this.sceneScriptRunner(scenePath, this.sceneTimeoutMs);
     await writeFile(markerLogPath, extractMarkerLog(result.stdout));
+    const blockedNetworkAttempts = readBlockedNetworkAttempts(result.stderr);
+    if (blockedNetworkAttempts.length > 0) {
+      throw new Error(
+        `Footage Capture blocked runtime network access from the generated Demo Script: ${blockedNetworkAttempts.map((attempt) => attempt.host).join(", ")}`,
+      );
+    }
 
     if (result.exitCode !== 0) {
       throw new Error(formatSceneFailure("continuous-take", result));
     }
 
-    const recordedVideoPath = await findSingleVideo(videoScratchDirectory);
+    const recordedVideoPath = await this.rawVideoFinder(videoScratchDirectory);
     await rm(rawTakePath, { force: true });
     await rename(recordedVideoPath, rawTakePath);
 
@@ -187,12 +213,7 @@ async function probeVideoDurationSeconds(videoPath: string): Promise<number> {
 }
 
 async function runSceneScript(scenePath: string, timeoutMs: number) {
-  return await new Promise<{
-    exitCode: number | null;
-    stderr: string;
-    stdout: string;
-    timedOut: boolean;
-  }>((resolve, reject) => {
+  return await new Promise<SceneScriptResult>((resolve, reject) => {
     const child = spawn(process.execPath, [scenePath], {
       detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
@@ -226,10 +247,7 @@ async function runSceneScript(scenePath: string, timeoutMs: number) {
   });
 }
 
-function formatSceneFailure(
-  sceneId: string,
-  result: Awaited<ReturnType<typeof runSceneScript>>,
-) {
+function formatSceneFailure(sceneId: string, result: SceneScriptResult) {
   const details = [result.stdout.trim(), result.stderr.trim()]
     .filter((output) => output.length > 0)
     .join("\n");
@@ -279,25 +297,41 @@ function parseSceneMarkers(stdout: string): SceneMarker[] {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.startsWith("[makeademo:scene] "))
-    .map((line) => JSON.parse(line.slice("[makeademo:scene] ".length)))
+    .map((line) => readSceneMarker(line))
     .map((value): SceneMarker => {
+      const marker = value as Partial<SceneMarker>;
       if (
         typeof value !== "object" ||
         value === null ||
-        typeof value.sceneId !== "string" ||
-        typeof value.elapsedMs !== "number" ||
-        !Number.isFinite(value.elapsedMs) ||
-        (value.event !== "started" &&
-          value.event !== "succeeded" &&
-          value.event !== "failed")
+        typeof marker.sceneId !== "string" ||
+        typeof marker.elapsedMs !== "number" ||
+        !Number.isFinite(marker.elapsedMs) ||
+        (marker.event !== "started" &&
+          marker.event !== "succeeded" &&
+          marker.event !== "failed")
       ) {
         throw new Error(
           "Malformed MakeADemo scene marker emitted by capture script.",
         );
       }
 
-      return value;
+      return {
+        elapsedMs: marker.elapsedMs,
+        event: marker.event,
+        ...(marker.message === undefined ? {} : { message: marker.message }),
+        sceneId: marker.sceneId,
+      };
     });
+}
+
+function readSceneMarker(line: string): unknown {
+  try {
+    return JSON.parse(line.slice("[makeademo:scene] ".length));
+  } catch {
+    throw new Error(
+      `Malformed MakeADemo scene marker emitted by capture script: ${line}`,
+    );
+  }
 }
 
 function readMarkerRanges(markers: SceneMarker[], sceneIds: string[]) {
@@ -357,6 +391,25 @@ function readMarkerRanges(markers: SceneMarker[], sceneIds: string[]) {
   }
 
   return ranges;
+}
+
+function readBlockedNetworkAttempts(stderr: string) {
+  return stderr
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("[makeademo:network-blocked] "))
+    .map((line) =>
+      JSON.parse(line.slice("[makeademo:network-blocked] ".length)),
+    )
+    .filter(
+      (value) =>
+        typeof value === "object" &&
+        value !== null &&
+        value.direction === "outbound" &&
+        value.phase === "runtime" &&
+        typeof value.host === "string",
+    )
+    .map((value) => ({ host: value.host as string }));
 }
 
 function killChildProcessGroup(pid: number | undefined) {

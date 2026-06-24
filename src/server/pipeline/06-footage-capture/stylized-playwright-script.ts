@@ -71,6 +71,7 @@ const context = await browser.newContext({
     size: { width: 1280, height: 720 },
   },
 });
+${runtimeNetworkLockdownSource()}
 const page = await context.newPage();
 const makeADemoCaptureStartedAt = performance.now();
 const makeADemoCaptureContext = { page, baseUrl, expect };
@@ -107,6 +108,7 @@ const browser = await chromium.launch(${launchOptions});
 const context = await browser.newContext({
   viewport: { width: 1280, height: 720 },
 });
+${runtimeNetworkLockdownSource()}
 const page = await context.newPage();
 const makeADemoCaptureStartedAt = performance.now();
 const makeADemoCaptureContext = { page, baseUrl, expect };
@@ -130,6 +132,58 @@ ${indentScriptBody(script)}
 void expect;
 void setup;
 void scene;
+`;
+}
+
+function runtimeNetworkLockdownSource() {
+  return `const makeADemoAllowedRuntimeOrigin = new URL(baseUrl).origin;
+const makeADemoOriginalFetch = globalThis.fetch?.bind(globalThis);
+if (makeADemoOriginalFetch !== undefined) {
+  globalThis.fetch = async (resource, init) => {
+    const requestUrl = typeof resource === "string" || resource instanceof URL
+      ? new URL(resource, baseUrl).toString()
+      : new URL(resource.url, baseUrl).toString();
+    if (!isMakeADemoAllowedRuntimeRequest(requestUrl)) {
+      console.error("[makeademo:network-blocked]", JSON.stringify({
+        direction: "outbound",
+        host: new URL(requestUrl).host,
+        phase: "runtime",
+        resourceType: "fetch",
+        url: requestUrl,
+      }));
+      throw new Error(\`MakeADemo blocked runtime network access to \${requestUrl}\`);
+    }
+
+    return await makeADemoOriginalFetch(resource, init);
+  };
+}
+
+await context.route("**/*", async (route) => {
+  const request = route.request();
+  const requestUrl = request.url();
+  if (isMakeADemoAllowedRuntimeRequest(requestUrl)) {
+    await route.continue();
+    return;
+  }
+
+  console.error("[makeademo:network-blocked]", JSON.stringify({
+    direction: "outbound",
+    host: new URL(requestUrl).host,
+    phase: "runtime",
+    resourceType: request.resourceType(),
+    url: requestUrl,
+  }));
+  await route.abort("blockedbyclient");
+});
+
+function isMakeADemoAllowedRuntimeRequest(requestUrl) {
+  const parsedUrl = new URL(requestUrl);
+  if (parsedUrl.protocol === "about:" || parsedUrl.protocol === "blob:" || parsedUrl.protocol === "data:") {
+    return true;
+  }
+
+  return parsedUrl.origin === makeADemoAllowedRuntimeOrigin;
+}
 `;
 }
 

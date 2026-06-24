@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 
 import { describe, expect, it } from "vitest";
 
+import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
 import { DefaultCapturePathSceneValidator } from "./playwright-capture-path-scene-validator";
 
 describe("DefaultCapturePathSceneValidator", () => {
@@ -13,7 +14,8 @@ describe("DefaultCapturePathSceneValidator", () => {
       demoPlaywrightScript: [
         "import { setup, scene } from './makeademo-capture-sdk';",
         "await setup(async () => {});",
-        "await scene('scene_failure_evidence', async () => {",
+        "await scene('scene_failure_evidence', async ({ page, expect }) => {",
+        "  await expect(page.locator('body')).toBeVisible();",
         "  throw new Error('selector exploded');",
         "});",
       ].join("\n"),
@@ -35,6 +37,42 @@ describe("DefaultCapturePathSceneValidator", () => {
       "selector exploded",
     );
     expect(result.logs.join("\n")).toContain("selector exploded");
+  }, 20_000);
+
+  it("blocks process-level runtime network requests from generated Demo Scripts", async () => {
+    const validator = new DefaultCapturePathSceneValidator();
+
+    const result = await validator.validateScene({
+      baseUrl: "https://example.test/",
+      demoPlaywrightScript: [
+        "import { setup, scene } from './makeademo-capture-sdk';",
+        "await setup(async () => {});",
+        "await scene('scene_external_request', async ({ page, expect }) => {",
+        "  await expect(page.locator('body')).toBeVisible();",
+        "  await fetch('https://analytics.example.com/pixel');",
+        "});",
+      ].join("\n"),
+      scene: {
+        expectedVisibleOutcome: "The page is visible.",
+        humanReadableDescription: "Try an external request.",
+        id: "scene_external_request",
+      },
+      sectionId: "section_external_request",
+    });
+
+    expect(result).toMatchObject({
+      blockedNetworkAttempts: [
+        {
+          direction: "outbound",
+          host: "analytics.example.com",
+          phase: "runtime",
+        },
+      ],
+      failureReason:
+        "Capture Path Validation blocked runtime network access from the generated Demo Script.",
+      status: "failed",
+    });
+    expect(result.logs.join("\n")).toContain("[makeademo:network-blocked]");
   }, 20_000);
 
   it("rejects SDK type errors before running the dry-run browser script", async () => {
@@ -66,5 +104,79 @@ describe("DefaultCapturePathSceneValidator", () => {
     expect(result.logs.join("\n")).toContain("missingThing");
     expect(result.stdoutPath).toBeUndefined();
     expect(result.stderrPath).toBeUndefined();
+  }, 20_000);
+
+  it("runs the generated dry-run script inside the prepared workspace when available", async () => {
+    const validator = new DefaultCapturePathSceneValidator();
+    const executedCommands: string[] = [];
+    const uploadedDestinations: string[] = [];
+    const preparationWorkspace: PreparationWorkspaceHandle = {
+      async destroy() {},
+      id: "workspace_123",
+      workspace: {
+        async execute(command) {
+          executedCommands.push(command);
+          if (command.includes("bun '/workspace/.makeademo/")) {
+            return {
+              exitCode: 0,
+              stderr: "",
+              stdout: [
+                '[makeademo:scene] {"elapsedMs":10,"event":"started","sceneId":"scene_workspace"}',
+                '[makeademo:scene] {"elapsedMs":20,"event":"succeeded","sceneId":"scene_workspace"}',
+              ].join("\n"),
+            };
+          }
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async getPreviewUrl() {
+          return "https://preview.example.test/";
+        },
+        async setOutboundNetworkAccess() {},
+        async uploadFiles(files) {
+          uploadedDestinations.push(
+            ...files.map((file) => file.destinationPath),
+          );
+        },
+      },
+    };
+
+    const result = await validator.validateScene({
+      baseUrl: "https://preview.example.test/",
+      demoPlaywrightScript: [
+        "import { setup, scene } from './makeademo-capture-sdk';",
+        "await setup(async ({ page, baseUrl, expect }) => {",
+        "  await page.goto(baseUrl);",
+        "  await expect(page.locator('body')).toBeVisible();",
+        "});",
+        "await scene('scene_workspace', async ({ page, expect }) => {",
+        "  await expect(page.locator('body')).toBeVisible();",
+        "});",
+      ].join("\n"),
+      preparationWorkspace,
+      scene: {
+        expectedVisibleOutcome: "The page is visible.",
+        humanReadableDescription: "Show the page.",
+        id: "scene_workspace",
+      },
+      sectionId: "section_workspace",
+    });
+
+    expect(result).toMatchObject({
+      runDirectory: expect.stringContaining(
+        "/workspace/.makeademo/capture-path-validation-runs/",
+      ),
+      scriptPath: expect.stringContaining("/workspace/.makeademo/"),
+      status: "succeeded",
+    });
+    expect(uploadedDestinations).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("makeademo-capture-sdk.js"),
+        expect.stringContaining("makeademo-capture-sdk.d.ts"),
+        expect.stringContaining("scene_workspace.ts"),
+      ]),
+    );
+    expect(executedCommands.join("\n")).toContain(
+      "/workspace/.makeademo/capture-path-validation-runs/",
+    );
   }, 20_000);
 });

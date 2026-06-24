@@ -42,6 +42,47 @@ describe("Capture SDK Contract", () => {
     ).toThrow("must import { setup, scene }");
   });
 
+  it("requires each Scene to include a visible Playwright assertion", () => {
+    expect(() =>
+      assertDemoScriptCaptureSdkContract(
+        demoScript(
+          [
+            "import { setup, scene } from './makeademo-capture-sdk';",
+            "await scene('scene_one', async ({ page, expect }) => {",
+            "  await expect(page.locator('main')).toBeVisible();",
+            "});",
+          ].join("\n"),
+        ),
+      ),
+    ).not.toThrow();
+
+    for (const script of [
+      [
+        "import { setup, scene } from './makeademo-capture-sdk';",
+        "await scene('scene_one', async () => {",
+        "  // await expect(page.locator('main')).toBeVisible();",
+        "});",
+      ].join("\n"),
+      [
+        "import { setup, scene } from './makeademo-capture-sdk';",
+        "await scene('scene_one', async () => {",
+        "  const fake = \"await expect(page.locator('main')).toBeVisible();\";",
+        "  void fake;",
+        "});",
+      ].join("\n"),
+      [
+        "import { setup, scene } from './makeademo-capture-sdk';",
+        "await scene('scene_one', async ({ expect }) => {",
+        "  await expect(1).toBe(1);",
+        "});",
+      ].join("\n"),
+    ]) {
+      expect(() =>
+        assertDemoScriptCaptureSdkContract(demoScript(script)),
+      ).toThrow("visible Playwright assertion");
+    }
+  });
+
   it("validates Demo Script code against the generated SDK declarations", async () => {
     const workspace = await sdkWorkspace();
 
@@ -96,12 +137,9 @@ function validTypedScript() {
   ].join("\n");
 }
 
-function demoScript(importLine: string): DemoScript {
+function demoScript(demoPlaywrightScript: string): DemoScript {
   return {
-    demoPlaywrightScript: [
-      importLine,
-      "await scene('scene_one', async ({ page, expect }) => { await expect(page.locator('body')).toBeVisible(); });",
-    ].join("\n"),
+    demoPlaywrightScript,
     format: "16:9",
     presentation: {
       music: { enabled: false },

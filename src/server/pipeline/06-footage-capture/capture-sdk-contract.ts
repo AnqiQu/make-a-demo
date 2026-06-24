@@ -47,12 +47,26 @@ export function assertDemoScriptCaptureSdkContract(script: DemoScript): void {
         `Demo Script must call scene(${JSON.stringify(scene.id)}, ...).`,
       );
     }
-    if (!/\bexpect\s*\(/.test(sceneBody)) {
+    if (!hasVisiblePlaywrightAssertion(sceneBody)) {
       throw new Error(
         `Scene ${scene.id} must include a visible Playwright assertion before it ends.`,
       );
     }
   }
+}
+
+function hasVisiblePlaywrightAssertion(source: string) {
+  const assertionSource = stripCommentsAndStringLiterals(source);
+  return /\bexpect\s*\(\s*(?:page\.|[^)]*\b(?:locator|getBy(?:Role|Text|Label|Placeholder|TestId|Title|AltText))\b)[\s\S]*?\)\s*\.\s*(?:toBeVisible|toBeInViewport|toContainText|toHaveText|toHaveURL|toHaveTitle|toHaveCount)\s*\(/.test(
+    assertionSource,
+  );
+}
+
+function stripCommentsAndStringLiterals(source: string) {
+  return source
+    .replaceAll(/\/\*[\s\S]*?\*\//g, " ")
+    .replaceAll(/\/\/.*$/gm, " ")
+    .replaceAll(/(['"`])(?:\\[\s\S]|(?!\1)[\s\S])*\1/g, "''");
 }
 
 export async function writeGeneratedCaptureSdkHarness(
