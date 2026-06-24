@@ -254,6 +254,21 @@ describe("captureScenesFromScript", () => {
     ).resolves.toBe("downloaded video");
   });
 
+  it("requires a prepared workspace when no explicit test recorder is injected", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
+    const tempRoot = join(workspace, "runs");
+
+    await expect(
+      captureScenesFromScript({
+        baseUrl: "http://localhost:3000",
+        scriptPackage: validDemoScript(),
+        tempRoot,
+      }),
+    ).rejects.toThrow(
+      "Footage Capture requires a prepared workspace; local capture is not allowed.",
+    );
+  });
+
   it("rejects Demo Scripts with agent-authored recorded Scene durations before recording starts", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
     const tempRoot = join(workspace, "runs");

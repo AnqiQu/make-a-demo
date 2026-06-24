@@ -3,10 +3,7 @@ import { join } from "node:path";
 import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
 import { assertDemoScriptCaptureSdkContract } from "./capture-sdk-contract";
 import { type DemoScript, parseDemoScript } from "./demo-script.schema";
-import {
-  DefaultPlaywrightSceneRecorder,
-  PreparedWorkspacePlaywrightSceneRecorder,
-} from "./playwright-scene-recorder";
+import { PreparedWorkspacePlaywrightSceneRecorder } from "./playwright-scene-recorder";
 import type { SceneRecorder } from "./scene-recorder.interface";
 
 type CapturedSceneManifestEntry = {
@@ -55,13 +52,7 @@ export async function captureScenesFromScript(
 
   const scriptPackage = await readScriptPackage(input);
   assertDemoScriptCaptureSdkContract(scriptPackage);
-  const recorder =
-    input.recorder ??
-    (input.preparationWorkspace === undefined
-      ? new DefaultPlaywrightSceneRecorder()
-      : new PreparedWorkspacePlaywrightSceneRecorder({
-          preparationWorkspace: input.preparationWorkspace,
-        }));
+  const recorder = input.recorder ?? createPreparedWorkspaceRecorder(input);
   const scenes: CapturedSceneManifestEntry[] = [];
 
   try {
@@ -108,6 +99,18 @@ export async function captureScenesFromScript(
     }
     throw error;
   }
+}
+
+function createPreparedWorkspaceRecorder(input: CaptureScenesFromScriptInput) {
+  if (input.preparationWorkspace === undefined) {
+    throw new Error(
+      "Footage Capture requires a prepared workspace; local capture is not allowed.",
+    );
+  }
+
+  return new PreparedWorkspacePlaywrightSceneRecorder({
+    preparationWorkspace: input.preparationWorkspace,
+  });
 }
 
 async function readScriptPackage(input: CaptureScenesFromScriptInput) {
