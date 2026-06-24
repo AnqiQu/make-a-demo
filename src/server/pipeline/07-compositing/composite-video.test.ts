@@ -240,6 +240,74 @@ describe("compositeVideoFromScript", () => {
     ).rejects.toThrow();
   });
 
+  it("can retain the local Draft Composite after storing final video output", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "makeademo-composite-test-"),
+    );
+    const outputRoot = join(workspace, "renders");
+    const scriptPath = join(workspace, "demo-script.json");
+    const captureManifestPath = join(workspace, "capture-manifest.json");
+    const capturedScenePath = join(workspace, "scene-feed.webm");
+
+    await writeFile(capturedScenePath, "captured scene");
+    await writeFile(scriptPath, JSON.stringify(makeDemoScript()));
+    await writeFile(
+      captureManifestPath,
+      JSON.stringify(
+        makeCaptureManifest({
+          manifestPath: captureManifestPath,
+          runDirectory: workspace,
+          scenes: [
+            {
+              durationSeconds: 2,
+              sceneId: "scene-feed",
+              sectionId: "demo-script",
+              videoPath: capturedScenePath,
+            },
+          ],
+        }),
+      ),
+    );
+
+    const manifest = await compositeVideoFromScript({
+      captureManifestPath,
+      demoRequestId: "demo-request-001",
+      demoRequestStore: {
+        async linkFinalVideo() {
+          return {
+            finalVideoEmailSentAt: null,
+            makerEmail: "maker@example.com",
+          };
+        },
+        async markFinalVideoEmailSent() {},
+      },
+      finalVideoStorage: {
+        async storeFinalVideo() {
+          return {
+            key: "final-video.mp4",
+            r2Url: "r2://owlet/final-video.mp4",
+          };
+        },
+      },
+      outputRoot,
+      renderer: {
+        async renderVideo(input) {
+          await writeFile(input.outputPath, "rendered mp4");
+        },
+      },
+      retainLocalOutput: true,
+      runId: "composite-001",
+      scriptPath,
+    });
+
+    expect(manifest.outputVideoPath).toBe(
+      join(outputRoot, "composite-001", "final-video.mp4"),
+    );
+    await expect(
+      stat(manifest.outputVideoPath as string),
+    ).resolves.toBeTruthy();
+  });
+
   it("emails the maker a stable final video link after Compositing completes", async () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "makeademo-composite-test-"),
@@ -365,6 +433,57 @@ describe("compositeVideoFromScript", () => {
     ).rejects.toThrow(
       "missing captured Scene for Demo Script Scene scene-feed",
     );
+
+    expect(renderWasCalled).toBe(false);
+  });
+
+  it("rejects agent-authored recorded Scene durations instead of using them for Compositing", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "makeademo-composite-test-"),
+    );
+    const scriptPath = join(workspace, "demo-script.json");
+    const captureManifestPath = join(workspace, "capture-manifest.json");
+    const capturedScenePath = join(workspace, "scene-feed.webm");
+    let renderWasCalled = false;
+
+    await writeFile(capturedScenePath, "captured scene");
+    await writeFile(
+      scriptPath,
+      JSON.stringify({
+        ...makeDemoScript(),
+        scenes: [{ ...makeDemoScript().scenes[0], durationSeconds: 99 }],
+      }),
+    );
+    await writeFile(
+      captureManifestPath,
+      JSON.stringify(
+        makeCaptureManifest({
+          manifestPath: captureManifestPath,
+          runDirectory: workspace,
+          scenes: [
+            {
+              durationSeconds: 1.25,
+              sceneId: "scene-feed",
+              sectionId: "demo-script",
+              videoPath: capturedScenePath,
+            },
+          ],
+        }),
+      ),
+    );
+
+    await expect(
+      compositeVideoFromScript({
+        captureManifestPath,
+        outputRoot: join(workspace, "renders"),
+        renderer: {
+          async renderVideo() {
+            renderWasCalled = true;
+          },
+        },
+        scriptPath,
+      }),
+    ).rejects.toThrow("scenes[0].durationSeconds is not allowed");
 
     expect(renderWasCalled).toBe(false);
   });

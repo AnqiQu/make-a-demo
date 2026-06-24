@@ -50,6 +50,12 @@ type ApprovedFontFamily = keyof typeof fontAssetFiles;
 
 export type CompositedVideoManifest = {
   createdAt: string;
+  draftCompositeReview?: {
+    attempts: number;
+    findings: string[];
+    status: "accepted" | "exhausted";
+    warnings: string[];
+  };
   durationInFrames: number;
   fps: number;
   finalVideo?: StoredFinalVideo;
@@ -72,6 +78,7 @@ export type CompositeVideoFromScriptInput = {
   outputRoot?: string;
   projectRoot?: string;
   publicAppBaseUrl?: string;
+  retainLocalOutput?: boolean;
   renderer?: VideoRenderer;
   runId?: string;
   scriptDirectory?: string;
@@ -156,6 +163,7 @@ export async function compositeVideoFromScript(
     finalVideoStorage: input.finalVideoStorage,
     outputVideoPath,
     publicAppBaseUrl: input.publicAppBaseUrl,
+    retainLocalOutput: input.retainLocalOutput ?? false,
     runId,
     scriptId: scriptPackage.scriptId,
     title: scriptPackage.title,
@@ -168,7 +176,7 @@ export async function compositeVideoFromScript(
     fps: FPS,
     ...(finalVideo ? { finalVideo } : {}),
     manifestPath,
-    ...(finalVideo ? {} : { outputVideoPath }),
+    ...(finalVideo && !input.retainLocalOutput ? {} : { outputVideoPath }),
     renderPlanPath,
     runDirectory,
     runId,
@@ -222,6 +230,7 @@ async function storeAndLinkFinalVideo(input: {
   finalVideoStorage: FinalVideoStorage | undefined;
   outputVideoPath: string;
   publicAppBaseUrl: string | undefined;
+  retainLocalOutput: boolean;
   runId: string;
   scriptId: string;
   title: string;
@@ -267,7 +276,9 @@ async function storeAndLinkFinalVideo(input: {
       sentAt: new Date().toISOString(),
     });
   }
-  await unlink(input.outputVideoPath);
+  if (!input.retainLocalOutput) {
+    await unlink(input.outputVideoPath);
+  }
 
   return finalVideo;
 }

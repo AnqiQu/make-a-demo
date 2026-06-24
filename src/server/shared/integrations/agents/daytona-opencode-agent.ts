@@ -6,6 +6,10 @@ import type {
   CapturePathRepairer,
 } from "../../../pipeline/05-capture-path-validation/capture-path-repairer.interface";
 import { validateProject } from "../../../pipeline/05-capture-path-validation/project-runtime-preflight/project-validator";
+import type {
+  DraftCompositeReviewDecision,
+  DraftCompositeReviewInput,
+} from "../../pipeline-runner/full-pipeline-runner";
 import { PlaywrightBrowserValidator } from "../browser/playwright-browser-validator";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../daytona/daytona-sdk-preparation-workspace-provider";
 import { DaytonaSandboxRunner } from "../sandbox/daytona-sandbox-runner";
@@ -82,5 +86,11 @@ export class DaytonaOpenCodeAgent
     input: CapturePathRepairInput,
   ): Promise<CapturePathRepairResult> {
     return this.scriptGeneration.repairCapturePathFailure(input);
+  }
+
+  reviewDraftComposite(
+    input: DraftCompositeReviewInput,
+  ): Promise<DraftCompositeReviewDecision> {
+    return this.scriptGeneration.reviewDraftComposite(input);
   }
 }

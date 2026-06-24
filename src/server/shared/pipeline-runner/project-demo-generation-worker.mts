@@ -3,7 +3,10 @@ import { finalVideoEmailsEnabled } from "../../pipeline/final-output/final-video
 import { DaytonaOpenCodeAgent } from "../integrations/agents/daytona-opencode-agent";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import { createResendFinalVideoEmailNotifierFromEnv } from "../integrations/email/resend-final-video-email-notifier";
-import { DaytonaSandboxRunner } from "../integrations/sandbox/daytona-sandbox-runner";
+import {
+  DaytonaSandboxRunner,
+  restartPreparedDemoForFreshCapture,
+} from "../integrations/sandbox/daytona-sandbox-runner";
 import { createR2UploadPresignerFromEnv } from "../integrations/storage/r2-client";
 import { R2FinalVideoStorage } from "../integrations/storage/r2-final-video-storage";
 import { R2SupportingDocumentLoader } from "../integrations/storage/r2-supporting-document-loader";
@@ -103,6 +106,7 @@ do {
                   ? {}
                   : { finalVideoEmailNotifier }),
                 ...(publicAppBaseUrl === undefined ? {} : { publicAppBaseUrl }),
+                retainLocalOutput: true,
               });
             },
             context: {
@@ -111,6 +115,20 @@ do {
             },
             demoRequestScriptStore: demoRequestStore,
             observer,
+            async prepareFreshCaptureState({ stage1 }) {
+              if (stage1.preparationWorkspace === undefined) {
+                throw new Error(
+                  "Fresh Footage Capture state requires the prepared workspace.",
+                );
+              }
+
+              return await restartPreparedDemoForFreshCapture({
+                preparationManifest: stage1.preparationManifest,
+                preparationWorkspace: stage1.preparationWorkspace,
+              });
+            },
+            reviewDraftComposite:
+              openCodeAgent.reviewDraftComposite.bind(openCodeAgent),
           },
         );
 

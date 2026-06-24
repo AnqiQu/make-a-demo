@@ -1,3 +1,6 @@
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import type { PreparationWorkspace } from "../../../pipeline/03-repo-preparation/preparation-workspace.interface";
@@ -164,7 +167,7 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
       preparationManifest: scriptGenerationInput().preparationManifest,
       preparationWorkspace: workspaceHandle(events, [interactivePackage()]),
       repoUrl: "https://github.com/example/conduit",
-      videoScriptPackage: {
+      demoScriptPackage: {
         ...interactivePackage(),
         assumptions: [],
         demoPlan: {
@@ -180,7 +183,7 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
       },
     });
 
-    expect(result.videoScriptPackage.scriptId).toBe("script_conduit");
+    expect(result.demoScriptPackage.scriptId).toBe("script_conduit");
     const openCodeCommand = events.find(
       (event): event is { execute: string } =>
         typeof event === "object" &&
@@ -206,6 +209,154 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
         },
       ]),
     );
+  });
+
+  it("reviews Draft Composites in the same OpenCode session with uploaded evidence", async () => {
+    const events: unknown[] = [];
+    const reviewDirectory = await mkdtemp(join(tmpdir(), "makeademo-review-"));
+    const draftPath = join(reviewDirectory, "draft.mp4");
+    const rawTakePath = join(reviewDirectory, "raw.webm");
+    const contactSheetPath = join(reviewDirectory, "contact-sheet.jpg");
+    const sampledFramePath = join(reviewDirectory, "sample-001.jpg");
+    await writeFile(draftPath, "draft video");
+    await writeFile(rawTakePath, "raw take");
+    await writeFile(contactSheetPath, "contact sheet");
+    await writeFile(sampledFramePath, "sampled frame");
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      modelID: "gpt-5.5",
+      providerApiKey: "openai_key",
+      providerID: "openai",
+    });
+
+    const decision = await agent.reviewDraftComposite({
+      attempt: 1,
+      captureManifest: {
+        baseUrl: "https://preview.example.test/",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        keepTemp: true,
+        manifestPath: join(reviewDirectory, "capture-manifest.json"),
+        qualityFindings: [],
+        rawTakePath,
+        runDirectory: reviewDirectory,
+        runId: "capture-1",
+        scenes: [
+          {
+            durationSeconds: 5,
+            sceneId: "scene_feed",
+            sectionId: "demo-script",
+            videoPath: join(reviewDirectory, "scene-feed.webm"),
+          },
+        ],
+        scriptId: "script_conduit",
+        temporary: true,
+        title: "Conduit article feed demo",
+      },
+      derivedEvidence: {
+        contactSheetPaths: [contactSheetPath],
+        draftDurationSeconds: 5,
+        ffmpegFindings: ["ffprobe audio probe found no audio stream"],
+        markerSummary: [{ durationSeconds: 5, sceneId: "scene_feed" }],
+        qualityFindings: [],
+        rawDraftCompositePath: draftPath,
+        rawTakePath,
+        sampledFramePaths: [sampledFramePath],
+      },
+      draftComposite: {
+        createdAt: "2026-01-01T00:00:00.000Z",
+        durationInFrames: 150,
+        fps: 30,
+        manifestPath: join(reviewDirectory, "composite-manifest.json"),
+        outputVideoPath: draftPath,
+        renderPlanPath: join(reviewDirectory, "render-plan.json"),
+        runDirectory: reviewDirectory,
+        runId: "composite-1",
+        scriptId: "script_conduit",
+        title: "Conduit article feed demo",
+        viewUrl: "file:///tmp/draft.mp4",
+      },
+      opencodeSessionID: "session_prepare_123",
+      preparationWorkspace: workspaceHandle(events, [
+        {
+          decision: "repair",
+          reason: "Missing payoff.",
+          repairScope: "demo-script",
+        },
+      ]),
+      scriptPackage: {
+        ...interactivePackage(),
+        assumptions: [],
+        demoPlan: {
+          featureOrder: ["article feed"],
+          narrative: "Conduit article feed demo",
+          risks: [],
+        },
+        exploration: {
+          assumptions: [],
+          productSurfaces: [],
+          summary: "Prepared Conduit with local articles.",
+        },
+      },
+    });
+
+    expect(decision).toEqual({
+      decision: "repair",
+      reason: "Missing payoff.",
+      repairScope: "demo-script",
+    });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          uploadFiles: [
+            {
+              destinationPath: "/workspace/.makeademo/draft-review/draft.mp4",
+              sourcePath: draftPath,
+            },
+            {
+              destinationPath: "/workspace/.makeademo/draft-review/raw.webm",
+              sourcePath: rawTakePath,
+            },
+            {
+              destinationPath:
+                "/workspace/.makeademo/draft-review/contact-sheet.jpg",
+              sourcePath: contactSheetPath,
+            },
+            {
+              destinationPath:
+                "/workspace/.makeademo/draft-review/sample-001.jpg",
+              sourcePath: sampledFramePath,
+            },
+          ],
+        },
+        expect.objectContaining({
+          execute: expect.stringContaining("opencode run"),
+        }),
+      ]),
+    );
+    const openCodeCommand = events.find(
+      (event): event is { execute: string } =>
+        typeof event === "object" &&
+        event !== null &&
+        "execute" in event &&
+        typeof event.execute === "string" &&
+        event.execute.includes("opencode run"),
+    )?.execute;
+    expect(openCodeCommand).toContain("--session 'session_prepare_123'");
+    expect(openCodeCommand).toContain("Draft Composite Review");
+    expect(openCodeCommand).toContain("/workspace/.makeademo/draft-review");
+    expect(openCodeCommand).toContain("ffmpeg/ffprobe");
+    expect(openCodeCommand).toContain("markerSummary");
+    expect(openCodeCommand).toContain("scene_feed");
+    expect(openCodeCommand).toContain(
+      "ffprobe audio probe found no audio stream",
+    );
+    expect(openCodeCommand).toContain(draftPath);
+    expect(openCodeCommand).toContain(rawTakePath);
+    expect(openCodeCommand).toContain(contactSheetPath);
+    expect(openCodeCommand).toContain(sampledFramePath);
+    expect(openCodeCommand).toContain("rawDraftCompositePath");
+    expect(openCodeCommand).toContain("contactSheetPaths");
+    expect(openCodeCommand).toContain("sampledFramePaths");
+    expect(openCodeCommand).toContain("ffmpegFindings");
   });
 });
 
@@ -236,6 +387,12 @@ function workspaceHandle(events: unknown[], artifacts: unknown[]) {
         };
       }
 
+      if (command.includes("draft-composite-review.json")) {
+        return latestArtifact === undefined
+          ? { exitCode: 1, stderr: "missing review", stdout: "" }
+          : { exitCode: 0, stderr: "", stdout: JSON.stringify(latestArtifact) };
+      }
+
       if (command.startsWith("if test -f")) {
         return latestArtifact === undefined
           ? { exitCode: 1, stderr: "", stdout: "" }
@@ -248,7 +405,9 @@ function workspaceHandle(events: unknown[], artifacts: unknown[]) {
       return `https://preview.example.test:${port}`;
     },
     async setOutboundNetworkAccess() {},
-    async uploadFiles() {},
+    async uploadFiles(files) {
+      events.push({ uploadFiles: files });
+    },
     async writeSandboxLog(entry) {
       events.push({ sandboxLog: entry });
     },
