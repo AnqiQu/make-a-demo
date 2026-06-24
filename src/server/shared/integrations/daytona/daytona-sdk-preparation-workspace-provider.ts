@@ -9,6 +9,7 @@ import type {
 import type {
   PreparationWorkspace,
   PreparationWorkspaceCommandResult,
+  PreparationWorkspaceDownloadFile,
   PreparationWorkspaceExecuteOptions,
   PreparationWorkspaceLogEntry,
   PreparationWorkspaceUploadFile,
@@ -26,6 +27,10 @@ type DaytonaSdkClient = {
 
 type DaytonaSdkSandbox = {
   fs: {
+    downloadFiles(
+      files: Array<{ destination: string; source: string }>,
+      timeoutSec?: number,
+    ): Promise<Array<{ error?: string; source: string }>>;
     uploadFiles(
       files: Array<{ destination: string; source: string }>,
     ): Promise<void>;
@@ -339,6 +344,24 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
         source: file.sourcePath,
       })),
     );
+  }
+
+  async downloadFiles(
+    files: PreparationWorkspaceDownloadFile[],
+  ): Promise<void> {
+    const results = await this.sandbox.fs.downloadFiles(
+      files.map((file) => ({
+        destination: file.destinationPath,
+        source: file.sourcePath,
+      })),
+      0,
+    );
+    const failed = results.find((result) => result.error !== undefined);
+    if (failed !== undefined) {
+      throw new Error(
+        `Failed to download Daytona sandbox file ${failed.source}: ${failed.error}`,
+      );
+    }
   }
 }
 

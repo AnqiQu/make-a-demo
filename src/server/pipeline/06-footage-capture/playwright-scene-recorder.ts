@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
+import type { PreparationWorkspace } from "../03-repo-preparation/preparation-workspace.interface";
 import {
   validateDemoScriptCaptureSdkTypes,
   writeGeneratedCaptureSdkHarness,
@@ -155,6 +157,200 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
   }
 }
 
+export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
+  private readonly headed: boolean;
+  private readonly pauseAfterSceneMs: number;
+  private readonly postRollMs: number;
+  private readonly preRollMs: number;
+  private readonly sceneTimeoutMs: number;
+
+  constructor(
+    private readonly options: {
+      headed?: boolean;
+      pauseAfterSceneMs?: number;
+      postRollMs?: number;
+      preRollMs?: number;
+      preparationWorkspace: PreparationWorkspaceHandle;
+      sceneTimeoutMs?: number;
+    },
+  ) {
+    this.headed = options.headed ?? false;
+    this.pauseAfterSceneMs = options.pauseAfterSceneMs ?? 0;
+    this.postRollMs = options.postRollMs ?? 350;
+    this.preRollMs = options.preRollMs ?? 250;
+    this.sceneTimeoutMs = options.sceneTimeoutMs ?? 120_000;
+  }
+
+  async recordScenes(input: RecordSceneInput): Promise<RecordedScene[]> {
+    const workspace = this.options.preparationWorkspace.workspace;
+    if (workspace.downloadFiles === undefined) {
+      throw new Error(
+        "Prepared workspace Footage Capture requires artifact download support.",
+      );
+    }
+
+    const runId = basename(input.runDirectory);
+    const remoteRunDirectory = `/workspace/.makeademo/footage-capture-runs/${runId}`;
+    const remoteSceneWorkspace = `${remoteRunDirectory}/work/continuous-take`;
+    const remoteVideoScratchDirectory = `${remoteSceneWorkspace}/playwright-videos`;
+    const remoteRawScenesDirectory = `${remoteRunDirectory}/raw-scenes`;
+    const remoteSceneClipsDirectory = `${remoteRunDirectory}/scene-clips`;
+    const remoteScenePath = `${remoteSceneWorkspace}/demo-script.ts`;
+    const remoteRawTakePath = `${remoteRawScenesDirectory}/continuous-take.webm`;
+    const localSceneWorkspace = join(
+      input.runDirectory,
+      "work",
+      "continuous-take",
+    );
+    const localRawScenesDirectory = join(input.runDirectory, "raw-scenes");
+    const localSceneClipsDirectory = join(input.runDirectory, "scene-clips");
+    const localScenePath = join(localSceneWorkspace, "demo-script.ts");
+    const markerLogPath = join(input.runDirectory, "scene-markers.jsonl");
+    const localRawTakePath = join(
+      localRawScenesDirectory,
+      "continuous-take.webm",
+    );
+
+    await mkdir(localSceneWorkspace, { recursive: true });
+    await mkdir(localRawScenesDirectory, { recursive: true });
+    await mkdir(localSceneClipsDirectory, { recursive: true });
+    await writeGeneratedCaptureSdkHarness(localSceneWorkspace);
+    await validateDemoScriptCaptureSdkTypes({
+      demoPlaywrightScript: input.demoPlaywrightScript,
+      directory: localSceneWorkspace,
+    });
+    await writeFile(
+      localScenePath,
+      prepareStylizedPlaywrightScript(input.demoPlaywrightScript, {
+        baseUrl: input.baseUrl,
+        headed: this.headed,
+        pauseAfterSceneMs: this.pauseAfterSceneMs,
+        videoDirectory: remoteVideoScratchDirectory,
+      }),
+    );
+
+    await workspace.execute(
+      `mkdir -p ${shellQuote(remoteSceneWorkspace)} ${shellQuote(remoteVideoScratchDirectory)} ${shellQuote(remoteRawScenesDirectory)} ${shellQuote(remoteSceneClipsDirectory)}`,
+    );
+    await workspace.uploadFiles([
+      {
+        destinationPath: `${remoteSceneWorkspace}/makeademo-capture-sdk.js`,
+        sourcePath: join(localSceneWorkspace, "makeademo-capture-sdk.js"),
+      },
+      {
+        destinationPath: `${remoteSceneWorkspace}/makeademo-capture-sdk.d.ts`,
+        sourcePath: join(localSceneWorkspace, "makeademo-capture-sdk.d.ts"),
+      },
+      {
+        destinationPath: `${remoteSceneWorkspace}/makeademo-capture-sdk.instructions.md`,
+        sourcePath: join(
+          localSceneWorkspace,
+          "makeademo-capture-sdk.instructions.md",
+        ),
+      },
+      {
+        destinationPath: `${remoteSceneWorkspace}/demo-script.contract.ts`,
+        sourcePath: join(localSceneWorkspace, "demo-script.contract.ts"),
+      },
+      { destinationPath: remoteScenePath, sourcePath: localScenePath },
+    ]);
+
+    const result = await workspace.execute(
+      `cd ${shellQuote(remoteSceneWorkspace)} && timeout -s TERM ${Math.ceil(this.sceneTimeoutMs / 1000)} bun ${shellQuote(remoteScenePath)}`,
+    );
+    await writeFile(markerLogPath, extractMarkerLog(result.stdout));
+    const blockedNetworkAttempts = readBlockedNetworkAttempts(result.stderr);
+    if (blockedNetworkAttempts.length > 0) {
+      throw new Error(
+        `Footage Capture blocked runtime network access from the generated Demo Script: ${blockedNetworkAttempts.map((attempt) => attempt.host).join(", ")}`,
+      );
+    }
+    if (result.exitCode !== 0) {
+      throw new Error(
+        formatSceneFailure("continuous-take", {
+          ...result,
+          timedOut: result.exitCode === 124,
+        }),
+      );
+    }
+
+    const remoteRecordedVideoPath = await findSingleRemoteVideo({
+      directory: remoteVideoScratchDirectory,
+      workspace,
+    });
+    await workspace.execute(
+      `rm -f ${shellQuote(remoteRawTakePath)} && mv ${shellQuote(remoteRecordedVideoPath)} ${shellQuote(remoteRawTakePath)}`,
+    );
+
+    const markers = parseSceneMarkers(result.stdout);
+    const markerRanges = readMarkerRanges(
+      markers,
+      input.scenes.map((scene) => scene.id),
+    );
+    const recordedScenes: RecordedScene[] = [];
+    const downloads = [
+      { destinationPath: localRawTakePath, sourcePath: remoteRawTakePath },
+    ];
+
+    for (const scene of input.scenes) {
+      const range = markerRanges.get(scene.id);
+      if (range === undefined) {
+        throw new Error(`Scene ${scene.id} did not emit complete markers.`);
+      }
+
+      const startMs = Math.max(0, range.startedAtMs - this.preRollMs);
+      const endMs = Math.max(startMs + 1, range.endedAtMs + this.postRollMs);
+      const remoteOutputVideoPath = `${remoteSceneClipsDirectory}/${scene.id}.webm`;
+      const localOutputVideoPath = join(
+        localSceneClipsDirectory,
+        `${scene.id}.webm`,
+      );
+      const durationSeconds = (endMs - startMs) / 1000;
+      const trimResult = await workspace.execute(
+        [
+          "ffmpeg",
+          "-y",
+          "-ss",
+          shellQuote((startMs / 1000).toFixed(3)),
+          "-i",
+          shellQuote(remoteRawTakePath),
+          "-t",
+          shellQuote(durationSeconds.toFixed(3)),
+          "-c",
+          "copy",
+          shellQuote(remoteOutputVideoPath),
+        ].join(" "),
+      );
+      if (trimResult.exitCode !== 0) {
+        throw new Error(
+          `Failed to trim Scene ${scene.id} with ffmpeg.\n${[trimResult.stdout, trimResult.stderr].filter(Boolean).join("\n")}`,
+        );
+      }
+      const probedDurationSeconds = await probeRemoteVideoDurationSeconds({
+        videoPath: remoteOutputVideoPath,
+        workspace,
+      });
+
+      downloads.push({
+        destinationPath: localOutputVideoPath,
+        sourcePath: remoteOutputVideoPath,
+      });
+      recordedScenes.push({
+        durationSeconds: probedDurationSeconds,
+        markerEndMs: range.endedAtMs,
+        markerStartMs: range.startedAtMs,
+        sceneId: scene.id,
+        sectionId: input.sectionId,
+        videoPath: localOutputVideoPath,
+      });
+    }
+
+    await workspace.downloadFiles(downloads);
+
+    return recordedScenes;
+  }
+}
+
 async function trimSceneClipWithFfmpeg(input: {
   durationMs: number;
   outputVideoPath: string;
@@ -207,6 +403,37 @@ async function probeVideoDurationSeconds(videoPath: string): Promise<number> {
   const durationSeconds = Number(result.stdout.trim());
   if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
     throw new Error(`ffprobe returned invalid duration for ${videoPath}`);
+  }
+
+  return durationSeconds;
+}
+
+async function probeRemoteVideoDurationSeconds(input: {
+  videoPath: string;
+  workspace: PreparationWorkspace;
+}): Promise<number> {
+  const result = await input.workspace.execute(
+    [
+      "ffprobe",
+      "-v",
+      "error",
+      "-show_entries",
+      "format=duration",
+      "-of",
+      "default=noprint_wrappers=1:nokey=1",
+      shellQuote(input.videoPath),
+    ].join(" "),
+  );
+
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `Failed to probe trimmed Scene clip duration.\n${[result.stdout, result.stderr].filter(Boolean).join("\n")}`,
+    );
+  }
+
+  const durationSeconds = Number(result.stdout.trim());
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    throw new Error(`ffprobe returned invalid duration for ${input.videoPath}`);
   }
 
   return durationSeconds;
@@ -443,6 +670,44 @@ async function findSingleVideo(directory: string) {
   }
 
   return video;
+}
+
+async function findSingleRemoteVideo(input: {
+  directory: string;
+  workspace: PreparationWorkspace;
+}) {
+  const result = await input.workspace.execute(
+    `find ${shellQuote(input.directory)} -type f -name '*.webm' | sort`,
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `Failed to find Playwright video in ${input.directory}.\n${[result.stdout, result.stderr].filter(Boolean).join("\n")}`,
+    );
+  }
+
+  const videos = result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (videos.length === 0) {
+    throw new Error(`No Playwright video was created in ${input.directory}`);
+  }
+  if (videos.length > 1) {
+    throw new Error(
+      `Expected one Playwright video in ${input.directory}, found ${videos.length}`,
+    );
+  }
+
+  const video = videos[0];
+  if (video === undefined) {
+    throw new Error(`No Playwright video was created in ${input.directory}`);
+  }
+
+  return video;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 async function findVideoFiles(directory: string): Promise<string[]> {

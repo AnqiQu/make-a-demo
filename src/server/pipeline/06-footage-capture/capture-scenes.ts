@@ -1,8 +1,12 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
 import { assertDemoScriptCaptureSdkContract } from "./capture-sdk-contract";
 import { type DemoScript, parseDemoScript } from "./demo-script.schema";
-import { DefaultPlaywrightSceneRecorder } from "./playwright-scene-recorder";
+import {
+  DefaultPlaywrightSceneRecorder,
+  PreparedWorkspacePlaywrightSceneRecorder,
+} from "./playwright-scene-recorder";
 import type { SceneRecorder } from "./scene-recorder.interface";
 
 type CapturedSceneManifestEntry = {
@@ -31,6 +35,7 @@ export type CaptureManifest = {
 export type CaptureScenesFromScriptInput = {
   baseUrl: string;
   keepTemp?: boolean;
+  preparationWorkspace?: PreparationWorkspaceHandle;
   recorder?: SceneRecorder;
   runId?: string;
   scriptPackage?: unknown;
@@ -50,7 +55,13 @@ export async function captureScenesFromScript(
 
   const scriptPackage = await readScriptPackage(input);
   assertDemoScriptCaptureSdkContract(scriptPackage);
-  const recorder = input.recorder ?? new DefaultPlaywrightSceneRecorder();
+  const recorder =
+    input.recorder ??
+    (input.preparationWorkspace === undefined
+      ? new DefaultPlaywrightSceneRecorder()
+      : new PreparedWorkspacePlaywrightSceneRecorder({
+          preparationWorkspace: input.preparationWorkspace,
+        }));
   const scenes: CapturedSceneManifestEntry[] = [];
 
   try {

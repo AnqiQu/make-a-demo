@@ -1,7 +1,8 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
 import { captureScenesFromScript } from "./capture-scenes";
 import type { SceneRecorder } from "./scene-recorder.interface";
 
@@ -150,6 +151,107 @@ describe("captureScenesFromScript", () => {
     expect(manifest.rawTakePath).toBe(
       join(manifest.runDirectory, "raw-scenes", "continuous-take.webm"),
     );
+  });
+
+  it("runs Footage Capture scripts, trimming, and probing inside the prepared workspace", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
+    const tempRoot = join(workspace, "runs");
+    const executedCommands: string[] = [];
+    const uploadedDestinations: string[] = [];
+    const downloadedSources: string[] = [];
+    const preparationWorkspace: PreparationWorkspaceHandle = {
+      async destroy() {},
+      id: "daytona_workspace",
+      workspace: {
+        async downloadFiles(files) {
+          downloadedSources.push(...files.map((file) => file.sourcePath));
+          await Promise.all(
+            files.map(async (file) => {
+              await mkdir(dirname(file.destinationPath), { recursive: true });
+              await writeFile(file.destinationPath, "downloaded video");
+            }),
+          );
+        },
+        async execute(command) {
+          executedCommands.push(command);
+          if (command.includes("find ")) {
+            return {
+              exitCode: 0,
+              stderr: "",
+              stdout:
+                "/workspace/.makeademo/footage-capture-runs/capture-sandbox/work/continuous-take/playwright-videos/raw.webm\n",
+            };
+          }
+          if (command.includes("ffprobe")) {
+            return { exitCode: 0, stderr: "", stdout: "1.200\n" };
+          }
+          if (command.includes("bun ")) {
+            return {
+              exitCode: 0,
+              stderr: "",
+              stdout: [
+                '[makeademo:scene] {"elapsedMs":100,"event":"started","sceneId":"scene-001"}',
+                '[makeademo:scene] {"elapsedMs":900,"event":"succeeded","sceneId":"scene-001"}',
+              ].join("\n"),
+            };
+          }
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async getPreviewUrl() {
+          return "https://preview.example.test/";
+        },
+        async setOutboundNetworkAccess() {},
+        async uploadFiles(files) {
+          uploadedDestinations.push(
+            ...files.map((file) => file.destinationPath),
+          );
+        },
+      },
+    };
+
+    const manifest = await captureScenesFromScript({
+      baseUrl: "https://preview.example.test/",
+      keepTemp: true,
+      preparationWorkspace,
+      runId: "capture-sandbox",
+      scriptPackage: validDemoScript(),
+      tempRoot,
+    });
+
+    expect(manifest.scenes).toEqual([
+      expect.objectContaining({
+        durationSeconds: 1.2,
+        markerEndMs: 900,
+        markerStartMs: 100,
+        sceneId: "scene-001",
+        videoPath: join(manifest.runDirectory, "scene-clips", "scene-001.webm"),
+      }),
+    ]);
+    expect(uploadedDestinations).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          "/workspace/.makeademo/footage-capture-runs/capture-sandbox/work/continuous-take/demo-script.ts",
+        ),
+        expect.stringContaining("makeademo-capture-sdk.js"),
+      ]),
+    );
+    expect(executedCommands.join("\n")).toContain(
+      "/workspace/.makeademo/footage-capture-runs/capture-sandbox",
+    );
+    expect(executedCommands.join("\n")).toContain("ffmpeg");
+    expect(executedCommands.join("\n")).toContain("ffprobe");
+    expect(downloadedSources).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("raw-scenes/continuous-take.webm"),
+        expect.stringContaining("scene-clips/scene-001.webm"),
+      ]),
+    );
+    await expect(
+      readFile(
+        join(manifest.runDirectory, "scene-clips", "scene-001.webm"),
+        "utf8",
+      ),
+    ).resolves.toBe("downloaded video");
   });
 
   it("rejects Demo Scripts with agent-authored recorded Scene durations before recording starts", async () => {

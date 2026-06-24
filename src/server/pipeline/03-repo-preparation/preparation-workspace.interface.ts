@@ -9,6 +9,11 @@ export type PreparationWorkspaceUploadFile = {
   sourcePath: string;
 };
 
+export type PreparationWorkspaceDownloadFile = {
+  destinationPath: string;
+  sourcePath: string;
+};
+
 export type PreparationWorkspaceExecuteOptions = {
   env?: Record<string, string>;
   onStderr?: (chunk: string) => void;
@@ -24,6 +29,7 @@ export type PreparationWorkspaceLogEntry = Record<string, unknown>;
  */
 export interface PreparationWorkspace {
   cancelActiveCommands?(): Promise<void>;
+  downloadFiles?(files: PreparationWorkspaceDownloadFile[]): Promise<void>;
   execute(
     command: string,
     options?: PreparationWorkspaceExecuteOptions,

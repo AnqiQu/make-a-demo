@@ -420,6 +420,9 @@ async function captureCompositeAndReview(input: {
       ...(scriptPersistence.scriptPath === undefined
         ? {}
         : { scriptPath: scriptPersistence.scriptPath }),
+      ...(stage1.preparationWorkspace === undefined
+        ? {}
+        : { preparationWorkspace: stage1.preparationWorkspace }),
       tempRoot: join(input.runDirectory, "capture"),
     });
     latestCaptureManifest = captureManifest;
