@@ -10,4 +10,4 @@ The OpenCode agent may run fully autonomously inside the disposable workspace co
 
 The prepared OpenCode configuration should allow all OpenCode permissions for the agent session to avoid interactive blockers. Network access, runtime isolation, secret scoping, timeouts, and workspace teardown are enforced by the backend Daytona seam and nested runtime controls rather than by OpenCode permission prompts.
 
-The prepared image should include predefined OpenCode subagent configurations for the four security reviewers from ADR 0013. Predefining them keeps reviewer prompts, permissions, and structured accept/reject outputs consistent across preparation runs.
+The prepared image does not need predefined advisory-review agent configurations for Repo Preparation. After the deterministic Repo Security Screen passes, the OpenCode preparation agent works directly inside the disposable workspace, while backend seams enforce network policy, secret scoping, timeouts, teardown, and non-agent validation.

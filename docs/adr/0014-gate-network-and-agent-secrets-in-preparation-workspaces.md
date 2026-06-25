@@ -2,7 +2,7 @@
 
 The agent may have unrestricted tool permissions inside the ephemeral workspace, but the submitted app runtime remains subject to Runtime Network Lockdown during Capture Path Validation and Footage Capture. We chose this split because the OpenCode agent needs enough autonomy to prepare demos and repair scripts, while submitted repo code should not inherit agent privileges.
 
-If dependency installation requires outbound network access, the main agent may only enable a dependency-install-only network window after all four security-review subagents from ADR 0013 approve it. The network-access mechanism should enforce this mechanically by requiring structured approvals and a dependency-install-only reason before it updates Daytona sandbox network settings.
+If dependency installation requires outbound network access, the main agent may only request a dependency-install-only network window. The network-access mechanism should enforce this mechanically by requiring an allowlisted package-manager install command and a dependency-install-only reason before it updates Daytona sandbox network settings.
 
 Outbound network access should be blocked again immediately after dependency installation completes. Demo build, demo start, Capture Path Validation, and Footage Capture should run with outbound network blocked unless another dependency-install-only window is separately approved.
 
