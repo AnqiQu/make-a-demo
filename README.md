@@ -199,10 +199,7 @@ bun run pipeline:run -- \
 Optional flags:
 
 ```bash
---provider openai
---model gpt-5.5
---daytona-snapshot makeademo-opencode-v3
---workspace-id workspace-test
+--doc ./optional-notes.md
 ```
 
 Full pipeline runs require `DAYTONA_API_KEY` and `OPENAI_API_KEY`. Repo Security Screen, Repo Preparation, Project Validation, and Script Generation run through Daytona-backed sandboxes using the backend Daytona seam. Repo Preparation runs OpenCode inside Daytona and streams concise progress to the terminal. After backend validation passes, Script Generation resumes the same OpenCode session with a new read-only prompt so the agent keeps the repo context it discovered during preparation while emitting only the capture-ready script artifact.

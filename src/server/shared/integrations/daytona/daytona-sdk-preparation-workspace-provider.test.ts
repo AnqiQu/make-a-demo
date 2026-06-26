@@ -48,6 +48,52 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
   });
 
+  it("downloads captured workspace artifacts with Daytona fs.downloadFiles", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls),
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.downloadFiles?.([
+      {
+        destinationPath: "/tmp/capture/scene.webm",
+        sourcePath: "/workspace/.makeademo/capture/scene.webm",
+      },
+    ]);
+
+    expect(calls[1]).toEqual({
+      downloadFiles: {
+        files: [
+          {
+            destination: "/tmp/capture/scene.webm",
+            source: "/workspace/.makeademo/capture/scene.webm",
+          },
+        ],
+        timeoutSec: 0,
+      },
+    });
+  });
+
+  it("fails when Daytona cannot download a captured workspace artifact", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { downloadError: "missing file" }),
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.downloadFiles?.([
+        {
+          destinationPath: "/tmp/capture/scene.webm",
+          sourcePath: "/workspace/.makeademo/capture/scene.webm",
+        },
+      ]),
+    ).rejects.toThrow(
+      "Failed to download Daytona sandbox file /workspace/.makeademo/capture/scene.webm: missing file",
+    );
+  });
+
   it("reconnects to an existing sandbox as a preparation workspace", async () => {
     const calls: unknown[] = [];
 
@@ -305,6 +351,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
 function fakeClient(
   calls: unknown[],
   options: {
+    downloadError?: string;
     networkError?: Error;
     ptyNeverConnects?: boolean;
     ptyWaitsForDisconnect?: boolean;
@@ -312,6 +359,18 @@ function fakeClient(
 ) {
   const sandbox = {
     fs: {
+      async downloadFiles(
+        files: Array<{ destination: string; source: string }>,
+        timeoutSec?: number,
+      ) {
+        calls.push({ downloadFiles: { files, timeoutSec } });
+        return files.map((file) => ({
+          ...(options.downloadError === undefined
+            ? {}
+            : { error: options.downloadError }),
+          source: file.source,
+        }));
+      },
       async uploadFiles(files: unknown[]) {
         calls.push({ uploadFiles: files });
       },

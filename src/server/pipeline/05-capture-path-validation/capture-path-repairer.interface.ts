@@ -1,6 +1,6 @@
 import type { PreparationManifest } from "../03-repo-preparation/preparation-manifest";
 import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
-import type { VideoScriptPackage } from "../04-script-generation/video-script-package";
+import type { DemoScriptPackage } from "../04-script-generation/demo-script-package";
 import type { CapturePathValidationResult } from "./capture-path-validator.interface";
 
 export type CapturePathRepairInput = {
@@ -10,12 +10,12 @@ export type CapturePathRepairInput = {
   preparationManifest: PreparationManifest;
   preparationWorkspace?: PreparationWorkspaceHandle;
   repoUrl: string;
-  videoScriptPackage: VideoScriptPackage;
+  demoScriptPackage: DemoScriptPackage;
 };
 
 export type CapturePathRepairResult = {
   preparationManifest: PreparationManifest;
-  videoScriptPackage: VideoScriptPackage;
+  demoScriptPackage: DemoScriptPackage;
 };
 
 /**

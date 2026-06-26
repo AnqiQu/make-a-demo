@@ -3,6 +3,7 @@ import type { PreparationWorkspace } from "../../../pipeline/03-repo-preparation
 export type DaytonaOpenCodeActivityStage =
   | "repo-preparation"
   | "capture-path-repair"
+  | "draft-composite-review"
   | "script-generation";
 
 export async function writeDaytonaOpenCodeActivityLog(

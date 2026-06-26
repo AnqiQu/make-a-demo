@@ -1,11 +1,11 @@
 import type { SceneDescription } from "../../06-footage-capture/demo-script.schema";
+import type { ComposedDemoScript } from "./composed-demo-script";
 import type { ScriptComposer } from "./script-composer.interface";
-import type { VideoScript } from "./video-script";
 
 export class DefaultScriptComposer implements ScriptComposer {
   async composeScript(
     input: Parameters<ScriptComposer["composeScript"]>[0],
-  ): Promise<VideoScript> {
+  ): Promise<ComposedDemoScript> {
     const scenes: SceneDescription[] = input.demoPlan.featureOrder.map(
       (feature) => {
         const sceneId = `scene-${slug(feature)}`;
@@ -47,15 +47,18 @@ export class DefaultScriptComposer implements ScriptComposer {
 
 function createPlaywrightScript(features: string[]): string {
   const lines = [
-    "await page.goto(baseUrl);",
-    "await expect(page.locator('body')).toContainText(/\\S/);",
+    "import { scene, setup } from './makeademo-capture-sdk';",
+    "",
+    "await setup(async ({ page, baseUrl, expect }) => {",
+    "  await page.goto(baseUrl);",
+    "  await expect(page.locator('html')).toBeVisible();",
+    "});",
   ];
 
   for (const feature of features) {
     lines.push(
-      `await scene(${JSON.stringify(`scene-${slug(feature)}`)}, async () => {`,
-      `  await page.locator('body').evaluate(() => document.body.setAttribute('data-makeademo-feature', ${JSON.stringify(feature)}));`,
-      "  await expect(page.locator('body')).toContainText(/\\S/);",
+      `await scene(${JSON.stringify(`scene-${slug(feature)}`)}, async ({ page, expect }) => {`,
+      `  await expect(page.getByText(${JSON.stringify(feature)}, { exact: false }).first()).toBeVisible();`,
       "});",
     );
   }

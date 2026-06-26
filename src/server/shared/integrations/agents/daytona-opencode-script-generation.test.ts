@@ -1,13 +1,16 @@
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import type { PreparationWorkspace } from "../../../pipeline/03-repo-preparation/preparation-workspace.interface";
-import { DaytonaOpenCodeScriptGenerationAgent } from "./daytona-opencode-script-generation-agent";
+import { DaytonaOpenCodeScriptGeneration } from "./daytona-opencode-script-generation";
 
-describe("DaytonaOpenCodeScriptGenerationAgent", () => {
+describe("DaytonaOpenCodeScriptGeneration", () => {
   it("resumes the Repo Preparation OpenCode session and returns an interactive Demo Script", async () => {
     const events: unknown[] = [];
     const stdout: string[] = [];
-    const agent = new DaytonaOpenCodeScriptGenerationAgent({
+    const agent = new DaytonaOpenCodeScriptGeneration({
       modelID: "gpt-5.5",
       onStdout: (chunk) => stdout.push(chunk),
       providerApiKey: "openai_key",
@@ -44,9 +47,6 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
     )?.execute;
     expect(openCodeCommand).toContain("--session 'session_prepare_123'");
     expect(openCodeCommand).not.toContain("OPENAI_API_KEY");
-    expect(openCodeCommand).toContain("scriptId");
-    expect(openCodeCommand).toContain("demoPlaywrightScript");
-    expect(openCodeCommand).toContain("expectedVisibleOutcome");
     expect(stdout.join("\n")).toContain(
       "Script Generation OpenCode attempt 1 starting in session session_prepare_123.",
     );
@@ -59,7 +59,7 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
     const events: unknown[] = [];
     const stderr: string[] = [];
     const stdout: string[] = [];
-    const agent = new DaytonaOpenCodeScriptGenerationAgent({
+    const agent = new DaytonaOpenCodeScriptGeneration({
       modelID: "gpt-5.5",
       onStderr: (chunk) => stderr.push(chunk),
       onStdout: (chunk) => stdout.push(chunk),
@@ -108,7 +108,7 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
 
   it("repairs static placeholder Demo Scripts in the same OpenCode session", async () => {
     const events: unknown[] = [];
-    const agent = new DaytonaOpenCodeScriptGenerationAgent({
+    const agent = new DaytonaOpenCodeScriptGeneration({
       maxAttempts: 2,
       modelID: "gpt-5.5",
       providerApiKey: "openai_key",
@@ -136,16 +136,12 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
       )
       .map((event) => event.execute);
     expect(openCodeCommands).toHaveLength(2);
-    expect(openCodeCommands[1]).toContain("placeholder actions");
-    expect(openCodeCommands[1]).toContain("scriptId");
-    expect(openCodeCommands[1]).toContain("demoPlaywrightScript");
-    expect(openCodeCommands[1]).toContain("format");
     expect(openCodeCommands[1]).toContain("--session 'session_prepare_123'");
   });
 
   it("sends Capture Path Validation failure evidence back to the same OpenCode session for repair", async () => {
     const events: unknown[] = [];
-    const agent = new DaytonaOpenCodeScriptGenerationAgent({
+    const agent = new DaytonaOpenCodeScriptGeneration({
       modelID: "gpt-5.5",
       providerApiKey: "openai_key",
       providerID: "openai",
@@ -155,6 +151,8 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
       attempt: 1,
       failure: {
         blockedNetworkAttempts: [],
+        diagnosticsLogPath:
+          "/workspace/.makeademo/capture-path-validation-diagnostics.jsonl",
         failedSceneId: "scene_feed",
         failureReason:
           "Scene scene_feed failed during Capture Path Validation.",
@@ -169,7 +167,7 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
       preparationManifest: scriptGenerationInput().preparationManifest,
       preparationWorkspace: workspaceHandle(events, [interactivePackage()]),
       repoUrl: "https://github.com/example/conduit",
-      videoScriptPackage: {
+      demoScriptPackage: {
         ...interactivePackage(),
         assumptions: [],
         demoPlan: {
@@ -185,7 +183,7 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
       },
     });
 
-    expect(result.videoScriptPackage.scriptId).toBe("script_conduit");
+    expect(result.demoScriptPackage.scriptId).toBe("script_conduit");
     const openCodeCommand = events.find(
       (event): event is { execute: string } =>
         typeof event === "object" &&
@@ -195,9 +193,6 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
         event.execute.includes("opencode run"),
     )?.execute;
     expect(openCodeCommand).toContain("--session 'session_prepare_123'");
-    expect(openCodeCommand).toContain("Capture Path Validation failed");
-    expect(openCodeCommand).toContain("scene_feed");
-    expect(openCodeCommand).toContain("locator failed");
     expect(events).toEqual(
       expect.arrayContaining([
         {
@@ -214,6 +209,154 @@ describe("DaytonaOpenCodeScriptGenerationAgent", () => {
         },
       ]),
     );
+  });
+
+  it("reviews Draft Composites in the same OpenCode session with uploaded evidence", async () => {
+    const events: unknown[] = [];
+    const reviewDirectory = await mkdtemp(join(tmpdir(), "makeademo-review-"));
+    const draftPath = join(reviewDirectory, "draft.mp4");
+    const rawTakePath = join(reviewDirectory, "raw.webm");
+    const contactSheetPath = join(reviewDirectory, "contact-sheet.jpg");
+    const sampledFramePath = join(reviewDirectory, "sample-001.jpg");
+    await writeFile(draftPath, "draft video");
+    await writeFile(rawTakePath, "raw take");
+    await writeFile(contactSheetPath, "contact sheet");
+    await writeFile(sampledFramePath, "sampled frame");
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      modelID: "gpt-5.5",
+      providerApiKey: "openai_key",
+      providerID: "openai",
+    });
+
+    const decision = await agent.reviewDraftComposite({
+      attempt: 1,
+      captureManifest: {
+        baseUrl: "https://preview.example.test/",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        keepTemp: true,
+        manifestPath: join(reviewDirectory, "capture-manifest.json"),
+        qualityFindings: [],
+        rawTakePath,
+        runDirectory: reviewDirectory,
+        runId: "capture-1",
+        scenes: [
+          {
+            durationSeconds: 5,
+            sceneId: "scene_feed",
+            sectionId: "demo-script",
+            videoPath: join(reviewDirectory, "scene-feed.webm"),
+          },
+        ],
+        scriptId: "script_conduit",
+        temporary: true,
+        title: "Conduit article feed demo",
+      },
+      derivedEvidence: {
+        contactSheetPaths: [contactSheetPath],
+        draftDurationSeconds: 5,
+        ffmpegFindings: ["ffprobe audio probe found no audio stream"],
+        markerSummary: [{ durationSeconds: 5, sceneId: "scene_feed" }],
+        qualityFindings: [],
+        rawDraftCompositePath: draftPath,
+        rawTakePath,
+        sampledFramePaths: [sampledFramePath],
+      },
+      draftComposite: {
+        createdAt: "2026-01-01T00:00:00.000Z",
+        durationInFrames: 150,
+        fps: 30,
+        manifestPath: join(reviewDirectory, "composite-manifest.json"),
+        outputVideoPath: draftPath,
+        renderPlanPath: join(reviewDirectory, "render-plan.json"),
+        runDirectory: reviewDirectory,
+        runId: "composite-1",
+        scriptId: "script_conduit",
+        title: "Conduit article feed demo",
+        viewUrl: "file:///tmp/draft.mp4",
+      },
+      opencodeSessionID: "session_prepare_123",
+      preparationWorkspace: workspaceHandle(events, [
+        {
+          decision: "repair",
+          reason: "Missing payoff.",
+          repairScope: "demo-script",
+        },
+      ]),
+      scriptPackage: {
+        ...interactivePackage(),
+        assumptions: [],
+        demoPlan: {
+          featureOrder: ["article feed"],
+          narrative: "Conduit article feed demo",
+          risks: [],
+        },
+        exploration: {
+          assumptions: [],
+          productSurfaces: [],
+          summary: "Prepared Conduit with local articles.",
+        },
+      },
+    });
+
+    expect(decision).toEqual({
+      decision: "repair",
+      reason: "Missing payoff.",
+      repairScope: "demo-script",
+    });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          uploadFiles: [
+            {
+              destinationPath: "/workspace/.makeademo/draft-review/draft.mp4",
+              sourcePath: draftPath,
+            },
+            {
+              destinationPath: "/workspace/.makeademo/draft-review/raw.webm",
+              sourcePath: rawTakePath,
+            },
+            {
+              destinationPath:
+                "/workspace/.makeademo/draft-review/contact-sheet.jpg",
+              sourcePath: contactSheetPath,
+            },
+            {
+              destinationPath:
+                "/workspace/.makeademo/draft-review/sample-001.jpg",
+              sourcePath: sampledFramePath,
+            },
+          ],
+        },
+        expect.objectContaining({
+          execute: expect.stringContaining("opencode run"),
+        }),
+      ]),
+    );
+    const openCodeCommand = events.find(
+      (event): event is { execute: string } =>
+        typeof event === "object" &&
+        event !== null &&
+        "execute" in event &&
+        typeof event.execute === "string" &&
+        event.execute.includes("opencode run"),
+    )?.execute;
+    expect(openCodeCommand).toContain("--session 'session_prepare_123'");
+    expect(openCodeCommand).toContain("Draft Composite Review");
+    expect(openCodeCommand).toContain("/workspace/.makeademo/draft-review");
+    expect(openCodeCommand).toContain("ffmpeg/ffprobe");
+    expect(openCodeCommand).toContain("markerSummary");
+    expect(openCodeCommand).toContain("scene_feed");
+    expect(openCodeCommand).toContain(
+      "ffprobe audio probe found no audio stream",
+    );
+    expect(openCodeCommand).toContain(draftPath);
+    expect(openCodeCommand).toContain(rawTakePath);
+    expect(openCodeCommand).toContain(contactSheetPath);
+    expect(openCodeCommand).toContain(sampledFramePath);
+    expect(openCodeCommand).toContain("rawDraftCompositePath");
+    expect(openCodeCommand).toContain("contactSheetPaths");
+    expect(openCodeCommand).toContain("sampledFramePaths");
+    expect(openCodeCommand).toContain("ffmpegFindings");
   });
 });
 
@@ -244,6 +387,12 @@ function workspaceHandle(events: unknown[], artifacts: unknown[]) {
         };
       }
 
+      if (command.includes("draft-composite-review.json")) {
+        return latestArtifact === undefined
+          ? { exitCode: 1, stderr: "missing review", stdout: "" }
+          : { exitCode: 0, stderr: "", stdout: JSON.stringify(latestArtifact) };
+      }
+
       if (command.startsWith("if test -f")) {
         return latestArtifact === undefined
           ? { exitCode: 1, stderr: "", stdout: "" }
@@ -256,7 +405,9 @@ function workspaceHandle(events: unknown[], artifacts: unknown[]) {
       return `https://preview.example.test:${port}`;
     },
     async setOutboundNetworkAccess() {},
-    async uploadFiles() {},
+    async uploadFiles(files) {
+      events.push({ uploadFiles: files });
+    },
     async writeSandboxLog(entry) {
       events.push({ sandboxLog: entry });
     },

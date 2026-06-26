@@ -10,6 +10,10 @@ import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { CaptureManifest } from "../06-footage-capture/capture-scenes";
+import {
+  type DemoScript,
+  parseDemoScript,
+} from "../06-footage-capture/demo-script.schema";
 import type { FinalVideoEmailNotifier } from "../final-output/final-video-email-notifier.interface";
 import type {
   DemoRequestFinalVideoStore,
@@ -44,58 +48,14 @@ const fontAssetFiles = {
 
 type ApprovedFontFamily = keyof typeof fontAssetFiles;
 
-type FullVideoScriptPackage = {
-  audio?: {
-    enabled: boolean;
-    music?: { id: string };
-  };
-  estimatedDurationSeconds: number;
-  format: string;
-  scriptId: string;
-  sections: ScriptSection[];
-  title: string;
-  version: number;
-};
-
-type ScriptSection = {
-  id: string;
-  scenes: ScriptScene[];
-  title: string;
-};
-
-type ScriptScene =
-  | FullScreenTextScene
-  | PlaywrightRecordingScene
-  | StaticImageScene;
-
-type BaseScriptScene = {
-  description: string;
-  durationSeconds: number;
-  id: string;
-  text?: CompositingTextStyle;
-  transition?: CompositingTransition;
-};
-
-type FullScreenTextScene = BaseScriptScene & {
-  backgroundColor: string;
-  type: "full-screen-text";
-};
-
-type PlaywrightRecordingScene = BaseScriptScene & {
-  playwrightSceneId: string;
-  type: "playwright-recording";
-};
-
-type StaticImageScene = BaseScriptScene & {
-  image: {
-    alt: string;
-    assetPath: string;
-  };
-  type: "static-image";
-};
-
 export type CompositedVideoManifest = {
   createdAt: string;
+  draftCompositeReview?: {
+    attempts: number;
+    findings: string[];
+    status: "accepted" | "exhausted";
+    warnings: string[];
+  };
   durationInFrames: number;
   fps: number;
   finalVideo?: StoredFinalVideo;
@@ -118,6 +78,7 @@ export type CompositeVideoFromScriptInput = {
   outputRoot?: string;
   projectRoot?: string;
   publicAppBaseUrl?: string;
+  retainLocalOutput?: boolean;
   renderer?: VideoRenderer;
   runId?: string;
   scriptDirectory?: string;
@@ -148,7 +109,7 @@ export async function compositeVideoFromScript(
 
   if (captureManifest.scriptId !== scriptPackage.scriptId) {
     throw new Error(
-      `capture manifest scriptId ${captureManifest.scriptId} does not match Video Script Package scriptId ${scriptPackage.scriptId}`,
+      `capture manifest scriptId ${captureManifest.scriptId} does not match Demo Script scriptId ${scriptPackage.scriptId}`,
     );
   }
 
@@ -202,6 +163,7 @@ export async function compositeVideoFromScript(
     finalVideoStorage: input.finalVideoStorage,
     outputVideoPath,
     publicAppBaseUrl: input.publicAppBaseUrl,
+    retainLocalOutput: input.retainLocalOutput ?? false,
     runId,
     scriptId: scriptPackage.scriptId,
     title: scriptPackage.title,
@@ -214,7 +176,7 @@ export async function compositeVideoFromScript(
     fps: FPS,
     ...(finalVideo ? { finalVideo } : {}),
     manifestPath,
-    ...(finalVideo ? {} : { outputVideoPath }),
+    ...(finalVideo && !input.retainLocalOutput ? {} : { outputVideoPath }),
     renderPlanPath,
     runDirectory,
     runId,
@@ -229,14 +191,14 @@ export async function compositeVideoFromScript(
 
 async function readScriptPackage(input: CompositeVideoFromScriptInput) {
   if (input.scriptPackage !== undefined) {
-    return parseFullVideoScriptPackage(input.scriptPackage);
+    return parseCompositingDemoScript(input.scriptPackage);
   }
 
   if (input.scriptPath === undefined) {
     throw new Error("scriptPath or scriptPackage is required");
   }
 
-  return parseFullVideoScriptPackage(
+  return parseCompositingDemoScript(
     JSON.parse(await readFile(input.scriptPath, "utf8")),
   );
 }
@@ -268,6 +230,7 @@ async function storeAndLinkFinalVideo(input: {
   finalVideoStorage: FinalVideoStorage | undefined;
   outputVideoPath: string;
   publicAppBaseUrl: string | undefined;
+  retainLocalOutput: boolean;
   runId: string;
   scriptId: string;
   title: string;
@@ -313,7 +276,9 @@ async function storeAndLinkFinalVideo(input: {
       sentAt: new Date().toISOString(),
     });
   }
-  await unlink(input.outputVideoPath);
+  if (!input.retainLocalOutput) {
+    await unlink(input.outputVideoPath);
+  }
 
   return finalVideo;
 }
@@ -333,70 +298,59 @@ async function stageScenes(input: {
   projectRoot: string;
   publicDir: string;
   scriptDirectory: string;
-  scriptPackage: FullVideoScriptPackage;
+  scriptPackage: DemoScript;
 }) {
   const capturedScenesById = new Map(
     input.captureManifest.scenes.map((scene) => [scene.sceneId, scene]),
   );
+  const textOverlaysBySceneId = new Map(
+    input.scriptPackage.presentation.textOverlays.map((overlay) => [
+      overlay.sceneId,
+      {
+        color: "#ffffff",
+        content: overlay.content,
+        fontFamily: overlay.font,
+        position: overlay.position,
+        size: overlay.size,
+      } satisfies CompositingTextStyle,
+    ]),
+  );
+  const transitionsBySceneId = new Map(
+    input.scriptPackage.presentation.transitions.map((transition) => [
+      transition.toSceneId,
+      {
+        durationFrames: secondsToFrames(transition.durationSeconds),
+        in: transition.style,
+        out: transition.style,
+      } satisfies CompositingTransition,
+    ]),
+  );
   const scenes: CompositingScene[] = [];
 
-  for (const section of input.scriptPackage.sections) {
-    for (const scene of section.scenes) {
-      if (scene.type === "full-screen-text") {
-        scenes.push({
-          backgroundColor: scene.backgroundColor,
-          durationFrames: secondsToFrames(scene.durationSeconds),
-          sceneId: scene.id,
-          ...(scene.text ? { text: scene.text } : {}),
-          ...(scene.transition ? { transition: scene.transition } : {}),
-          type: scene.type,
-        });
-        continue;
-      }
-
-      if (scene.type === "playwright-recording") {
-        const capturedScene = capturedScenesById.get(scene.playwrightSceneId);
-        if (!capturedScene) {
-          throw new Error(
-            `missing captured Scene for playwrightSceneId ${scene.playwrightSceneId}`,
-          );
-        }
-
-        const extension = extname(capturedScene.videoPath) || ".webm";
-        const sourcePublicPath = `scenes/${scene.playwrightSceneId}${extension}`;
-        await copyAsset(
-          capturedScene.videoPath,
-          join(input.publicDir, sourcePublicPath),
-        );
-        scenes.push({
-          durationFrames: secondsToFrames(scene.durationSeconds),
-          sceneId: scene.id,
-          sourcePublicPath,
-          ...(scene.text ? { text: scene.text } : {}),
-          ...(scene.transition ? { transition: scene.transition } : {}),
-          type: scene.type,
-        });
-        continue;
-      }
-
-      const imagePath = await resolveAssetPath({
-        assetPath: scene.image.assetPath,
-        projectRoot: input.projectRoot,
-        scriptDirectory: input.scriptDirectory,
-      });
-      const extension = extname(imagePath) || ".png";
-      const sourcePublicPath = `images/${scene.id}${extension}`;
-      await copyAsset(imagePath, join(input.publicDir, sourcePublicPath));
-      scenes.push({
-        alt: scene.image.alt,
-        durationFrames: secondsToFrames(scene.durationSeconds),
-        sceneId: scene.id,
-        sourcePublicPath,
-        ...(scene.text ? { text: scene.text } : {}),
-        ...(scene.transition ? { transition: scene.transition } : {}),
-        type: scene.type,
-      });
+  for (const scene of input.scriptPackage.scenes) {
+    const capturedScene = capturedScenesById.get(scene.id);
+    if (!capturedScene) {
+      throw new Error(
+        `missing captured Scene for Demo Script Scene ${scene.id}`,
+      );
     }
+
+    const extension = extname(capturedScene.videoPath) || ".webm";
+    const sourcePublicPath = `scenes/${scene.id}${extension}`;
+    await copyAsset(
+      capturedScene.videoPath,
+      join(input.publicDir, sourcePublicPath),
+    );
+    const text = textOverlaysBySceneId.get(scene.id);
+    const transition = transitionsBySceneId.get(scene.id);
+    scenes.push({
+      durationFrames: secondsToFrames(capturedScene.durationSeconds),
+      sceneId: scene.id,
+      sourcePublicPath,
+      ...(text ? { text } : {}),
+      ...(transition ? { transition } : {}),
+      type: "playwright-recording",
+    });
   }
 
   return scenes;
@@ -434,13 +388,13 @@ async function stageFontAssets(input: {
 async function stageMusicAsset(input: {
   projectRoot: string;
   publicDir: string;
-  scriptPackage: FullVideoScriptPackage;
+  scriptPackage: DemoScript;
 }) {
-  if (!input.scriptPackage.audio?.enabled || !input.scriptPackage.audio.music) {
+  if (!input.scriptPackage.presentation.music.enabled) {
     return undefined;
   }
 
-  const musicId = input.scriptPackage.audio.music.id;
+  const musicId = input.scriptPackage.presentation.music.trackId;
   const sourcePath = join(
     input.projectRoot,
     "assets",
@@ -484,209 +438,13 @@ async function exists(path: string) {
   }
 }
 
-function parseFullVideoScriptPackage(value: unknown): FullVideoScriptPackage {
-  const record = assertRecord(value, "script package");
-  const audio = readAudio(record);
-
-  const scriptPackage: FullVideoScriptPackage = {
-    estimatedDurationSeconds: readPositiveNumber(
-      record,
-      "estimatedDurationSeconds",
-    ),
-    format: readNonEmptyString(record, "format"),
-    scriptId: readNonEmptyString(record, "scriptId"),
-    sections: readSections(record),
-    title: readNonEmptyString(record, "title"),
-    version: readPositiveNumber(record, "version"),
-    ...(audio ? { audio } : {}),
-  };
-
+function parseCompositingDemoScript(value: unknown): DemoScript {
+  const scriptPackage = parseDemoScript(value);
   if (scriptPackage.format !== "16:9") {
     throw new Error("format must be 16:9 for Compositing");
   }
 
   return scriptPackage;
-}
-
-function readSections(record: Record<string, unknown>) {
-  const sections = record.sections;
-  if (!Array.isArray(sections) || sections.length === 0) {
-    throw new Error("sections must be a non-empty array");
-  }
-
-  return sections.map((section, sectionIndex): ScriptSection => {
-    const sectionPath = `sections[${sectionIndex}]`;
-    const sectionRecord = assertRecord(section, sectionPath);
-    const scenes = sectionRecord.scenes;
-    if (!Array.isArray(scenes) || scenes.length === 0) {
-      throw new Error(`${sectionPath}.scenes must be a non-empty array`);
-    }
-
-    return {
-      id: readNonEmptyString(sectionRecord, "id", sectionPath),
-      scenes: scenes.map((scene, sceneIndex) =>
-        readScene(scene, `${sectionPath}.scenes[${sceneIndex}]`),
-      ),
-      title: readNonEmptyString(sectionRecord, "title", sectionPath),
-    };
-  });
-}
-
-function readScene(value: unknown, path: string): ScriptScene {
-  const record = assertRecord(value, path);
-  const type = readNonEmptyString(record, "type", path);
-  const text = readOptionalText(record, path);
-  const transition = readOptionalTransition(record, path);
-  const base = {
-    description: readNonEmptyString(record, "description", path),
-    durationSeconds: readPositiveNumber(record, "durationSeconds", path),
-    id: readNonEmptyString(record, "id", path),
-    ...(text ? { text } : {}),
-    ...(transition ? { transition } : {}),
-  };
-
-  if (type === "full-screen-text") {
-    return {
-      ...base,
-      backgroundColor: readBackgroundColor(record, path),
-      type,
-    };
-  }
-
-  if (type === "playwright-recording") {
-    return {
-      ...base,
-      playwrightSceneId: readNonEmptyString(record, "playwrightSceneId", path),
-      type,
-    };
-  }
-
-  if (type === "static-image") {
-    return {
-      ...base,
-      image: readImage(record, path),
-      type,
-    };
-  }
-
-  throw new Error(`${path}.type must be a supported Compositing scene type`);
-}
-
-function readBackgroundColor(record: Record<string, unknown>, path: string) {
-  const background = assertRecord(record.background, `${path}.background`);
-  const type = readNonEmptyString(background, "type", `${path}.background`);
-  if (type !== "solid") {
-    throw new Error(`${path}.background.type must be solid`);
-  }
-  return readNonEmptyString(background, "colour", `${path}.background`);
-}
-
-function readImage(record: Record<string, unknown>, path: string) {
-  const image = assertRecord(record.image, `${path}.image`);
-  return {
-    alt: readNonEmptyString(image, "alt", `${path}.image`),
-    assetPath: readNonEmptyString(image, "assetPath", `${path}.image`),
-  };
-}
-
-function readOptionalText(
-  record: Record<string, unknown>,
-  path: string,
-): CompositingTextStyle | undefined {
-  if (record.text === undefined) {
-    return undefined;
-  }
-
-  const text = assertRecord(record.text, `${path}.text`);
-  return {
-    color: readNonEmptyString(text, "text-colour", `${path}.text`),
-    content: readNonEmptyString(text, "content", `${path}.text`),
-    fontFamily: readNonEmptyString(text, "font", `${path}.text`),
-    position: readTextPosition(text, path),
-    size: readTextSize(text, path),
-  };
-}
-
-function readTextPosition(
-  record: Record<string, unknown>,
-  path: string,
-): CompositingTextStyle["position"] {
-  const position = readNonEmptyString(record, "text-position", `${path}.text`);
-  if (
-    position !== "bottom-left" &&
-    position !== "center" &&
-    position !== "top-left"
-  ) {
-    throw new Error(`${path}.text.text-position must be a supported position`);
-  }
-  return position;
-}
-
-function readTextSize(
-  record: Record<string, unknown>,
-  path: string,
-): CompositingTextStyle["size"] {
-  const size = readNonEmptyString(record, "text-size", `${path}.text`);
-  if (size !== "large" && size !== "medium" && size !== "small") {
-    throw new Error(`${path}.text.text-size must be small, medium, or large`);
-  }
-  return size;
-}
-
-function readOptionalTransition(
-  record: Record<string, unknown>,
-  path: string,
-): CompositingTransition | undefined {
-  if (record.transition === undefined) {
-    return undefined;
-  }
-
-  const transition = assertRecord(record.transition, `${path}.transition`);
-  return {
-    durationFrames: secondsToFrames(
-      readPositiveNumber(transition, "durationSeconds", `${path}.transition`),
-    ),
-    in: readTransitionMode(transition, "in", path),
-    out: readTransitionMode(transition, "out", path),
-  };
-}
-
-function readTransitionMode(
-  record: Record<string, unknown>,
-  key: "in" | "out",
-  path: string,
-): CompositingTransition["in"] {
-  const mode = readNonEmptyString(record, key, `${path}.transition`);
-  if (mode !== "cut" && mode !== "fade") {
-    throw new Error(`${path}.transition.${key} must be cut or fade`);
-  }
-  return mode;
-}
-
-function readAudio(
-  record: Record<string, unknown>,
-): FullVideoScriptPackage["audio"] {
-  if (record.audio === undefined) {
-    return undefined;
-  }
-
-  const audio = assertRecord(record.audio, "audio");
-  const enabled = audio.enabled;
-  if (typeof enabled !== "boolean") {
-    throw new Error("audio.enabled must be a boolean");
-  }
-
-  const music =
-    audio.music === undefined
-      ? undefined
-      : {
-          id: readNonEmptyString(
-            assertRecord(audio.music, "audio.music"),
-            "id",
-          ),
-        };
-
-  return { enabled, ...(music ? { music } : {}) };
 }
 
 function parseCaptureManifest(value: unknown): CaptureManifest {
@@ -705,6 +463,7 @@ function parseCaptureManifest(value: unknown): CaptureManifest {
       "manifestPath",
       "capture manifest",
     ),
+    qualityFindings: readStringArray(record.qualityFindings, "qualityFindings"),
     runDirectory: readNonEmptyString(
       record,
       "runDirectory",
@@ -743,6 +502,21 @@ function parseCaptureManifest(value: unknown): CaptureManifest {
     temporary: true,
     title: readNonEmptyString(record, "title", "capture manifest"),
   };
+}
+
+function readStringArray(value: unknown, path: string) {
+  if (value === undefined) {
+    return [];
+  }
+
+  if (
+    !Array.isArray(value) ||
+    value.some((entry) => typeof entry !== "string")
+  ) {
+    throw new Error(`capture manifest.${path} must be an array of strings`);
+  }
+
+  return value;
 }
 
 function readBoolean(

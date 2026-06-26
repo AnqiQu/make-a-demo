@@ -27,7 +27,7 @@ const validationRequestPath = `${makeADemoArtifactDirectory}/validation-request.
 const validationResultPath = `${makeADemoArtifactDirectory}/validation-result.json`;
 const minimumBackendToolBudgetMs = 100;
 
-export type DaytonaOpenCodeRepoPreparationAgentOptions = {
+export type DaytonaOpenCodeRepoPreparationOptions = {
   modelID: string;
   onStderr?: (chunk: string) => void;
   onStdout?: (chunk: string) => void;
@@ -41,9 +41,7 @@ export type DaytonaOpenCodeRepoPreparationAgentOptions = {
   }) => Promise<ProjectValidationResult>;
 };
 
-export class DaytonaOpenCodeRepoPreparationAgent
-  implements RepoPreparationAgent
-{
+export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
   private readonly modelID: string;
   private readonly onStderr: ((chunk: string) => void) | undefined;
   private readonly onStdout: ((chunk: string) => void) | undefined;
@@ -58,7 +56,7 @@ export class DaytonaOpenCodeRepoPreparationAgent
       }) => Promise<ProjectValidationResult>)
     | undefined;
 
-  constructor(options: DaytonaOpenCodeRepoPreparationAgentOptions) {
+  constructor(options: DaytonaOpenCodeRepoPreparationOptions) {
     this.modelID = options.modelID;
     this.onStderr = options.onStderr;
     this.onStdout = options.onStdout;

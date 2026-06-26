@@ -142,6 +142,32 @@ export class DaytonaSandboxRunner implements SandboxRunner {
         event: "project-validation.demo-readiness.succeeded",
         url: input.url,
       });
+      const baselineResult = await handle.workspace.execute(
+        createFreshCaptureBaselineCommand(),
+      );
+      if (baselineResult.exitCode !== 0) {
+        await writeSandboxLog({
+          event: "project-validation.fresh-capture-baseline.failed",
+          stderr: baselineResult.stderr,
+          stdout: baselineResult.stdout,
+        });
+        return {
+          blockedNetworkAttempts: [],
+          cleanup: () => this.cleanup(handle),
+          logs: [
+            ...collectLogs(repoFilesResult),
+            ...collectLogs(installResult),
+            ...collectLogs(runtimeResult),
+            ...collectLogs(readinessResult),
+            ...collectLogs(baselineResult),
+          ],
+          repoFiles,
+          runtimeExitCode: 1,
+        };
+      }
+      await writeSandboxLog({
+        event: "project-validation.fresh-capture-baseline.created",
+      });
       const demoLogsResult = await handle.workspace.execute(
         "if test -f /tmp/makeademo-demo.log; then cat /tmp/makeademo-demo.log; fi",
       );
@@ -181,6 +207,77 @@ export class DaytonaSandboxRunner implements SandboxRunner {
   }
 }
 
+export async function restartPreparedDemoForFreshCapture(input: {
+  preparationManifest: PreparationManifest;
+  preparationWorkspace: PreparationWorkspaceHandle;
+  readinessPollIntervalMs?: number;
+  readinessTimeoutMs?: number;
+}): Promise<{ browserUrl: string }> {
+  const writeSandboxLog = (entry: Record<string, unknown>) =>
+    input.preparationWorkspace.workspace.writeSandboxLog?.({
+      ...entry,
+      repoUrl: input.preparationManifest.repoUrl,
+      stage: "footage-capture",
+      workspaceId: input.preparationManifest.workspaceId,
+    });
+
+  await writeSandboxLog({
+    command: input.preparationManifest.demoCommand,
+    event: "footage-capture.fresh-state.restart.started",
+    url: input.preparationManifest.url,
+  });
+  await input.preparationWorkspace.workspace.execute(createStopDemoCommand());
+  const restoreResult = await input.preparationWorkspace.workspace.execute(
+    createFreshCaptureRestoreCommand(),
+  );
+  if (restoreResult.exitCode !== 0) {
+    await writeSandboxLog({
+      event: "footage-capture.fresh-state.restore.failed",
+      stderr: restoreResult.stderr,
+      stdout: restoreResult.stdout,
+    });
+    throw new Error("Fresh Footage Capture baseline could not be restored.");
+  }
+  await writeSandboxLog({
+    event: "footage-capture.fresh-state.restore.succeeded",
+  });
+  const runtimeResult = await input.preparationWorkspace.workspace.execute(
+    createStartDemoCommand(input.preparationManifest.demoCommand),
+  );
+  await writeSandboxLog({
+    event: "footage-capture.fresh-state.restart.launched",
+    exitCode: runtimeResult.exitCode,
+    stdout: runtimeResult.stdout,
+  });
+  const readinessResult = await waitForDemoReadiness({
+    pollIntervalMs: input.readinessPollIntervalMs ?? 1_000,
+    timeoutMs: input.readinessTimeoutMs ?? 30_000,
+    url: input.preparationManifest.url,
+    workspace: input.preparationWorkspace.workspace,
+  });
+  if (runtimeResult.exitCode !== 0 || readinessResult.exitCode !== 0) {
+    await writeSandboxLog({
+      event: "footage-capture.fresh-state.restart.failed",
+      runtimeExitCode: runtimeResult.exitCode,
+      stderr: readinessResult.stderr,
+      stdout: readinessResult.stdout,
+      url: input.preparationManifest.url,
+    });
+    throw new Error("Fresh Footage Capture state did not become ready.");
+  }
+
+  const browserUrl = await createBrowserPreviewUrl({
+    localUrl: input.preparationManifest.url,
+    workspace: input.preparationWorkspace.workspace,
+  });
+  await writeSandboxLog({
+    browserUrl,
+    event: "footage-capture.fresh-state.restart.succeeded",
+  });
+
+  return { browserUrl };
+}
+
 async function writeDemoServerLog(
   writeSandboxLog: (
     entry: Record<string, unknown>,
@@ -207,6 +304,14 @@ function createStartDemoCommand(demoCommand: string): string {
 
 function createStopDemoCommand(): string {
   return `sh -lc ${shellQuote("if test -f /tmp/makeademo-demo.pid; then kill -- -$(cat /tmp/makeademo-demo.pid) >/dev/null 2>&1 || true; rm -f /tmp/makeademo-demo.pid; fi")}`;
+}
+
+function createFreshCaptureBaselineCommand(): string {
+  return `sh -lc ${shellQuote("mkdir -p /workspace/.makeademo && tar --exclude='./.makeademo' --exclude='./node_modules' -czf /workspace/.makeademo/fresh-capture-baseline.tgz -C /workspace .")}`;
+}
+
+function createFreshCaptureRestoreCommand(): string {
+  return `sh -lc ${shellQuote("test -f /workspace/.makeademo/fresh-capture-baseline.tgz && find /workspace -mindepth 1 ! -path '/workspace/.makeademo' ! -path '/workspace/.makeademo/*' ! -path '/workspace/node_modules' ! -path '/workspace/node_modules/*' -exec rm -rf {} + && tar -xzf /workspace/.makeademo/fresh-capture-baseline.tgz -C /workspace")}`;
 }
 
 async function waitForDemoReadiness(input: {

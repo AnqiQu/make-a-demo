@@ -7,14 +7,14 @@ import {
   normalizeSupportingDocument,
   readSupportingDocumentUpload,
 } from "../../pipeline/01-context-gathering/supporting-documents";
-import { DaytonaOpenCodeScriptGenerationAgent } from "../integrations/agents/daytona-opencode-script-generation-agent";
-import { createRepoPreparationAgent } from "../integrations/agents/repo-preparation-agent-factory";
+import { DaytonaOpenCodeAgent } from "../integrations/agents/daytona-opencode-agent";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import { DaytonaSandboxRunner } from "../integrations/sandbox/daytona-sandbox-runner";
 import {
   createPipelineEventLogger,
   createPrettyPipelineLogSink,
 } from "../logging/pipeline-event-logger";
+import { createDaytonaFreshCaptureStatePreparer } from "./fresh-capture-state";
 import { runFullPipelineJob } from "./full-pipeline-runner";
 import { createOpenCodeOutputStream } from "./opencode-output-stream";
 import { createOpenCodeRawOutputLog } from "./opencode-raw-output-log";
@@ -35,18 +35,6 @@ const runDirectory = join(fullPipelineOutputRoot, runId);
 const rawOpenCodeLog = createOpenCodeRawOutputLog({
   logPath: join(runDirectory, "opencode-raw-output.jsonl"),
 });
-const scriptGenerationRawOpenCodeLog = createOpenCodeRawOutputLog({
-  logPath: join(runDirectory, "script-generation-opencode-raw-output.jsonl"),
-});
-scriptGenerationRawOpenCodeLog.write(
-  "stdout",
-  `${JSON.stringify({
-    runDirectory,
-    source: "makeademo",
-    text: "Script Generation raw log initialized.",
-    type: "text",
-  })}\n`,
-);
 
 if (daytonaApiKey === undefined || daytonaApiKey === "") {
   throw new Error("DAYTONA_API_KEY is required for full pipeline runs.");
@@ -88,7 +76,7 @@ const normalizedSupportingDocuments = await Promise.all(
 const openCodeOutput = createOpenCodeOutputStream({
   write: (text) => process.stdout.write(text),
 });
-const repoPreparationAgent = createRepoPreparationAgent({
+const openCodeAgent = new DaytonaOpenCodeAgent({
   daytonaApiKey,
   ...(options.daytonaSnapshot === undefined
     ? {}
@@ -105,21 +93,6 @@ const repoPreparationAgent = createRepoPreparationAgent({
   providerApiKey: readProviderApiKey(options.providerID),
   providerID: options.providerID,
 });
-const scriptGenerationAgent = new DaytonaOpenCodeScriptGenerationAgent({
-  modelID: options.modelID,
-  onStderr: (chunk) => {
-    rawOpenCodeLog.write("stderr", chunk);
-    scriptGenerationRawOpenCodeLog.write("stderr", chunk);
-    process.stderr.write(chunk);
-  },
-  onStdout: (chunk) => {
-    rawOpenCodeLog.write("stdout", chunk);
-    scriptGenerationRawOpenCodeLog.write("stdout", chunk);
-    openCodeOutput.write(chunk);
-  },
-  providerApiKey: readProviderApiKey(options.providerID),
-  providerID: options.providerID,
-});
 
 const result = await runFullPipelineJob(
   {
@@ -130,9 +103,9 @@ const result = await runFullPipelineJob(
     workspaceId: options.workspaceId,
   },
   createStage1PipelineDependencies({
-    repoPreparationAgent,
+    repoPreparationAgent: openCodeAgent,
     sandboxRunner: new DaytonaSandboxRunner(),
-    scriptGenerationAgent,
+    scriptGenerationAgent: openCodeAgent,
   }),
   {
     logSinks: [
@@ -141,15 +114,14 @@ const result = await runFullPipelineJob(
       }),
     ],
     outputRoot: fullPipelineOutputRoot,
+    prepareFreshCaptureState: createDaytonaFreshCaptureStatePreparer(),
     rawOpenCodeLogPath: rawOpenCodeLog.logPath,
+    reviewDraftComposite:
+      openCodeAgent.reviewDraftComposite.bind(openCodeAgent),
     runId,
-    scriptGenerationRawOpenCodeLogPath: scriptGenerationRawOpenCodeLog.logPath,
   },
 ).finally(async () => {
-  await Promise.all([
-    rawOpenCodeLog.close(),
-    scriptGenerationRawOpenCodeLog.close(),
-  ]);
+  await rawOpenCodeLog.close();
 });
 
 process.stdout.write("\nFull pipeline complete.\n");
@@ -163,9 +135,6 @@ process.stdout.write(
 process.stdout.write(`Composite manifest: ${result.finalVideo.manifestPath}\n`);
 process.stdout.write(`Log: ${result.logPath}\n`);
 process.stdout.write(`Raw OpenCode log: ${rawOpenCodeLog.logPath}\n`);
-process.stdout.write(
-  `Script Generation raw OpenCode log: ${scriptGenerationRawOpenCodeLog.logPath}\n`,
-);
 process.stdout.write(`Result JSON: ${result.resultPath}\n`);
 
 function readFullPipelineArgs(args: string[]) {

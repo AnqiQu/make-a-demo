@@ -7,8 +7,7 @@ import {
   normalizeSupportingDocument,
   readSupportingDocumentUpload,
 } from "../../pipeline/01-context-gathering/supporting-documents";
-import { DaytonaOpenCodeScriptGenerationAgent } from "../integrations/agents/daytona-opencode-script-generation-agent";
-import { createRepoPreparationAgent } from "../integrations/agents/repo-preparation-agent-factory";
+import { DaytonaOpenCodeAgent } from "../integrations/agents/daytona-opencode-agent";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import { DaytonaSandboxRunner } from "../integrations/sandbox/daytona-sandbox-runner";
 import {
@@ -69,18 +68,11 @@ const openCodeOutput = createOpenCodeOutputStream({
   write: (text) => process.stdout.write(text),
 });
 
-const repoPreparationAgent = createRepoPreparationAgent({
+const openCodeAgent = new DaytonaOpenCodeAgent({
   daytonaApiKey,
   ...(options.daytonaSnapshot === undefined
     ? {}
     : { daytonaSnapshot: options.daytonaSnapshot }),
-  modelID: options.modelID,
-  onStderr: (chunk) => process.stderr.write(chunk),
-  onStdout: (chunk) => openCodeOutput.write(chunk),
-  providerApiKey: readProviderApiKey(options.providerID),
-  providerID: options.providerID,
-});
-const scriptGenerationAgent = new DaytonaOpenCodeScriptGenerationAgent({
   modelID: options.modelID,
   onStderr: (chunk) => process.stderr.write(chunk),
   onStdout: (chunk) => openCodeOutput.write(chunk),
@@ -97,9 +89,9 @@ const result = await runPipelineJob(
     workspaceId: options.workspaceId,
   },
   createStage1PipelineDependencies({
-    repoPreparationAgent,
+    repoPreparationAgent: openCodeAgent,
     sandboxRunner: new DaytonaSandboxRunner(),
-    scriptGenerationAgent,
+    scriptGenerationAgent: openCodeAgent,
   }),
   {
     onProgress: async (event) => {

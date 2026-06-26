@@ -1,12 +1,12 @@
-import type { VideoScriptPackage } from "./video-script-package";
+import type { DemoScriptPackage } from "./demo-script-package";
 
 export type SaveGeneratedScriptInput = {
   demoRequestId: string;
-  script: VideoScriptPackage;
+  script: DemoScriptPackage;
 };
 
 /**
- * Persists the generated Video Script Package for a Demo Request.
+ * Persists the generated Demo Script Package for a Demo Request.
  * Implementations must update only the identified Demo Request and must store
  * the complete package that downstream review and audit flows need.
  */

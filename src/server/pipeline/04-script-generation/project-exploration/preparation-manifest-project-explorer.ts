@@ -1,10 +1,10 @@
-import type { ProjectExplorationResult } from "../../../pipeline/04-script-generation/project-exploration/project-exploration-result";
+import type { ProjectExplorationResult } from "./project-exploration-result";
 import type {
   ProjectExplorationInput,
   ProjectExplorer,
-} from "../../../pipeline/04-script-generation/project-exploration/project-explorer.interface";
+} from "./project-explorer.interface";
 
-export class LlmProjectExplorer implements ProjectExplorer {
+export class PreparationManifestProjectExplorer implements ProjectExplorer {
   async exploreProject(
     input: ProjectExplorationInput,
   ): Promise<ProjectExplorationResult> {

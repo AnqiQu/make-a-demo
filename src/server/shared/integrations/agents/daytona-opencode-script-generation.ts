@@ -1,10 +1,12 @@
+import { stat } from "node:fs/promises";
+import { basename } from "node:path";
 import { readPreparationManifest } from "../../../pipeline/03-repo-preparation/preparation-manifest";
+import type { DemoScriptPackage } from "../../../pipeline/04-script-generation/demo-script-package";
 import type {
   AgenticScriptGenerationInput,
   ScriptGenerationAgent,
 } from "../../../pipeline/04-script-generation/script-generation-agent.interface";
 import { assertCaptureReadyScriptQuality } from "../../../pipeline/04-script-generation/script-package-quality";
-import type { VideoScriptPackage } from "../../../pipeline/04-script-generation/video-script-package";
 import type {
   CapturePathRepairInput,
   CapturePathRepairResult,
@@ -14,14 +16,20 @@ import {
   type DemoScript,
   parseDemoScript,
 } from "../../../pipeline/06-footage-capture/demo-script.schema";
+import type {
+  DraftCompositeReviewDecision,
+  DraftCompositeReviewInput,
+} from "../../pipeline-runner/full-pipeline-runner";
 import { writeDaytonaOpenCodeActivityLog } from "./daytona-opencode-activity-log";
 
 const makeADemoArtifactDirectory = "/workspace/.makeademo";
 const makeADemoOpenCodeConfigDirectory = `${makeADemoArtifactDirectory}/opencode`;
 const preparationManifestPath = `${makeADemoArtifactDirectory}/preparation-manifest.json`;
 const demoScriptPath = `${makeADemoArtifactDirectory}/demo-script.json`;
+const draftCompositeReviewPath = `${makeADemoArtifactDirectory}/draft-composite-review.json`;
+const draftReviewDirectory = `${makeADemoArtifactDirectory}/draft-review`;
 
-export type DaytonaOpenCodeScriptGenerationAgentOptions = {
+export type DaytonaOpenCodeScriptGenerationOptions = {
   modelID: string;
   onStderr?: (chunk: string) => void;
   onStdout?: (chunk: string) => void;
@@ -30,7 +38,7 @@ export type DaytonaOpenCodeScriptGenerationAgentOptions = {
   maxAttempts?: number;
 };
 
-export class DaytonaOpenCodeScriptGenerationAgent
+export class DaytonaOpenCodeScriptGeneration
   implements CapturePathRepairer, ScriptGenerationAgent
 {
   private readonly maxAttempts: number;
@@ -40,7 +48,7 @@ export class DaytonaOpenCodeScriptGenerationAgent
   private readonly providerApiKey: string;
   private readonly providerID: string;
 
-  constructor(options: DaytonaOpenCodeScriptGenerationAgentOptions) {
+  constructor(options: DaytonaOpenCodeScriptGenerationOptions) {
     this.maxAttempts = options.maxAttempts ?? 3;
     this.modelID = options.modelID;
     this.onStderr = options.onStderr;
@@ -51,7 +59,7 @@ export class DaytonaOpenCodeScriptGenerationAgent
 
   async generateScriptPackage(
     input: AgenticScriptGenerationInput,
-  ): Promise<VideoScriptPackage> {
+  ): Promise<DemoScriptPackage> {
     let prompt = createScriptGenerationPrompt(input);
     let lastFailure =
       "Script Generation did not produce a valid script package.";
@@ -281,11 +289,11 @@ export class DaytonaOpenCodeScriptGenerationAgent
 
     return {
       preparationManifest,
-      videoScriptPackage: attachPipelineMetadata(
+      demoScriptPackage: attachPipelineMetadata(
         parseDemoScript(scriptArtifact.value),
         {
           demoBrief: {
-            keyProductFeatures: input.videoScriptPackage.demoPlan.featureOrder,
+            keyProductFeatures: input.demoScriptPackage.demoPlan.featureOrder,
           },
           normalizedSupportingDocuments: [],
           opencodeSessionID: input.opencodeSessionID,
@@ -297,6 +305,78 @@ export class DaytonaOpenCodeScriptGenerationAgent
     };
   }
 
+  async reviewDraftComposite(
+    input: DraftCompositeReviewInput,
+  ): Promise<DraftCompositeReviewDecision> {
+    if (input.opencodeSessionID === undefined) {
+      throw new Error(
+        "Draft Composite review requires an OpenCode session ID.",
+      );
+    }
+    if (input.preparationWorkspace === undefined) {
+      throw new Error(
+        "Draft Composite review requires the prepared workspace.",
+      );
+    }
+    const preparationWorkspace = input.preparationWorkspace;
+
+    await uploadDraftReviewFiles(input);
+    const outputWrites: Promise<void>[] = [];
+    const result = await preparationWorkspace.workspace.execute(
+      createOpenCodeRunCommand({
+        model: `${this.providerID}/${this.modelID}`,
+        prompt: createDraftCompositeReviewPrompt(input),
+        sessionID: input.opencodeSessionID,
+      }),
+      removeUndefinedOptions({
+        env: createOpenCodeEnv({
+          providerApiKey: this.providerApiKey,
+          providerID: this.providerID,
+        }),
+        onStderr: (chunk) => {
+          this.onStderr?.(chunk);
+          outputWrites.push(
+            writeDaytonaOpenCodeActivityLog(preparationWorkspace.workspace, {
+              attempt: input.attempt,
+              channel: "stderr",
+              raw: chunk,
+              stage: "draft-composite-review",
+            }),
+          );
+        },
+        onStdout: (chunk) => {
+          this.onStdout?.(chunk);
+          outputWrites.push(
+            writeDaytonaOpenCodeActivityLog(preparationWorkspace.workspace, {
+              attempt: input.attempt,
+              channel: "stdout",
+              raw: chunk,
+              stage: "draft-composite-review",
+            }),
+          );
+        },
+      }),
+    );
+    await Promise.all(outputWrites);
+
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `OpenCode Draft Composite review exited with ${result.exitCode}: ${[result.stderr, result.stdout].filter((line) => line.length > 0).join("\n")}`,
+      );
+    }
+
+    const artifact = await preparationWorkspace.workspace.execute(
+      `cat ${shellQuote(draftCompositeReviewPath)}`,
+    );
+    if (artifact.exitCode !== 0) {
+      throw new Error(
+        `OpenCode Draft Composite review did not write ${draftCompositeReviewPath}: ${artifact.stderr}`,
+      );
+    }
+
+    return parseDraftCompositeReviewDecision(artifact.stdout);
+  }
+
   private writeStatus(message: string): void {
     this.onStdout?.(
       `${JSON.stringify({
@@ -306,6 +386,68 @@ export class DaytonaOpenCodeScriptGenerationAgent
       })}\n`,
     );
   }
+}
+
+async function uploadDraftReviewFiles(input: DraftCompositeReviewInput) {
+  if (input.preparationWorkspace === undefined) {
+    return;
+  }
+
+  const paths = [
+    input.derivedEvidence.rawDraftCompositePath,
+    input.derivedEvidence.rawTakePath,
+    ...input.derivedEvidence.contactSheetPaths,
+    ...input.derivedEvidence.sampledFramePaths,
+  ].filter((path): path is string => path !== undefined);
+  const files = [];
+  for (const sourcePath of paths) {
+    if (await exists(sourcePath)) {
+      files.push({
+        destinationPath: `${draftReviewDirectory}/${basename(sourcePath)}`,
+        sourcePath,
+      });
+    }
+  }
+
+  if (files.length > 0) {
+    await input.preparationWorkspace.workspace.uploadFiles(files);
+  }
+}
+
+async function exists(path: string) {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function parseDraftCompositeReviewDecision(
+  value: string,
+): DraftCompositeReviewDecision {
+  const record = JSON.parse(value) as Record<string, unknown>;
+  if (record.decision === "accept") {
+    return typeof record.reason === "string"
+      ? { decision: "accept", reason: record.reason }
+      : { decision: "accept" };
+  }
+
+  if (
+    record.decision === "repair" &&
+    typeof record.reason === "string" &&
+    (record.repairScope === "demo-script" || record.repairScope === "workspace")
+  ) {
+    return {
+      decision: "repair",
+      reason: record.reason,
+      repairScope: record.repairScope,
+    };
+  }
+
+  throw new Error(
+    "Draft Composite review artifact must contain accept or repair decision.",
+  );
 }
 
 async function writeRepairSandboxLog(
@@ -397,7 +539,7 @@ async function readPreparationManifestArtifact(input: {
 function attachPipelineMetadata(
   scriptPackage: DemoScript,
   input: AgenticScriptGenerationInput,
-): VideoScriptPackage {
+): DemoScriptPackage {
   const exploration = {
     assumptions: input.preparationManifest.assumptions,
     productSurfaces: input.preparationManifest.scriptGenerationContext,
@@ -480,6 +622,7 @@ function createScriptGenerationPrompt(
     "",
     "## Hard Requirements",
     "- Output JSON matching the capture-ready Demo Script schema.",
+    "- The demoPlaywrightScript must import `{ setup, scene }` from `./makeademo-capture-sdk`.",
     "- Every demonstrated feature must have a declared Scene with an expected visible outcome.",
     "- Playwright scripts must use the provided `baseUrl` variable, not hardcoded preview URLs.",
     "- Demonstrate real user flows with route changes, clicks, fills, presses, selectOption calls, or feature-specific assertions.",
@@ -534,6 +677,7 @@ function createCapturePathRepairPrompt(
     "",
     "## Hard Requirements",
     `- Overwrite ${demoScriptPath} with the repaired Demo Script JSON before finishing.`,
+    "- The demoPlaywrightScript must import `{ setup, scene }` from `./makeademo-capture-sdk`.",
     `- If you change the prepared app command, URL, assumptions, risks, or workspace-change summary, update ${preparationManifestPath}.`,
     "- Keep Playwright interactions deterministic and use only the provided `baseUrl` variable in Playwright scripts.",
     "- Do not add Scene durations, raw video recording, custom marker writers, or timestamps.",
@@ -546,13 +690,16 @@ function createCapturePathRepairPrompt(
         {
           attempt: input.attempt,
           failure: input.failure,
-          currentScriptId: input.videoScriptPackage.scriptId,
+          currentScriptId: input.demoScriptPackage.scriptId,
         },
         null,
         2,
       ),
     ),
     "```",
+    input.failure.diagnosticsLogPath === undefined
+      ? "No Capture Path diagnostics log path was returned. Use the structured failure evidence above."
+      : `Before editing, read the Capture Path diagnostics log at ${input.failure.diagnosticsLogPath}. It contains verbose validation stdout/stderr excerpts and is written inside the prepared workspace for agent inspection.`,
     "",
     "## Current Preparation Manifest",
     "```json",
@@ -561,10 +708,69 @@ function createCapturePathRepairPrompt(
     "",
     "## Current Demo Script",
     "```json",
-    truncateForPrompt(JSON.stringify(input.videoScriptPackage, null, 2)),
+    truncateForPrompt(JSON.stringify(input.demoScriptPackage, null, 2)),
     "```",
     "",
     createScriptPackageSchemaPrompt(),
+  ].join("\n");
+}
+
+function createDraftCompositeReviewPrompt(
+  input: DraftCompositeReviewInput,
+): string {
+  return [
+    "# MakeADemo Draft Composite Review",
+    "",
+    "Review the Draft Composite generated from the Demo Script in this same OpenCode session.",
+    "Use your preparation and Script Generation context, plus the structured evidence below, to decide whether the draft is a good demo video.",
+    `Write exactly one JSON artifact to ${draftCompositeReviewPath}.`,
+    "",
+    "## Required Decision Shape",
+    "Accept:",
+    "```json",
+    JSON.stringify(
+      { decision: "accept", reason: "Concise acceptance reason." },
+      null,
+      2,
+    ),
+    "```",
+    "Repair:",
+    "```json",
+    JSON.stringify(
+      {
+        decision: "repair",
+        reason: "Concise repair reason.",
+        repairScope: "demo-script",
+      },
+      null,
+      2,
+    ),
+    "```",
+    "Use repairScope `demo-script` for script pacing, Scene boundaries, visible outcomes, overlays, music intent, or narrative issues.",
+    "Use repairScope `workspace` only when the prepared app or deterministic demo data must change.",
+    "Do not request repair only for ffmpeg/contact-sheet/sampled-frame findings unless they reveal an actual demo quality issue. Deterministic quality gates are already supplied separately.",
+    "",
+    "## Available Local Evidence In Workspace",
+    `${draftReviewDirectory} contains uploaded draft/review files when they were available from the backend host.`,
+    "You may use shell tools such as ffmpeg/ffprobe against those files if useful.",
+    "",
+    "## Structured Evidence",
+    "```json",
+    truncateForPrompt(
+      JSON.stringify(
+        {
+          attempt: input.attempt,
+          captureManifest: input.captureManifest,
+          derivedEvidence: input.derivedEvidence,
+          draftComposite: input.draftComposite,
+          scriptId: input.scriptPackage.scriptId,
+          title: input.scriptPackage.title,
+        },
+        null,
+        2,
+      ),
+    ),
+    "```",
   ].join("\n");
 }
 
@@ -578,7 +784,7 @@ function createScriptPackageSchemaPrompt(): string {
       {
         audio: { enabled: true, music: { id: "clean" } },
         demoPlaywrightScript:
-          "await setup(async ({ page, baseUrl }) => { await page.goto(baseUrl); });\nawait scene('scene_requested_feature', async ({ page }) => {\n  await page.getByRole('button', { name: /example/i }).click();\n  await expect(page.getByText(/result/i)).toBeVisible();\n});",
+          "import { setup, scene } from './makeademo-capture-sdk';\n\nawait setup(async ({ page, baseUrl, expect }) => { await page.goto(baseUrl); await expect(page.locator('body')).toBeVisible(); });\nawait scene('scene_requested_feature', async ({ page, expect }) => {\n  await page.getByRole('button', { name: /example/i }).click();\n  await expect(page.getByText(/result/i)).toBeVisible();\n});",
         format: "16:9",
         presentation: {
           music: { enabled: true, trackId: "clean" },

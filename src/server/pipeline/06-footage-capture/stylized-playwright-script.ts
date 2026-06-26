@@ -12,15 +12,16 @@ export function prepareStylizedPlaywrightScript(
   script: string,
   input: PrepareStylizedPlaywrightScriptInput,
 ) {
+  const demoScript = removeCaptureSdkImportsFromBody(script);
   if ((input.mode ?? "recording") === "validation") {
-    return prepareValidationPlaywrightScript(script, input);
+    return prepareValidationPlaywrightScript(demoScript, input);
   }
 
-  if (!script.includes("chromium.launch")) {
-    return wrapActionBody(stylizeBrowserActions(script), input);
+  if (!demoScript.includes("chromium.launch")) {
+    return wrapActionBody(stylizeBrowserActions(demoScript), input);
   }
 
-  let prepared = script.replaceAll("http://localhost:3000", input.baseUrl);
+  let prepared = demoScript.replaceAll("http://localhost:3000", input.baseUrl);
   prepared = prepared.replace(
     /dir:\s*(['"`])[^'"`]+?\1/,
     `dir: ${JSON.stringify(input.videoDirectory)}`,
@@ -57,6 +58,7 @@ function wrapActionBody(
       : "";
 
   return `import { chromium, expect } from "@playwright/test";
+import { setup, scene } from "./makeademo-capture-sdk.js";
 
 ${recordingHelperSource()}
 
@@ -69,7 +71,11 @@ const context = await browser.newContext({
     size: { width: 1280, height: 720 },
   },
 });
+${runtimeNetworkLockdownSource()}
 const page = await context.newPage();
+const makeADemoCaptureStartedAt = performance.now();
+const makeADemoCaptureContext = { page, baseUrl, expect };
+globalThis.__makeademoCaptureSdk = { context: makeADemoCaptureContext, startedAt: makeADemoCaptureStartedAt };
 
 try {
 ${indentScriptBody(script)}
@@ -79,6 +85,8 @@ ${indentScriptBody(script)}
   await browser.close();
 }
 void expect;
+void setup;
+void scene;
 `;
 }
 
@@ -93,22 +101,97 @@ function prepareValidationPlaywrightScript(
   const launchOptions = input.headed ? "{ headless: false }" : "";
 
   return `import { chromium, expect } from "@playwright/test";
+import { setup, scene } from "./makeademo-capture-sdk.js";
 
 const baseUrl = ${JSON.stringify(input.baseUrl)};
 const browser = await chromium.launch(${launchOptions});
 const context = await browser.newContext({
   viewport: { width: 1280, height: 720 },
 });
+${runtimeNetworkLockdownSource()}
 const page = await context.newPage();
+const makeADemoCaptureStartedAt = performance.now();
+const makeADemoCaptureContext = { page, baseUrl, expect };
+globalThis.__makeademoCaptureSdk = { context: makeADemoCaptureContext, startedAt: makeADemoCaptureStartedAt };
 
 try {
+  console.log("[makeademo:validation] script started", JSON.stringify({ baseUrl }));
 ${indentScriptBody(script)}
+  console.log("[makeademo:validation] script succeeded", JSON.stringify({ title: await page.title(), url: page.url() }));
+} catch (error) {
+  console.error("[makeademo:validation] script failed", JSON.stringify({
+    message: error instanceof Error ? error.message : String(error),
+    title: await page.title().catch(() => ""),
+    url: page.url(),
+  }));
+  throw error;
 } finally {
   await context.close();
   await browser.close();
 }
 void expect;
+void setup;
+void scene;
 `;
+}
+
+function runtimeNetworkLockdownSource() {
+  return `const makeADemoAllowedRuntimeOrigin = new URL(baseUrl).origin;
+const makeADemoOriginalFetch = globalThis.fetch?.bind(globalThis);
+if (makeADemoOriginalFetch !== undefined) {
+  globalThis.fetch = async (resource, init) => {
+    const requestUrl = typeof resource === "string" || resource instanceof URL
+      ? new URL(resource, baseUrl).toString()
+      : new URL(resource.url, baseUrl).toString();
+    if (!isMakeADemoAllowedRuntimeRequest(requestUrl)) {
+      console.error("[makeademo:network-blocked]", JSON.stringify({
+        direction: "outbound",
+        host: new URL(requestUrl).host,
+        phase: "runtime",
+        resourceType: "fetch",
+        url: requestUrl,
+      }));
+      throw new Error(\`MakeADemo blocked runtime network access to \${requestUrl}\`);
+    }
+
+    return await makeADemoOriginalFetch(resource, init);
+  };
+}
+
+await context.route("**/*", async (route) => {
+  const request = route.request();
+  const requestUrl = request.url();
+  if (isMakeADemoAllowedRuntimeRequest(requestUrl)) {
+    await route.continue();
+    return;
+  }
+
+  console.error("[makeademo:network-blocked]", JSON.stringify({
+    direction: "outbound",
+    host: new URL(requestUrl).host,
+    phase: "runtime",
+    resourceType: request.resourceType(),
+    url: requestUrl,
+  }));
+  await route.abort("blockedbyclient");
+});
+
+function isMakeADemoAllowedRuntimeRequest(requestUrl) {
+  const parsedUrl = new URL(requestUrl);
+  if (parsedUrl.protocol === "about:" || parsedUrl.protocol === "blob:" || parsedUrl.protocol === "data:") {
+    return true;
+  }
+
+  return parsedUrl.origin === makeADemoAllowedRuntimeOrigin;
+}
+`;
+}
+
+function removeCaptureSdkImportsFromBody(script: string) {
+  return script
+    .split("\n")
+    .filter((line) => !/from\s+['"].*makeademo-capture-sdk['"]/.test(line))
+    .join("\n");
 }
 
 function injectRecordingHelpers(script: string) {

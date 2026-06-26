@@ -1,7 +1,6 @@
 import { compositeVideoFromScript } from "../../pipeline/07-compositing/composite-video";
 import { finalVideoEmailsEnabled } from "../../pipeline/final-output/final-video-email-feature";
-import { DaytonaOpenCodeScriptGenerationAgent } from "../integrations/agents/daytona-opencode-script-generation-agent";
-import { createRepoPreparationAgent } from "../integrations/agents/repo-preparation-agent-factory";
+import { DaytonaOpenCodeAgent } from "../integrations/agents/daytona-opencode-agent";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import { createResendFinalVideoEmailNotifierFromEnv } from "../integrations/email/resend-final-video-email-notifier";
 import { DaytonaSandboxRunner } from "../integrations/sandbox/daytona-sandbox-runner";
@@ -11,6 +10,7 @@ import { R2SupportingDocumentLoader } from "../integrations/storage/r2-supportin
 import { createPipelineEventLogger } from "../logging/pipeline-event-logger";
 import { createNeonDemoRequestFinalVideoStore } from "../persistence/neon-demo-request-final-video-store";
 import { createNeonProjectDemoGenerationQueueStore } from "../persistence/neon-project-demo-generation-queue-store";
+import { createDaytonaFreshCaptureStatePreparer } from "./fresh-capture-state";
 import { runFullPipelineJob } from "./full-pipeline-runner";
 import { createJsonPipelineObserver } from "./pipeline-observer";
 import { processNextProjectDemoGenerationJob } from "./project-demo-generation-queue";
@@ -46,14 +46,9 @@ const sandboxProvider = new DaytonaSdkPreparationWorkspaceProvider({
   apiKey: daytonaApiKey,
   ...(daytonaSnapshot === undefined ? {} : { snapshot: daytonaSnapshot }),
 });
-const repoPreparationAgent = createRepoPreparationAgent({
+const openCodeAgent = new DaytonaOpenCodeAgent({
   daytonaApiKey,
   ...(daytonaSnapshot === undefined ? {} : { daytonaSnapshot }),
-  modelID,
-  providerApiKey: readProviderApiKey(providerID),
-  providerID,
-});
-const scriptGenerationAgent = new DaytonaOpenCodeScriptGenerationAgent({
   modelID,
   providerApiKey: readProviderApiKey(providerID),
   providerID,
@@ -94,9 +89,9 @@ do {
             workspaceId: job.workspaceId,
           },
           createStage1PipelineDependencies({
-            repoPreparationAgent,
+            repoPreparationAgent: openCodeAgent,
             sandboxRunner: new DaytonaSandboxRunner(),
-            scriptGenerationAgent,
+            scriptGenerationAgent: openCodeAgent,
           }),
           {
             async compositeVideo(input) {
@@ -109,6 +104,7 @@ do {
                   ? {}
                   : { finalVideoEmailNotifier }),
                 ...(publicAppBaseUrl === undefined ? {} : { publicAppBaseUrl }),
+                retainLocalOutput: true,
               });
             },
             context: {
@@ -117,6 +113,9 @@ do {
             },
             demoRequestScriptStore: demoRequestStore,
             observer,
+            prepareFreshCaptureState: createDaytonaFreshCaptureStatePreparer(),
+            reviewDraftComposite:
+              openCodeAgent.reviewDraftComposite.bind(openCodeAgent),
           },
         );
 
