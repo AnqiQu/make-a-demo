@@ -497,6 +497,8 @@ describe("ContextDetailsForm", () => {
     expect(styles).toContain("width: 5.4rem;");
     expect(styles).toContain(".details-form .file-type-tooltip");
     expect(styles).toContain("background: transparent;");
+    expect(styles).toContain(".details-form .file-type-tooltip::after");
+    expect(styles).toContain("display: none;");
     expect(styles).not.toContain(
       ".details-form button:not(.details-submit-button)",
     );
@@ -558,8 +560,15 @@ describe("SubmittedDemoPanel", () => {
         progress: { status: "processing" },
       }),
     );
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+    const loadingRingRule = styles.match(/\.loading-ring\s*\{([^}]*)\}/)?.[1];
 
     expect(html).toContain("Your demo is processing");
+    expect(loadingRingRule).toContain("border: 0.5rem solid #df6d18;");
+    expect(loadingRingRule).not.toContain("border-top-color");
     expect(html).not.toContain("Request");
     expect(html).not.toContain("demo-request");
   });

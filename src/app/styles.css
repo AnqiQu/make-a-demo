@@ -904,6 +904,10 @@ button:disabled {
   width: auto;
 }
 
+.details-form .file-type-tooltip::after {
+  display: none;
+}
+
 .file-type-tooltip svg {
   height: 1rem;
   width: 1rem;
@@ -1032,9 +1036,8 @@ button:disabled {
 
 .loading-ring {
   animation: spin 1s steps(8, end) infinite;
-  border: 0.5rem solid #fff4bf;
+  border: 0.5rem solid #df6d18;
   border-radius: 0;
-  border-top-color: #df6d18;
   height: 4rem;
   margin: 0 auto 1.5rem;
   width: 4rem;
