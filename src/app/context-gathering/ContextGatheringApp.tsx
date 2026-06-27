@@ -777,14 +777,6 @@ export function ContextDetailsForm({
 
   return (
     <section className="details-step" aria-label="Demo intake details">
-      <button
-        aria-label="Back to repository"
-        className="back-arrow-button"
-        onClick={onBack}
-        type="button"
-      >
-        <ArrowLeft aria-hidden="true" strokeWidth={2.4} />
-      </button>
       <div
         className="progress-track-shell"
         aria-label="Context Gathering progress"
@@ -817,6 +809,7 @@ export function ContextDetailsForm({
               onChange={(event) =>
                 onFieldChange("name", event.currentTarget.value)
               }
+              placeholder="Katherine Johnson"
               required
               value={form.name}
             />
@@ -830,6 +823,7 @@ export function ContextDetailsForm({
               onChange={(event) =>
                 onFieldChange("email", event.currentTarget.value)
               }
+              placeholder="you@domain.com"
               required
               type="email"
               value={form.email}
@@ -842,6 +836,7 @@ export function ContextDetailsForm({
             onChange={(event) =>
               onFieldChange("productSummary", event.currentTarget.value)
             }
+            placeholder="A few sentences describing what your product does..."
             value={form.productSummary}
           />
         </label>
@@ -852,6 +847,7 @@ export function ContextDetailsForm({
               onChange={(event) =>
                 onFieldChange("targetUsers", event.currentTarget.value)
               }
+              placeholder="All humans in the world?"
               value={form.targetUsers}
             />
           </label>
@@ -880,6 +876,7 @@ export function ContextDetailsForm({
             onChange={(event) =>
               onFieldChange("importantFeatures", event.currentTarget.value)
             }
+            placeholder="Most important product features, separated by commas"
             value={form.importantFeatures}
           />
         </label>
@@ -950,14 +947,24 @@ export function ContextDetailsForm({
             )}
           </div>
         </section>
-        <button
-          aria-label="Submit demo intake"
-          className="primary-hoot details-submit-button"
-          disabled={!hasRequiredContactDetails || isSubmitting || isUploading}
-          type="submit"
-        >
-          <ArrowRight aria-hidden="true" strokeWidth={2.4} />
-        </button>
+        <div className="details-form-actions">
+          <button
+            aria-label="Back to repository"
+            className="back-arrow-button"
+            onClick={onBack}
+            type="button"
+          >
+            <ArrowLeft aria-hidden="true" strokeWidth={2.4} />
+          </button>
+          <button
+            aria-label="Submit demo intake"
+            className="primary-hoot details-submit-button"
+            disabled={!hasRequiredContactDetails || isSubmitting || isUploading}
+            type="submit"
+          >
+            <ArrowRight aria-hidden="true" strokeWidth={2.4} />
+          </button>
+        </div>
       </form>
     </section>
   );

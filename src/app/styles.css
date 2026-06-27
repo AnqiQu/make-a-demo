@@ -325,7 +325,11 @@ button:disabled {
   padding: clamp(2rem, 7vh, 5rem) 0 clamp(0.75rem, 2vh, 1.25rem);
   position: relative;
   width: max-content;
-  z-index: 1;
+  z-index: 2;
+}
+
+.owlet-shell-details .brand {
+  margin-bottom: clamp(0.75rem, 2vh, 1.5rem);
 }
 
 .brand-name {
@@ -735,10 +739,6 @@ button:disabled {
   margin: 0;
 }
 
-.repo-url-input:focus-within {
-  box-shadow: 8px 8px 0 #111827, 0 0 0 5px #ffffff;
-}
-
 .details-step {
   max-width: 54rem;
   padding-bottom: 4rem;
@@ -757,12 +757,8 @@ button:disabled {
   display: grid;
   height: 3rem;
   justify-content: center;
-  left: 1rem;
-  position: fixed;
-  top: 1rem;
   transition: transform 120ms ease, box-shadow 120ms ease;
   width: 3rem;
-  z-index: 3;
 }
 
 .back-arrow-button:not(:disabled):hover {
@@ -804,12 +800,18 @@ button:disabled {
 }
 
 .details-form {
-  background: rgba(255, 251, 224, 0.88);
+  background: #fffbe6;
   border: 4px solid #111827;
   box-shadow: 8px 8px 0 #111827;
   display: grid;
   gap: clamp(1rem, 2.4vw, 1.5rem);
   padding: clamp(1.25rem, 3vw, 2rem);
+}
+
+.details-form-actions {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
 }
 
 .details-field-grid {
@@ -1191,11 +1193,6 @@ button:disabled {
 
   .github-button {
     width: min(100%, 20rem);
-  }
-
-  .back-arrow-button {
-    left: 0.75rem;
-    top: 0.75rem;
   }
 }
 

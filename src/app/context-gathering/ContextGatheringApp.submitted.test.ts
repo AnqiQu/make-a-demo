@@ -224,6 +224,15 @@ describe("ContextGatheringApp", () => {
     );
   });
 
+  it("keeps the repository text box visually stable while it is focused", () => {
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+
+    expect(styles).not.toContain(".repo-url-input:focus-within");
+  });
+
   it("uses the repository URL field as the connected repository dropdown", () => {
     const html = renderToStaticMarkup(
       createElement(RepoConnectionFields, {
@@ -314,6 +323,134 @@ describe("ContextGatheringApp", () => {
 });
 
 describe("ContextDetailsForm", () => {
+  it("uses a fully opaque, ten-percent-lighter background for the Context Gathering form", () => {
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+    const formRule = styles.match(/\.details-form\s*\{([^}]*)\}/)?.[1];
+
+    expect(formRule).toContain("background: #fffbe6;");
+    expect(formRule).not.toContain("rgba(");
+  });
+
+  it("keeps the Context Gathering form close to the title", () => {
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+    const detailsBrandRule = styles.match(
+      /\.owlet-shell-details \.brand\s*\{([^}]*)\}/,
+    )?.[1];
+
+    expect(detailsBrandRule).toContain(
+      "margin-bottom: clamp(0.75rem, 2vh, 1.5rem);",
+    );
+  });
+
+  it("shows example text for every Context Gathering text field", () => {
+    const html = renderToStaticMarkup(
+      createElement(ContextDetailsForm, {
+        form: {
+          email: "",
+          importantFeatures: "",
+          name: "",
+          productSummary: "",
+          requestedDurationSeconds: 60,
+          targetUsers: "",
+        },
+        isSubmitting: false,
+        isUploading: false,
+        onBack: () => undefined,
+        onFieldChange: () => undefined,
+        onRemovePendingFile: () => undefined,
+        onStageFiles: () => undefined,
+        onSubmit: () => undefined,
+        pendingSupportingFiles: [],
+      }),
+    );
+
+    expect(html).toContain('placeholder="Katherine Johnson"');
+    expect(html).toContain('placeholder="you@domain.com"');
+    expect(html).toContain(
+      'placeholder="A few sentences describing what your product does..."',
+    );
+    expect(html).toContain('placeholder="All humans in the world?"');
+    expect(html).toContain(
+      'placeholder="Most important product features, separated by commas"',
+    );
+  });
+
+  it("enables submission only after name and email are filled in", () => {
+    const renderForm = (name: string, email: string) =>
+      renderToStaticMarkup(
+        createElement(ContextDetailsForm, {
+          form: {
+            email,
+            importantFeatures: "",
+            name,
+            productSummary: "",
+            requestedDurationSeconds: 60,
+            targetUsers: "",
+          },
+          isSubmitting: false,
+          isUploading: false,
+          onBack: () => undefined,
+          onFieldChange: () => undefined,
+          onRemovePendingFile: () => undefined,
+          onStageFiles: () => undefined,
+          onSubmit: () => undefined,
+          pendingSupportingFiles: [],
+        }),
+      );
+
+    const incompleteHtml = renderForm("Katherine Johnson", " ");
+    const completeHtml = renderForm("Katherine Johnson", "you@domain.com");
+
+    expect(incompleteHtml).toContain(
+      'aria-label="Submit demo intake" class="primary-hoot details-submit-button" disabled=""',
+    );
+    expect(completeHtml).not.toContain(
+      'aria-label="Submit demo intake" class="primary-hoot details-submit-button" disabled=""',
+    );
+  });
+
+  it("places back and submit controls at opposite bottom corners of the form", () => {
+    const html = renderToStaticMarkup(
+      createElement(ContextDetailsForm, {
+        form: {
+          email: "you@domain.com",
+          importantFeatures: "",
+          name: "Katherine Johnson",
+          productSummary: "",
+          requestedDurationSeconds: 60,
+          targetUsers: "",
+        },
+        isSubmitting: false,
+        isUploading: false,
+        onBack: () => undefined,
+        onFieldChange: () => undefined,
+        onRemovePendingFile: () => undefined,
+        onStageFiles: () => undefined,
+        onSubmit: () => undefined,
+        pendingSupportingFiles: [],
+      }),
+    );
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+
+    expect(html).toContain(
+      'class="details-form-actions"><button aria-label="Back to repository"',
+    );
+    expect(html.indexOf('class="details-form-actions"')).toBeGreaterThan(
+      html.indexOf('class="details-supporting-documents"'),
+    );
+    expect(styles).toContain(".details-form-actions");
+    expect(styles).toContain("justify-content: space-between;");
+  });
+
   it("renders the combined second page as a halfway-progress form", () => {
     const html = renderToStaticMarkup(
       createElement(ContextDetailsForm, {
