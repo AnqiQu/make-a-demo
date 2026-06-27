@@ -1,0 +1,69 @@
+import type { DemoBrief } from "../01-context-gathering/intake/demo-brief.schema";
+import type { NormalizedSupportingDocument } from "../01-context-gathering/supporting-documents";
+import type { PreparationManifest } from "../03-repo-preparation/preparation-manifest";
+import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
+import type { DemoPlanner } from "./demo-planning/demo-planner.interface";
+import {
+  type DemoScriptPackage,
+  buildDemoScriptPackage,
+} from "./demo-script-package";
+import type { ProjectExplorer } from "./project-exploration/project-explorer.interface";
+import type { ScriptComposer } from "./script-composition/script-composer.interface";
+import type { ScriptGenerationAgent } from "./script-generation-agent.interface";
+import { assertCaptureReadyScriptQuality } from "./script-package-quality";
+
+export type ScriptGenerationInput = {
+  demoBrief: DemoBrief;
+  normalizedSupportingDocuments: NormalizedSupportingDocument[];
+  opencodeSessionID?: string;
+  preparationManifest: PreparationManifest;
+  preparationWorkspace?: PreparationWorkspaceHandle;
+  repoUrl: string;
+};
+
+export type ScriptGenerationDependencies = {
+  demoPlanner: DemoPlanner;
+  projectExplorer: ProjectExplorer;
+  scriptGenerationAgent?: ScriptGenerationAgent;
+  scriptComposer: ScriptComposer;
+};
+
+export async function generateDemoScriptPackage(
+  input: ScriptGenerationInput,
+  dependencies: ScriptGenerationDependencies,
+): Promise<DemoScriptPackage> {
+  if (dependencies.scriptGenerationAgent !== undefined) {
+    if (
+      input.preparationWorkspace === undefined ||
+      input.opencodeSessionID === undefined
+    ) {
+      throw new Error(
+        "Agentic Script Generation requires the validated preparation workspace and OpenCode session ID.",
+      );
+    }
+
+    return dependencies.scriptGenerationAgent.generateScriptPackage({
+      ...input,
+      opencodeSessionID: input.opencodeSessionID,
+      preparationWorkspace: input.preparationWorkspace,
+    });
+  }
+
+  const exploration = await dependencies.projectExplorer.exploreProject(input);
+  const demoPlan = await dependencies.demoPlanner.planDemo({
+    demoBrief: input.demoBrief,
+    exploration,
+  });
+  const demoScript = await dependencies.scriptComposer.composeScript({
+    demoBrief: input.demoBrief,
+    demoPlan,
+    exploration,
+  });
+  assertCaptureReadyScriptQuality(demoScript);
+
+  return buildDemoScriptPackage({
+    demoPlan,
+    demoScript,
+    exploration,
+  });
+}

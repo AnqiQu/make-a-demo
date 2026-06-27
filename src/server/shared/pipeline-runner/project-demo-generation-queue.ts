@@ -1,6 +1,5 @@
 import type { DemoBrief } from "../../pipeline/01-context-gathering/intake/demo-brief.schema";
 import type { NormalizedSupportingDocument } from "../../pipeline/01-context-gathering/supporting-documents";
-import type { PipelineJobResult } from "./pipeline-job";
 import {
   type PipelineObserver,
   noopPipelineObserver,
@@ -49,22 +48,10 @@ type GeneratedFinalVideo = {
   generatedDemoUrl: string;
 };
 
-/**
- * Runs the final output portion of a Project job.
- * Implementations must not resolve until Compositing has generated the final
- * video, linked it to the Demo Request, and completed any enabled user
- * notification.
- */
-export interface ProjectFinalVideoGenerator {
-  generateFinalVideo(input: {
-    demoRequestId: string;
-    pipelineResult: Extract<PipelineJobResult, { status: "succeeded" }>;
-    projectId: string;
-  }): Promise<GeneratedFinalVideo>;
-}
-
-export type ProjectDemoGenerationDependencies = ProjectFinalVideoGenerator & {
-  runPipeline(input: ProjectDemoGenerationJob): Promise<PipelineJobResult>;
+export type ProjectFullPipelineGenerationDependencies = {
+  runFullPipeline(
+    input: ProjectDemoGenerationJob,
+  ): Promise<GeneratedFinalVideo>;
 };
 
 export type ProjectDemoGenerationOptions = {
@@ -74,7 +61,7 @@ export type ProjectDemoGenerationOptions = {
 
 export async function processNextProjectDemoGenerationJob(
   store: ProjectDemoGenerationQueueStore,
-  dependencies: ProjectDemoGenerationDependencies,
+  dependencies: ProjectFullPipelineGenerationDependencies,
   options: ProjectDemoGenerationOptions = {},
 ): Promise<ProjectDemoGenerationResult> {
   const observer = options.observer ?? noopPipelineObserver;
@@ -97,28 +84,7 @@ export async function processNextProjectDemoGenerationJob(
   const startedAt = now();
 
   try {
-    const pipelineResult = await dependencies.runPipeline(job);
-    if (pipelineResult.status !== "succeeded") {
-      await store.markProjectFailed({
-        error: pipelineResult.status,
-        projectId: job.projectId,
-      });
-      observer.record({
-        ...context,
-        durationMs: now() - startedAt,
-        errorMessage: pipelineResult.status,
-        errorType: "PipelineJobFailed",
-        event: "job.failed",
-        status: "failed",
-      });
-      return { projectId: job.projectId, status: "failed" };
-    }
-
-    const finalVideo = await dependencies.generateFinalVideo({
-      demoRequestId: job.demoRequestId,
-      pipelineResult,
-      projectId: job.projectId,
-    });
+    const finalVideo = await dependencies.runFullPipeline(job);
     await store.markProjectCompleted({
       generatedDemoUrl: finalVideo.generatedDemoUrl,
       projectId: job.projectId,

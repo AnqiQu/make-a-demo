@@ -126,6 +126,27 @@ describe("PlaywrightBrowserValidator", () => {
       "https://code.ionicframework.com/ionicons/2.0.1/css/ionicons.min.css",
     ]);
   });
+
+  it("fails browser validation when page operations stop completing", async () => {
+    const validator = new PlaywrightBrowserValidator({
+      pageFactory: async () =>
+        fakePage({
+          bodyText: "Demo app loaded",
+          screenshotNeverCompletes: true,
+        }),
+      validationTimeoutMs: 50,
+    });
+
+    await expect(
+      validator.validate({ url: "http://localhost:3000" }),
+    ).resolves.toEqual({
+      interactable: false,
+      logs: [
+        "Browser validation timed out after 50ms for http://localhost:3000",
+      ],
+      screenshotArtifactId: "",
+    });
+  });
 });
 
 function fakePage(input: {
@@ -134,6 +155,7 @@ function fakePage(input: {
   onAbort?: (url: string) => void;
   onContinue?: (url: string) => void;
   requestedUrls?: string[];
+  screenshotNeverCompletes?: boolean;
 }) {
   let routeHandler:
     | ((route: {
@@ -167,6 +189,9 @@ function fakePage(input: {
       return input.requestedUrls ?? [];
     },
     async screenshot() {
+      if (input.screenshotNeverCompletes) {
+        await new Promise(() => {});
+      }
       return "artifact_screenshot";
     },
     async route(_pattern: string, handler: NonNullable<typeof routeHandler>) {

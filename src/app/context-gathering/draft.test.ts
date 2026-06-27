@@ -13,6 +13,7 @@ import {
   selectRepositoryForDemo,
   setRepoDetails,
   stagePendingSupportingFiles,
+  startContextGatheringSubmission,
 } from "./draft";
 
 describe("Context Gathering draft", () => {
@@ -49,7 +50,6 @@ describe("Context Gathering draft", () => {
       importantFeatures: "Repo validation and script generation.",
       productSummary: "Owlet turns apps into demo videos.",
       requestedDurationSeconds: 120,
-      supplementaryInformation: "",
       targetUsers: "Founders and hackathon builders.",
     });
     expect(draft.chatStep).toBe("details");
@@ -81,7 +81,6 @@ describe("Context Gathering draft", () => {
         name: "Anqi",
         productSummary: "MakeADemo creates demo videos from runnable apps.",
         requestedDurationSeconds: 60,
-        supplementaryInformation: "Use the launch deck tone.",
         targetUsers: "Founders and product teams.",
       },
       { now: () => "2026-06-07T17:05:00.000Z" },
@@ -95,7 +94,6 @@ describe("Context Gathering draft", () => {
       importantFeatures: "Context gathering and video rendering.",
       productSummary: "MakeADemo creates demo videos from runnable apps.",
       requestedDurationSeconds: 60,
-      supplementaryInformation: "Use the launch deck tone.",
       targetUsers: "Founders and product teams.",
     });
     expect(collected.chatStep).toBe("details");
@@ -110,8 +108,6 @@ describe("Context Gathering draft", () => {
       "Context gathering and video rendering.",
       "How long do you want the demo video to be? Choose between 30s-3min.",
       "1 minute",
-      "Any supplementary information?",
-      "Use the launch deck tone.",
     ]);
   });
 
@@ -129,7 +125,6 @@ describe("Context Gathering draft", () => {
         name: "Anqi",
         productSummary: "",
         requestedDurationSeconds: 60,
-        supplementaryInformation: "",
         targetUsers: "",
       },
       { now: () => "2026-06-07T17:05:00.000Z" },
@@ -143,7 +138,6 @@ describe("Context Gathering draft", () => {
       importantFeatures: "",
       productSummary: "",
       requestedDurationSeconds: 60,
-      supplementaryInformation: "",
       targetUsers: "",
     });
     expect(collected.contextTranscript.map((message) => message.text)).toEqual([
@@ -152,6 +146,30 @@ describe("Context Gathering draft", () => {
       "How long do you want the demo video to be? Choose between 30s-3min.",
       "1 minute",
     ]);
+  });
+
+  it("moves collected Project Intake to submitting before the API returns", () => {
+    const draft = collectIntakeDetails(
+      setRepoDetails(createInitialContextGatheringDraft(), {
+        repoUrl: "https://github.com/example/app",
+        repoVisibility: "public",
+      }),
+      {
+        email: "founder@example.com",
+        importantFeatures: "Repo validation.",
+        name: "Anqi",
+        productSummary: "MakeADemo creates demo videos.",
+        requestedDurationSeconds: 60,
+        targetUsers: "Builders.",
+      },
+      { now: () => "2026-06-07T17:05:00.000Z" },
+    );
+
+    const submitting = startContextGatheringSubmission(draft);
+
+    expect(submitting.chatStep).toBe("submitting");
+    expect(submitting.contact).toEqual(draft.contact);
+    expect(submitting.structuredContext).toEqual(draft.structuredContext);
   });
 
   it("rejects image and video Supporting Documents", () => {
@@ -228,6 +246,15 @@ describe("Context Gathering draft", () => {
       repoUrl: "https://github.com/example/private-app",
     });
     expect(canContinueFromRepoStep(draft, "")).toBe(true);
+  });
+
+  it("stores trimmed public repository URLs when continuing from the repo step", () => {
+    const draft = setRepoDetails(createInitialContextGatheringDraft(), {
+      repoUrl: " https://github.com/example/app ",
+      repoVisibility: "public",
+    });
+
+    expect(draft.repoUrl).toBe("https://github.com/example/app");
   });
 
   it("auto-selects the first repository returned for a connected GitHub installation", () => {

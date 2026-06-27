@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { DaytonaSdkPreparationWorkspaceProvider } from "./daytona-sdk-preparation-workspace-provider";
+import {
+  DaytonaSdkPreparationWorkspaceProvider,
+  createDaytonaSdkPreparationWorkspaceHandle,
+} from "./daytona-sdk-preparation-workspace-provider";
 
 describe("DaytonaSdkPreparationWorkspaceProvider", () => {
   it("creates a sandbox from the configured snapshot", async () => {
@@ -43,6 +46,69 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         },
       ],
     });
+  });
+
+  it("downloads captured workspace artifacts with Daytona fs.downloadFiles", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls),
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.downloadFiles?.([
+      {
+        destinationPath: "/tmp/capture/scene.webm",
+        sourcePath: "/workspace/.makeademo/capture/scene.webm",
+      },
+    ]);
+
+    expect(calls[1]).toEqual({
+      downloadFiles: {
+        files: [
+          {
+            destination: "/tmp/capture/scene.webm",
+            source: "/workspace/.makeademo/capture/scene.webm",
+          },
+        ],
+        timeoutSec: 0,
+      },
+    });
+  });
+
+  it("fails when Daytona cannot download a captured workspace artifact", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { downloadError: "missing file" }),
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.downloadFiles?.([
+        {
+          destinationPath: "/tmp/capture/scene.webm",
+          sourcePath: "/workspace/.makeademo/capture/scene.webm",
+        },
+      ]),
+    ).rejects.toThrow(
+      "Failed to download Daytona sandbox file /workspace/.makeademo/capture/scene.webm: missing file",
+    );
+  });
+
+  it("reconnects to an existing sandbox as a preparation workspace", async () => {
+    const calls: unknown[] = [];
+
+    const handle = await createDaytonaSdkPreparationWorkspaceHandle({
+      client: fakeClient(calls),
+      sandboxId: "sandbox_existing",
+    });
+    const result = await handle.workspace.execute("pwd");
+
+    expect(handle.id).toBe("sandbox_existing");
+    expect(result.stdout).toBe("ok");
+    expect(calls).toEqual([
+      { get: "sandbox_existing" },
+      { executeCommand: "pwd" },
+    ]);
   });
 
   it("executes commands, updates network settings, and deletes the sandbox", async () => {
@@ -118,6 +184,82 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ]);
   });
 
+  it("writes Pino-formatted sandbox logs through durable files", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls),
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.writeSandboxLog?.({
+      event: "repo-preparation.started",
+      stage: "repo-preparation",
+      timestamp: "2026-06-17T00:00:00.000Z",
+    });
+    await handle.workspace.writeSandboxLog?.({
+      event: "repo-preparation.succeeded",
+      stage: "repo-preparation",
+    });
+
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        {
+          executeCommand: expect.stringContaining(
+            "/tmp/makeademo/sandbox-log.jsonl",
+          ),
+        },
+        {
+          executeCommand: expect.stringContaining(
+            "/workspace/.makeademo/sandbox-log.jsonl",
+          ),
+        },
+        {
+          executeCommand: expect.stringContaining(
+            '"event":"repo-preparation.succeeded"',
+          ),
+        },
+        {
+          executeCommand: expect.stringContaining('"level":"info"'),
+        },
+        {
+          executeCommand: expect.stringContaining(
+            '"message":"repo-preparation.succeeded"',
+          ),
+        },
+        {
+          executeCommand: expect.stringContaining('"service":"makeademo"'),
+        },
+        {
+          executeCommand: expect.stringContaining(
+            '"eventTime":"2026-06-17T00:00:00.000Z"',
+          ),
+        },
+      ]),
+    );
+    const sandboxLogWrites = calls
+      .filter(
+        (call): call is { executeCommand: string } =>
+          typeof call === "object" &&
+          call !== null &&
+          "executeCommand" in call &&
+          typeof call.executeCommand === "string" &&
+          call.executeCommand.includes("/tmp/makeademo/sandbox-log.jsonl"),
+      )
+      .map((call) => call.executeCommand);
+    expect(sandboxLogWrites).not.toHaveLength(0);
+    for (const command of sandboxLogWrites) {
+      expect(countOccurrences(command, '"workspaceId"')).toBe(1);
+      expect(countOccurrences(command, '"message"')).toBe(1);
+      expect(command).not.toContain('"timestamp"');
+    }
+    expect(
+      calls.filter(
+        (call) =>
+          typeof call === "object" && call !== null && "createSession" in call,
+      ),
+    ).toHaveLength(0);
+  });
+
   it("disconnects active streaming commands before deleting the sandbox", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -159,6 +301,28 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
   });
 
+  it("fails fast when a streaming PTY never connects", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { ptyNeverConnects: true }),
+      ptyConnectionTimeoutMs: 1,
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.execute("opencode run hello", {
+        onStdout: () => {},
+      }),
+    ).rejects.toThrow("Daytona PTY did not connect within 1ms");
+
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        { waitForConnection: true },
+        { disconnect: true },
+      ]),
+    );
+  });
+
   it("continues when Daytona org policy rejects sandbox-level network overrides", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -186,10 +350,27 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
 
 function fakeClient(
   calls: unknown[],
-  options: { networkError?: Error; ptyWaitsForDisconnect?: boolean } = {},
+  options: {
+    downloadError?: string;
+    networkError?: Error;
+    ptyNeverConnects?: boolean;
+    ptyWaitsForDisconnect?: boolean;
+  } = {},
 ) {
   const sandbox = {
     fs: {
+      async downloadFiles(
+        files: Array<{ destination: string; source: string }>,
+        timeoutSec?: number,
+      ) {
+        calls.push({ downloadFiles: { files, timeoutSec } });
+        return files.map((file) => ({
+          ...(options.downloadError === undefined
+            ? {}
+            : { error: options.downloadError }),
+          source: file.source,
+        }));
+      },
       async uploadFiles(files: unknown[]) {
         calls.push({ uploadFiles: files });
       },
@@ -247,6 +428,9 @@ function fakeClient(
           },
           async waitForConnection() {
             calls.push({ waitForConnection: true });
+            if (options.ptyNeverConnects === true) {
+              await new Promise(() => {});
+            }
           },
         };
       },
@@ -307,5 +491,13 @@ function fakeClient(
     async delete(input: { id?: string; name?: string }) {
       calls.push({ delete: input.id ?? input.name });
     },
+    async get(idOrName: string) {
+      calls.push({ get: idOrName });
+      return sandbox;
+    },
   };
+}
+
+function countOccurrences(text: string, needle: string): number {
+  return text.split(needle).length - 1;
 }

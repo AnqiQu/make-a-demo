@@ -3,6 +3,10 @@ import { type PostgresJsDatabase, drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
 import type {
+  DemoRequestScriptStore,
+  SaveGeneratedScriptInput,
+} from "../../pipeline/04-script-generation/demo-request-script-store.interface";
+import type {
   DemoRequestFinalVideoStore,
   LinkFinalVideoInput,
   LinkedFinalVideoDemoRequest,
@@ -67,12 +71,29 @@ type SelectMakerEmailQuery = {
 };
 
 export class NeonDemoRequestFinalVideoStore
-  implements DemoRequestFinalVideoStore, DemoRequestStatusStore
+  implements
+    DemoRequestFinalVideoStore,
+    DemoRequestScriptStore,
+    DemoRequestStatusStore
 {
   private readonly db: DemoRequestUpdateDatabase;
 
   constructor(db: DemoRequestUpdateDatabase) {
     this.db = db;
+  }
+
+  async saveGeneratedScript(input: SaveGeneratedScriptInput): Promise<void> {
+    const updateQuery = this.db.update(demoRequests) as UpdateReturningQuery;
+    const [demoRequest] = await updateQuery
+      .set({
+        script: input.script,
+      })
+      .where(eq(demoRequests.id, input.demoRequestId))
+      .returning({ id: demoRequests.id });
+
+    if (!demoRequest) {
+      throw new Error("Failed to save generated script to Demo Request");
+    }
   }
 
   async linkFinalVideo(

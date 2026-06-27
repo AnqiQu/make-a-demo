@@ -7,13 +7,20 @@ import {
   normalizeSupportingDocument,
   readSupportingDocumentUpload,
 } from "../../pipeline/01-context-gathering/supporting-documents";
-import { createRepoPreparationAgent } from "../integrations/agents/repo-preparation-agent-factory";
+import { DaytonaOpenCodeAgent } from "../integrations/agents/daytona-opencode-agent";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import { DaytonaSandboxRunner } from "../integrations/sandbox/daytona-sandbox-runner";
+import {
+  createPipelineEventLogger,
+  createPrettyPipelineLogSink,
+} from "../logging/pipeline-event-logger";
 import { createOpenCodeOutputStream } from "./opencode-output-stream";
 import { runPipelineJob } from "./pipeline-orchestrator";
 import { collectStage1CliOptions } from "./stage1-cli-interactive";
-import { parseStage1CliArgs } from "./stage1-cli-options";
+import {
+  parseStage1CliArgs,
+  readStage1CliDefaults,
+} from "./stage1-cli-options";
 import { createStage1PipelineDependencies } from "./stage1-pipeline";
 import { readRepoSecurityInput } from "./stage1-repo-security";
 
@@ -30,9 +37,18 @@ const sandboxProvider = new DaytonaSdkPreparationWorkspaceProvider({
     ? {}
     : { snapshot: options.daytonaSnapshot }),
 });
+const cliLogger = createPipelineEventLogger({
+  base: { component: "stage1-cli" },
+  sinks: [
+    createPrettyPipelineLogSink({
+      write: (text) => process.stderr.write(text),
+    }),
+  ],
+});
 const repoSecurity = await readRepoSecurityInput(
   sandboxProvider,
   options.repoUrl,
+  { logger: cliLogger.child({ component: "repo-security-screen" }) },
 );
 const normalizedSupportingDocuments = await Promise.all(
   options.docs.map(async (docPath) => {
@@ -52,7 +68,7 @@ const openCodeOutput = createOpenCodeOutputStream({
   write: (text) => process.stdout.write(text),
 });
 
-const repoPreparationAgent = createRepoPreparationAgent({
+const openCodeAgent = new DaytonaOpenCodeAgent({
   daytonaApiKey,
   ...(options.daytonaSnapshot === undefined
     ? {}
@@ -73,12 +89,22 @@ const result = await runPipelineJob(
     workspaceId: options.workspaceId,
   },
   createStage1PipelineDependencies({
-    repoPreparationAgent,
+    repoPreparationAgent: openCodeAgent,
     sandboxRunner: new DaytonaSandboxRunner(),
+    scriptGenerationAgent: openCodeAgent,
   }),
   {
-    onProgress: (event) =>
-      process.stderr.write(`[pipeline] ${event.stage}: ${event.status}\n`),
+    onProgress: async (event) => {
+      await cliLogger.info(
+        {
+          event: "stage-progress",
+          message: `${event.stage} ${event.status}.`,
+          stage: event.stage,
+          status: event.status,
+        },
+        `${event.stage} ${event.status}.`,
+      );
+    },
   },
 );
 
@@ -89,8 +115,9 @@ if (result.status !== "succeeded") {
 }
 
 async function readOptions(args: string[]) {
+  const defaults = readStage1CliDefaults();
   if (args.length > 0) {
-    return parseStage1CliArgs(args);
+    return parseStage1CliArgs(args, defaults);
   }
 
   const readline = createInterface({
@@ -99,10 +126,13 @@ async function readOptions(args: string[]) {
   });
 
   try {
-    return await collectStage1CliOptions({
-      prompt: (question) => readline.question(question),
-      write: (message) => process.stdout.write(`${message}\n`),
-    });
+    return await collectStage1CliOptions(
+      {
+        prompt: (question) => readline.question(question),
+        write: (message) => process.stdout.write(`${message}\n`),
+      },
+      defaults,
+    );
   } finally {
     readline.close();
   }

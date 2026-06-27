@@ -1,11 +1,13 @@
+import { readSupportingDocumentUpload } from "./supporting-documents";
+
 type ProjectRepoVisibility = "private" | "public";
 
-type ContextTranscriptMessage = {
-  id: string;
-  promptId: string;
-  role: "assistant" | "user";
-  text: string;
-  timestamp: string;
+type SupportingFileSubmission = {
+  fileName: string;
+  mimeType: string;
+  r2Key: string;
+  r2Url: string;
+  sizeBytes: number;
 };
 
 export type ContextGatheringSubmission = {
@@ -13,7 +15,6 @@ export type ContextGatheringSubmission = {
     email: string;
     name: string;
   };
-  contextTranscript: ContextTranscriptMessage[];
   githubInstallationId?: string;
   repoUrl: string;
   repoVisibility: ProjectRepoVisibility;
@@ -23,18 +24,14 @@ export type ContextGatheringSubmission = {
     requestedDurationSeconds: number;
     targetUsers: string;
   };
-  supportingFiles: Array<{
-    fileName: string;
-    mimeType: string;
-    r2Key: string;
-    r2Url: string;
-    sizeBytes: number;
-  }>;
+  supportingFiles: SupportingFileSubmission[];
 };
 
 type ContextGatheringProjectContext = {
-  structuredContext: ContextGatheringSubmission["structuredContext"];
-  transcript: ContextTranscriptMessage[];
+  importantFeatures: string;
+  productSummary: string;
+  requestedDurationSeconds: number;
+  targetUsers: string;
 };
 
 export type ContextGatheringStoreInput = {
@@ -76,13 +73,10 @@ export async function submitContextGathering(
 
   return dependencies.store.createQueuedProject({
     project: {
-      context: {
-        structuredContext: input.structuredContext,
-        transcript: input.contextTranscript,
-      },
+      context: createProjectContext(input.structuredContext),
       repoUrl: input.repoUrl,
       repoVisibility: input.repoVisibility,
-      supportingFiles: input.supportingFiles.map((file) => file.r2Url),
+      supportingFiles: input.supportingFiles.map(serializeSupportingFile),
       ...(input.githubInstallationId === undefined
         ? {}
         : { githubInstallationId: input.githubInstallationId }),
@@ -91,6 +85,34 @@ export async function submitContextGathering(
       email: input.contact.email,
       name: input.contact.name,
     },
+  });
+}
+
+function createProjectContext(
+  input: ContextGatheringSubmission["structuredContext"],
+): ContextGatheringProjectContext {
+  return {
+    importantFeatures: input.importantFeatures,
+    productSummary: input.productSummary,
+    requestedDurationSeconds: input.requestedDurationSeconds,
+    targetUsers: input.targetUsers,
+  };
+}
+
+function serializeSupportingFile(file: SupportingFileSubmission) {
+  const upload = readSupportingDocumentUpload({
+    artifactId: readNonEmptyString(file.r2Url, "r2Url"),
+    fileName: file.fileName,
+    mimeType: file.mimeType,
+    sizeBytes: file.sizeBytes,
+  });
+
+  return JSON.stringify({
+    fileName: upload.fileName,
+    mimeType: upload.mimeType,
+    r2Key: readNonEmptyString(file.r2Key, "r2Key"),
+    r2Url: upload.artifactId,
+    sizeBytes: upload.sizeBytes,
   });
 }
 
@@ -111,8 +133,20 @@ function validateSubmission(input: ContextGatheringSubmission) {
     throw new Error("name is required");
   }
 
+  if (!Array.isArray(input.supportingFiles)) {
+    throw new Error("supportingFiles must be an array");
+  }
+
   const duration = input.structuredContext.requestedDurationSeconds;
   if (!Number.isFinite(duration) || duration < 30 || duration > 180) {
     throw new Error("requestedDurationSeconds must be between 30 and 180");
   }
+}
+
+function readNonEmptyString(value: unknown, key: string) {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${key} must be a non-empty string`);
+  }
+
+  return value;
 }

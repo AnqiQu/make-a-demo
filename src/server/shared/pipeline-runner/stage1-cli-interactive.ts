@@ -1,4 +1,4 @@
-import type { Stage1CliOptions } from "./stage1-cli-options";
+import type { Stage1CliDefaults, Stage1CliOptions } from "./stage1-cli-options";
 
 type Stage1CliPrompt = (question: string) => Promise<string>;
 
@@ -9,6 +9,7 @@ export type Stage1CliInteractiveIO = {
 
 export async function collectStage1CliOptions(
   io: Stage1CliInteractiveIO,
+  defaults: Stage1CliDefaults = {},
 ): Promise<Stage1CliOptions> {
   io.write("MakeADemo Stage 1 CLI");
   io.write("Press Enter to accept defaults where shown.");
@@ -32,20 +33,16 @@ export async function collectStage1CliOptions(
       "Supporting document paths, separated by commas (optional): ",
     ),
   );
-  const providerID = await promptWithDefault(io, "Model provider", "openai");
-  const modelID = await promptWithDefault(io, "Model ID", "gpt-5.5");
-  const workspaceId = await promptWithDefault(
-    io,
-    "Workspace ID",
-    createWorkspaceId(repoUrl),
-  );
   return {
+    ...(defaults.daytonaSnapshot === undefined
+      ? {}
+      : { daytonaSnapshot: defaults.daytonaSnapshot }),
     docs,
     features,
-    modelID,
-    providerID,
+    modelID: "gpt-5.5",
+    providerID: "openai",
     repoUrl,
-    workspaceId,
+    workspaceId: createWorkspaceId(repoUrl),
   };
 }
 
@@ -64,15 +61,6 @@ async function promptUntilValid(
 
     io.write(invalidMessage);
   }
-}
-
-async function promptWithDefault(
-  io: Stage1CliInteractiveIO,
-  label: string,
-  defaultValue: string,
-): Promise<string> {
-  const value = (await io.prompt(`${label} [${defaultValue}]: `)).trim();
-  return value.length === 0 ? defaultValue : value;
 }
 
 function splitCsv(value: string): string[] {

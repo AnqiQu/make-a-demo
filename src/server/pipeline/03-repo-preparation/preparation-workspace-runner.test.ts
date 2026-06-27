@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   type PreparationWorkspaceProvider,
@@ -25,24 +25,19 @@ describe("runInPreparationWorkspace", () => {
   });
 
   it("blocks network and destroys the workspace when the agent run times out", async () => {
-    vi.useFakeTimers();
     const events: string[] = [];
     const provider = fakeProvider(events);
-    const runPromise = runInPreparationWorkspace({
+    const result = await runInPreparationWorkspace({
       provider,
       run: () => new Promise(() => undefined),
-      timeoutMs: 10,
+      timeoutMs: 0,
     });
 
-    await vi.advanceTimersByTimeAsync(10);
-    const result = await runPromise;
-
     expect(result).toEqual({
-      reason: "Repo Preparation agent timed out after 10ms.",
+      reason: "Repo Preparation agent timed out after 0ms.",
       status: "timed-out",
     });
     expect(events).toEqual(["create", "network:blocked", "destroy"]);
-    vi.useRealTimers();
   });
 });
 

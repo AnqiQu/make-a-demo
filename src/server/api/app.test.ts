@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { createPipelineEventLogger } from "../shared/logging/pipeline-event-logger";
 import { createApiApp } from "./app";
 
 describe("Context Gathering API", () => {
@@ -60,6 +61,72 @@ describe("Context Gathering API", () => {
     expect(apiRouteResponse.status).toBe(404);
     await expect(apiRouteResponse.json()).resolves.toEqual({
       error: "Not found",
+    });
+  });
+
+  it("logs completed API requests through Pino JSON", async () => {
+    const lines: string[] = [];
+    const app = createApiApp({
+      ...createDefaultDependencies(),
+      logger: createPipelineEventLogger({
+        base: { component: "api" },
+        sinks: [{ write: (line) => void lines.push(line) }],
+        timestamp: () => "2026-06-17T00:00:00.000Z",
+      }),
+    });
+
+    const response = await app.fetch(
+      new Request("http://localhost/api/github/install-url?state=draft-1"),
+    );
+
+    expect(response.status).toBe(200);
+    expect(lines.map((line) => JSON.parse(line))).toEqual([
+      {
+        component: "api",
+        durationMs: expect.any(Number),
+        event: "api.request.completed",
+        level: "info",
+        message: "API request completed.",
+        method: "GET",
+        path: "/api/github/install-url",
+        service: "makeademo",
+        status: 200,
+        time: "2026-06-17T00:00:00.000Z",
+      },
+    ]);
+  });
+
+  it("logs API request failures without query strings or request bodies", async () => {
+    const lines: string[] = [];
+    const app = createApiApp({
+      ...createDefaultDependencies(),
+      logger: createPipelineEventLogger({
+        base: { component: "api" },
+        sinks: [{ write: (line) => void lines.push(line) }],
+        timestamp: () => "2026-06-17T00:00:00.000Z",
+      }),
+    });
+
+    const response = await app.fetch(
+      new Request(
+        "http://localhost/api/github/authorization-url?providerApiKey=secret",
+      ),
+    );
+
+    expect(response.status).toBe(400);
+    const rawLog = lines.join("");
+    expect(rawLog).not.toContain("providerApiKey");
+    expect(rawLog).not.toContain("secret");
+    expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
+      component: "api",
+      errorMessage: "GitHub authorization is not configured",
+      errorType: "Error",
+      event: "api.request.failed",
+      level: "error",
+      message: "API request failed.",
+      method: "GET",
+      path: "/api/github/authorization-url",
+      status: 400,
     });
   });
 
@@ -230,6 +297,12 @@ describe("Context Gathering API", () => {
         async createQueuedProject(input) {
           expect(input.user.email).toBe("anqi@example.com");
           expect(input.project.repoVisibility).toBe("public");
+          expect(input.project.context).toEqual({
+            importantFeatures: "script generation",
+            productSummary: "A demo generator.",
+            requestedDurationSeconds: 60,
+            targetUsers: "Founders",
+          });
           return {
             demoRequestId: "demo-request-1",
             projectId: "project-1",
@@ -253,7 +326,6 @@ describe("Context Gathering API", () => {
       new Request("http://localhost/api/context-gathering/submit", {
         body: JSON.stringify({
           contact: { email: "anqi@example.com", name: "Anqi" },
-          contextTranscript: [],
           repoUrl: "https://github.com/example/app",
           repoVisibility: "public",
           structuredContext: {

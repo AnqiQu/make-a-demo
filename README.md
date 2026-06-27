@@ -26,7 +26,7 @@ Open `http://localhost:5173`.
 
 Agent skills are pinned in `skills-lock.json` but installed copies are not committed. `.agents/` is local generated state and is ignored by git.
 
-Agent-facing CLI tools are pinned in `tools-lock.json`. Railway is installed through the pinned `@railway/cli` package in `package.json`/`bun.lock`; Daytona is pinned to exact GitHub release assets and checksums because it is not distributed as an npm CLI.
+Agent-facing CLI tools are tracked in `tools-lock.json`. Railway is installed through the pinned `@railway/cli` package in `package.json`/`bun.lock`; Daytona follows the latest GitHub release because it is not distributed as an npm CLI.
 
 Restore the repo-level skills locally before using OpenCode in this repo:
 
@@ -175,7 +175,7 @@ The primary local pipeline command runs from repository intake through final vid
 2. Repo Security Screen
 3. Repo Preparation with OpenCode
 4. Project Validation
-5. Video Script Package generation
+5. Video Script Package generation with the same OpenCode session
 6. Footage Capture
 7. Compositing
 
@@ -199,13 +199,10 @@ bun run pipeline:run -- \
 Optional flags:
 
 ```bash
---provider openai
---model gpt-5.5
---daytona-snapshot makeademo-opencode-v3
---workspace-id workspace-test
+--doc ./optional-notes.md
 ```
 
-Full pipeline runs require `DAYTONA_API_KEY` and `OPENAI_API_KEY`. Repo Security Screen, Repo Preparation, and Project Validation run through Daytona-backed sandboxes using the backend Daytona seam. Repo Preparation runs OpenCode inside Daytona and streams concise progress to the terminal.
+Full pipeline runs require `DAYTONA_API_KEY` and `OPENAI_API_KEY`. Repo Security Screen, Repo Preparation, Project Validation, and Script Generation run through Daytona-backed sandboxes using the backend Daytona seam. Repo Preparation runs OpenCode inside Daytona and streams concise progress to the terminal. After backend validation passes, Script Generation resumes the same OpenCode session with a new read-only prompt so the agent keeps the repo context it discovered during preparation while emitting only the capture-ready script artifact.
 
 Each full run writes a local run directory under `--output-root`:
 
@@ -214,6 +211,8 @@ Each full run writes a local run directory under `--output-root`:
   full-pipeline-result.json
   opencode-raw-output.jsonl
   pipeline-log.jsonl
+  script-generation-resume.json
+  script-generation-opencode-raw-output.jsonl
   video-script-package.json
   capture/capture/capture-manifest.json
   composite/composite/composite-manifest.json
@@ -230,10 +229,20 @@ Capture manifest: <path-to-capture-manifest.json>
 Composite manifest: <path-to-composite-manifest.json>
 Log: <path-to-pipeline-log.jsonl>
 Raw OpenCode log: <path-to-opencode-raw-output.jsonl>
+Script Generation raw OpenCode log: <path-to-script-generation-opencode-raw-output.jsonl>
 Result JSON: <path-to-full-pipeline-result.json>
 ```
 
-`pipeline-log.jsonl` is the structured high-level pipeline event log. `opencode-raw-output.jsonl` is intentionally more verbose than terminal output: it records raw OpenCode stdout/stderr lines with timestamps and parsed tool metadata when available.
+`pipeline-log.jsonl` is the structured high-level pipeline event log. `opencode-raw-output.jsonl` is intentionally more verbose than terminal output: it records raw OpenCode stdout/stderr lines with timestamps and parsed tool metadata when available. `script-generation-opencode-raw-output.jsonl` contains the Script Generation OpenCode turn separately for debugging script quality and repair loops.
+
+After validated Repo Preparation, full runs also write `script-generation-resume.json`. Use it to rerun only Script Generation against the retained Daytona workspace and existing OpenCode session without rebuilding the demo:
+
+```bash
+bun run scriptgen:run -- \
+  --resume .makeademo-full-pipeline-runs/full-pipeline-<timestamp>/script-generation-resume.json
+```
+
+The resume command writes a fresh `video-script-package.json` and `script-generation-opencode-raw-output.jsonl` in the same run directory.
 
 If the pipeline fails, `full-pipeline-result.json` is still written with failure status, failure details, and available log paths.
 

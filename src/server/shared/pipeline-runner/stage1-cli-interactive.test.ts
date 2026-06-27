@@ -8,24 +8,26 @@ describe("collectStage1CliOptions", () => {
       "https://github.com/example/app",
       "validation dashboard, script package",
       "./brief.md, ./setup-notes.txt",
-      "openai",
-      "gpt-5.5",
-      "workspace-demo",
     ];
 
-    const options = await collectStage1CliOptions({
-      prompt: async () => answers.shift() ?? "",
-      write: () => {},
-    });
+    const options = await collectStage1CliOptions(
+      {
+        prompt: async () => answers.shift() ?? "",
+        write: () => {},
+      },
+      { daytonaSnapshot: "makeademo-opencode" },
+    );
 
     expect(options).toEqual({
+      daytonaSnapshot: "makeademo-opencode",
       docs: ["./brief.md", "./setup-notes.txt"],
       features: ["validation dashboard", "script package"],
       modelID: "gpt-5.5",
       providerID: "openai",
       repoUrl: "https://github.com/example/app",
-      workspaceId: "workspace-demo",
+      workspaceId: expect.stringMatching(/^workspace-example-app-\d+$/),
     });
+    expect(answers).toEqual([]);
   });
 
   it("re-prompts with guidance when an answer is invalid", async () => {
@@ -34,9 +36,6 @@ describe("collectStage1CliOptions", () => {
       "https://github.com/example/app",
       "",
       "validation dashboard",
-      "",
-      "",
-      "",
       "",
     ];
     const messages: string[] = [];

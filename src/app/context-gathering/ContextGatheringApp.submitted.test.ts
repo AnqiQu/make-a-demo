@@ -19,50 +19,230 @@ describe("ContextGatheringApp", () => {
     );
   });
 
-  it("brands the product as MakeADemo with Owlet attribution", () => {
+  it("brands the product as MakeADemo without Owlet attribution", () => {
     const html = renderToStaticMarkup(createElement(ContextGatheringApp));
 
     expect(html).toContain("MakeADemo");
-    expect(html).toContain("by Owlet");
+    expect(html).not.toContain("by Owlet");
     expect(html).toContain("Make me a demo");
     expect(html).not.toContain("A peak into our personalised demo machine");
     expect(html).not.toContain("Let&#x27;s Hoot");
   });
 
-  it("keeps the Owlet attribution in one stable brand position across Context Gathering pages", () => {
+  it("does not reserve layout for removed Owlet attribution", () => {
     const styles = readFileSync(
       new URL("../styles.css", import.meta.url),
       "utf8",
     );
 
-    expect(styles).not.toContain(".owlet-shell-details .brand-attribution");
-    expect(styles).not.toContain(".owlet-shell-submitted .brand-attribution");
+    expect(styles).not.toContain("brand-attribution");
   });
 
-  it("keeps repository entry choices on one row above the compact demo submit button", () => {
+  it("draws six filled background clouds from compact pixel blocks at irregular sky positions", () => {
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+    const cloudRule = styles.match(/\.owlet-shell::before\s*\{([^}]*)\}/)?.[1];
+    const cloudBlockWidths = [
+      ...(cloudRule?.matchAll(/(\d+)px\s+\d+px/g) ?? []),
+    ].map((match) => Number.parseInt(match[1] ?? "", 10));
+
+    expect(cloudBlockWidths).toHaveLength(54);
+    expect(cloudBlockWidths.filter((width) => width >= 90)).toHaveLength(0);
+    expect(cloudBlockWidths.filter((width) => width <= 64).length).toBe(54);
+    expect(
+      cloudRule?.match(/calc\((?:4|18|34|57|71|86)vw/g) ?? [],
+    ).toHaveLength(54);
+  });
+
+  it("draws six small stars in the sky", () => {
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+    const shellRule = styles.slice(
+      styles.indexOf(".owlet-shell {"),
+      styles.indexOf(".ground-bushes"),
+    );
+
+    expect(
+      shellRule.match(/linear-gradient\(#fff5a6, #fff5a6\)/g),
+    ).toHaveLength(6);
+  });
+
+  it("places the twelve illustrated ground bushes in the requested order", () => {
+    const html = renderToStaticMarkup(createElement(ContextGatheringApp));
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+    const shellRule = styles.slice(
+      styles.indexOf(".owlet-shell {"),
+      styles.indexOf(".owlet-shell::before"),
+    );
+    const bushSources = [
+      ...html.matchAll(/<img[^>]+class="ground-bush[^>]+>/g),
+    ].map(([image]) => image.match(/src="([^"]+)"/)?.[1]);
+
+    expect(bushSources).toEqual(
+      [5, 2, 6, 1, 3, 4, 2, 4, 1, 6, 5, 3].map(
+        (number) => `/assets/background/bushes/bush_${number}.svg`,
+      ),
+    );
+    expect(shellRule).not.toContain("135deg");
+  });
+
+  it("uses one shared size and keeps lowered ground bushes behind the brown strip", () => {
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+    const bushesRule = styles.match(/\.ground-bushes\s*\{([^}]*)\}/)?.[1];
+    const bushRule = styles.match(/\.ground-bush\s*\{([^}]*)\}/)?.[1];
+    const groundStripRule = styles.match(
+      /\.owlet-shell::after\s*\{([^}]*)\}/,
+    )?.[1];
+    const positionRules = styles.match(/\.ground-bush-\d{2}\s*\{[^}]*\}/g);
+
+    expect(bushesRule).toContain("z-index: 0;");
+    expect(groundStripRule).toContain("z-index: 1;");
+    expect(bushRule).toContain("width: clamp(96px, 15vw, 240px);");
+    expect(bushRule).toContain("transform: translateY(10%);");
+    expect(positionRules).toHaveLength(12);
+    expect(
+      new Set(positionRules?.map((rule) => rule.match(/bottom: (\d+)px/)?.[1]))
+        .size,
+    ).toBeGreaterThan(3);
+    expect(positionRules?.[4]).toContain("transform: translateY(15%);");
+    expect(positionRules?.[11]).toContain("right: -5vw;");
+    expect(positionRules?.[11]).toContain("transform: translateY(15%);");
+  });
+
+  it("places repo submission beside the URL field with one GitHub access guidance sentence", () => {
     const html = renderToStaticMarkup(createElement(ContextGatheringApp));
     const styles = readFileSync(
       new URL("../styles.css", import.meta.url),
       "utf8",
     );
 
-    expect(html).toContain('class="repo-connect-row"');
-    expect(html).toContain("OR");
+    expect(html).toContain('class="repo-url-submit-row"');
     expect(html).toContain('class="primary-hoot repo-submit-button"');
     expect(html).toContain('aria-label="Make me a demo"');
-    expect(styles).toContain("width: min(100%, 68rem);");
-    expect(styles).toContain("width: max-content;");
+    expect(html).toContain(
+      "Paste a public GitHub URL, or connect GitHub to use a private repository.",
+    );
+    expect(html).toContain(
+      "We currently support web apps built with JavaScript or TypeScript.",
+    );
+    expect(html).not.toContain('class="repo-or-divider"');
+    expect(html).not.toContain(">OR<");
+    expect(html).not.toContain("Paste a public GitHub URL</p>");
+    expect(styles).toContain(".repo-guidance,\n.repo-help");
+    expect(styles).toContain("grid-template-columns: minmax(0, 1fr) auto;");
     expect(styles).toContain("min-width: 0;");
+  });
+
+  it("does not apply hover feedback to disabled submit buttons", () => {
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+
+    expect(styles).toContain(".primary-hoot:not(:disabled):hover");
+    expect(styles).not.toMatch(/\.primary-hoot:hover/);
+  });
+
+  it("keeps disabled buttons fully opaque", () => {
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+    const disabledButtonRule = styles.match(
+      /button:disabled\s*\{([^}]*)\}/,
+    )?.[1];
+
+    expect(disabledButtonRule).toContain("opacity: 1;");
+  });
+
+  it("uses the original orange for every submit button", () => {
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+    const submitButtonRule = styles.match(/\.primary-hoot\s*\{([^}]*)\}/)?.[1];
+
+    expect(submitButtonRule).toContain("background: #ffb22d;");
+  });
+
+  it("uses the requested purple for the GitHub connection button", () => {
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+    const githubButtonRule = styles.match(/\.github-button\s*\{([^}]*)\}/)?.[1];
+
+    expect(githubButtonRule).toContain("background: #26115f;");
+  });
+
+  it("gives each Context Gathering button a color-matched border-join bevel that inverts only while clicked", () => {
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+    const bevelRule = styles.match(
+      /\.owlet-shell button::after\s*\{([^}]*)\}/,
+    )?.[1];
+    const activeBevelRule = styles.match(
+      /\.owlet-shell button:not\(:disabled\):active::after\s*\{([^}]*)\}/,
+    )?.[1];
+
+    expect(bevelRule).toContain("border-style: solid;");
+    expect(bevelRule).toContain("border-width: var(--button-bevel-size);");
+    expect(bevelRule?.replace(/\s+/g, " ")).toContain(
+      "border-color: var(--button-bevel-highlight) var(--button-bevel-shadow) var(--button-bevel-shadow) var(--button-bevel-highlight);",
+    );
+    expect(bevelRule).not.toContain("mask-composite");
+    expect(styles).not.toContain(
+      ".owlet-shell button:not(:disabled):hover::after",
+    );
+    expect(activeBevelRule?.replace(/\s+/g, " ")).toContain(
+      "border-color: var(--button-bevel-shadow) var(--button-bevel-highlight) var(--button-bevel-highlight) var(--button-bevel-shadow);",
+    );
+    expect(activeBevelRule).toContain("transition: none;");
+    expect(styles).toMatch(
+      /\.primary-hoot:not\(:disabled\):hover\s*\{[^}]*box-shadow: 5px 5px 0 #111827;[^}]*transform: translate\(3px, 3px\);/s,
+    );
+    expect(styles).toMatch(
+      /\.primary-hoot\s*\{[^}]*--button-bevel-highlight: #ffe781;[^}]*--button-bevel-shadow: #df6d18;/s,
+    );
+    expect(styles).toMatch(
+      /\.github-button\s*\{[^}]*--button-bevel-highlight: #5b3da1;[^}]*--button-bevel-shadow: #10072a;/s,
+    );
+    expect(styles).toMatch(
+      /\.github-button-connected\s*\{[^}]*--button-bevel-highlight: #4fba78;[^}]*--button-bevel-shadow: #075229;/s,
+    );
+  });
+
+  it("keeps the repository text box visually stable while it is focused", () => {
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+
+    expect(styles).not.toContain(".repo-url-input:focus-within");
   });
 
   it("uses the repository URL field as the connected repository dropdown", () => {
     const html = renderToStaticMarkup(
       createElement(RepoConnectionFields, {
+        canSubmitRepository: true,
         githubInstallationId: "installation-123",
         isLoadingRepositories: false,
         onConnectGitHub: () => undefined,
         onRepoInputChange: () => undefined,
         onRepositorySelect: () => undefined,
+        onSubmitRepository: () => undefined,
         repoInput: "",
         repositories: [
           {
@@ -90,22 +270,21 @@ describe("ContextGatheringApp", () => {
     expect(html).toContain('class="repo-select-chevron"');
     expect(html).not.toContain('class="repo-select-field"');
     expect(html).not.toContain('class="button-icon"');
-    expect(html).not.toContain(">OR<");
-    expect(html).toContain('class="or-label or-label-connected"');
-    expect(styles).toContain(
-      "grid-template-columns: minmax(0, 1fr) auto auto;",
-    );
+    expect(html).not.toContain('class="repo-or-divider"');
+    expect(styles).toContain("grid-template-columns: minmax(0, 1fr) auto;");
     expect(styles).toContain("grid-column: 3;");
   });
 
   it("shows GitHub as connected while connected repositories are still loading", () => {
     const html = renderToStaticMarkup(
       createElement(RepoConnectionFields, {
+        canSubmitRepository: false,
         githubInstallationId: "installation-123",
         isLoadingRepositories: true,
         onConnectGitHub: () => undefined,
         onRepoInputChange: () => undefined,
         onRepositorySelect: () => undefined,
+        onSubmitRepository: () => undefined,
         repoInput: "",
         repositories: [],
         selectedRepoUrl: "",
@@ -113,14 +292,63 @@ describe("ContextGatheringApp", () => {
     );
 
     expect(html).toContain("Connected");
+    expect(html).toContain("github-connected-check");
     expect(html).toContain("Loading repositories...");
-    expect(html).not.toContain("Connect GitHub");
+    expect(html).not.toContain(">Connect GitHub</button>");
     expect(html).not.toContain("https://github.com/org/repo");
+  });
+
+  it("lets users reconnect GitHub when connected repositories fail to load", () => {
+    const html = renderToStaticMarkup(
+      createElement(RepoConnectionFields, {
+        canSubmitRepository: false,
+        githubInstallationId: "installation-123",
+        isLoadingRepositories: false,
+        onConnectGitHub: () => undefined,
+        onRepoInputChange: () => undefined,
+        onRepositorySelect: () => undefined,
+        onSubmitRepository: () => undefined,
+        repoInput: "",
+        repositories: [],
+        selectedRepoUrl: "",
+      }),
+    );
+
+    expect(html).toContain("No repositories found");
+    expect(html).toContain("Reconnect GitHub");
+    expect(html).toContain(
+      '<button class="github-button github-button-connected" type="button">',
+    );
   });
 });
 
 describe("ContextDetailsForm", () => {
-  it("renders the combined second page as a halfway-progress form", () => {
+  it("uses a fully opaque, ten-percent-lighter background for the Context Gathering form", () => {
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+    const formRule = styles.match(/\.details-form\s*\{([^}]*)\}/)?.[1];
+
+    expect(formRule).toContain("background: #fffbe6;");
+    expect(formRule).not.toContain("rgba(");
+  });
+
+  it("keeps the Context Gathering form close to the title", () => {
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+    const detailsBrandRule = styles.match(
+      /\.owlet-shell-details \.brand\s*\{([^}]*)\}/,
+    )?.[1];
+
+    expect(detailsBrandRule).toContain(
+      "margin-bottom: clamp(0.75rem, 2vh, 1.5rem);",
+    );
+  });
+
+  it("shows example text for every Context Gathering text field", () => {
     const html = renderToStaticMarkup(
       createElement(ContextDetailsForm, {
         form: {
@@ -129,7 +357,6 @@ describe("ContextDetailsForm", () => {
           name: "",
           productSummary: "",
           requestedDurationSeconds: 60,
-          supplementaryInformation: "",
           targetUsers: "",
         },
         isSubmitting: false,
@@ -143,6 +370,113 @@ describe("ContextDetailsForm", () => {
       }),
     );
 
+    expect(html).toContain('placeholder="Katherine Johnson"');
+    expect(html).toContain('placeholder="you@domain.com"');
+    expect(html).toContain(
+      'placeholder="A few sentences describing what your product does..."',
+    );
+    expect(html).toContain('placeholder="All humans in the world?"');
+    expect(html).toContain(
+      'placeholder="Most important product features, separated by commas"',
+    );
+  });
+
+  it("enables submission only after name and email are filled in", () => {
+    const renderForm = (name: string, email: string) =>
+      renderToStaticMarkup(
+        createElement(ContextDetailsForm, {
+          form: {
+            email,
+            importantFeatures: "",
+            name,
+            productSummary: "",
+            requestedDurationSeconds: 60,
+            targetUsers: "",
+          },
+          isSubmitting: false,
+          isUploading: false,
+          onBack: () => undefined,
+          onFieldChange: () => undefined,
+          onRemovePendingFile: () => undefined,
+          onStageFiles: () => undefined,
+          onSubmit: () => undefined,
+          pendingSupportingFiles: [],
+        }),
+      );
+
+    const incompleteHtml = renderForm("Katherine Johnson", " ");
+    const completeHtml = renderForm("Katherine Johnson", "you@domain.com");
+
+    expect(incompleteHtml).toContain(
+      'aria-label="Submit demo intake" class="primary-hoot details-submit-button" disabled=""',
+    );
+    expect(completeHtml).not.toContain(
+      'aria-label="Submit demo intake" class="primary-hoot details-submit-button" disabled=""',
+    );
+  });
+
+  it("places back and submit controls at opposite bottom corners of the form", () => {
+    const html = renderToStaticMarkup(
+      createElement(ContextDetailsForm, {
+        form: {
+          email: "you@domain.com",
+          importantFeatures: "",
+          name: "Katherine Johnson",
+          productSummary: "",
+          requestedDurationSeconds: 60,
+          targetUsers: "",
+        },
+        isSubmitting: false,
+        isUploading: false,
+        onBack: () => undefined,
+        onFieldChange: () => undefined,
+        onRemovePendingFile: () => undefined,
+        onStageFiles: () => undefined,
+        onSubmit: () => undefined,
+        pendingSupportingFiles: [],
+      }),
+    );
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+
+    expect(html).toContain(
+      'class="details-form-actions"><button aria-label="Back to repository"',
+    );
+    expect(html.indexOf('class="details-form-actions"')).toBeGreaterThan(
+      html.indexOf('class="details-supporting-documents"'),
+    );
+    expect(styles).toContain(".details-form-actions");
+    expect(styles).toContain("justify-content: space-between;");
+  });
+
+  it("renders the combined second page as a halfway-progress form", () => {
+    const html = renderToStaticMarkup(
+      createElement(ContextDetailsForm, {
+        form: {
+          email: "",
+          importantFeatures: "",
+          name: "",
+          productSummary: "",
+          requestedDurationSeconds: 60,
+          targetUsers: "",
+        },
+        isSubmitting: false,
+        isUploading: false,
+        onBack: () => undefined,
+        onFieldChange: () => undefined,
+        onRemovePendingFile: () => undefined,
+        onStageFiles: () => undefined,
+        onSubmit: () => undefined,
+        pendingSupportingFiles: [],
+      }),
+    );
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+
     expect(html).toContain('role="progressbar"');
     expect(html).toContain('aria-valuenow="50"');
     expect(html).toContain('aria-label="Back to repository"');
@@ -154,14 +488,28 @@ describe("ContextDetailsForm", () => {
     expect(html).toContain(
       'aria-label="Accepted file types: PDF, PPTX, DOCX, TXT, MD"',
     );
-    expect(html).toContain("Let&#x27;s go");
+    expect(html).toContain('aria-label="Submit demo intake"');
+    expect(html).toContain('class="primary-hoot details-submit-button"');
+    expect(html).toContain("lucide-arrow-right");
+    expect(styles).toContain(".repo-submit-button,\n.details-submit-button");
+    expect(styles).toContain("height: 3.9rem;");
+    expect(styles).toContain("justify-self: center;");
+    expect(styles).toContain("width: 5.4rem;");
+    expect(styles).toContain(".details-form .file-type-tooltip");
+    expect(styles).toContain("background: transparent;");
+    expect(styles).toContain(".details-form .file-type-tooltip::after");
+    expect(styles).toContain("display: none;");
+    expect(styles).not.toContain(
+      ".details-form button:not(.details-submit-button)",
+    );
     expect(html.match(/required=""/g)?.length).toBe(2);
+    expect(html).not.toContain("Let&#x27;s go");
+    expect(html).not.toContain("Starting...");
     expect(html).not.toContain("Tell us what the demo should show");
     expect(html).not.toContain("Supporting Documents");
     expect(html).not.toContain("<h2>Supporting documents</h2>");
     expect(html).not.toContain("Drop anything relevant here");
     expect(html).not.toContain("ZIP");
-    expect(html).not.toContain("Any supplementary information?");
     expect(html).not.toContain("Chat response");
     expect(html).not.toContain("<textarea");
   });
@@ -175,7 +523,6 @@ describe("ContextDetailsForm", () => {
           name: "",
           productSummary: "",
           requestedDurationSeconds: 60,
-          supplementaryInformation: "",
           targetUsers: "",
         },
         isSubmitting: false,
@@ -213,8 +560,15 @@ describe("SubmittedDemoPanel", () => {
         progress: { status: "processing" },
       }),
     );
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+    const loadingRingRule = styles.match(/\.loading-ring\s*\{([^}]*)\}/)?.[1];
 
     expect(html).toContain("Your demo is processing");
+    expect(loadingRingRule).toContain("border: 0.5rem solid #df6d18;");
+    expect(loadingRingRule).not.toContain("border-top-color");
     expect(html).not.toContain("Request");
     expect(html).not.toContain("demo-request");
   });

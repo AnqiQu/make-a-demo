@@ -2,7 +2,7 @@
 
 Repo skills are pinned in `skills-lock.json`. Do not commit installed skill copies under `.agents/`; that directory is local generated state and is ignored by git.
 
-Agent-facing CLI tools are pinned separately in `tools-lock.json`. `railway` is installed from the pinned `@railway/cli` package in `package.json`/`bun.lock`; `daytona` is pinned to an exact GitHub release asset and checksum because it is not distributed as an npm CLI.
+Agent-facing CLI tools are tracked separately in `tools-lock.json`. `railway` is installed from the pinned `@railway/cli` package in `package.json`/`bun.lock`; `daytona` follows the latest GitHub release because it is not distributed as an npm CLI.
 
 Before using repo-level skills in OpenCode, restore them locally:
 
@@ -22,7 +22,7 @@ This repo uses the default triage label vocabulary. See `docs/agents/triage-labe
 
 ### Domain docs
 
-This is a single-context repo. See `docs/agents/domain.md`. You should always take a look at this info BEFORE DOING ANYTHING to facilitate better communication. 
+This is a single-context repo. See `docs/agents/domain.md`. You should always take a look at this info BEFORE DOING ANYTHING to facilitate better communication.
 
 ## Project Introduction
 
@@ -51,7 +51,7 @@ For runtime-code changes, always use the `tdd` skill if you have to it. If you d
 - When exporting a new interface, add a docstring that explains what implementations should do and the invariants they must uphold.
 - Run `bun run lint`, `bun run typecheck`, `bun run test`, `bun run knip`, and `bun run graph:deps` before considering code changes complete.
 
-### Commit Messages
+### Commit
 
 - Keep commit messages concise, easily readable, and very specific.
 - Use one of these prefixes: `feature:`, `bugfix:`, `refactor:`, `test:`, `docs:`, `chore:`, `infra:`, or `generated:`.
@@ -64,7 +64,11 @@ For runtime-code changes, always use the `tdd` skill if you have to it. If you d
 - Use `infra:` for deployment, CI, environment, sandbox, cloud, or operational tooling changes.
 - Use `generated:` for regenerated artifacts such as dependency graphs, schemas, lockfiles, or other machine-generated outputs when committed separately.
 - Prefer a specific subject that explains the exact change, such as `bugfix: preserve Daytona preview paths` rather than `bugfix: fix pipeline`.
-- If a single very specific subject cannot clearly describe the staged changes, split the work into two or more commits.
+- Before committing, ask the user whether the work completes or relates to any Linear issues. If it does, ask them to open the relevant Linear issue and copy the issue text into their response so the commit can be tied to the correct issue context.
+- When a commit or PR is about a Linear issue, include the relevant Linear issue key in the commit subject or PR title, for example `feature(OWL-22): add draft composite review`.
+- When a commit or PR should close a Linear issue, include a Linear closing magic word and issue key in the title/subject, not only in the body. Use a closing form such as `Closes OWL-22: add draft composite review` in the PR title, or `feature: closes OWL-22 add draft composite review` in a commit subject when committing directly to the default branch.
+- Use non-closing Linear words such as `Refs OWL-22` only when the work is related but should not move the issue to Done after merge.
+- N.B. When asked to commit, split staged work into multiple small commits. N.B.: Commits should be atomic: each commit should be fully described by its short subject and should not be able to be split apart anymore without losing important context.
 
 ### Testing
 
@@ -74,6 +78,7 @@ For runtime-code changes, always use the `tdd` skill if you have to it. If you d
 - Name tests as specifications of observable behavior, not implementation steps.
 - Cover failure cases at seams: invalid lifecycle transitions, missing records, provider failures, malformed persisted data, sandbox failures, browser automation failures, and rendering failures.
 - Use integration-style tests for core product flows where practical, especially pipeline orchestration, repo validation, script generation, capture, and compositing.
+- Do not unit test prompt text or prompt wording in code. Prompts do not need direct unit tests; test the observable behavior or contract that the prompt-powered seam must satisfy instead.
 - Add regression tests before fixing bugs, and keep them focused on the bug's externally visible behavior.
 - Avoid over-mocking. Use small fakes at external seams when real adapters would make the test slow, flaky, or dependent on network/auth state.
 - Refactor tests after they pass: remove duplicated setup, split broad tests, and keep assertions specific enough to catch real regressions.

@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { RepoPreparationAgent } from "../../pipeline/03-repo-preparation/repo-preparation-agent.interface";
-import type { BrowserValidator } from "../../pipeline/04-project-validation/browser-validator.interface";
-import type { SandboxRunner } from "../../pipeline/04-project-validation/sandbox-runner.interface";
-import { parseVideoScriptPackage } from "../../pipeline/06-capture/video-script-package.schema";
+import type { ScriptGenerationAgent } from "../../pipeline/04-script-generation/script-generation-agent.interface";
+import type { CapturePathRepairer } from "../../pipeline/05-capture-path-validation/capture-path-repairer.interface";
+import type { BrowserValidator } from "../../pipeline/05-capture-path-validation/project-runtime-preflight/browser-validator.interface";
+import type { SandboxRunner } from "../../pipeline/05-capture-path-validation/project-runtime-preflight/sandbox-runner.interface";
+import { parseDemoScript } from "../../pipeline/06-footage-capture/demo-script.schema";
 import { runPipelineJob } from "./pipeline-orchestrator";
 import { createStage1PipelineDependencies } from "./stage1-pipeline";
 
@@ -67,25 +69,127 @@ describe("createStage1PipelineDependencies", () => {
         browserValidator,
         repoPreparationAgent,
         sandboxRunner,
+        sceneValidator: {
+          async validateScene() {
+            return {
+              logs: [
+                '[makeademo:scene] {"elapsedMs":10,"event":"started","sceneId":"scene-validation"}',
+                '[makeademo:scene] {"elapsedMs":20,"event":"succeeded","sceneId":"scene-validation"}',
+                "scene dry run passed",
+              ],
+              status: "succeeded",
+            };
+          },
+        },
       }),
     );
 
     expect(result.status).toBe("succeeded");
     if (result.status === "succeeded") {
-      expect(parseVideoScriptPackage(result.videoScriptPackage).scriptId).toBe(
+      expect(parseDemoScript(result.demoScriptPackage).scriptId).toBe(
         "generated-makeademo-script",
       );
-      expect(result.videoScriptPackage.sections[0]?.scenes[0]).toMatchObject({
-        description: "Demonstrate validation.",
-        events: [
-          "Open the prepared local demo URL",
-          "Navigate to the validation area if it is not already visible",
-          "Show the validation workflow and its result",
-        ],
+      expect(result.demoScriptPackage.scenes[0]).toMatchObject({
+        expectedVisibleOutcome: "The validation result is visible.",
+        humanReadableDescription: "Demonstrate validation.",
         id: "scene-validation",
-        playwrightSceneId: "scene-validation",
-        type: "playwright-recording",
       });
     }
   });
+
+  it("wires Capture Path Validation repair through a repair-capable Script Generation agent", async () => {
+    const scriptGenerationAgent: ScriptGenerationAgent & CapturePathRepairer = {
+      async generateScriptPackage() {
+        return scriptPackage("script_initial");
+      },
+      async repairCapturePathFailure(input) {
+        return {
+          preparationManifest: input.preparationManifest,
+          demoScriptPackage: scriptPackage("script_repaired"),
+        };
+      },
+    };
+
+    const dependencies = createStage1PipelineDependencies({
+      repoPreparationAgent: {
+        async prepare() {
+          throw new Error("not used");
+        },
+      },
+      sandboxRunner: {
+        async runValidation() {
+          throw new Error("not used");
+        },
+      },
+      scriptGenerationAgent,
+    });
+
+    await expect(
+      dependencies.repairCapturePathFailure?.({
+        attempt: 1,
+        failure: {
+          blockedNetworkAttempts: [],
+          failedSceneId: "scene_feed",
+          failureReason: "Missing button",
+          logs: ["locator failed"],
+          status: "failed",
+          warnings: [],
+        },
+        preparationManifest: manifest(),
+        repoUrl: "https://github.com/example/app",
+        demoScriptPackage: scriptPackage("script_initial"),
+      }),
+    ).resolves.toMatchObject({
+      demoScriptPackage: { scriptId: "script_repaired" },
+    });
+  });
 });
+
+function manifest() {
+  return {
+    assumptions: [],
+    createdFiles: [],
+    demoCommand: "npm run demo:makeademo",
+    diffArtifactId: "artifact_diff",
+    existingDemoEvidence: [],
+    mockedServices: [],
+    modifiedFiles: [],
+    repoUrl: "https://github.com/example/app",
+    risks: [],
+    scriptGenerationContext: [],
+    setupSummary: "Prepared demo runtime.",
+    status: "created-new-demo" as const,
+    url: "http://localhost:3000",
+    workspaceId: "workspace_123",
+  };
+}
+
+function scriptPackage(scriptId: string) {
+  return {
+    assumptions: [],
+    demoPlan: {
+      featureOrder: ["validation"],
+      narrative: "Demo it",
+      risks: [],
+    },
+    demoPlaywrightScript:
+      "await scene('scene_validation', async () => { await page.goto(baseUrl); });",
+    exploration: { assumptions: [], productSurfaces: [], summary: "" },
+    format: "16:9",
+    presentation: {
+      music: { enabled: false as const },
+      textOverlays: [],
+      transitions: [],
+    },
+    scenes: [
+      {
+        expectedVisibleOutcome: "Validation is visible.",
+        humanReadableDescription: "Show validation.",
+        id: "scene_validation",
+      },
+    ],
+    scriptId,
+    title: "Demo",
+    version: 1,
+  };
+}

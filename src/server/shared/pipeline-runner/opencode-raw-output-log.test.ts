@@ -57,9 +57,14 @@ describe("createOpenCodeRawOutputLog", () => {
       expect(entries[0]?.parsed.part.state.output).toBe(
         "package.json contents",
       );
-      expect(
-        entries.every((entry) => typeof entry.timestamp === "string"),
-      ).toBe(true);
+      expect(entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ level: "info", service: "makeademo" }),
+        ]),
+      );
+      expect(entries.every((entry) => typeof entry.time === "string")).toBe(
+        true,
+      );
     } finally {
       await rm(directory, { force: true, recursive: true });
     }

@@ -2,8 +2,23 @@ import { and, asc, eq } from "drizzle-orm";
 import { type PostgresJsDatabase, drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
+import type { NormalizedSupportingDocument } from "../../pipeline/01-context-gathering/supporting-documents";
 import type { ProjectDemoGenerationQueueStore } from "../pipeline-runner/project-demo-generation-queue";
 import { demoRequests, projects } from "./schema";
+
+export type QueuedSupportingDocumentUpload = {
+  fileName: string;
+  mimeType: string;
+  r2Key: string;
+  r2Url: string;
+  sizeBytes: number;
+};
+
+type SupportingDocumentLoader = {
+  loadSupportingDocuments(
+    input: QueuedSupportingDocumentUpload[],
+  ): Promise<NormalizedSupportingDocument[]>;
+};
 
 type ProjectQueueDatabase = {
   select(selection: unknown): unknown;
@@ -37,9 +52,16 @@ export class NeonProjectDemoGenerationQueueStore
   implements ProjectDemoGenerationQueueStore
 {
   private readonly db: ProjectQueueDatabase;
+  private readonly supportingDocumentLoader:
+    | SupportingDocumentLoader
+    | undefined;
 
-  constructor(db: ProjectQueueDatabase) {
+  constructor(
+    db: ProjectQueueDatabase,
+    supportingDocumentLoader?: SupportingDocumentLoader,
+  ) {
     this.db = db;
+    this.supportingDocumentLoader = supportingDocumentLoader;
   }
 
   async claimNextQueuedProject() {
@@ -48,6 +70,7 @@ export class NeonProjectDemoGenerationQueueStore
       demoRequestId: demoRequests.id,
       projectId: projects.id,
       repoUrl: projects.repoUrl,
+      supportingFiles: projects.supportingFiles,
     }) as SelectQueuedProjectQuery;
     const [row] = await query
       .from(projects)
@@ -71,14 +94,34 @@ export class NeonProjectDemoGenerationQueueStore
       return undefined;
     }
 
-    return {
-      demoBrief: readDemoBriefFromProjectContext(row.context),
-      demoRequestId: readString(row, "demoRequestId"),
-      normalizedSupportingDocuments: [],
-      projectId,
-      repoUrl: readString(row, "repoUrl"),
-      workspaceId: projectId,
-    };
+    try {
+      const supportingFiles = readQueuedSupportingDocuments(
+        row.supportingFiles,
+      );
+
+      return {
+        demoBrief: readDemoBriefFromProjectContext(row.context),
+        demoRequestId: readString(row, "demoRequestId"),
+        normalizedSupportingDocuments:
+          supportingFiles.length === 0 || !this.supportingDocumentLoader
+            ? []
+            : await this.supportingDocumentLoader.loadSupportingDocuments(
+                supportingFiles,
+              ),
+        projectId,
+        repoUrl: readString(row, "repoUrl"),
+        workspaceId: projectId,
+      };
+    } catch (error) {
+      await this.markProjectFailed({
+        error:
+          error instanceof Error
+            ? error.message
+            : "Project queue claim failed after processing started",
+        projectId,
+      });
+      return undefined;
+    }
   }
 
   async markProjectCompleted(input: {
@@ -113,21 +156,56 @@ export class NeonProjectDemoGenerationQueueStore
   }
 }
 
+function readQueuedSupportingDocuments(
+  value: unknown,
+): QueuedSupportingDocumentUpload[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((item) => {
+    if (typeof item !== "string" || !item.trim().startsWith("{")) {
+      return [];
+    }
+
+    return [readQueuedSupportingDocument(JSON.parse(item))];
+  });
+}
+
+function readQueuedSupportingDocument(
+  value: unknown,
+): QueuedSupportingDocumentUpload {
+  const record = readRecord(value, "Supporting Document metadata");
+
+  return {
+    fileName: readString(record, "fileName"),
+    mimeType: readString(record, "mimeType"),
+    r2Key: readString(record, "r2Key"),
+    r2Url: readString(record, "r2Url"),
+    sizeBytes: readPositiveNumber(record, "sizeBytes"),
+  };
+}
+
 export function createNeonProjectDemoGenerationQueueStore(
   databaseUrl = readRequiredEnv("DATABASE_URL"),
+  supportingDocumentLoader?: SupportingDocumentLoader,
 ): NeonProjectDemoGenerationQueueStore {
   const client = postgres(databaseUrl, { max: 5 });
   return new NeonProjectDemoGenerationQueueStore(
     drizzle(client) as PostgresJsDatabase<Record<string, never>>,
+    supportingDocumentLoader,
   );
 }
 
 function readDemoBriefFromProjectContext(value: unknown) {
   const context = readRecord(value, "Project context");
-  const structuredContext = readRecord(
-    context.structuredContext,
-    "Project context.structuredContext",
-  );
+  const structuredContext =
+    context.structuredContext === undefined
+      ? context
+      : readRecord(
+          context.structuredContext,
+          "Project context.structuredContext",
+        );
   const targetUsers = readOptionalString(structuredContext, "targetUsers");
 
   return {
@@ -159,6 +237,15 @@ function readString(record: Record<string, unknown>, key: string) {
   const value = record[key];
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new Error(`${key} must be a non-empty string`);
+  }
+
+  return value;
+}
+
+function readPositiveNumber(record: Record<string, unknown>, key: string) {
+  const value = record[key];
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    throw new Error(`${key} must be a positive number`);
   }
 
   return value;

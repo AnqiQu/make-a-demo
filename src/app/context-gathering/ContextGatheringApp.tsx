@@ -10,8 +10,13 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import bush1Url from "../../../assets/background/bushes/bush_1.svg";
+import bush2Url from "../../../assets/background/bushes/bush_2.svg";
+import bush3Url from "../../../assets/background/bushes/bush_3.svg";
+import bush4Url from "../../../assets/background/bushes/bush_4.svg";
+import bush5Url from "../../../assets/background/bushes/bush_5.svg";
+import bush6Url from "../../../assets/background/bushes/bush_6.svg";
 import githubLogoUrl from "../../../assets/github-logo.png";
-import owletLogoUrl from "../../../assets/owl-logo.png";
 import {
   type ContextGatheringDraft,
   type IntakeDetailsInput,
@@ -26,6 +31,7 @@ import {
   selectRepositoryForDemo,
   setRepoDetails,
   stagePendingSupportingFiles,
+  startContextGatheringSubmission,
 } from "./draft";
 
 type InstalledRepository = {
@@ -77,6 +83,21 @@ const durationOptions = [
   { label: "1 min", seconds: 60 },
   { label: "2 min", seconds: 120 },
   { label: "3 min", seconds: 180 },
+];
+
+const groundBushes = [
+  { className: "ground-bush-01", src: bush5Url },
+  { className: "ground-bush-02", src: bush2Url },
+  { className: "ground-bush-03", src: bush6Url },
+  { className: "ground-bush-04", src: bush1Url },
+  { className: "ground-bush-05", src: bush3Url },
+  { className: "ground-bush-06", src: bush4Url },
+  { className: "ground-bush-07", src: bush2Url },
+  { className: "ground-bush-08", src: bush4Url },
+  { className: "ground-bush-09", src: bush1Url },
+  { className: "ground-bush-10", src: bush6Url },
+  { className: "ground-bush-11", src: bush5Url },
+  { className: "ground-bush-12", src: bush3Url },
 ];
 
 let pendingGitHubCallbackConnection: PendingGitHubCallbackConnection | null =
@@ -175,7 +196,6 @@ const initialIntakeDetailsForm: IntakeDetailsInput = {
   name: "",
   productSummary: "",
   requestedDurationSeconds: 60,
-  supplementaryInformation: "",
   targetUsers: "",
 };
 
@@ -407,6 +427,7 @@ export function ContextGatheringApp() {
     let nextDraft: ContextGatheringDraft;
     try {
       nextDraft = collectIntakeDetails(draft, intakeDetailsForm);
+      nextDraft = startContextGatheringSubmission(nextDraft);
       setDraft(nextDraft);
       setError("");
     } catch (caught) {
@@ -447,13 +468,12 @@ export function ContextGatheringApp() {
         pendingSupportingFiles,
       );
       const supportingFiles = [
-        ...draft.supportingFiles,
+        ...draftToSubmit.supportingFiles,
         ...uploadedSupportingFiles,
       ];
       const response = await fetch("/api/context-gathering/submit", {
         body: JSON.stringify({
           contact: draftToSubmit.contact,
-          contextTranscript: draftToSubmit.contextTranscript,
           githubInstallationId: draftToSubmit.githubInstallationId,
           repoUrl: draftToSubmit.repoUrl,
           repoVisibility: draftToSubmit.repoVisibility,
@@ -478,6 +498,14 @@ export function ContextGatheringApp() {
         supportingFiles,
       }));
     } catch (caught) {
+      setDraft((current) =>
+        current.chatStep === "submitting"
+          ? {
+              ...current,
+              chatStep: "details",
+            }
+          : current,
+      );
       setError(caught instanceof Error ? caught.message : "Submit failed.");
     } finally {
       setIsUploading(false);
@@ -524,20 +552,28 @@ export function ContextGatheringApp() {
 
   return (
     <main className={`owlet-shell owlet-shell-${draft.chatStep}`}>
+      <div className="ground-bushes" aria-hidden="true">
+        {groundBushes.map((bush) => (
+          <img
+            alt=""
+            className={`ground-bush ${bush.className}`}
+            key={bush.className}
+            src={bush.src}
+          />
+        ))}
+      </div>
       <section className="brand" aria-label="MakeADemo">
         <span className="brand-name">MakeADemo</span>
-        <aside className="brand-attribution" aria-label="by Owlet">
-          <span>by Owlet</span>
-          <img alt="" src={owletLogoUrl} />
-        </aside>
       </section>
 
       {draft.chatStep === "repo" ? (
         <section className="repo-step" aria-label="GitHub repository">
           <article className="repo-panel">
             <RepoConnectionFields
+              canSubmitRepository={canContinueRepoStep}
               githubInstallationId={draft.githubInstallationId}
               onConnectGitHub={() => void connectGitHub()}
+              onSubmitRepository={continueFromRepo}
               onRepoInputChange={setRepoInput}
               onRepositorySelect={selectRepositoryFromDropdown}
               repoInput={repoInput}
@@ -546,21 +582,6 @@ export function ContextGatheringApp() {
               selectedRepoUrl={draft.repoUrl}
             />
           </article>
-          <p className="repo-help">
-            Paste a public GitHub URL, or connect GitHub to grant access to a
-            private repository.
-            <br />
-            We currently support web apps built with JavaScript or TypeScript.
-          </p>
-          <button
-            aria-label="Make me a demo"
-            className="primary-hoot repo-submit-button"
-            disabled={!canContinueRepoStep}
-            onClick={continueFromRepo}
-            type="button"
-          >
-            <ArrowRight aria-hidden="true" strokeWidth={2.4} />
-          </button>
         </section>
       ) : null}
 
@@ -582,7 +603,7 @@ export function ContextGatheringApp() {
         />
       ) : null}
 
-      {draft.chatStep === "submitted" ? (
+      {draft.chatStep === "submitting" || draft.chatStep === "submitted" ? (
         <SubmittedDemoPanel progress={demoRequestProgress} />
       ) : null}
 
@@ -592,98 +613,135 @@ export function ContextGatheringApp() {
 }
 
 type RepoConnectionFieldsProps = {
+  canSubmitRepository: boolean;
   githubInstallationId: string | undefined;
   isLoadingRepositories: boolean;
   onConnectGitHub: () => void;
   onRepoInputChange: (value: string) => void;
   onRepositorySelect: (repoUrl: string) => void;
+  onSubmitRepository: () => void;
   repoInput: string;
   repositories: InstalledRepository[];
   selectedRepoUrl: string;
 };
 
 export function RepoConnectionFields({
+  canSubmitRepository,
   githubInstallationId,
   isLoadingRepositories,
   onConnectGitHub,
   onRepoInputChange,
   onRepositorySelect,
+  onSubmitRepository,
   repoInput,
   repositories,
   selectedRepoUrl,
 }: RepoConnectionFieldsProps) {
   const isConnected = githubInstallationId !== undefined;
+  const canRetryGitHubConnection =
+    isConnected && !isLoadingRepositories && repositories.length === 0;
   const connectedRepositoryStatus = isLoadingRepositories
     ? "Loading repositories..."
     : "No repositories found";
+  const githubButtonLabel = canRetryGitHubConnection
+    ? "Reconnect GitHub"
+    : isConnected
+      ? "Connected"
+      : "Connect GitHub";
 
   return (
-    <div className="repo-connect-row">
-      {isConnected && repositories.length > 0 ? (
-        <label className="repo-url-input repo-url-select">
-          <span className="link-icon" aria-hidden="true">
-            <LinkIcon strokeWidth={2.4} />
+    <div className="repo-entry-stack">
+      <div className="repo-url-submit-row">
+        {isConnected && repositories.length > 0 ? (
+          <label className="repo-url-input repo-url-select">
+            <span className="link-icon" aria-hidden="true">
+              <LinkIcon strokeWidth={2.4} />
+            </span>
+            <select
+              aria-label="Select one GitHub repository to demo"
+              onChange={(event) =>
+                onRepositorySelect(event.currentTarget.value)
+              }
+              value={selectedRepoUrl}
+            >
+              <option value="">Choose a repository</option>
+              {repositories.map((repository) => (
+                <option key={repository.repoUrl} value={repository.repoUrl}>
+                  {repository.fullName}
+                </option>
+              ))}
+            </select>
+            <span className="repo-select-chevron" aria-hidden="true">
+              <ChevronDown strokeWidth={2.4} />
+            </span>
+          </label>
+        ) : isConnected ? (
+          <label className="repo-url-input repo-url-loading">
+            <span className="link-icon" aria-hidden="true">
+              <LinkIcon strokeWidth={2.4} />
+            </span>
+            <input
+              aria-label="GitHub repositories"
+              disabled
+              readOnly
+              value={connectedRepositoryStatus}
+            />
+          </label>
+        ) : (
+          <label className="repo-url-input">
+            <span className="link-icon" aria-hidden="true">
+              <LinkIcon strokeWidth={2.4} />
+            </span>
+            <input
+              aria-label="GitHub repository URL"
+              onChange={(event) => onRepoInputChange(event.currentTarget.value)}
+              placeholder="https://github.com/org/repo"
+              value={repoInput}
+            />
+          </label>
+        )}
+        <button
+          aria-label="Make me a demo"
+          className="primary-hoot repo-submit-button"
+          disabled={!canSubmitRepository}
+          onClick={onSubmitRepository}
+          type="button"
+        >
+          <ArrowRight aria-hidden="true" strokeWidth={2.4} />
+        </button>
+      </div>
+      <div className="repo-access-options">
+        <p className="repo-guidance">
+          Paste a public GitHub URL, or connect GitHub to use a private
+          repository.
+          <br /> We currently support web apps built with JavaScript or
+          TypeScript.
+        </p>
+        <button
+          className={`github-button ${
+            isConnected ? "github-button-connected" : ""
+          }`}
+          disabled={isConnected && !canRetryGitHubConnection}
+          onClick={() =>
+            isConnected && !canRetryGitHubConnection
+              ? undefined
+              : onConnectGitHub()
+          }
+          type="button"
+        >
+          <span className="github-logo-frame" aria-hidden="true">
+            <img alt="" className="github-logo-image" src={githubLogoUrl} />
           </span>
-          <select
-            aria-label="Select one GitHub repository to demo"
-            onChange={(event) => onRepositorySelect(event.currentTarget.value)}
-            value={selectedRepoUrl}
-          >
-            <option value="">Choose a repository</option>
-            {repositories.map((repository) => (
-              <option key={repository.repoUrl} value={repository.repoUrl}>
-                {repository.fullName}
-              </option>
-            ))}
-          </select>
-          <span className="repo-select-chevron" aria-hidden="true">
-            <ChevronDown strokeWidth={2.4} />
-          </span>
-        </label>
-      ) : isConnected ? (
-        <label className="repo-url-input repo-url-loading">
-          <span className="link-icon" aria-hidden="true">
-            <LinkIcon strokeWidth={2.4} />
-          </span>
-          <input
-            aria-label="GitHub repositories"
-            disabled
-            readOnly
-            value={connectedRepositoryStatus}
-          />
-        </label>
-      ) : (
-        <label className="repo-url-input">
-          <span className="link-icon" aria-hidden="true">
-            <LinkIcon strokeWidth={2.4} />
-          </span>
-          <input
-            aria-label="GitHub repository URL"
-            onChange={(event) => onRepoInputChange(event.currentTarget.value)}
-            placeholder="https://github.com/org/repo"
-            value={repoInput}
-          />
-        </label>
-      )}
-      <span
-        aria-label={isConnected ? "GitHub connected" : undefined}
-        className={`or-label ${isConnected ? "or-label-connected" : ""}`}
-      >
-        {isConnected ? <Check aria-hidden="true" strokeWidth={2.4} /> : "OR"}
-      </span>
-      <button
-        className={`github-button ${
-          isConnected ? "github-button-connected" : ""
-        }`}
-        disabled={isConnected}
-        onClick={() => (isConnected ? undefined : onConnectGitHub())}
-        type="button"
-      >
-        <span className="github-logo-frame" aria-hidden="true">
-          <img alt="" className="github-logo-image" src={githubLogoUrl} />
-        </span>
-        {isConnected ? "Connected" : "Connect GitHub"}
-      </button>
+          {isConnected ? (
+            <Check
+              aria-hidden="true"
+              className="github-connected-check"
+              strokeWidth={2.4}
+            />
+          ) : null}
+          {githubButtonLabel}
+        </button>
+      </div>
     </div>
   );
 }
@@ -714,16 +772,11 @@ export function ContextDetailsForm({
   onSubmit,
   pendingSupportingFiles,
 }: ContextDetailsFormProps) {
+  const hasRequiredContactDetails =
+    form.name.trim().length > 0 && form.email.trim().length > 0;
+
   return (
     <section className="details-step" aria-label="Demo intake details">
-      <button
-        aria-label="Back to repository"
-        className="back-arrow-button"
-        onClick={onBack}
-        type="button"
-      >
-        <ArrowLeft aria-hidden="true" strokeWidth={2.4} />
-      </button>
       <div
         className="progress-track-shell"
         aria-label="Context Gathering progress"
@@ -756,6 +809,7 @@ export function ContextDetailsForm({
               onChange={(event) =>
                 onFieldChange("name", event.currentTarget.value)
               }
+              placeholder="Katherine Johnson"
               required
               value={form.name}
             />
@@ -769,6 +823,7 @@ export function ContextDetailsForm({
               onChange={(event) =>
                 onFieldChange("email", event.currentTarget.value)
               }
+              placeholder="you@domain.com"
               required
               type="email"
               value={form.email}
@@ -781,6 +836,7 @@ export function ContextDetailsForm({
             onChange={(event) =>
               onFieldChange("productSummary", event.currentTarget.value)
             }
+            placeholder="A few sentences describing what your product does..."
             value={form.productSummary}
           />
         </label>
@@ -791,6 +847,7 @@ export function ContextDetailsForm({
               onChange={(event) =>
                 onFieldChange("targetUsers", event.currentTarget.value)
               }
+              placeholder="All humans in the world?"
               value={form.targetUsers}
             />
           </label>
@@ -819,6 +876,7 @@ export function ContextDetailsForm({
             onChange={(event) =>
               onFieldChange("importantFeatures", event.currentTarget.value)
             }
+            placeholder="Most important product features, separated by commas"
             value={form.importantFeatures}
           />
         </label>
@@ -889,17 +947,24 @@ export function ContextDetailsForm({
             )}
           </div>
         </section>
-        <button
-          className="primary-hoot"
-          disabled={isSubmitting || isUploading}
-          type="submit"
-        >
-          {isUploading
-            ? "Uploading files..."
-            : isSubmitting
-              ? "Starting..."
-              : "Let's go!"}
-        </button>
+        <div className="details-form-actions">
+          <button
+            aria-label="Back to repository"
+            className="back-arrow-button"
+            onClick={onBack}
+            type="button"
+          >
+            <ArrowLeft aria-hidden="true" strokeWidth={2.4} />
+          </button>
+          <button
+            aria-label="Submit demo intake"
+            className="primary-hoot details-submit-button"
+            disabled={!hasRequiredContactDetails || isSubmitting || isUploading}
+            type="submit"
+          >
+            <ArrowRight aria-hidden="true" strokeWidth={2.4} />
+          </button>
+        </div>
       </form>
     </section>
   );

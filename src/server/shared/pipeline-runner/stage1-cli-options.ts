@@ -8,14 +8,27 @@ export type Stage1CliOptions = {
   workspaceId: string;
 };
 
-export function parseStage1CliArgs(args: string[]): Stage1CliOptions {
+export type Stage1CliDefaults = {
+  daytonaSnapshot?: string;
+};
+
+export function readStage1CliDefaults(
+  env: NodeJS.ProcessEnv = process.env,
+): Stage1CliDefaults {
+  const daytonaSnapshot = env.DAYTONA_SNAPSHOT;
+
+  return daytonaSnapshot === undefined || daytonaSnapshot.trim() === ""
+    ? {}
+    : { daytonaSnapshot };
+}
+
+export function parseStage1CliArgs(
+  args: string[],
+  defaults: Stage1CliDefaults = {},
+): Stage1CliOptions {
   const docs: string[] = [];
   const features: string[] = [];
-  let modelID = "gpt-5.5";
-  let providerID = "openai";
   let repoUrl: string | undefined;
-  let workspaceId: string | undefined;
-  let daytonaSnapshot: string | undefined;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -29,24 +42,8 @@ export function parseStage1CliArgs(args: string[]): Stage1CliOptions {
         features.push(readValue(args, index, arg));
         index += 1;
         break;
-      case "--model":
-        modelID = readValue(args, index, arg);
-        index += 1;
-        break;
-      case "--provider":
-        providerID = readValue(args, index, arg);
-        index += 1;
-        break;
-      case "--daytona-snapshot":
-        daytonaSnapshot = readValue(args, index, arg);
-        index += 1;
-        break;
       case "--repo":
         repoUrl = readValue(args, index, arg);
-        index += 1;
-        break;
-      case "--workspace-id":
-        workspaceId = readValue(args, index, arg);
         index += 1;
         break;
       default:
@@ -63,13 +60,15 @@ export function parseStage1CliArgs(args: string[]): Stage1CliOptions {
   }
 
   return {
-    ...(daytonaSnapshot === undefined ? {} : { daytonaSnapshot }),
+    ...(defaults.daytonaSnapshot === undefined
+      ? {}
+      : { daytonaSnapshot: defaults.daytonaSnapshot }),
     docs,
     features,
-    modelID,
-    providerID,
+    modelID: "gpt-5.5",
+    providerID: "openai",
     repoUrl,
-    workspaceId: workspaceId ?? createWorkspaceId(repoUrl),
+    workspaceId: createWorkspaceId(repoUrl),
   };
 }
 

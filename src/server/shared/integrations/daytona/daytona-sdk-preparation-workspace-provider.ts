@@ -9,17 +9,28 @@ import type {
 import type {
   PreparationWorkspace,
   PreparationWorkspaceCommandResult,
+  PreparationWorkspaceDownloadFile,
   PreparationWorkspaceExecuteOptions,
+  PreparationWorkspaceLogEntry,
   PreparationWorkspaceUploadFile,
 } from "../../../pipeline/03-repo-preparation/preparation-workspace.interface";
+import {
+  type PipelineEventLogger,
+  createPipelineEventLogger,
+} from "../../logging/pipeline-event-logger";
 
 type DaytonaSdkClient = {
   create(input?: unknown): Promise<DaytonaSdkSandbox>;
   delete(sandbox: DaytonaSdkSandbox): Promise<void>;
+  get?(idOrName: string): Promise<DaytonaSdkSandbox>;
 };
 
 type DaytonaSdkSandbox = {
   fs: {
+    downloadFiles(
+      files: Array<{ destination: string; source: string }>,
+      timeoutSec?: number,
+    ): Promise<Array<{ error?: string; source: string }>>;
     uploadFiles(
       files: Array<{ destination: string; source: string }>,
     ): Promise<void>;
@@ -90,16 +101,48 @@ export type DaytonaSdkPreparationWorkspaceProviderOptions = {
   apiKey?: string;
   client?: DaytonaSdkClient;
   diskGB?: number;
+  ptyConnectionTimeoutMs?: number;
   snapshot?: string;
 };
 
 const defaultSandboxDiskGB = 3;
+const defaultPtyConnectionTimeoutMs = 30_000;
+const makeADemoArtifactDirectory = "/tmp/makeademo";
+const workspaceMakeADemoDirectory = "/workspace/.makeademo";
+const sandboxAuditLogPath = `${makeADemoArtifactDirectory}/sandbox-log.jsonl`;
+const workspaceSandboxAuditLogPath = `${workspaceMakeADemoDirectory}/sandbox-log.jsonl`;
+
+export async function createDaytonaSdkPreparationWorkspaceHandle(input: {
+  apiKey?: string;
+  client?: DaytonaSdkClient;
+  sandboxId: string;
+  ptyConnectionTimeoutMs?: number;
+}): Promise<PreparationWorkspaceHandle> {
+  const client =
+    input.client ??
+    (new Daytona(
+      input.apiKey === undefined ? undefined : { apiKey: input.apiKey },
+    ) as DaytonaSdkClient);
+  if (client.get === undefined) {
+    throw new Error("Daytona client does not support sandbox lookup.");
+  }
+  const sandbox = await client.get(input.sandboxId);
+
+  return createPreparationWorkspaceHandle({
+    client,
+    id: input.sandboxId,
+    ptyConnectionTimeoutMs:
+      input.ptyConnectionTimeoutMs ?? defaultPtyConnectionTimeoutMs,
+    sandbox,
+  });
+}
 
 export class DaytonaSdkPreparationWorkspaceProvider
   implements PreparationWorkspaceProvider
 {
   private readonly client: DaytonaSdkClient;
   private readonly diskGB: number;
+  private readonly ptyConnectionTimeoutMs: number;
   private readonly snapshot: string | undefined;
 
   constructor(options: DaytonaSdkPreparationWorkspaceProviderOptions = {}) {
@@ -110,6 +153,8 @@ export class DaytonaSdkPreparationWorkspaceProvider
       ) as DaytonaSdkClient);
     this.snapshot = options.snapshot;
     this.diskGB = options.diskGB ?? defaultSandboxDiskGB;
+    this.ptyConnectionTimeoutMs =
+      options.ptyConnectionTimeoutMs ?? defaultPtyConnectionTimeoutMs;
   }
 
   async create(): Promise<PreparationWorkspaceHandle> {
@@ -122,25 +167,53 @@ export class DaytonaSdkPreparationWorkspaceProvider
       throw new Error("Daytona did not return a sandbox id.");
     }
 
-    const client = this.client;
-
-    const workspace = new DaytonaSdkPreparationWorkspace(sandbox);
-
-    return {
-      async destroy() {
-        await workspace.cancelActiveCommands();
-        await client.delete(sandbox);
-      },
+    return createPreparationWorkspaceHandle({
+      client: this.client,
       id,
-      workspace,
-    };
+      ptyConnectionTimeoutMs: this.ptyConnectionTimeoutMs,
+      sandbox,
+    });
   }
+}
+
+function createPreparationWorkspaceHandle(input: {
+  client: DaytonaSdkClient;
+  id: string;
+  ptyConnectionTimeoutMs: number;
+  sandbox: DaytonaSdkSandbox;
+}): PreparationWorkspaceHandle {
+  const workspace = new DaytonaSdkPreparationWorkspace(
+    input.sandbox,
+    input.id,
+    input.ptyConnectionTimeoutMs,
+  );
+
+  return {
+    async destroy() {
+      await workspace.cancelActiveCommands();
+      await input.client.delete(input.sandbox);
+    },
+    id: input.id,
+    workspace,
+  };
 }
 
 class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
   private readonly activePtys = new Set<ManagedPty>();
+  private readonly sandboxLogger: PipelineEventLogger;
 
-  constructor(private readonly sandbox: DaytonaSdkSandbox) {}
+  constructor(
+    private readonly sandbox: DaytonaSdkSandbox,
+    private readonly workspaceId: string,
+    private readonly ptyConnectionTimeoutMs: number,
+  ) {
+    this.sandboxLogger = createPipelineEventLogger({
+      base: {
+        component: "daytona-sandbox",
+      },
+      sinks: [{ write: (line) => this.writeSandboxLogLine(line) }],
+    });
+  }
 
   async execute(
     command: string,
@@ -188,7 +261,11 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
     this.activePtys.add(pty);
 
     try {
-      await pty.waitForConnection();
+      await withTimeout(
+        pty.waitForConnection(),
+        this.ptyConnectionTimeoutMs,
+        `Daytona PTY did not connect within ${this.ptyConnectionTimeoutMs}ms.`,
+      );
       await pty.sendInput(
         `stty -echo\n${command}\nprintf '\\n__MAKEADEMO_EXIT__:%s\\n' $?\nexit\n`,
       );
@@ -211,6 +288,32 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
     await Promise.allSettled(
       [...this.activePtys].map((pty) => pty.disconnect()),
     );
+  }
+
+  async writeSandboxLog(entry: PreparationWorkspaceLogEntry): Promise<void> {
+    const { source, timestamp, workspaceId, ...fields } = entry;
+    await this.sandboxLogger[readSandboxLogLevel(entry)](
+      {
+        ...fields,
+        ...(typeof timestamp === "string" ? { eventTime: timestamp } : {}),
+        source: source ?? "makeademo",
+        workspaceId:
+          typeof workspaceId === "string" && workspaceId.trim().length > 0
+            ? workspaceId
+            : this.workspaceId,
+      },
+      readSandboxLogMessage(entry),
+    );
+  }
+
+  private async writeSandboxLogLine(line: string): Promise<void> {
+    const response = await this.sandbox.process.executeCommand(
+      `mkdir -p ${shellQuote(makeADemoArtifactDirectory)} ${shellQuote(workspaceMakeADemoDirectory)} && printf '%s' ${shellQuote(line)} >> ${shellQuote(sandboxAuditLogPath)} && cp ${shellQuote(sandboxAuditLogPath)} ${shellQuote(workspaceSandboxAuditLogPath)}`,
+    );
+
+    if ((response.exitCode ?? 0) !== 0) {
+      throw new Error("Failed to write Daytona sandbox audit log.");
+    }
   }
 
   async setOutboundNetworkAccess(enabled: boolean): Promise<void> {
@@ -242,6 +345,24 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
       })),
     );
   }
+
+  async downloadFiles(
+    files: PreparationWorkspaceDownloadFile[],
+  ): Promise<void> {
+    const results = await this.sandbox.fs.downloadFiles(
+      files.map((file) => ({
+        destination: file.destinationPath,
+        source: file.sourcePath,
+      })),
+      0,
+    );
+    const failed = results.find((result) => result.error !== undefined);
+    if (failed !== undefined) {
+      throw new Error(
+        `Failed to download Daytona sandbox file ${failed.source}: ${failed.error}`,
+      );
+    }
+  }
 }
 
 class ManagedPty {
@@ -270,6 +391,24 @@ class ManagedPty {
   }
 }
 
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise.finally(() => {
+      if (timeout !== undefined) {
+        clearTimeout(timeout);
+      }
+    }),
+    new Promise<never>((_, reject) => {
+      timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+    }),
+  ]);
+}
+
 function readExitCode(output: string): number | undefined {
   const match = output.match(/__MAKEADEMO_EXIT__:(\d+)/);
   if (match?.[1] === undefined) {
@@ -281,6 +420,33 @@ function readExitCode(output: string): number | undefined {
 
 function removeExitMarker(output: string): string {
   return output.replace(/\n?__MAKEADEMO_EXIT__:\d+\n?/g, "");
+}
+
+function readSandboxLogLevel(
+  entry: PreparationWorkspaceLogEntry,
+): "error" | "info" | "warn" {
+  const event = typeof entry.event === "string" ? entry.event : "";
+  if (event.includes("failed") || event.includes("invalid")) {
+    return "error";
+  }
+
+  if (event.includes("warning")) {
+    return "warn";
+  }
+
+  return "info";
+}
+
+function readSandboxLogMessage(entry: PreparationWorkspaceLogEntry): string {
+  if (typeof entry.message === "string") {
+    return entry.message;
+  }
+
+  return typeof entry.event === "string" ? entry.event : "Sandbox log event.";
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function isRestrictedNetworkPolicyError(error: unknown): boolean {

@@ -6,10 +6,14 @@ import type {
   RepoPreparationInput,
   RepoPreparationResult,
 } from "../../pipeline/03-repo-preparation/repo-preparation-agent.interface";
-import type { ProjectValidationInput } from "../../pipeline/04-project-validation/project-validator";
-import type { ProjectValidationResult } from "../../pipeline/04-project-validation/validation-result";
-import type { ScriptGenerationInput } from "../../pipeline/05-script-generation/script-generation-orchestrator";
-import type { VideoScriptPackage } from "../../pipeline/05-script-generation/video-script-package";
+import type { DemoScriptPackage } from "../../pipeline/04-script-generation/demo-script-package";
+import type { ScriptGenerationInput } from "../../pipeline/04-script-generation/script-generation-orchestrator";
+import type { CapturePathRepairer } from "../../pipeline/05-capture-path-validation/capture-path-repairer.interface";
+import type {
+  CapturePathValidationInput,
+  CapturePathValidationResult,
+  CapturePathValidator,
+} from "../../pipeline/05-capture-path-validation/capture-path-validator.interface";
 import type { PipelineJobInput, PipelineJobResult } from "./pipeline-job";
 import {
   type PipelineObservabilityEvent,
@@ -23,12 +27,11 @@ import {
 export type PipelineOrchestratorDependencies = {
   generateScriptPackage(
     input: ScriptGenerationInput,
-  ): Promise<VideoScriptPackage>;
+  ): Promise<DemoScriptPackage>;
   prepareRepo(input: RepoPreparationInput): Promise<RepoPreparationResult>;
+  repairCapturePathFailure?: CapturePathRepairer["repairCapturePathFailure"];
   screenRepoSecurity(input: RepoSecurityInput): RepoSecurityResult;
-  validateProject(
-    input: ProjectValidationInput,
-  ): Promise<ProjectValidationResult>;
+  validateCapturePath: CapturePathValidator["validate"];
 };
 
 type PipelineProgressEvent = {
@@ -36,10 +39,15 @@ type PipelineProgressEvent = {
   status: "failed" | "started" | "succeeded";
 };
 
+export type ScriptGenerationReadyEvent = ScriptGenerationInput;
+
 export type PipelineOrchestratorOptions = {
   context?: Omit<PipelineObservationContext, "workspaceId">;
   now?: () => number;
   observer?: PipelineObserver;
+  onScriptGenerationReady?: (
+    event: ScriptGenerationReadyEvent,
+  ) => Promise<unknown> | unknown;
   onProgress?: (event: PipelineProgressEvent) => Promise<unknown> | unknown;
 };
 
@@ -181,79 +189,6 @@ export async function runPipelineJob(
     status: "succeeded",
   });
 
-  let validation: ProjectValidationResult;
-  if (preparation.validation === undefined) {
-    const validationStartedAt = reportStageStarted("project-validation", {
-      context,
-      now,
-      observer,
-      onProgress: options.onProgress,
-    });
-    await emitProgress(options, {
-      stage: "project-validation",
-      status: "started",
-    });
-
-    try {
-      validation = await dependencies.validateProject({
-        preparationManifest: preparation.manifest,
-        ...(preparation.workspace === undefined
-          ? {}
-          : { preparationWorkspace: preparation.workspace }),
-      });
-    } catch (error) {
-      reportStageFinished("project-validation", "failed", {
-        context,
-        error,
-        now,
-        observer,
-        onProgress: options.onProgress,
-        startedAt: validationStartedAt,
-      });
-      await emitProgress(options, {
-        stage: "project-validation",
-        status: "failed",
-      });
-      throw error;
-    }
-
-    if (validation.status === "failed") {
-      reportStageFinished("project-validation", "failed", {
-        blockedNetworkAttemptCount: validation.blockedNetworkAttempts.length,
-        context,
-        now,
-        observer,
-        onProgress: options.onProgress,
-        startedAt: validationStartedAt,
-        warningCount: validation.warnings.length,
-      });
-      await emitProgress(options, {
-        stage: "project-validation",
-        status: "failed",
-      });
-      return { status: "validation-failed", validation };
-    }
-
-    reportStageFinished("project-validation", "succeeded", {
-      blockedNetworkAttemptCount: validation.blockedNetworkAttempts.length,
-      context,
-      now,
-      observer,
-      onProgress: options.onProgress,
-      startedAt: validationStartedAt,
-      warningCount: validation.warnings.length,
-    });
-    await emitProgress(options, {
-      stage: "project-validation",
-      status: "succeeded",
-    });
-  } else {
-    validation = preparation.validation;
-    if (validation.status === "failed") {
-      return { status: "validation-failed", validation };
-    }
-  }
-
   const scriptStartedAt = reportStageStarted("script-generation", {
     context,
     now,
@@ -265,15 +200,25 @@ export async function runPipelineJob(
     status: "started",
   });
 
-  let videoScriptPackage: VideoScriptPackage;
+  let demoScriptPackage: DemoScriptPackage;
+  const scriptGenerationInput = {
+    demoBrief: input.demoBrief,
+    normalizedSupportingDocuments: input.normalizedSupportingDocuments,
+    ...(preparation.opencodeSessionID === undefined
+      ? {}
+      : { opencodeSessionID: preparation.opencodeSessionID }),
+    preparationManifest: preparation.manifest,
+    ...(preparation.workspace === undefined
+      ? {}
+      : { preparationWorkspace: preparation.workspace }),
+    repoUrl: input.repoUrl,
+  } satisfies ScriptGenerationInput;
+  let preparationManifest = preparation.manifest;
   try {
-    videoScriptPackage = await dependencies.generateScriptPackage({
-      demoBrief: input.demoBrief,
-      normalizedSupportingDocuments: input.normalizedSupportingDocuments,
-      preparationManifest: preparation.manifest,
-      repoUrl: input.repoUrl,
-      validation,
-    });
+    await options.onScriptGenerationReady?.(scriptGenerationInput);
+    demoScriptPackage = await dependencies.generateScriptPackage(
+      scriptGenerationInput,
+    );
   } catch (error) {
     reportStageFinished("script-generation", "failed", {
       context,
@@ -294,8 +239,8 @@ export async function runPipelineJob(
     now,
     observer,
     onProgress: options.onProgress,
-    riskCount: videoScriptPackage.demoPlan.risks.length,
-    sceneCount: countScenes(videoScriptPackage),
+    riskCount: demoScriptPackage.demoPlan.risks.length,
+    sceneCount: countScenes(demoScriptPackage),
     startedAt: scriptStartedAt,
   });
   await emitProgress(options, {
@@ -303,15 +248,153 @@ export async function runPipelineJob(
     status: "succeeded",
   });
 
+  let capturePathValidation: CapturePathValidationResult | undefined;
+  const repairAttemptLimit = readCapturePathRepairAttemptLimit();
+  for (let attempt = 0; attempt <= repairAttemptLimit; attempt += 1) {
+    capturePathValidation = await runCapturePathValidation({
+      context,
+      dependencies,
+      now,
+      onProgress: options.onProgress,
+      observer,
+      preparationManifest,
+      preparationWorkspace: preparation.workspace,
+      demoScriptPackage,
+    });
+
+    if (capturePathValidation.status === "succeeded") {
+      break;
+    }
+
+    if (
+      attempt === repairAttemptLimit ||
+      dependencies.repairCapturePathFailure === undefined
+    ) {
+      return {
+        capturePathValidation,
+        status: "capture-path-validation-failed",
+      };
+    }
+
+    const repair = await dependencies.repairCapturePathFailure({
+      attempt: attempt + 1,
+      failure: capturePathValidation,
+      ...(preparation.opencodeSessionID === undefined
+        ? {}
+        : { opencodeSessionID: preparation.opencodeSessionID }),
+      preparationManifest,
+      ...(preparation.workspace === undefined
+        ? {}
+        : { preparationWorkspace: preparation.workspace }),
+      repoUrl: input.repoUrl,
+      demoScriptPackage,
+    });
+    preparationManifest = repair.preparationManifest;
+    demoScriptPackage = repair.demoScriptPackage;
+  }
+
   return {
-    preparationManifest: preparation.manifest,
+    capturePathValidation: requireCapturePathValidation(capturePathValidation),
+    preparationManifest,
+    ...(preparation.opencodeSessionID === undefined
+      ? {}
+      : { opencodeSessionID: preparation.opencodeSessionID }),
     ...(preparation.workspace === undefined
       ? {}
       : { preparationWorkspace: preparation.workspace }),
     status: "succeeded",
-    validation,
-    videoScriptPackage,
+    demoScriptPackage,
   };
+}
+
+function requireCapturePathValidation(
+  result: CapturePathValidationResult | undefined,
+) {
+  if (result === undefined) {
+    throw new Error("Capture Path Validation did not run.");
+  }
+
+  return result;
+}
+
+async function runCapturePathValidation(input: {
+  context: PipelineObservationContext;
+  dependencies: PipelineOrchestratorDependencies;
+  now: () => number;
+  observer: PipelineObserver;
+  onProgress:
+    | ((event: PipelineProgressEvent) => Promise<unknown> | unknown)
+    | undefined;
+  preparationManifest: CapturePathValidationInput["preparationManifest"];
+  preparationWorkspace: CapturePathValidationInput["preparationWorkspace"];
+  demoScriptPackage: DemoScriptPackage;
+}) {
+  const startedAt = reportStageStarted("capture-path-validation", {
+    context: input.context,
+    now: input.now,
+    observer: input.observer,
+    onProgress: input.onProgress,
+  });
+  await input.onProgress?.({
+    stage: "capture-path-validation",
+    status: "started",
+  });
+
+  let result: CapturePathValidationResult;
+  try {
+    result = await input.dependencies.validateCapturePath({
+      preparationManifest: input.preparationManifest,
+      ...(input.preparationWorkspace === undefined
+        ? {}
+        : { preparationWorkspace: input.preparationWorkspace }),
+      demoScriptPackage: input.demoScriptPackage,
+    });
+  } catch (error) {
+    reportStageFinished("capture-path-validation", "failed", {
+      context: input.context,
+      error,
+      now: input.now,
+      observer: input.observer,
+      onProgress: input.onProgress,
+      startedAt,
+    });
+    await input.onProgress?.({
+      stage: "capture-path-validation",
+      status: "failed",
+    });
+    throw error;
+  }
+
+  reportStageFinished("capture-path-validation", result.status, {
+    blockedNetworkAttemptCount: result.blockedNetworkAttempts.length,
+    context: input.context,
+    now: input.now,
+    observer: input.observer,
+    onProgress: input.onProgress,
+    sceneCount: countScenes(input.demoScriptPackage),
+    startedAt,
+    warningCount: result.warnings.length,
+  });
+  await input.onProgress?.({
+    stage: "capture-path-validation",
+    status: result.status,
+  });
+
+  return result;
+}
+
+function readCapturePathRepairAttemptLimit() {
+  const rawValue = process.env.MAKEADEMO_CAPTURE_PATH_REPAIR_ATTEMPTS;
+  if (rawValue === undefined || rawValue.trim().length === 0) {
+    return 3;
+  }
+
+  const parsedValue = Number(rawValue);
+  if (!Number.isInteger(parsedValue) || parsedValue < 0) {
+    return 3;
+  }
+
+  return parsedValue;
 }
 
 function reportStageStarted(
@@ -365,11 +448,8 @@ function reportStageFinished(
   });
 }
 
-function countScenes(videoScriptPackage: VideoScriptPackage) {
-  return videoScriptPackage.sections.reduce(
-    (total, section) => total + section.scenes.length,
-    0,
-  );
+function countScenes(demoScriptPackage: DemoScriptPackage) {
+  return demoScriptPackage.scenes.length;
 }
 
 async function emitProgress(

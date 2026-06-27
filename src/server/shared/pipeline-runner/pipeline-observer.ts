@@ -1,5 +1,8 @@
+import { createPipelineEventLogger } from "../logging/pipeline-event-logger";
+
 export type PipelineStage =
   | "compositing"
+  | "capture-path-validation"
   | "project-validation"
   | "repo-preparation"
   | "repo-security-screen"
@@ -79,14 +82,17 @@ export type JsonPipelineObserverOptions = {
 export function createJsonPipelineObserver(
   options: JsonPipelineObserverOptions,
 ): PipelineObserver {
-  const now = options.now ?? (() => new Date().toISOString());
-  const service = options.service ?? "makeademo";
+  const logger = createPipelineEventLogger({
+    ...(options.service === undefined ? {} : { service: options.service }),
+    sinks: [{ write: options.write }],
+    ...(options.now === undefined ? {} : { timestamp: options.now }),
+  });
 
   return {
     record(event) {
       try {
-        options.write(
-          `${JSON.stringify(toJsonLogEvent(event, service, now()))}\n`,
+        void logger[event.status === "failed" ? "error" : "info"](
+          toJsonLogEvent(event),
         );
       } catch {
         // Observability must never interrupt Pipeline Job execution.
@@ -109,11 +115,7 @@ export function sanitizeObservabilityError(error: unknown) {
   };
 }
 
-function toJsonLogEvent(
-  event: PipelineObservabilityEvent,
-  service: string,
-  time: string,
-) {
+function toJsonLogEvent(event: PipelineObservabilityEvent) {
   return omitUndefined({
     blockedNetworkAttemptCount: event.blockedNetworkAttemptCount,
     createdFileCount: event.createdFileCount,
@@ -124,16 +126,13 @@ function toJsonLogEvent(
     errorType: event.errorType,
     event: event.event,
     externalCall: event.externalCall,
-    level: event.status === "failed" ? "error" : "info",
     mockedServiceCount: event.mockedServiceCount,
     projectId: event.projectId,
     riskCount: event.riskCount,
     runId: event.runId,
     sceneCount: event.sceneCount,
-    service,
     stage: event.stage,
     status: event.status,
-    time,
     warningCount: event.warningCount,
     workspaceId: event.workspaceId,
   });

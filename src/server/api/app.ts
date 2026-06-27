@@ -8,6 +8,7 @@ import {
   createSupportingDocumentUpload,
   storeSupportingDocumentUpload,
 } from "../shared/integrations/storage/r2-upload-presigner";
+import type { PipelineEventLogger } from "../shared/logging/pipeline-event-logger";
 
 type ApiGithubDependencies = {
   connectAuthorizedInstallation?(code: string): Promise<{
@@ -40,6 +41,7 @@ export type ApiAppDependencies = {
   demoRequests: DemoRequestStatusStore;
   frontend?: FrontendAssetReader;
   github: ApiGithubDependencies;
+  logger?: PipelineEventLogger;
   store: ContextGatheringStore;
   uploads: R2UploadStorage;
 };
@@ -60,19 +62,64 @@ export type ApiApp = {
 export function createApiApp(dependencies: ApiAppDependencies): ApiApp {
   return {
     async fetch(request) {
+      const startedAt = Date.now();
+      const url = new URL(request.url);
       try {
-        return await handleRequest(request, dependencies);
+        const response = await handleRequest(request, dependencies);
+        await logApiRequest(dependencies.logger, {
+          durationMs: Date.now() - startedAt,
+          event: "api.request.completed",
+          message: "API request completed.",
+          method: request.method,
+          path: url.pathname,
+          status: response.status,
+        });
+        return response;
       } catch (error) {
-        return json(
-          {
-            error:
-              error instanceof Error ? error.message : "Unexpected API error",
-          },
-          { status: 400 },
-        );
+        const errorMessage =
+          error instanceof Error ? error.message : "Unexpected API error";
+        const response = json({ error: errorMessage }, { status: 400 });
+        await logApiRequest(dependencies.logger, {
+          durationMs: Date.now() - startedAt,
+          errorMessage,
+          errorType: error instanceof Error ? error.name : "UnknownError",
+          event: "api.request.failed",
+          message: "API request failed.",
+          method: request.method,
+          path: url.pathname,
+          status: response.status,
+        });
+        return response;
       }
     },
   };
+}
+
+async function logApiRequest(
+  logger: PipelineEventLogger | undefined,
+  entry: {
+    durationMs: number;
+    errorMessage?: string;
+    errorType?: string;
+    event: "api.request.completed" | "api.request.failed";
+    message: string;
+    method: string;
+    path: string;
+    status: number;
+  },
+) {
+  if (logger === undefined) {
+    return;
+  }
+
+  try {
+    await logger[entry.event === "api.request.failed" ? "error" : "info"](
+      entry,
+      entry.message,
+    );
+  } catch {
+    // Logging must never interrupt API responses.
+  }
 }
 
 async function handleRequest(

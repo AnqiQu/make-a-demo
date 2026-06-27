@@ -1,5 +1,4 @@
 node_modules/
-.agent/
 .agents/
 coverage/
 dist/
@@ -7,6 +6,7 @@ dist/
 .demo-capture-runs/
 .demo-composite-renders/
 .demo-script-runs/
+.makeademo-capture-path-validation-runs/
 .makeademo-full-pipeline-runs/
 .playwright-cli/
 artifacts/
