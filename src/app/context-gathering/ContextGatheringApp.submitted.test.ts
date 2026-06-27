@@ -110,6 +110,87 @@ describe("ContextGatheringApp", () => {
     expect(styles).toContain("min-width: 0;");
   });
 
+  it("does not apply hover feedback to disabled submit buttons", () => {
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+
+    expect(styles).toContain(".primary-hoot:not(:disabled):hover");
+    expect(styles).not.toMatch(/\.primary-hoot:hover/);
+  });
+
+  it("keeps disabled buttons fully opaque", () => {
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+    const disabledButtonRule = styles.match(
+      /button:disabled\s*\{([^}]*)\}/,
+    )?.[1];
+
+    expect(disabledButtonRule).toContain("opacity: 1;");
+  });
+
+  it("uses the original orange for every submit button", () => {
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+    const submitButtonRule = styles.match(/\.primary-hoot\s*\{([^}]*)\}/)?.[1];
+
+    expect(submitButtonRule).toContain("background: #ffb22d;");
+  });
+
+  it("uses the requested purple for the GitHub connection button", () => {
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+    const githubButtonRule = styles.match(/\.github-button\s*\{([^}]*)\}/)?.[1];
+
+    expect(githubButtonRule).toContain("background: #26115f;");
+  });
+
+  it("gives each Context Gathering button a color-matched border-join bevel that inverts only while clicked", () => {
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+    const bevelRule = styles.match(
+      /\.owlet-shell button::after\s*\{([^}]*)\}/,
+    )?.[1];
+    const activeBevelRule = styles.match(
+      /\.owlet-shell button:not\(:disabled\):active::after\s*\{([^}]*)\}/,
+    )?.[1];
+
+    expect(bevelRule).toContain("border-style: solid;");
+    expect(bevelRule).toContain("border-width: var(--button-bevel-size);");
+    expect(bevelRule?.replace(/\s+/g, " ")).toContain(
+      "border-color: var(--button-bevel-highlight) var(--button-bevel-shadow) var(--button-bevel-shadow) var(--button-bevel-highlight);",
+    );
+    expect(bevelRule).not.toContain("mask-composite");
+    expect(styles).not.toContain(
+      ".owlet-shell button:not(:disabled):hover::after",
+    );
+    expect(activeBevelRule?.replace(/\s+/g, " ")).toContain(
+      "border-color: var(--button-bevel-shadow) var(--button-bevel-highlight) var(--button-bevel-highlight) var(--button-bevel-shadow);",
+    );
+    expect(activeBevelRule).toContain("transition: none;");
+    expect(styles).toMatch(
+      /\.primary-hoot:not\(:disabled\):hover\s*\{[^}]*box-shadow: 5px 5px 0 #111827;[^}]*transform: translate\(3px, 3px\);/s,
+    );
+    expect(styles).toMatch(
+      /\.primary-hoot\s*\{[^}]*--button-bevel-highlight: #ffe781;[^}]*--button-bevel-shadow: #df6d18;/s,
+    );
+    expect(styles).toMatch(
+      /\.github-button\s*\{[^}]*--button-bevel-highlight: #5b3da1;[^}]*--button-bevel-shadow: #10072a;/s,
+    );
+    expect(styles).toMatch(
+      /\.github-button-connected\s*\{[^}]*--button-bevel-highlight: #4fba78;[^}]*--button-bevel-shadow: #075229;/s,
+    );
+  });
+
   it("uses the repository URL field as the connected repository dropdown", () => {
     const html = renderToStaticMarkup(
       createElement(RepoConnectionFields, {

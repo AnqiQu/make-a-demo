@@ -52,9 +52,35 @@ button {
   cursor: pointer;
 }
 
+.owlet-shell button {
+  --button-bevel-size: 0.44rem;
+  --button-bevel-highlight: rgba(255, 255, 255, 0.75);
+  --button-bevel-shadow: rgba(17, 24, 39, 0.35);
+
+  position: relative;
+}
+
+.owlet-shell button::after {
+  border-color: var(--button-bevel-highlight) var(--button-bevel-shadow)
+    var(--button-bevel-shadow) var(--button-bevel-highlight);
+  border-style: solid;
+  border-width: var(--button-bevel-size);
+  box-sizing: border-box;
+  content: "";
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+}
+
+.owlet-shell button:not(:disabled):active::after {
+  border-color: var(--button-bevel-shadow) var(--button-bevel-highlight)
+    var(--button-bevel-highlight) var(--button-bevel-shadow);
+  transition: none;
+}
+
 button:disabled {
   cursor: not-allowed;
-  opacity: 0.58;
+  opacity: 1;
 }
 
 #root {
@@ -427,8 +453,11 @@ button:disabled {
 }
 
 .github-button {
+  --button-bevel-highlight: #5b3da1;
+  --button-bevel-shadow: #10072a;
+
   align-items: center;
-  background: #071a35;
+  background: #26115f;
   border-color: #111827;
   color: #ffffff;
   display: flex;
@@ -448,6 +477,9 @@ button:disabled {
 }
 
 .github-button-connected {
+  --button-bevel-highlight: #4fba78;
+  --button-bevel-shadow: #075229;
+
   background: #117a43;
   border-color: #111827;
   color: #ffffff;
@@ -458,13 +490,17 @@ button:disabled {
   opacity: 1;
 }
 
-.github-button-connected:disabled:hover {
-  transform: none;
+.repo-picker button:not(:disabled):hover {
+  box-shadow: 5px 5px 0 #111827;
+  transform: translate(3px, 3px);
 }
 
-.github-button:hover,
-.repo-picker button:hover,
-.primary-hoot:hover {
+.primary-hoot:not(:disabled):hover {
+  box-shadow: 5px 5px 0 #111827;
+  transform: translate(3px, 3px);
+}
+
+.github-button:not(:disabled):hover {
   box-shadow: 5px 5px 0 #111827;
   transform: translate(3px, 3px);
 }
@@ -529,10 +565,12 @@ button:disabled {
 }
 
 .primary-hoot {
+  --button-bevel-highlight: #ffe781;
+  --button-bevel-shadow: #df6d18;
+
   background: #ffb22d;
   border: 4px solid #111827;
-  box-shadow: 8px 8px 0 #111827, inset 6px 6px 0 #ffe781, inset -7px -7px 0
-    #df6d18;
+  box-shadow: 8px 8px 0 #111827;
   color: #111827;
   display: block;
   font-size: 1.22rem;
@@ -561,10 +599,6 @@ button:disabled {
   width: 2.5rem;
 }
 
-.primary-hoot:hover {
-  background: #ffca47;
-}
-
 .repo-picker {
   display: flex;
   flex-wrap: wrap;
@@ -574,6 +608,9 @@ button:disabled {
 }
 
 .repo-picker button {
+  --button-bevel-highlight: #ffe781;
+  --button-bevel-shadow: #df6d18;
+
   background: #ffb22d;
   border: 4px solid #111827;
   box-shadow: 6px 6px 0 #111827;
@@ -640,6 +677,9 @@ button:disabled {
 }
 
 .back-arrow-button {
+  --button-bevel-highlight: #fffbea;
+  --button-bevel-shadow: #d9b85d;
+
   align-items: center;
   background: #fff4bf;
   border: 4px solid #111827;
@@ -657,7 +697,7 @@ button:disabled {
   z-index: 3;
 }
 
-.back-arrow-button:hover {
+.back-arrow-button:not(:disabled):hover {
   box-shadow: 3px 3px 0 #111827;
   transform: translate(3px, 3px);
 }

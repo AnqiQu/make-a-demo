@@ -772,6 +772,9 @@ export function ContextDetailsForm({
   onSubmit,
   pendingSupportingFiles,
 }: ContextDetailsFormProps) {
+  const hasRequiredContactDetails =
+    form.name.trim().length > 0 && form.email.trim().length > 0;
+
   return (
     <section className="details-step" aria-label="Demo intake details">
       <button
@@ -950,7 +953,7 @@ export function ContextDetailsForm({
         <button
           aria-label="Submit demo intake"
           className="primary-hoot details-submit-button"
-          disabled={isSubmitting || isUploading}
+          disabled={!hasRequiredContactDetails || isSubmitting || isUploading}
           type="submit"
         >
           <ArrowRight aria-hidden="true" strokeWidth={2.4} />
