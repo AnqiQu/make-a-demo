@@ -94,15 +94,17 @@ button:disabled {
     linear-gradient(#2e8f45, #2e8f45), linear-gradient(#196b38, #196b38),
     linear-gradient(#a65f2a, #a65f2a), linear-gradient(#7b3f22, #7b3f22),
     linear-gradient(#fff5a6, #fff5a6), linear-gradient(#fff5a6, #fff5a6),
-    linear-gradient(#fff5a6, #fff5a6),
+    linear-gradient(#fff5a6, #fff5a6), linear-gradient(#fff5a6, #fff5a6),
+    linear-gradient(#fff5a6, #fff5a6), linear-gradient(#fff5a6, #fff5a6),
     linear-gradient(180deg, #4a9cff 0%, #72c8ff 55%, #99e8ff 100%);
   background-position:
     left calc(100% - 78px), left calc(100% - 58px),
-    left calc(100% - 42px), left bottom, left bottom, 22vw 27vh, 66vw 11vh,
-    88vw 34vh, left top;
+    left calc(100% - 42px), left bottom, left bottom, 12vw 31vh, 28vw 9vh,
+    46vw 21vh, 63vw 7vh, 76vw 29vh, 91vw 16vh, left top;
   background-repeat: no-repeat;
-  background-size: 100% 80px, 100% 58px, 100% 42px, 100% 88px, 100% 46px, 10px
-    10px, 8px 8px, 8px 8px, 100% 100%;
+  background-size:
+    100% 80px, 100% 58px, 100% 42px, 100% 88px, 100% 46px, 10px
+    10px, 8px 8px, 8px 8px, 10px 10px, 8px 8px, 10px 10px, 100% 100%;
   box-sizing: border-box;
   color: #17131f;
   height: 100vh;
@@ -199,26 +201,92 @@ button:disabled {
   background-image:
     linear-gradient(#ffffff, #ffffff),
     linear-gradient(#ffffff, #ffffff), linear-gradient(#ffffff, #ffffff),
-    linear-gradient(#ffffff, #ffffff), linear-gradient(#e9fbff, #e9fbff),
+    linear-gradient(#ffffff, #ffffff), linear-gradient(#ffffff, #ffffff),
+    linear-gradient(#ffffff, #ffffff), linear-gradient(#ffffff, #ffffff),
     linear-gradient(#e9fbff, #e9fbff), linear-gradient(#e9fbff, #e9fbff),
     linear-gradient(#e9fbff, #e9fbff), linear-gradient(#ffffff, #ffffff),
     linear-gradient(#ffffff, #ffffff), linear-gradient(#ffffff, #ffffff),
+    linear-gradient(#ffffff, #ffffff), linear-gradient(#ffffff, #ffffff),
     linear-gradient(#ffffff, #ffffff), linear-gradient(#e9fbff, #e9fbff),
+    linear-gradient(#e9fbff, #e9fbff), linear-gradient(#e9fbff, #e9fbff),
+    linear-gradient(#ffffff, #ffffff), linear-gradient(#ffffff, #ffffff),
+    linear-gradient(#ffffff, #ffffff), linear-gradient(#ffffff, #ffffff),
+    linear-gradient(#ffffff, #ffffff), linear-gradient(#ffffff, #ffffff),
+    linear-gradient(#e9fbff, #e9fbff), linear-gradient(#e9fbff, #e9fbff),
+    linear-gradient(#e9fbff, #e9fbff), linear-gradient(#ffffff, #ffffff),
+    linear-gradient(#ffffff, #ffffff), linear-gradient(#ffffff, #ffffff),
+    linear-gradient(#ffffff, #ffffff), linear-gradient(#ffffff, #ffffff),
+    linear-gradient(#ffffff, #ffffff), linear-gradient(#e9fbff, #e9fbff),
+    linear-gradient(#e9fbff, #e9fbff), linear-gradient(#e9fbff, #e9fbff),
+    linear-gradient(#ffffff, #ffffff), linear-gradient(#ffffff, #ffffff),
+    linear-gradient(#ffffff, #ffffff), linear-gradient(#ffffff, #ffffff),
+    linear-gradient(#ffffff, #ffffff), linear-gradient(#ffffff, #ffffff),
+    linear-gradient(#e9fbff, #e9fbff), linear-gradient(#e9fbff, #e9fbff),
+    linear-gradient(#e9fbff, #e9fbff), linear-gradient(#ffffff, #ffffff),
+    linear-gradient(#ffffff, #ffffff), linear-gradient(#ffffff, #ffffff),
+    linear-gradient(#ffffff, #ffffff), linear-gradient(#ffffff, #ffffff),
+    linear-gradient(#ffffff, #ffffff), linear-gradient(#e9fbff, #e9fbff),
+    linear-gradient(#e9fbff, #e9fbff), linear-gradient(#e9fbff, #e9fbff),
+    linear-gradient(#ffffff, #ffffff), linear-gradient(#ffffff, #ffffff),
+    linear-gradient(#ffffff, #ffffff), linear-gradient(#ffffff, #ffffff),
+    linear-gradient(#ffffff, #ffffff), linear-gradient(#ffffff, #ffffff),
     linear-gradient(#e9fbff, #e9fbff), linear-gradient(#e9fbff, #e9fbff),
     linear-gradient(#e9fbff, #e9fbff);
   background-position:
-    6vw 15vh, calc(6vw + 50px) calc(15vh - 30px),
-    calc(6vw + 114px) 15vh, calc(6vw + 176px) 15vh, 31vw 24vh,
-    calc(31vw + 60px) calc(24vh - 34px), calc(31vw + 132px) 24vh,
-    calc(31vw + 200px) 24vh, 67vw 12vh, calc(67vw + 60px) calc(12vh - 34px),
-    calc(67vw + 132px) 12vh, calc(67vw + 200px) 12vh, 82vw 31vh,
-    calc(82vw + 54px) calc(31vh - 30px), calc(82vw + 120px) 31vh,
-    calc(82vw + 182px) 31vh;
+    calc(4vw + 26px) 14vh, calc(4vw + 52px) 14vh,
+    calc(4vw + 0px) calc(14vh + 22px),
+    calc(4vw + 26px) calc(14vh + 22px),
+    calc(4vw + 52px) calc(14vh + 22px),
+    calc(4vw + 78px) calc(14vh + 22px),
+    calc(4vw + 16px) calc(14vh + 44px),
+    calc(4vw + 42px) calc(14vh + 44px),
+    calc(4vw + 68px) calc(14vh + 44px), calc(18vw + 26px) 26vh,
+    calc(18vw + 52px) 26vh, calc(18vw + 0px) calc(26vh + 22px),
+    calc(18vw + 26px) calc(26vh + 22px),
+    calc(18vw + 52px) calc(26vh + 22px),
+    calc(18vw + 78px) calc(26vh + 22px),
+    calc(18vw + 16px) calc(26vh + 44px),
+    calc(18vw + 42px) calc(26vh + 44px),
+    calc(18vw + 68px) calc(26vh + 44px), calc(34vw + 26px) 9vh,
+    calc(34vw + 52px) 9vh, calc(34vw + 0px) calc(9vh + 22px),
+    calc(34vw + 26px) calc(9vh + 22px),
+    calc(34vw + 52px) calc(9vh + 22px),
+    calc(34vw + 78px) calc(9vh + 22px),
+    calc(34vw + 16px) calc(9vh + 44px),
+    calc(34vw + 42px) calc(9vh + 44px),
+    calc(34vw + 68px) calc(9vh + 44px), calc(57vw + 26px) 30vh,
+    calc(57vw + 52px) 30vh, calc(57vw + 0px) calc(30vh + 22px),
+    calc(57vw + 26px) calc(30vh + 22px),
+    calc(57vw + 52px) calc(30vh + 22px),
+    calc(57vw + 78px) calc(30vh + 22px),
+    calc(57vw + 16px) calc(30vh + 44px),
+    calc(57vw + 42px) calc(30vh + 44px),
+    calc(57vw + 68px) calc(30vh + 44px), calc(71vw + 26px) 16vh,
+    calc(71vw + 52px) 16vh, calc(71vw + 0px) calc(16vh + 22px),
+    calc(71vw + 26px) calc(16vh + 22px),
+    calc(71vw + 52px) calc(16vh + 22px),
+    calc(71vw + 78px) calc(16vh + 22px),
+    calc(71vw + 16px) calc(16vh + 44px),
+    calc(71vw + 42px) calc(16vh + 44px),
+    calc(71vw + 68px) calc(16vh + 44px), calc(86vw + 26px) 33vh,
+    calc(86vw + 52px) 33vh, calc(86vw + 0px) calc(33vh + 22px),
+    calc(86vw + 26px) calc(33vh + 22px),
+    calc(86vw + 52px) calc(33vh + 22px),
+    calc(86vw + 78px) calc(33vh + 22px),
+    calc(86vw + 16px) calc(33vh + 44px),
+    calc(86vw + 42px) calc(33vh + 44px),
+    calc(86vw + 68px) calc(33vh + 44px);
   background-repeat: no-repeat;
   background-size:
-    72px 32px, 92px 32px, 104px 32px, 72px 32px, 78px 34px, 106px 34px,
-    114px 34px, 78px 34px, 78px 34px, 106px 34px, 114px 34px, 78px 34px,
-    64px 30px, 92px 30px, 104px 30px, 64px 30px;
+    34px 24px, 40px 30px, 36px 26px, 38px 28px, 40px 30px, 34px 26px,
+    34px 24px, 38px 24px, 32px 24px, 36px 24px, 42px 30px, 34px 26px,
+    38px 28px, 42px 30px, 36px 26px, 32px 24px, 40px 24px, 34px 24px,
+    34px 24px, 40px 30px, 36px 26px, 38px 28px, 40px 30px, 34px 26px,
+    34px 24px, 38px 24px, 32px 24px, 36px 24px, 42px 30px, 34px 26px,
+    38px 28px, 42px 30px, 36px 26px, 32px 24px, 40px 24px, 34px 24px,
+    34px 24px, 40px 30px, 36px 26px, 38px 28px, 40px 30px, 34px 26px,
+    34px 24px, 38px 24px, 32px 24px, 36px 24px, 42px 30px, 34px 26px,
+    38px 28px, 42px 30px, 36px 26px, 32px 24px, 40px 24px, 34px 24px;
   content: "";
   inset: 0;
   pointer-events: none;

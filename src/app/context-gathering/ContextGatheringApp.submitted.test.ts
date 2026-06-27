@@ -38,6 +38,39 @@ describe("ContextGatheringApp", () => {
     expect(styles).not.toContain("brand-attribution");
   });
 
+  it("draws six filled background clouds from compact pixel blocks at irregular sky positions", () => {
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+    const cloudRule = styles.match(/\.owlet-shell::before\s*\{([^}]*)\}/)?.[1];
+    const cloudBlockWidths = [
+      ...(cloudRule?.matchAll(/(\d+)px\s+\d+px/g) ?? []),
+    ].map((match) => Number.parseInt(match[1] ?? "", 10));
+
+    expect(cloudBlockWidths).toHaveLength(54);
+    expect(cloudBlockWidths.filter((width) => width >= 90)).toHaveLength(0);
+    expect(cloudBlockWidths.filter((width) => width <= 64).length).toBe(54);
+    expect(
+      cloudRule?.match(/calc\((?:4|18|34|57|71|86)vw/g) ?? [],
+    ).toHaveLength(54);
+  });
+
+  it("draws six small stars in the sky", () => {
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+    const shellRule = styles.slice(
+      styles.indexOf(".owlet-shell {"),
+      styles.indexOf(".ground-bushes"),
+    );
+
+    expect(
+      shellRule.match(/linear-gradient\(#fff5a6, #fff5a6\)/g),
+    ).toHaveLength(6);
+  });
+
   it("places the twelve illustrated ground bushes in the requested order", () => {
     const html = renderToStaticMarkup(createElement(ContextGatheringApp));
     const styles = readFileSync(
