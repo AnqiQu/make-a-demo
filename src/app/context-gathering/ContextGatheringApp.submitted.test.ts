@@ -38,6 +38,54 @@ describe("ContextGatheringApp", () => {
     expect(styles).not.toContain("brand-attribution");
   });
 
+  it("places the twelve illustrated ground bushes in the requested order", () => {
+    const html = renderToStaticMarkup(createElement(ContextGatheringApp));
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+    const shellRule = styles.slice(
+      styles.indexOf(".owlet-shell {"),
+      styles.indexOf(".owlet-shell::before"),
+    );
+    const bushSources = [
+      ...html.matchAll(/<img[^>]+class="ground-bush[^>]+>/g),
+    ].map(([image]) => image.match(/src="([^"]+)"/)?.[1]);
+
+    expect(bushSources).toEqual(
+      [5, 2, 6, 1, 3, 4, 2, 4, 1, 6, 5, 3].map(
+        (number) => `/assets/background/bushes/bush_${number}.svg`,
+      ),
+    );
+    expect(shellRule).not.toContain("135deg");
+  });
+
+  it("uses one shared size and keeps lowered ground bushes behind the brown strip", () => {
+    const styles = readFileSync(
+      new URL("../styles.css", import.meta.url),
+      "utf8",
+    );
+    const bushesRule = styles.match(/\.ground-bushes\s*\{([^}]*)\}/)?.[1];
+    const bushRule = styles.match(/\.ground-bush\s*\{([^}]*)\}/)?.[1];
+    const groundStripRule = styles.match(
+      /\.owlet-shell::after\s*\{([^}]*)\}/,
+    )?.[1];
+    const positionRules = styles.match(/\.ground-bush-\d{2}\s*\{[^}]*\}/g);
+
+    expect(bushesRule).toContain("z-index: 0;");
+    expect(groundStripRule).toContain("z-index: 1;");
+    expect(bushRule).toContain("width: clamp(96px, 15vw, 240px);");
+    expect(bushRule).toContain("transform: translateY(10%);");
+    expect(positionRules).toHaveLength(12);
+    expect(
+      new Set(positionRules?.map((rule) => rule.match(/bottom: (\d+)px/)?.[1]))
+        .size,
+    ).toBeGreaterThan(3);
+    expect(positionRules?.[4]).toContain("transform: translateY(15%);");
+    expect(positionRules?.[11]).toContain("right: -5vw;");
+    expect(positionRules?.[11]).toContain("transform: translateY(15%);");
+  });
+
   it("places repo submission beside the URL field with one GitHub access guidance sentence", () => {
     const html = renderToStaticMarkup(createElement(ContextGatheringApp));
     const styles = readFileSync(

@@ -10,6 +10,12 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import bush1Url from "../../../assets/background/bushes/bush_1.svg";
+import bush2Url from "../../../assets/background/bushes/bush_2.svg";
+import bush3Url from "../../../assets/background/bushes/bush_3.svg";
+import bush4Url from "../../../assets/background/bushes/bush_4.svg";
+import bush5Url from "../../../assets/background/bushes/bush_5.svg";
+import bush6Url from "../../../assets/background/bushes/bush_6.svg";
 import githubLogoUrl from "../../../assets/github-logo.png";
 import {
   type ContextGatheringDraft,
@@ -77,6 +83,21 @@ const durationOptions = [
   { label: "1 min", seconds: 60 },
   { label: "2 min", seconds: 120 },
   { label: "3 min", seconds: 180 },
+];
+
+const groundBushes = [
+  { className: "ground-bush-01", src: bush5Url },
+  { className: "ground-bush-02", src: bush2Url },
+  { className: "ground-bush-03", src: bush6Url },
+  { className: "ground-bush-04", src: bush1Url },
+  { className: "ground-bush-05", src: bush3Url },
+  { className: "ground-bush-06", src: bush4Url },
+  { className: "ground-bush-07", src: bush2Url },
+  { className: "ground-bush-08", src: bush4Url },
+  { className: "ground-bush-09", src: bush1Url },
+  { className: "ground-bush-10", src: bush6Url },
+  { className: "ground-bush-11", src: bush5Url },
+  { className: "ground-bush-12", src: bush3Url },
 ];
 
 let pendingGitHubCallbackConnection: PendingGitHubCallbackConnection | null =
@@ -531,6 +552,16 @@ export function ContextGatheringApp() {
 
   return (
     <main className={`owlet-shell owlet-shell-${draft.chatStep}`}>
+      <div className="ground-bushes" aria-hidden="true">
+        {groundBushes.map((bush) => (
+          <img
+            alt=""
+            className={`ground-bush ${bush.className}`}
+            key={bush.className}
+            src={bush.src}
+          />
+        ))}
+      </div>
       <section className="brand" aria-label="MakeADemo">
         <span className="brand-name">MakeADemo</span>
       </section>
