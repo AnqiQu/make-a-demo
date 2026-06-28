@@ -3,6 +3,7 @@ import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
 import type { PreparationWorkspace } from "../03-repo-preparation/preparation-workspace.interface";
+import { executeSubmittedCode } from "../03-repo-preparation/submitted-code-execution";
 import {
   validateDemoScriptCaptureSdkTypes,
   writeGeneratedCaptureSdkHarness,
@@ -229,7 +230,8 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
       }),
     );
 
-    await workspace.execute(
+    await executeSubmittedCode(
+      workspace,
       `mkdir -p ${shellQuote(remoteSceneWorkspace)} ${shellQuote(remoteVideoScratchDirectory)} ${shellQuote(remoteRawScenesDirectory)} ${shellQuote(remoteSceneClipsDirectory)}`,
     );
     await workspace.uploadFiles([
@@ -255,7 +257,8 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
       { destinationPath: remoteScenePath, sourcePath: localScenePath },
     ]);
 
-    const result = await workspace.execute(
+    const result = await executeSubmittedCode(
+      workspace,
       `cd ${shellQuote(remoteSceneWorkspace)} && timeout -s TERM ${Math.ceil(this.sceneTimeoutMs / 1000)} bun ${shellQuote(remoteScenePath)}`,
     );
     await writeFile(markerLogPath, extractMarkerLog(result.stdout));
@@ -278,7 +281,8 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
       directory: remoteVideoScratchDirectory,
       workspace,
     });
-    await workspace.execute(
+    await executeSubmittedCode(
+      workspace,
       `rm -f ${shellQuote(remoteRawTakePath)} && mv ${shellQuote(remoteRecordedVideoPath)} ${shellQuote(remoteRawTakePath)}`,
     );
 
@@ -306,7 +310,8 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
         `${scene.id}.webm`,
       );
       const durationSeconds = (endMs - startMs) / 1000;
-      const trimResult = await workspace.execute(
+      const trimResult = await executeSubmittedCode(
+        workspace,
         [
           "ffmpeg",
           "-y",
@@ -412,7 +417,8 @@ async function probeRemoteVideoDurationSeconds(input: {
   videoPath: string;
   workspace: PreparationWorkspace;
 }): Promise<number> {
-  const result = await input.workspace.execute(
+  const result = await executeSubmittedCode(
+    input.workspace,
     [
       "ffprobe",
       "-v",
@@ -676,7 +682,8 @@ async function findSingleRemoteVideo(input: {
   directory: string;
   workspace: PreparationWorkspace;
 }) {
-  const result = await input.workspace.execute(
+  const result = await executeSubmittedCode(
+    input.workspace,
     `find ${shellQuote(input.directory)} -type f -name '*.webm' | sort`,
   );
   if (result.exitCode !== 0) {

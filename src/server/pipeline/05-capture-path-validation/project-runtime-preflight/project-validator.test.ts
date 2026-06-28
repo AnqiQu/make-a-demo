@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { PreparationWorkspaceHandle } from "../../03-repo-preparation/preparation-workspace-runner";
 import type { BrowserValidator } from "./browser-validator.interface";
 import { validateProject } from "./project-validator";
 import type { SandboxRunner } from "./sandbox-runner.interface";
@@ -48,6 +49,46 @@ describe("validateProject", () => {
       warnings: [],
     });
     expect(browserUrls).toEqual(["https://preview.example.test"]);
+  });
+
+  it("passes the retained preparation workspace to browser validation", async () => {
+    const preparationWorkspace = fakePreparationWorkspace();
+    let browserWorkspaceId = "";
+    const sandboxRunner: SandboxRunner = {
+      async runValidation() {
+        return {
+          browserUrl: "http://localhost:3000",
+          blockedNetworkAttempts: [],
+          logs: ["started demo"],
+          repoFiles: ["package.json", "bun.lock"],
+          runtimeExitCode: 0,
+        };
+      },
+    };
+    const browserValidator: BrowserValidator = {
+      async validate(input) {
+        browserWorkspaceId = input.preparationWorkspace?.id ?? "";
+        return {
+          interactable: true,
+          logs: ["loaded app inside submitted-code container"],
+          screenshotArtifactId: "artifact_screenshot",
+        };
+      },
+    };
+
+    const result = await validateProject(
+      {
+        preparationManifest: manifest({
+          demoCommand: "npm run demo",
+          url: "http://localhost:3000",
+        }),
+        preparationWorkspace,
+      },
+      { browserValidator, sandboxRunner },
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(browserWorkspaceId).toBe("workspace_123");
   });
 
   it("fails validation when runtime network attempts cross the sandbox boundary", async () => {
@@ -185,6 +226,27 @@ describe("validateProject", () => {
     });
   });
 });
+
+function fakePreparationWorkspace(): PreparationWorkspaceHandle {
+  return {
+    async destroy() {},
+    id: "workspace_123",
+    workspace: {
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async getPreviewUrl() {
+        return "https://preview.example.test";
+      },
+      async setOutboundNetworkAccess() {},
+      async setSubmittedCodeNetworkAccess() {},
+      async uploadFiles() {},
+    },
+  };
+}
 
 function manifest(overrides: { demoCommand: string; url: string }) {
   return {

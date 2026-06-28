@@ -116,6 +116,10 @@ describe("DefaultCapturePathSceneValidator", () => {
       workspace: {
         async execute(command) {
           executedCommands.push(command);
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async executeSubmittedCode(command) {
+          executedCommands.push(command);
           if (command.includes("bun '/workspace/.makeademo/")) {
             return {
               exitCode: 0,
@@ -179,4 +183,107 @@ describe("DefaultCapturePathSceneValidator", () => {
       "/workspace/.makeademo/capture-path-validation-runs/",
     );
   }, 20_000);
+
+  it("reports blocked runtime network from prepared-workspace dry-runs", async () => {
+    const validator = new DefaultCapturePathSceneValidator();
+    const preparationWorkspace: PreparationWorkspaceHandle = {
+      async destroy() {},
+      id: "workspace_123",
+      workspace: {
+        async execute() {
+          throw new Error("outer workspace execution must not validate scenes");
+        },
+        async executeSubmittedCode(command) {
+          if (command.includes("bun '/workspace/.makeademo/")) {
+            return {
+              exitCode: 0,
+              stderr:
+                '[makeademo:network-blocked] {"direction":"outbound","host":"analytics.example.com","phase":"runtime"}',
+              stdout: "",
+            };
+          }
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async getPreviewUrl() {
+          return "https://preview.example.test/";
+        },
+        async setOutboundNetworkAccess() {},
+        async uploadFiles() {},
+      },
+    };
+
+    const result = await validator.validateScene({
+      baseUrl: "https://preview.example.test/",
+      demoPlaywrightScript: [
+        "import { setup, scene } from './makeademo-capture-sdk';",
+        "await setup(async () => {});",
+        "await scene('scene_network', async () => {});",
+      ].join("\n"),
+      preparationWorkspace,
+      scene: {
+        expectedVisibleOutcome: "The page is visible.",
+        humanReadableDescription: "Try analytics.",
+        id: "scene_network",
+      },
+      sectionId: "section_network",
+    });
+
+    expect(result).toMatchObject({
+      blockedNetworkAttempts: [
+        {
+          direction: "outbound",
+          host: "analytics.example.com",
+          phase: "runtime",
+        },
+      ],
+      failureReason:
+        "Capture Path Validation blocked runtime network access from the generated Demo Script.",
+      status: "failed",
+    });
+  });
+
+  it("bounds prepared-workspace dry-runs with a command timeout", async () => {
+    const validator = new DefaultCapturePathSceneValidator();
+    const executedCommands: string[] = [];
+    const preparationWorkspace: PreparationWorkspaceHandle = {
+      async destroy() {},
+      id: "workspace_123",
+      workspace: {
+        async execute() {
+          throw new Error("outer workspace execution must not validate scenes");
+        },
+        async executeSubmittedCode(command) {
+          executedCommands.push(command);
+          if (command.includes("timeout -s TERM 120 bun")) {
+            return { exitCode: 124, stderr: "timed out", stdout: "" };
+          }
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async getPreviewUrl() {
+          return "https://preview.example.test/";
+        },
+        async setOutboundNetworkAccess() {},
+        async uploadFiles() {},
+      },
+    };
+
+    const result = await validator.validateScene({
+      baseUrl: "https://preview.example.test/",
+      demoPlaywrightScript: [
+        "import { setup, scene } from './makeademo-capture-sdk';",
+        "await setup(async () => {});",
+        "await scene('scene_timeout', async () => {});",
+      ].join("\n"),
+      preparationWorkspace,
+      scene: {
+        expectedVisibleOutcome: "The page is visible.",
+        humanReadableDescription: "Hang.",
+        id: "scene_timeout",
+      },
+      sectionId: "section_timeout",
+    });
+
+    expect(result).toMatchObject({ status: "failed" });
+    expect(executedCommands.join("\n")).toContain("timeout -s TERM 120 bun");
+  });
 });

@@ -59,6 +59,9 @@ export async function validateProject(
     const browserUrl =
       sandboxResult.browserUrl ?? input.preparationManifest.url;
     const browserResult = await dependencies.browserValidator.validate({
+      ...(input.preparationWorkspace === undefined
+        ? {}
+        : { preparationWorkspace: input.preparationWorkspace }),
       url: browserUrl,
     });
     const browserNetworkAttempts = findRuntimeBoundaryViolations(

@@ -30,7 +30,7 @@ describe("DaytonaSandboxRunner", () => {
       url: "http://localhost:3000",
     });
 
-    expect(workspace.commands).toEqual([
+    expect(workspace.submittedCommands).toEqual([
       "find /workspace -maxdepth 1 -mindepth 1 -printf '%f\\n' | sort",
       "npm ci",
       STOP_DEMO_COMMAND,
@@ -39,9 +39,9 @@ describe("DaytonaSandboxRunner", () => {
       FRESH_CAPTURE_BASELINE_COMMAND,
       "if test -f /tmp/makeademo-demo.log; then cat /tmp/makeademo-demo.log; fi",
     ]);
-    expect(workspace.networkAccess).toEqual([true, false]);
+    expect(workspace.submittedNetworkAccess).toEqual([true, false]);
     expect(result).toMatchObject({
-      browserUrl: "https://preview.example.test:3000/",
+      browserUrl: "http://localhost:3000",
       blockedNetworkAttempts: [],
       logs: [
         "package-lock.json\npackage.json\n",
@@ -143,7 +143,7 @@ describe("DaytonaSandboxRunner", () => {
     });
 
     expect(result.runtimeExitCode).toBe(1);
-    expect(workspace.commands).toEqual([
+    expect(workspace.submittedCommands).toEqual([
       "find /workspace -maxdepth 1 -mindepth 1 -printf '%f\\n' | sort",
       "npm ci",
     ]);
@@ -166,7 +166,7 @@ describe("DaytonaSandboxRunner", () => {
       }),
     ).rejects.toThrow("npm ci exploded");
 
-    expect(workspace.networkAccess).toEqual([true, false]);
+    expect(workspace.submittedNetworkAccess).toEqual([true, false]);
     expect(workspace.destroyed).toBe(true);
   });
 
@@ -184,8 +184,8 @@ describe("DaytonaSandboxRunner", () => {
       url: "http://localhost:3000",
     });
 
-    expect(workspace.commands).not.toContain("npm run demo");
-    expect(workspace.commands).toContain(START_DEMO_COMMAND);
+    expect(workspace.submittedCommands).not.toContain("npm run demo");
+    expect(workspace.submittedCommands).toContain(START_DEMO_COMMAND);
     expect(result.runtimeExitCode).toBe(0);
   });
 
@@ -201,9 +201,9 @@ describe("DaytonaSandboxRunner", () => {
       url: "http://localhost:3000",
     });
 
-    expect(workspace.commands).toContain(STOP_DEMO_COMMAND);
-    expect(workspace.commands.indexOf(STOP_DEMO_COMMAND)).toBeLessThan(
-      workspace.commands.indexOf(START_DEMO_COMMAND),
+    expect(workspace.submittedCommands).toContain(STOP_DEMO_COMMAND);
+    expect(workspace.submittedCommands.indexOf(STOP_DEMO_COMMAND)).toBeLessThan(
+      workspace.submittedCommands.indexOf(START_DEMO_COMMAND),
     );
   });
 
@@ -221,7 +221,9 @@ describe("DaytonaSandboxRunner", () => {
     });
 
     expect(
-      workspace.commands.filter((command) => command.includes("fetch")),
+      workspace.submittedCommands.filter((command) =>
+        command.includes("fetch"),
+      ),
     ).toHaveLength(2);
     expect(result.runtimeExitCode).toBe(0);
   });
@@ -246,7 +248,7 @@ describe("DaytonaSandboxRunner", () => {
     expect(result.logs).toContain("demo server failed");
   });
 
-  it("uses the manifest URL port when resolving a browser preview URL", async () => {
+  it("returns the manifest URL as the submitted-code browser URL", async () => {
     const workspace = new FakePreparationWorkspaceHandle();
     const runner = new DaytonaSandboxRunner();
 
@@ -258,11 +260,11 @@ describe("DaytonaSandboxRunner", () => {
       url: "http://localhost:4173",
     });
 
-    expect(workspace.previewPorts).toEqual([4173]);
-    expect(result.browserUrl).toBe("https://preview.example.test:4173/");
+    expect(workspace.previewPorts).toEqual([]);
+    expect(result.browserUrl).toBe("http://localhost:4173");
   });
 
-  it("preserves the manifest URL path, query, and hash on browser preview URLs", async () => {
+  it("preserves the manifest URL path, query, and hash on submitted-code browser URLs", async () => {
     const workspace = new FakePreparationWorkspaceHandle();
     const runner = new DaytonaSandboxRunner();
 
@@ -275,7 +277,7 @@ describe("DaytonaSandboxRunner", () => {
     });
 
     expect(result.browserUrl).toBe(
-      "https://preview.example.test:4173/articles?tab=global#/feed",
+      "http://localhost:4173/articles?tab=global#/feed",
     );
   });
 
@@ -288,13 +290,15 @@ describe("DaytonaSandboxRunner", () => {
       readinessPollIntervalMs: 0,
     });
 
-    expect(workspace.commands[0]).toBe(STOP_DEMO_COMMAND);
-    expect(workspace.commands[1]).toBe(FRESH_CAPTURE_RESTORE_COMMAND);
-    expect(workspace.commands[2]).toContain("exec npm run demo:makeademo");
-    expect(workspace.commands[3]).toBe(
+    expect(workspace.submittedCommands[0]).toBe(STOP_DEMO_COMMAND);
+    expect(workspace.submittedCommands[1]).toBe(FRESH_CAPTURE_RESTORE_COMMAND);
+    expect(workspace.submittedCommands[2]).toContain(
+      "exec npm run demo:makeademo",
+    );
+    expect(workspace.submittedCommands[3]).toBe(
       "node -e 'fetch(process.argv[1]).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));' 'http://localhost:3000'",
     );
-    expect(result.browserUrl).toBe("https://preview.example.test:3000/");
+    expect(result.browserUrl).toBe("http://localhost:3000");
     expect(workspace.sandboxLogs).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -306,7 +310,7 @@ describe("DaytonaSandboxRunner", () => {
           stage: "footage-capture",
         }),
         expect.objectContaining({
-          browserUrl: "https://preview.example.test:3000/",
+          browserUrl: "http://localhost:3000",
           event: "footage-capture.fresh-state.restart.succeeded",
           stage: "footage-capture",
         }),
@@ -348,7 +352,7 @@ describe("DaytonaSandboxRunner", () => {
         readinessPollIntervalMs: 0,
       }),
     ).rejects.toThrow("Fresh Footage Capture baseline could not be restored");
-    expect(workspace.commands).not.toContain(START_DEMO_COMMAND);
+    expect(workspace.submittedCommands).not.toContain(START_DEMO_COMMAND);
     expect(workspace.sandboxLogs).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -368,6 +372,8 @@ class FakePreparationWorkspaceHandle implements PreparationWorkspaceHandle {
   previewPorts: number[] = [];
   readinessResults: number[] = [];
   sandboxLogs: Record<string, unknown>[] = [];
+  submittedCommands: string[] = [];
+  submittedNetworkAccess: boolean[] = [];
   private lastReadinessExitCode = 0;
 
   constructor(
@@ -378,6 +384,10 @@ class FakePreparationWorkspaceHandle implements PreparationWorkspaceHandle {
   workspace = {
     execute: async (command: string) => {
       this.commands.push(command);
+      return { exitCode: 0, stderr: "", stdout: `outer ${command}` };
+    },
+    executeSubmittedCode: async (command: string) => {
+      this.submittedCommands.push(command);
       if (command === this.commandToThrow) {
         throw new Error(`${command} exploded`);
       }
@@ -420,6 +430,9 @@ class FakePreparationWorkspaceHandle implements PreparationWorkspaceHandle {
     },
     setOutboundNetworkAccess: async (enabled: boolean) => {
       this.networkAccess.push(enabled);
+    },
+    setSubmittedCodeNetworkAccess: async (enabled: boolean) => {
+      this.submittedNetworkAccess.push(enabled);
     },
     writeSandboxLog: async (entry: Record<string, unknown>) => {
       this.sandboxLogs.push(entry);

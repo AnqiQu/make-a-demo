@@ -1,5 +1,7 @@
+import { runDependencyInstallWithNetworkWindow } from "../../../pipeline/03-repo-preparation/dependency-install-network-window";
 import type { PreparationManifest } from "../../../pipeline/03-repo-preparation/preparation-manifest";
 import type { PreparationWorkspaceHandle } from "../../../pipeline/03-repo-preparation/preparation-workspace-runner";
+import { executeSubmittedCode } from "../../../pipeline/03-repo-preparation/submitted-code-execution";
 import { inferInstallPlan } from "../../../pipeline/05-capture-path-validation/project-runtime-preflight/install-plan";
 import type {
   SandboxRunner,
@@ -44,7 +46,8 @@ export class DaytonaSandboxRunner implements SandboxRunner {
       });
     try {
       await writeSandboxLog({ event: "project-validation.started" });
-      const repoFilesResult = await handle.workspace.execute(
+      const repoFilesResult = await executeSubmittedCode(
+        handle.workspace,
         "find /workspace -maxdepth 1 -mindepth 1 -printf '%f\\n' | sort",
       );
       const repoFiles = repoFilesResult.stdout
@@ -57,15 +60,13 @@ export class DaytonaSandboxRunner implements SandboxRunner {
         event: "project-validation.dependency-install.started",
       });
 
-      await handle.workspace.setOutboundNetworkAccess(true);
       let installResult: Awaited<
         ReturnType<PreparationWorkspaceHandle["workspace"]["execute"]>
       >;
-      try {
-        installResult = await handle.workspace.execute(installPlan.command);
-      } finally {
-        await handle.workspace.setOutboundNetworkAccess(false);
-      }
+      installResult = await runDependencyInstallWithNetworkWindow({
+        command: installPlan.command,
+        workspace: handle.workspace,
+      });
 
       if (installResult.exitCode !== 0) {
         await writeSandboxLog({
@@ -97,8 +98,9 @@ export class DaytonaSandboxRunner implements SandboxRunner {
         event: "project-validation.demo-command.started",
         url: input.url,
       });
-      await handle.workspace.execute(createStopDemoCommand());
-      const runtimeResult = await handle.workspace.execute(
+      await executeSubmittedCode(handle.workspace, createStopDemoCommand());
+      const runtimeResult = await executeSubmittedCode(
+        handle.workspace,
         createStartDemoCommand(input.demoCommand),
       );
       await writeSandboxLog({
@@ -119,7 +121,8 @@ export class DaytonaSandboxRunner implements SandboxRunner {
           stdout: readinessResult.stdout,
           url: input.url,
         });
-        const demoLogsResult = await handle.workspace.execute(
+        const demoLogsResult = await executeSubmittedCode(
+          handle.workspace,
           "if test -f /tmp/makeademo-demo.log; then cat /tmp/makeademo-demo.log; fi",
         );
         await writeDemoServerLog(writeSandboxLog, demoLogsResult.stdout);
@@ -142,7 +145,8 @@ export class DaytonaSandboxRunner implements SandboxRunner {
         event: "project-validation.demo-readiness.succeeded",
         url: input.url,
       });
-      const baselineResult = await handle.workspace.execute(
+      const baselineResult = await executeSubmittedCode(
+        handle.workspace,
         createFreshCaptureBaselineCommand(),
       );
       if (baselineResult.exitCode !== 0) {
@@ -168,14 +172,12 @@ export class DaytonaSandboxRunner implements SandboxRunner {
       await writeSandboxLog({
         event: "project-validation.fresh-capture-baseline.created",
       });
-      const demoLogsResult = await handle.workspace.execute(
+      const demoLogsResult = await executeSubmittedCode(
+        handle.workspace,
         "if test -f /tmp/makeademo-demo.log; then cat /tmp/makeademo-demo.log; fi",
       );
       await writeDemoServerLog(writeSandboxLog, demoLogsResult.stdout);
-      const browserUrl = await createBrowserPreviewUrl({
-        localUrl: input.url,
-        workspace: handle.workspace,
-      });
+      const browserUrl = input.url;
       await writeSandboxLog({
         browserUrl,
         event: "project-validation.browser-preview.created",
@@ -226,8 +228,12 @@ export async function restartPreparedDemoForFreshCapture(input: {
     event: "footage-capture.fresh-state.restart.started",
     url: input.preparationManifest.url,
   });
-  await input.preparationWorkspace.workspace.execute(createStopDemoCommand());
-  const restoreResult = await input.preparationWorkspace.workspace.execute(
+  await executeSubmittedCode(
+    input.preparationWorkspace.workspace,
+    createStopDemoCommand(),
+  );
+  const restoreResult = await executeSubmittedCode(
+    input.preparationWorkspace.workspace,
     createFreshCaptureRestoreCommand(),
   );
   if (restoreResult.exitCode !== 0) {
@@ -241,7 +247,8 @@ export async function restartPreparedDemoForFreshCapture(input: {
   await writeSandboxLog({
     event: "footage-capture.fresh-state.restore.succeeded",
   });
-  const runtimeResult = await input.preparationWorkspace.workspace.execute(
+  const runtimeResult = await executeSubmittedCode(
+    input.preparationWorkspace.workspace,
     createStartDemoCommand(input.preparationManifest.demoCommand),
   );
   await writeSandboxLog({
@@ -266,10 +273,7 @@ export async function restartPreparedDemoForFreshCapture(input: {
     throw new Error("Fresh Footage Capture state did not become ready.");
   }
 
-  const browserUrl = await createBrowserPreviewUrl({
-    localUrl: input.preparationManifest.url,
-    workspace: input.preparationWorkspace.workspace,
-  });
+  const browserUrl = input.preparationManifest.url;
   await writeSandboxLog({
     browserUrl,
     event: "footage-capture.fresh-state.restart.succeeded",
@@ -331,7 +335,8 @@ async function waitForDemoReadiness(input: {
   };
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    lastResult = await input.workspace.execute(
+    lastResult = await executeSubmittedCode(
+      input.workspace,
       createDemoReadinessCommand(input.url),
     );
     if (lastResult.exitCode === 0) {
@@ -355,30 +360,6 @@ async function waitForDemoReadiness(input: {
 
 function createDemoReadinessCommand(url: string): string {
   return `node -e ${shellQuote("fetch(process.argv[1]).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));")} ${shellQuote(url)}`;
-}
-
-function readPortFromLocalUrl(url: string): number {
-  const parsedUrl = new URL(url);
-  if (parsedUrl.port.length > 0) {
-    return Number(parsedUrl.port);
-  }
-
-  return parsedUrl.protocol === "https:" ? 443 : 80;
-}
-
-async function createBrowserPreviewUrl(input: {
-  localUrl: string;
-  workspace: PreparationWorkspaceHandle["workspace"];
-}): Promise<string> {
-  const localUrl = new URL(input.localUrl);
-  const previewUrl = new URL(
-    await input.workspace.getPreviewUrl(readPortFromLocalUrl(input.localUrl)),
-  );
-  previewUrl.pathname = localUrl.pathname;
-  previewUrl.search = localUrl.search;
-  previewUrl.hash = localUrl.hash;
-
-  return previewUrl.toString();
 }
 
 function delay(milliseconds: number): Promise<void> {

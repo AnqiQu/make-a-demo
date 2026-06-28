@@ -1,6 +1,8 @@
+import type { PreparationWorkspaceHandle } from "../../03-repo-preparation/preparation-workspace-runner";
 import type { NetworkAttempt } from "./network-isolation-policy";
 
 export type BrowserValidationInput = {
+  preparationWorkspace?: PreparationWorkspaceHandle;
   url: string;
 };
 

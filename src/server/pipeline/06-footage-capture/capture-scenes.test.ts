@@ -157,6 +157,7 @@ describe("captureScenesFromScript", () => {
     const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
     const tempRoot = join(workspace, "runs");
     const executedCommands: string[] = [];
+    const submittedCommands: string[] = [];
     const uploadedDestinations: string[] = [];
     const downloadedSources: string[] = [];
     const preparationWorkspace: PreparationWorkspaceHandle = {
@@ -174,6 +175,22 @@ describe("captureScenesFromScript", () => {
         },
         async execute(command) {
           executedCommands.push(command);
+          if (
+            command.includes("bun ") ||
+            command.includes("find ") ||
+            command.includes("ffmpeg") ||
+            command.includes("ffprobe") ||
+            command.includes("continuous-take") ||
+            command.includes("raw-scenes")
+          ) {
+            throw new Error(
+              "outer workspace execution must not run capture commands",
+            );
+          }
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async executeSubmittedCode(command) {
+          submittedCommands.push(command);
           if (command.includes("find ")) {
             return {
               exitCode: 0,
@@ -235,11 +252,13 @@ describe("captureScenesFromScript", () => {
         expect.stringContaining("makeademo-capture-sdk.js"),
       ]),
     );
-    expect(executedCommands.join("\n")).toContain(
+    expect(submittedCommands.join("\n")).toContain(
       "/workspace/.makeademo/footage-capture-runs/capture-sandbox",
     );
-    expect(executedCommands.join("\n")).toContain("ffmpeg");
-    expect(executedCommands.join("\n")).toContain("ffprobe");
+    expect(submittedCommands.join("\n")).toContain("ffmpeg");
+    expect(submittedCommands.join("\n")).toContain("ffprobe");
+    expect(executedCommands.join("\n")).not.toContain("ffmpeg");
+    expect(executedCommands.join("\n")).not.toContain("ffprobe");
     expect(downloadedSources).toEqual(
       expect.arrayContaining([
         expect.stringContaining("raw-scenes/continuous-take.webm"),
@@ -252,6 +271,68 @@ describe("captureScenesFromScript", () => {
         "utf8",
       ),
     ).resolves.toBe("downloaded video");
+  });
+
+  it("fails prepared-workspace Footage Capture before video discovery when runtime network is blocked", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
+    const tempRoot = join(workspace, "runs");
+    const submittedCommands: string[] = [];
+    const downloadedSources: string[] = [];
+    const preparationWorkspace: PreparationWorkspaceHandle = {
+      async destroy() {},
+      id: "daytona_workspace",
+      workspace: {
+        async downloadFiles(files) {
+          downloadedSources.push(...files.map((file) => file.sourcePath));
+        },
+        async execute() {
+          throw new Error(
+            "outer workspace execution must not run capture commands",
+          );
+        },
+        async executeSubmittedCode(command) {
+          submittedCommands.push(command);
+          if (command.includes("bun ")) {
+            return {
+              exitCode: 0,
+              stderr:
+                '[makeademo:network-blocked] {"direction":"outbound","host":"analytics.example.com","phase":"runtime"}',
+              stdout: "",
+            };
+          }
+          if (
+            command.includes("find ") ||
+            command.includes("ffmpeg") ||
+            command.includes("ffprobe")
+          ) {
+            throw new Error("post-network-block capture command must not run");
+          }
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async getPreviewUrl() {
+          return "https://preview.example.test/";
+        },
+        async setOutboundNetworkAccess() {},
+        async uploadFiles() {},
+      },
+    };
+
+    await expect(
+      captureScenesFromScript({
+        baseUrl: "https://preview.example.test/",
+        keepTemp: true,
+        preparationWorkspace,
+        runId: "capture-sandbox",
+        scriptPackage: validDemoScript(),
+        tempRoot,
+      }),
+    ).rejects.toThrow(
+      "Footage Capture blocked runtime network access from the generated Demo Script: analytics.example.com",
+    );
+    expect(submittedCommands.join("\n")).toContain("bun ");
+    expect(submittedCommands.join("\n")).not.toContain("ffmpeg");
+    expect(submittedCommands.join("\n")).not.toContain("ffprobe");
+    expect(downloadedSources).toEqual([]);
   });
 
   it("requires a prepared workspace when no explicit test recorder is injected", async () => {
