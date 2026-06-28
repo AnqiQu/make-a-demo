@@ -2,6 +2,7 @@ import type {
   RepoSecurityInput,
   RepoSecurityResult,
 } from "../../pipeline/02-repo-security-screen/repo-security-screen";
+import type { PreparationWorkspaceHandle } from "../../pipeline/03-repo-preparation/preparation-workspace-runner";
 import type {
   RepoPreparationInput,
   RepoPreparationResult,
@@ -232,6 +233,7 @@ export async function runPipelineJob(
       stage: "script-generation",
       status: "failed",
     });
+    await destroyPreparationWorkspaceQuietly(preparation.workspace);
     throw error;
   }
   reportStageFinished("script-generation", "succeeded", {
@@ -251,16 +253,21 @@ export async function runPipelineJob(
   let capturePathValidation: CapturePathValidationResult | undefined;
   const repairAttemptLimit = readCapturePathRepairAttemptLimit();
   for (let attempt = 0; attempt <= repairAttemptLimit; attempt += 1) {
-    capturePathValidation = await runCapturePathValidation({
-      context,
-      dependencies,
-      now,
-      onProgress: options.onProgress,
-      observer,
-      preparationManifest,
-      preparationWorkspace: preparation.workspace,
-      demoScriptPackage,
-    });
+    try {
+      capturePathValidation = await runCapturePathValidation({
+        context,
+        dependencies,
+        now,
+        onProgress: options.onProgress,
+        observer,
+        preparationManifest,
+        preparationWorkspace: preparation.workspace,
+        demoScriptPackage,
+      });
+    } catch (error) {
+      await destroyPreparationWorkspaceQuietly(preparation.workspace);
+      throw error;
+    }
 
     if (capturePathValidation.status === "succeeded") {
       break;
@@ -270,25 +277,34 @@ export async function runPipelineJob(
       attempt === repairAttemptLimit ||
       dependencies.repairCapturePathFailure === undefined
     ) {
+      await destroyPreparationWorkspaceQuietly(preparation.workspace);
       return {
         capturePathValidation,
         status: "capture-path-validation-failed",
       };
     }
 
-    const repair = await dependencies.repairCapturePathFailure({
-      attempt: attempt + 1,
-      failure: capturePathValidation,
-      ...(preparation.opencodeSessionID === undefined
-        ? {}
-        : { opencodeSessionID: preparation.opencodeSessionID }),
-      preparationManifest,
-      ...(preparation.workspace === undefined
-        ? {}
-        : { preparationWorkspace: preparation.workspace }),
-      repoUrl: input.repoUrl,
-      demoScriptPackage,
-    });
+    let repair: Awaited<
+      ReturnType<CapturePathRepairer["repairCapturePathFailure"]>
+    >;
+    try {
+      repair = await dependencies.repairCapturePathFailure({
+        attempt: attempt + 1,
+        failure: capturePathValidation,
+        ...(preparation.opencodeSessionID === undefined
+          ? {}
+          : { opencodeSessionID: preparation.opencodeSessionID }),
+        preparationManifest,
+        ...(preparation.workspace === undefined
+          ? {}
+          : { preparationWorkspace: preparation.workspace }),
+        repoUrl: input.repoUrl,
+        demoScriptPackage,
+      });
+    } catch (error) {
+      await destroyPreparationWorkspaceQuietly(preparation.workspace);
+      throw error;
+    }
     preparationManifest = repair.preparationManifest;
     demoScriptPackage = repair.demoScriptPackage;
   }
@@ -315,6 +331,16 @@ function requireCapturePathValidation(
   }
 
   return result;
+}
+
+async function destroyPreparationWorkspaceQuietly(
+  workspace: PreparationWorkspaceHandle | undefined,
+): Promise<void> {
+  try {
+    await workspace?.destroy();
+  } catch {
+    // Preserve the pipeline failure that triggered cleanup.
+  }
 }
 
 async function runCapturePathValidation(input: {

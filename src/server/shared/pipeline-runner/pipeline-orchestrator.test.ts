@@ -509,6 +509,199 @@ describe("runPipelineJob", () => {
     }
   });
 
+  it("destroys the prepared workspace when Script Generation fails", async () => {
+    const cleanup: string[] = [];
+
+    await expect(
+      runPipelineJob(
+        {
+          demoBrief: { keyProductFeatures: ["validation"] },
+          normalizedSupportingDocuments: [],
+          repoSecurity: {
+            files: [{ path: "package.json", text: "{}" }],
+            repoStats: { fileCount: 1, sizeBytes: 1_000 },
+          },
+          repoUrl: "https://github.com/example/app",
+          workspaceId: "workspace_123",
+        },
+        {
+          async generateScriptPackage() {
+            throw new Error("script generation exploded");
+          },
+          async prepareRepo() {
+            return {
+              manifest: manifest(),
+              status: "succeeded",
+              workspace: fakeWorkspaceHandle(cleanup),
+            };
+          },
+          screenRepoSecurity() {
+            return { rejections: [], status: "passed", warnings: [] };
+          },
+          async validateCapturePath() {
+            throw new Error("validation should not run after script failure");
+          },
+        },
+      ),
+    ).rejects.toThrow("script generation exploded");
+
+    expect(cleanup).toEqual(["destroy:daytona_workspace"]);
+  });
+
+  it("destroys the prepared workspace when Capture Path Validation exhausts repair", async () => {
+    const cleanup: string[] = [];
+
+    const result = await runPipelineJob(
+      {
+        demoBrief: { keyProductFeatures: ["validation"] },
+        normalizedSupportingDocuments: [],
+        repoSecurity: {
+          files: [{ path: "package.json", text: "{}" }],
+          repoStats: { fileCount: 1, sizeBytes: 1_000 },
+        },
+        repoUrl: "https://github.com/example/app",
+        workspaceId: "workspace_123",
+      },
+      {
+        async generateScriptPackage({ preparationManifest }) {
+          return scriptPackage({
+            assumptions: preparationManifest.assumptions,
+          });
+        },
+        async prepareRepo() {
+          return {
+            manifest: manifest(),
+            status: "succeeded",
+            workspace: fakeWorkspaceHandle(cleanup),
+          };
+        },
+        screenRepoSecurity() {
+          return { rejections: [], status: "passed", warnings: [] };
+        },
+        async validateCapturePath() {
+          return {
+            blockedNetworkAttempts: [],
+            failedSceneId: "scene_validation",
+            failureReason: "selector failed",
+            logs: ["selector failed"],
+            status: "failed",
+            warnings: [],
+          };
+        },
+      },
+    );
+
+    expect(result.status).toBe("capture-path-validation-failed");
+    expect(cleanup).toEqual(["destroy:daytona_workspace"]);
+  });
+
+  it("destroys the prepared workspace when Capture Path Validation throws", async () => {
+    const cleanup: string[] = [];
+
+    await expect(
+      runPipelineJob(
+        {
+          demoBrief: { keyProductFeatures: ["validation"] },
+          normalizedSupportingDocuments: [],
+          repoSecurity: {
+            files: [{ path: "package.json", text: "{}" }],
+            repoStats: { fileCount: 1, sizeBytes: 1_000 },
+          },
+          repoUrl: "https://github.com/example/app",
+          workspaceId: "workspace_123",
+        },
+        {
+          async generateScriptPackage({ preparationManifest }) {
+            return scriptPackage({
+              assumptions: preparationManifest.assumptions,
+            });
+          },
+          async prepareRepo() {
+            return {
+              manifest: manifest(),
+              status: "succeeded",
+              workspace: fakeWorkspaceHandle(cleanup),
+            };
+          },
+          screenRepoSecurity() {
+            return { rejections: [], status: "passed", warnings: [] };
+          },
+          async validateCapturePath() {
+            throw new Error("validation exploded");
+          },
+        },
+      ),
+    ).rejects.toThrow("validation exploded");
+
+    expect(cleanup).toEqual(["destroy:daytona_workspace"]);
+  });
+
+  it("destroys the prepared workspace when Capture Path repair throws", async () => {
+    const previousRepairAttempts =
+      process.env.MAKEADEMO_CAPTURE_PATH_REPAIR_ATTEMPTS;
+    process.env.MAKEADEMO_CAPTURE_PATH_REPAIR_ATTEMPTS = "1";
+    const cleanup: string[] = [];
+
+    try {
+      await expect(
+        runPipelineJob(
+          {
+            demoBrief: { keyProductFeatures: ["validation"] },
+            normalizedSupportingDocuments: [],
+            repoSecurity: {
+              files: [{ path: "package.json", text: "{}" }],
+              repoStats: { fileCount: 1, sizeBytes: 1_000 },
+            },
+            repoUrl: "https://github.com/example/app",
+            workspaceId: "workspace_123",
+          },
+          {
+            async generateScriptPackage({ preparationManifest }) {
+              return scriptPackage({
+                assumptions: preparationManifest.assumptions,
+              });
+            },
+            async prepareRepo() {
+              return {
+                manifest: manifest(),
+                status: "succeeded",
+                workspace: fakeWorkspaceHandle(cleanup),
+              };
+            },
+            async repairCapturePathFailure() {
+              throw new Error("repair exploded");
+            },
+            screenRepoSecurity() {
+              return { rejections: [], status: "passed", warnings: [] };
+            },
+            async validateCapturePath() {
+              return {
+                blockedNetworkAttempts: [],
+                failedSceneId: "scene_validation",
+                failureReason: "selector failed",
+                logs: ["selector failed"],
+                status: "failed",
+                warnings: [],
+              };
+            },
+          },
+        ),
+      ).rejects.toThrow("repair exploded");
+    } finally {
+      if (previousRepairAttempts === undefined) {
+        Reflect.deleteProperty(
+          process.env,
+          "MAKEADEMO_CAPTURE_PATH_REPAIR_ATTEMPTS",
+        );
+      } else {
+        process.env.MAKEADEMO_CAPTURE_PATH_REPAIR_ATTEMPTS =
+          previousRepairAttempts;
+      }
+    }
+
+    expect(cleanup).toEqual(["destroy:daytona_workspace"]);
+  });
+
   it("returns a fallback prompt and stops when Repo Preparation fails", async () => {
     const result = await runPipelineJob(
       {
@@ -601,9 +794,11 @@ function scriptPackage(input: {
   };
 }
 
-function fakeWorkspaceHandle() {
+function fakeWorkspaceHandle(cleanup?: string[]) {
   return {
-    async destroy() {},
+    async destroy() {
+      cleanup?.push("destroy:daytona_workspace");
+    },
     id: "daytona_workspace",
     workspace: {
       async execute() {

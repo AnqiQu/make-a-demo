@@ -335,6 +335,7 @@ export async function runFullPipelineJob(
     message: "Full pipeline result written.",
     resultPath,
   });
+  await destroyPreparationWorkspaceQuietly(stage1.preparationWorkspace);
 
   return {
     captureManifest,
@@ -561,6 +562,7 @@ async function captureCompositeAndReview(input: {
           `Workspace repair rerun failed with status ${repairedStage1.status}`,
         );
       }
+      await destroyPreparationWorkspaceQuietly(stage1.preparationWorkspace);
       stage1 = repairedStage1;
       browserUrl = stage1.capturePathValidation.browserUrl ?? browserUrl;
       scriptPersistence = await persistGeneratedScript({
@@ -652,6 +654,16 @@ async function captureCompositeAndReview(input: {
     scriptPersistence,
     stage1,
   };
+}
+
+async function destroyPreparationWorkspaceQuietly(
+  workspace: SucceededStage1["preparationWorkspace"],
+): Promise<void> {
+  try {
+    await workspace?.destroy();
+  } catch {
+    // Preserve the pipeline result or failure that triggered cleanup.
+  }
 }
 
 async function persistGeneratedScript(input: {
