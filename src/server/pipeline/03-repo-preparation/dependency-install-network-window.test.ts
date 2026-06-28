@@ -15,9 +15,13 @@ describe("runDependencyInstallWithNetworkWindow", () => {
 
     expect(result).toEqual({ exitCode: 0, stderr: "", stdout: "installed" });
     expect(events).toEqual([
-      "network:unblocked",
-      "execute:bun install",
-      "network:blocked",
+      "log:submitted-code-network.opening",
+      "submitted-network:unblocked",
+      "log:submitted-code-network.opened",
+      "submitted-execute:bun install",
+      "log:submitted-code-network.closing",
+      "submitted-network:blocked",
+      "log:submitted-code-network.closed",
     ]);
   });
 
@@ -32,9 +36,90 @@ describe("runDependencyInstallWithNetworkWindow", () => {
 
     expect(result).toEqual({ exitCode: 1, stderr: "nope", stdout: "" });
     expect(events).toEqual([
-      "network:unblocked",
-      "execute:npm install",
-      "network:blocked",
+      "log:submitted-code-network.opening",
+      "submitted-network:unblocked",
+      "log:submitted-code-network.opened",
+      "submitted-execute:npm install",
+      "log:submitted-code-network.closing",
+      "submitted-network:blocked",
+      "log:submitted-code-network.closed",
+    ]);
+  });
+
+  it("does not fall back to outer workspace execution for dependency install", async () => {
+    const workspace = fakeWorkspace([]);
+    workspace.execute = async () => {
+      throw new Error("outer workspace execution must not run submitted code");
+    };
+
+    await expect(
+      runDependencyInstallWithNetworkWindow({
+        command: "pnpm install",
+        workspace,
+      }),
+    ).resolves.toEqual({ exitCode: 0, stderr: "", stdout: "installed" });
+  });
+
+  it("denies non-install commands without opening submitted-code network", async () => {
+    const events: string[] = [];
+
+    await expect(
+      runDependencyInstallWithNetworkWindow({
+        command: "npm run build",
+        workspace: fakeWorkspace(events),
+      }),
+    ).rejects.toThrow(
+      "Dependency installation network access is limited to allowlisted package-manager install commands.",
+    );
+
+    expect(events).toEqual([]);
+  });
+
+  it("surfaces failures when submitted-code network cannot be blocked again", async () => {
+    const events: string[] = [];
+
+    await expect(
+      runDependencyInstallWithNetworkWindow({
+        command: "bun install",
+        workspace: fakeWorkspace(events, undefined, {
+          failNetworkDisable: true,
+        }),
+      }),
+    ).rejects.toThrow("failed to block submitted-code network");
+
+    expect(events).toEqual([
+      "log:submitted-code-network.opening",
+      "submitted-network:unblocked",
+      "log:submitted-code-network.opened",
+      "submitted-execute:bun install",
+      "log:submitted-code-network.closing",
+      "submitted-network:blocked",
+    ]);
+  });
+
+  it("blocks submitted-code network again when install execution throws", async () => {
+    const events: string[] = [];
+    const workspace = fakeWorkspace(events);
+    workspace.executeSubmittedCode = async (command) => {
+      events.push(`submitted-execute:${command}`);
+      throw new Error("install exploded");
+    };
+
+    await expect(
+      runDependencyInstallWithNetworkWindow({
+        command: "bun install",
+        workspace,
+      }),
+    ).rejects.toThrow("install exploded");
+
+    expect(events).toEqual([
+      "log:submitted-code-network.opening",
+      "submitted-network:unblocked",
+      "log:submitted-code-network.opened",
+      "submitted-execute:bun install",
+      "log:submitted-code-network.closing",
+      "submitted-network:blocked",
+      "log:submitted-code-network.closed",
     ]);
   });
 });
@@ -46,10 +131,15 @@ function fakeWorkspace(
     stderr: "",
     stdout: "installed",
   },
+  options: { failNetworkDisable?: boolean } = {},
 ): PreparationWorkspace {
   return {
     async execute(command) {
       events.push(`execute:${command}`);
+      return { stdout: "", ...result };
+    },
+    async executeSubmittedCode(command) {
+      events.push(`submitted-execute:${command}`);
       return { stdout: "", ...result };
     },
     async getPreviewUrl(port) {
@@ -57,6 +147,17 @@ function fakeWorkspace(
     },
     async setOutboundNetworkAccess(enabled) {
       events.push(enabled ? "network:unblocked" : "network:blocked");
+    },
+    async setSubmittedCodeNetworkAccess(enabled) {
+      events.push(
+        enabled ? "submitted-network:unblocked" : "submitted-network:blocked",
+      );
+      if (!enabled && options.failNetworkDisable === true) {
+        throw new Error("failed to block submitted-code network");
+      }
+    },
+    async writeSandboxLog(entry) {
+      events.push(`log:${entry.event}`);
     },
     async uploadFiles() {},
   };

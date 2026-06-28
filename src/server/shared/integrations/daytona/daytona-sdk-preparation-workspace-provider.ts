@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { Daytona } from "@daytona/sdk";
 
+import { createSubmittedRuntimeEnv } from "../../../pipeline/03-repo-preparation/dependency-network-gate";
 import type {
   PreparationWorkspaceHandle,
   PreparationWorkspaceProvider,
@@ -103,14 +104,16 @@ export type DaytonaSdkPreparationWorkspaceProviderOptions = {
   diskGB?: number;
   ptyConnectionTimeoutMs?: number;
   snapshot?: string;
+  submittedCodeImage?: string;
 };
 
 const defaultSandboxDiskGB = 3;
 const defaultPtyConnectionTimeoutMs = 30_000;
 const makeADemoArtifactDirectory = "/tmp/makeademo";
-const workspaceMakeADemoDirectory = "/workspace/.makeademo";
+const submittedCodeControlDirectory = `${makeADemoArtifactDirectory}/submitted-code`;
+const defaultSubmittedCodeImage = "makeademo-submitted-code:node-browser";
+const innerSubmittedCodeMakeADemoDirectory = "/workspace/.makeademo";
 const sandboxAuditLogPath = `${makeADemoArtifactDirectory}/sandbox-log.jsonl`;
-const workspaceSandboxAuditLogPath = `${workspaceMakeADemoDirectory}/sandbox-log.jsonl`;
 
 export async function createDaytonaSdkPreparationWorkspaceHandle(input: {
   apiKey?: string;
@@ -144,6 +147,7 @@ export class DaytonaSdkPreparationWorkspaceProvider
   private readonly diskGB: number;
   private readonly ptyConnectionTimeoutMs: number;
   private readonly snapshot: string | undefined;
+  private readonly submittedCodeImage: string;
 
   constructor(options: DaytonaSdkPreparationWorkspaceProviderOptions = {}) {
     this.client =
@@ -155,6 +159,8 @@ export class DaytonaSdkPreparationWorkspaceProvider
     this.diskGB = options.diskGB ?? defaultSandboxDiskGB;
     this.ptyConnectionTimeoutMs =
       options.ptyConnectionTimeoutMs ?? defaultPtyConnectionTimeoutMs;
+    this.submittedCodeImage =
+      options.submittedCodeImage ?? defaultSubmittedCodeImage;
   }
 
   async create(): Promise<PreparationWorkspaceHandle> {
@@ -172,6 +178,7 @@ export class DaytonaSdkPreparationWorkspaceProvider
       id,
       ptyConnectionTimeoutMs: this.ptyConnectionTimeoutMs,
       sandbox,
+      submittedCodeImage: this.submittedCodeImage,
     });
   }
 }
@@ -181,17 +188,32 @@ function createPreparationWorkspaceHandle(input: {
   id: string;
   ptyConnectionTimeoutMs: number;
   sandbox: DaytonaSdkSandbox;
+  submittedCodeImage?: string;
 }): PreparationWorkspaceHandle {
   const workspace = new DaytonaSdkPreparationWorkspace(
     input.sandbox,
     input.id,
     input.ptyConnectionTimeoutMs,
+    input.submittedCodeImage ?? defaultSubmittedCodeImage,
   );
 
   return {
     async destroy() {
-      await workspace.cancelActiveCommands();
+      let cleanupError: unknown;
+      try {
+        await workspace.cancelActiveCommands();
+      } catch (error) {
+        cleanupError = error;
+      }
+      try {
+        await workspace.destroySubmittedCodeContainer();
+      } catch (error) {
+        cleanupError ??= error;
+      }
       await input.client.delete(input.sandbox);
+      if (cleanupError !== undefined) {
+        throw cleanupError;
+      }
     },
     id: input.id,
     workspace,
@@ -201,11 +223,14 @@ function createPreparationWorkspaceHandle(input: {
 class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
   private readonly activePtys = new Set<ManagedPty>();
   private readonly sandboxLogger: PipelineEventLogger;
+  private submittedCodeContainerReady = false;
+  private submittedCodeNetworkEnabled = false;
 
   constructor(
     private readonly sandbox: DaytonaSdkSandbox,
     private readonly workspaceId: string,
     private readonly ptyConnectionTimeoutMs: number,
+    private readonly submittedCodeImage: string,
   ) {
     this.sandboxLogger = createPipelineEventLogger({
       base: {
@@ -288,6 +313,55 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
     await Promise.allSettled(
       [...this.activePtys].map((pty) => pty.disconnect()),
     );
+    if (this.submittedCodeNetworkEnabled) {
+      await this.setSubmittedCodeNetworkAccess(false);
+    }
+  }
+
+  async executeSubmittedCode(
+    command: string,
+    options: PreparationWorkspaceExecuteOptions = {},
+  ): Promise<PreparationWorkspaceCommandResult> {
+    await this.ensureSubmittedCodeContainer();
+    const env = createSubmittedRuntimeEnv(options.env ?? {});
+    return this.executeStreaming(
+      [
+        "docker exec",
+        ...Object.entries(env).map(
+          ([key, value]) => `-e ${shellQuote(`${key}=${value}`)}`,
+        ),
+        shellQuote(this.submittedCodeContainerName),
+        "sh -lc",
+        shellQuote(command),
+      ].join(" "),
+      { ...options, env: {} },
+    );
+  }
+
+  async setSubmittedCodeNetworkAccess(enabled: boolean): Promise<void> {
+    await this.ensureSubmittedCodeContainer();
+    const command = enabled
+      ? `docker network connect bridge ${shellQuote(this.submittedCodeContainerName)} >/dev/null 2>&1`
+      : `docker network disconnect bridge ${shellQuote(this.submittedCodeContainerName)} >/dev/null 2>&1`;
+    const response = await this.sandbox.process.executeCommand(command);
+    if ((response.exitCode ?? 0) !== 0) {
+      throw new Error(
+        "Failed to update submitted-code container network access.",
+      );
+    }
+    this.submittedCodeNetworkEnabled = enabled;
+  }
+
+  async destroySubmittedCodeContainer(): Promise<void> {
+    if (!this.submittedCodeContainerReady) {
+      return;
+    }
+
+    await this.sandbox.process.executeCommand(
+      `docker rm -f ${shellQuote(this.submittedCodeContainerName)} >/dev/null 2>&1 || true`,
+    );
+    this.submittedCodeContainerReady = false;
+    this.submittedCodeNetworkEnabled = false;
   }
 
   async writeSandboxLog(entry: PreparationWorkspaceLogEntry): Promise<void> {
@@ -306,9 +380,43 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
     );
   }
 
+  private async ensureSubmittedCodeContainer(): Promise<void> {
+    if (this.submittedCodeContainerReady) {
+      return;
+    }
+
+    const response = await this.sandbox.process.executeCommand(
+      [
+        "sh -lc",
+        shellQuote(
+          [
+            "set -e",
+            `trap 'docker rm -f ${shellQuote(this.submittedCodeContainerName)} >/dev/null 2>&1 || true' ERR`,
+            `mkdir -p ${shellQuote(submittedCodeControlDirectory)}`,
+            "if ! docker info >/dev/null 2>&1; then nohup dockerd >/tmp/makeademo-dockerd.log 2>&1 & for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done; docker info >/dev/null 2>&1; fi",
+            `docker image inspect ${shellQuote(this.submittedCodeImage)} >/dev/null 2>&1 || { echo 'Submitted-code image ${this.submittedCodeImage} is missing from the prepared Daytona workspace image.' >&2; exit 1; }`,
+            `if ! docker inspect ${shellQuote(this.submittedCodeContainerName)} >/dev/null 2>&1; then docker run -d --name ${shellQuote(this.submittedCodeContainerName)} --network none --read-only --tmpfs /tmp --tmpfs /root/.cache --tmpfs /root/.npm --tmpfs /root/.bun --workdir /workspace -v '/workspace:/workspace' -v '${submittedCodeControlDirectory}:${innerSubmittedCodeMakeADemoDirectory}' ${shellQuote(this.submittedCodeImage)} tail -f /dev/null; fi`,
+          ].join("\n"),
+        ),
+      ].join(" "),
+    );
+
+    if ((response.exitCode ?? 0) !== 0) {
+      throw new Error(
+        `Failed to initialize submitted-code container: ${[response.stdout ?? response.result ?? "", response.stderr ?? ""].filter(Boolean).join("\n")}`,
+      );
+    }
+
+    this.submittedCodeContainerReady = true;
+  }
+
+  private get submittedCodeContainerName(): string {
+    return `makeademo-submitted-${sanitizeContainerName(this.workspaceId)}`;
+  }
+
   private async writeSandboxLogLine(line: string): Promise<void> {
     const response = await this.sandbox.process.executeCommand(
-      `mkdir -p ${shellQuote(makeADemoArtifactDirectory)} ${shellQuote(workspaceMakeADemoDirectory)} && printf '%s' ${shellQuote(line)} >> ${shellQuote(sandboxAuditLogPath)} && cp ${shellQuote(sandboxAuditLogPath)} ${shellQuote(workspaceSandboxAuditLogPath)}`,
+      `mkdir -p ${shellQuote(makeADemoArtifactDirectory)} && printf '%s' ${shellQuote(line)} >> ${shellQuote(sandboxAuditLogPath)}`,
     );
 
     if ((response.exitCode ?? 0) !== 0) {
@@ -340,7 +448,7 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
   async uploadFiles(files: PreparationWorkspaceUploadFile[]): Promise<void> {
     await this.sandbox.fs.uploadFiles(
       files.map((file) => ({
-        destination: file.destinationPath,
+        destination: mapSubmittedCodeControlPath(file.destinationPath),
         source: file.sourcePath,
       })),
     );
@@ -352,7 +460,7 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
     const results = await this.sandbox.fs.downloadFiles(
       files.map((file) => ({
         destination: file.destinationPath,
-        source: file.sourcePath,
+        source: mapSubmittedCodeControlPath(file.sourcePath),
       })),
       0,
     );
@@ -447,6 +555,22 @@ function readSandboxLogMessage(entry: PreparationWorkspaceLogEntry): string {
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function sanitizeContainerName(value: string): string {
+  return value.replace(/[^A-Za-z0-9_.-]/g, "-").slice(0, 48);
+}
+
+function mapSubmittedCodeControlPath(path: string): string {
+  if (path === innerSubmittedCodeMakeADemoDirectory) {
+    return submittedCodeControlDirectory;
+  }
+
+  if (path.startsWith(`${innerSubmittedCodeMakeADemoDirectory}/`)) {
+    return `${submittedCodeControlDirectory}${path.slice(innerSubmittedCodeMakeADemoDirectory.length)}`;
+  }
+
+  return path;
 }
 
 function isRestrictedNetworkPolicyError(error: unknown): boolean {

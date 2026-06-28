@@ -67,7 +67,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         files: [
           {
             destination: "/tmp/capture/scene.webm",
-            source: "/workspace/.makeademo/capture/scene.webm",
+            source: "/tmp/makeademo/submitted-code/capture/scene.webm",
           },
         ],
         timeoutSec: 0,
@@ -90,8 +90,32 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         },
       ]),
     ).rejects.toThrow(
-      "Failed to download Daytona sandbox file /workspace/.makeademo/capture/scene.webm: missing file",
+      "Failed to download Daytona sandbox file /tmp/makeademo/submitted-code/capture/scene.webm: missing file",
     );
+  });
+
+  it("uploads submitted-code control artifacts to the separate control mount", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls),
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.uploadFiles([
+      {
+        destinationPath: "/workspace/.makeademo/capture/script.ts",
+        sourcePath: "/tmp/script.ts",
+      },
+    ]);
+
+    expect(calls[1]).toEqual({
+      uploadFiles: [
+        {
+          destination: "/tmp/makeademo/submitted-code/capture/script.ts",
+          source: "/tmp/script.ts",
+        },
+      ],
+    });
   });
 
   it("reconnects to an existing sandbox as a preparation workspace", async () => {
@@ -210,11 +234,6 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         },
         {
           executeCommand: expect.stringContaining(
-            "/workspace/.makeademo/sandbox-log.jsonl",
-          ),
-        },
-        {
-          executeCommand: expect.stringContaining(
             '"event":"repo-preparation.succeeded"',
           ),
         },
@@ -251,6 +270,8 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       expect(countOccurrences(command, '"workspaceId"')).toBe(1);
       expect(countOccurrences(command, '"message"')).toBe(1);
       expect(command).not.toContain('"timestamp"');
+      expect(command).not.toContain("/workspace/.makeademo");
+      expect(command).not.toContain("/tmp/makeademo/submitted-code");
     }
     expect(
       calls.filter(
@@ -346,17 +367,354 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       { updateNetworkSettings: { networkBlockAll: true } },
     ]);
   });
+
+  it("executes submitted repo commands through a long-lived inner Docker container", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls),
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.executeSubmittedCode?.("npm run build", {
+      env: {
+        NODE_ENV: "production",
+        OPENAI_API_KEY: "secret",
+        VITE_PUBLIC_DEMO_MODE: "1",
+      },
+    });
+
+    const commands = calls
+      .filter(
+        (call): call is { executeCommand: string } =>
+          typeof call === "object" &&
+          call !== null &&
+          "executeCommand" in call &&
+          typeof call.executeCommand === "string",
+      )
+      .map((call) => call.executeCommand);
+    const sentInput = calls
+      .filter(
+        (call): call is { sendInput: string } =>
+          typeof call === "object" &&
+          call !== null &&
+          "sendInput" in call &&
+          typeof call.sendInput === "string",
+      )
+      .map((call) => call.sendInput)
+      .join("\n");
+    const dockerBoundaryCommands = `${commands.join("\n")}\n${sentInput}`;
+
+    expect(dockerBoundaryCommands).toContain("docker run -d");
+    expect(dockerBoundaryCommands).toContain("docker exec");
+    expect(dockerBoundaryCommands).toContain("dockerd");
+    expect(dockerBoundaryCommands).toContain("--network none");
+    expect(dockerBoundaryCommands).toContain("--read-only");
+    expect(dockerBoundaryCommands).toContain("--tmpfs /tmp");
+    expect(dockerBoundaryCommands).toContain("/workspace:/workspace");
+    expect(dockerBoundaryCommands).toContain(
+      "/tmp/makeademo/submitted-code:/workspace/.makeademo",
+    );
+    expect(dockerBoundaryCommands).toContain("-e 'NODE_ENV=production'");
+    expect(dockerBoundaryCommands).toContain("-e 'VITE_PUBLIC_DEMO_MODE=1'");
+    expect(dockerBoundaryCommands).not.toContain("OPENAI_API_KEY");
+    expect(dockerBoundaryCommands).not.toContain("DATABASE_URL");
+    expect(dockerBoundaryCommands).not.toContain("GITHUB_PRIVATE_KEY");
+    expect(dockerBoundaryCommands).not.toContain("/root/.opencode");
+    expect(dockerBoundaryCommands).not.toContain(
+      "/workspace/.makeademo/opencode",
+    );
+    expect(dockerBoundaryCommands).toContain("trap");
+    expect(dockerBoundaryCommands).toContain("docker rm -f");
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        {
+          createPty: expect.objectContaining({
+            envs: {},
+          }),
+        },
+      ]),
+    );
+  });
+
+  it("streams submitted-code output through managed command callbacks", async () => {
+    const calls: unknown[] = [];
+    const streamed: string[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls),
+    });
+    const handle = await provider.create();
+
+    const result = await handle.workspace.executeSubmittedCode?.(
+      "npm run build",
+      {
+        onStderr: (chunk) => streamed.push(`stderr:${chunk}`),
+        onStdout: (chunk) => streamed.push(`stdout:${chunk}`),
+      },
+    );
+
+    expect(result).toEqual({
+      exitCode: 7,
+      stderr: "",
+      stdout: "hello\n",
+    });
+    expect(streamed).toEqual(["stdout:hello\n"]);
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        {
+          createPty: expect.objectContaining({
+            cwd: "/workspace",
+          }),
+        },
+        {
+          sendInput: expect.stringContaining("docker exec"),
+        },
+      ]),
+    );
+  });
+
+  it("reuses one long-lived submitted-code container across commands", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls),
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.executeSubmittedCode?.("npm run build");
+    await handle.workspace.executeSubmittedCode?.("npm test");
+
+    const commandText = calls
+      .map((call) => {
+        if (
+          typeof call === "object" &&
+          call !== null &&
+          "executeCommand" in call
+        ) {
+          return String(call.executeCommand);
+        }
+        if (typeof call === "object" && call !== null && "sendInput" in call) {
+          return String(call.sendInput);
+        }
+        return "";
+      })
+      .join("\n");
+
+    expect(countOccurrences(commandText, "docker run -d")).toBe(1);
+    expect(commandText).toContain("docker image inspect");
+    expect(commandText).not.toContain("docker build -t");
+    expect(countOccurrences(commandText, "docker exec")).toBe(2);
+  });
+
+  it("disconnects active submitted-code commands before deleting the sandbox", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { ptyWaitsForDisconnect: true }),
+    });
+    const handle = await provider.create();
+
+    const execution = handle.workspace.executeSubmittedCode?.("npm run dev");
+    await waitForCall(calls, "createPty");
+    await handle.destroy();
+
+    await expect(execution).resolves.toMatchObject({ exitCode: 7 });
+    expect(calls).toEqual(
+      expect.arrayContaining([{ disconnect: true }, { delete: "sandbox_123" }]),
+    );
+    expect(
+      calls.findIndex((call) => "disconnect" in Object(call)),
+    ).toBeLessThan(calls.findIndex((call) => "delete" in Object(call)));
+  });
+
+  it("controls inner submitted-code container network without changing outer workspace network", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls),
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.setSubmittedCodeNetworkAccess?.(true);
+    await handle.workspace.setSubmittedCodeNetworkAccess?.(false);
+
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        {
+          executeCommand: expect.stringContaining(
+            "docker network connect bridge",
+          ),
+        },
+        {
+          executeCommand: expect.stringContaining(
+            "docker network disconnect bridge",
+          ),
+        },
+      ]),
+    );
+    expect(calls).not.toEqual(
+      expect.arrayContaining([{ updateNetworkSettings: expect.anything() }]),
+    );
+  });
+
+  it("blocks submitted-code network when active commands are cancelled", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls),
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.setSubmittedCodeNetworkAccess?.(true);
+    await handle.workspace.cancelActiveCommands?.();
+
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        {
+          executeCommand: expect.stringContaining(
+            "docker network connect bridge",
+          ),
+        },
+        {
+          executeCommand: expect.stringContaining(
+            "docker network disconnect bridge",
+          ),
+        },
+      ]),
+    );
+  });
+
+  it("disconnects active submitted-code commands before resealing submitted-code network", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { ptyWaitsForDisconnect: true }),
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.setSubmittedCodeNetworkAccess?.(true);
+    const execution = handle.workspace.executeSubmittedCode?.("bun install");
+    await waitForCall(calls, "createPty");
+    await handle.workspace.cancelActiveCommands?.();
+
+    await expect(execution).resolves.toMatchObject({ stdout: "hello\n" });
+    const disconnectIndex = calls.findIndex(
+      (call) => "disconnect" in Object(call),
+    );
+    const networkDisconnectIndex = calls.findIndex(
+      (call) =>
+        typeof call === "object" &&
+        call !== null &&
+        "executeCommand" in call &&
+        typeof call.executeCommand === "string" &&
+        call.executeCommand.includes("docker network disconnect bridge"),
+    );
+    expect(disconnectIndex).toBeGreaterThan(-1);
+    expect(networkDisconnectIndex).toBeGreaterThan(disconnectIndex);
+  });
+
+  it("removes the inner submitted-code container before deleting the Daytona sandbox", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls),
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.executeSubmittedCode?.("npm run build");
+    const destroyStart = calls.length;
+    await handle.destroy();
+
+    const removeIndex = calls.findIndex(
+      (call) =>
+        calls.indexOf(call) >= destroyStart &&
+        typeof call === "object" &&
+        call !== null &&
+        "executeCommand" in call &&
+        typeof call.executeCommand === "string" &&
+        call.executeCommand.includes("docker rm -f"),
+    );
+    const deleteIndex = calls.findIndex((call) => "delete" in Object(call));
+    expect(removeIndex).toBeGreaterThan(-1);
+    expect(deleteIndex).toBeGreaterThan(removeIndex);
+  });
+
+  it("still deletes the Daytona sandbox when submitted-code network reseal fails during destroy", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { failSubmittedCodeNetworkDisable: true }),
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.setSubmittedCodeNetworkAccess?.(true);
+    await expect(handle.destroy()).rejects.toThrow(
+      "Failed to update submitted-code container network access.",
+    );
+
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        { executeCommand: expect.stringContaining("docker rm -f") },
+        { delete: "sandbox_123" },
+      ]),
+    );
+  });
+
+  it("does not mark failed submitted-code container initialization as ready", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { failFirstSubmittedCodeInitialization: true }),
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.executeSubmittedCode?.("npm run build"),
+    ).rejects.toThrow("Failed to initialize submitted-code container");
+    await expect(
+      handle.workspace.executeSubmittedCode?.("npm run build"),
+    ).resolves.toMatchObject({ stdout: "hello\n" });
+
+    const initializationCommands = calls.filter(
+      (call) =>
+        typeof call === "object" &&
+        call !== null &&
+        "executeCommand" in call &&
+        typeof call.executeCommand === "string" &&
+        call.executeCommand.includes("docker run -d"),
+    );
+    expect(initializationCommands).toHaveLength(2);
+  });
+
+  it("does not build the submitted-code image during pipeline execution", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { missingSubmittedCodeImage: true }),
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.executeSubmittedCode?.("npm run build"),
+    ).rejects.toThrow("Submitted-code image");
+    expect(
+      calls
+        .filter(
+          (call): call is { executeCommand: string } =>
+            typeof call === "object" &&
+            call !== null &&
+            "executeCommand" in call &&
+            typeof call.executeCommand === "string",
+        )
+        .map((call) => call.executeCommand)
+        .join("\n"),
+    ).not.toContain("docker build -t");
+  });
 });
 
 function fakeClient(
   calls: unknown[],
   options: {
     downloadError?: string;
+    failFirstSubmittedCodeInitialization?: boolean;
+    failSubmittedCodeNetworkDisable?: boolean;
+    missingSubmittedCodeImage?: boolean;
     networkError?: Error;
     ptyNeverConnects?: boolean;
     ptyWaitsForDisconnect?: boolean;
   } = {},
 ) {
+  let submittedCodeInitializationFailures = 0;
   const sandbox = {
     fs: {
       async downloadFiles(
@@ -442,6 +800,35 @@ function fakeClient(
       },
       async executeCommand(command: string) {
         calls.push({ executeCommand: command });
+        if (
+          options.failSubmittedCodeNetworkDisable === true &&
+          command.includes("docker network disconnect bridge")
+        ) {
+          return {
+            exitCode: 1,
+            result: "",
+            stderr: "failed to disable submitted-code network",
+          };
+        }
+        if (
+          options.missingSubmittedCodeImage === true &&
+          command.includes("docker image inspect")
+        ) {
+          return {
+            exitCode: 1,
+            result: "",
+            stderr:
+              "Submitted-code image makeademo-submitted-code:node-browser is missing from the prepared Daytona workspace image.",
+          };
+        }
+        if (
+          options.failFirstSubmittedCodeInitialization === true &&
+          command.includes("docker run -d") &&
+          submittedCodeInitializationFailures === 0
+        ) {
+          submittedCodeInitializationFailures += 1;
+          return { exitCode: 1, result: "", stderr: "docker failed" };
+        }
         return { exitCode: 0, result: "ok" };
       },
       async executeSessionCommand(
@@ -500,4 +887,14 @@ function fakeClient(
 
 function countOccurrences(text: string, needle: string): number {
   return text.split(needle).length - 1;
+}
+
+async function waitForCall(calls: unknown[], key: string): Promise<void> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (calls.some((call) => key in Object(call))) {
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
 }

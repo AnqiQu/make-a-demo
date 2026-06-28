@@ -6,6 +6,10 @@ import type {
   PreparationWorkspace,
   PreparationWorkspaceCommandResult,
 } from "./preparation-workspace.interface";
+import {
+  executeSubmittedCode,
+  setSubmittedCodeNetworkAccess,
+} from "./submitted-code-execution";
 
 export type DependencyInstallNetworkWindowInput = {
   command: string;
@@ -21,11 +25,31 @@ export async function runDependencyInstallWithNetworkWindow(
   });
   assertNetworkAllowed(decision);
 
-  await input.workspace.setOutboundNetworkAccess(true);
+  await input.workspace.writeSandboxLog?.({
+    command: input.command,
+    event: "submitted-code-network.opening",
+    reason: "dependency-install",
+  });
+  await setSubmittedCodeNetworkAccess(input.workspace, true);
+  await input.workspace.writeSandboxLog?.({
+    command: input.command,
+    event: "submitted-code-network.opened",
+    reason: "dependency-install",
+  });
   try {
-    return await input.workspace.execute(input.command);
+    return await executeSubmittedCode(input.workspace, input.command);
   } finally {
-    await input.workspace.setOutboundNetworkAccess(false);
+    await input.workspace.writeSandboxLog?.({
+      command: input.command,
+      event: "submitted-code-network.closing",
+      reason: "dependency-install",
+    });
+    await setSubmittedCodeNetworkAccess(input.workspace, false);
+    await input.workspace.writeSandboxLog?.({
+      command: input.command,
+      event: "submitted-code-network.closed",
+      reason: "dependency-install",
+    });
   }
 }
 
