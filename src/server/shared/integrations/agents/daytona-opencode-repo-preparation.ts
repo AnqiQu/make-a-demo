@@ -18,8 +18,9 @@ import type { ProjectValidationResult } from "../../../pipeline/05-capture-path-
 import { writeDaytonaOpenCodeActivityLog } from "./daytona-opencode-activity-log";
 import { createMakeADemoOpenCodeConfigFiles } from "./prepared-opencode-config";
 
-const makeADemoArtifactDirectory = "/workspace/.makeademo";
-const makeADemoOpenCodeConfigDirectory = `${makeADemoArtifactDirectory}/opencode`;
+const makeADemoOuterControlDirectory = "/tmp/makeademo/submitted-code";
+const makeADemoArtifactDirectory = makeADemoOuterControlDirectory;
+const makeADemoOpenCodeConfigDirectory = "/tmp/makeademo/opencode";
 const dependencyInstallRequestPath = `${makeADemoArtifactDirectory}/dependency-install-request.json`;
 const preparationManifestPath = `${makeADemoArtifactDirectory}/preparation-manifest.json`;
 const preparationResultPath = `${makeADemoArtifactDirectory}/repo-preparation-result.json`;
@@ -104,15 +105,12 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
         workspaceId: handle.id,
       });
       await cancelActiveCommandsQuietly(handle);
+      await destroyQuietly(handle);
       return {
         assumptions: [],
-        blockers: [
-          result.reason,
-          `Sandbox audit log retained in Daytona workspace ${handle.id}: ${makeADemoArtifactDirectory}/sandbox-log.jsonl`,
-        ],
+        blockers: [result.reason],
         status: "failed" as const,
         suggestedChanges: [
-          "Inspect the retained Daytona workspace sandbox audit log, then delete the workspace when finished.",
           "Retry Repo Preparation in a fresh Daytona workspace.",
         ],
       };
@@ -521,7 +519,6 @@ function createOpenCodeRunCommand(input: {
 }): string {
   return [
     "opencode run",
-    "--dangerously-skip-permissions",
     "--format json",
     "--dir /workspace",
     ...(input.sessionID === undefined
@@ -691,8 +688,8 @@ function createPreparationManifestGuidance(
     "",
     "### File-Writing Example",
     "```bash",
-    "mkdir -p /workspace/.makeademo",
-    "cat > /workspace/.makeademo/preparation-manifest.json <<'JSON'",
+    `mkdir -p ${makeADemoArtifactDirectory}`,
+    `cat > ${preparationManifestPath} <<'JSON'`,
     JSON.stringify(
       {
         assumptions: ["Demo data can be in-memory and reset on reload"],
@@ -725,7 +722,7 @@ function createPreparationManifestGuidance(
     "JSON",
     "```",
     "",
-    "Then call makeademo_validate_preparation with manifestPath set to /workspace/.makeademo/preparation-manifest.json and stop for feedback.",
+    `Then call makeademo_validate_preparation with manifestPath set to ${preparationManifestPath} and stop for feedback.`,
   ];
 }
 
@@ -990,7 +987,9 @@ async function installMakeADemoOpenCodeConfig(
 }
 
 function createWritePreparedConfigCommand(): string {
-  const commands = [`mkdir -p ${shellQuote(makeADemoOpenCodeConfigDirectory)}`];
+  const commands = [
+    `mkdir -p ${shellQuote(makeADemoOuterControlDirectory)} ${shellQuote(makeADemoOpenCodeConfigDirectory)}`,
+  ];
 
   for (const file of createMakeADemoOpenCodeConfigFiles()) {
     const destination = posix.join(makeADemoOpenCodeConfigDirectory, file.path);
