@@ -276,6 +276,12 @@ export async function runPipelineJob(
       };
     }
 
+    reportStageRetrying("capture-path-validation", {
+      context,
+      nextAttempt: attempt + 2,
+      observer,
+      reason: readCapturePathRetryReason(capturePathValidation),
+    });
     const repair = await dependencies.repairCapturePathFailure({
       attempt: attempt + 1,
       failure: capturePathValidation,
@@ -446,6 +452,32 @@ function reportStageFinished(
     stage,
     status,
   });
+}
+
+function reportStageRetrying(
+  stage: PipelineStage,
+  input: {
+    context: PipelineObservationContext;
+    nextAttempt: number;
+    observer: PipelineObserver;
+    reason: string;
+  },
+) {
+  input.observer.record({
+    ...input.context,
+    event: "stage.retrying",
+    nextAttempt: input.nextAttempt,
+    reason: input.reason,
+    stage,
+    status: "retrying",
+  });
+}
+
+function readCapturePathRetryReason(result: CapturePathValidationResult) {
+  return result.failureReason === undefined ||
+    result.failureReason.trim().length === 0
+    ? "capture-path-validation-failed"
+    : result.failureReason;
 }
 
 function countScenes(demoScriptPackage: DemoScriptPackage) {

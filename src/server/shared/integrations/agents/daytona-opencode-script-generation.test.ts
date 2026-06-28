@@ -137,6 +137,18 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
       .map((event) => event.execute);
     expect(openCodeCommands).toHaveLength(2);
     expect(openCodeCommands[1]).toContain("--session 'session_prepare_123'");
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "script-generation.retrying",
+            nextAttempt: 2,
+            reason: "demoPlaywrightScript contains placeholder actions",
+            stage: "script-generation",
+          }),
+        },
+      ]),
+    );
   });
 
   it("sends Capture Path Validation failure evidence back to the same OpenCode session for repair", async () => {

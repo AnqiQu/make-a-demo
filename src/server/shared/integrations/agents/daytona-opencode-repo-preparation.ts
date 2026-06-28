@@ -216,6 +216,10 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
         await writePreparationSandboxLog(handle.workspace, {
           event: "dependency-install-finished",
         });
+        await writeRepoPreparationRetryLog(handle.workspace, {
+          nextAttempt: attempt + 2,
+          reason: "dependency-install-completed",
+        });
         prompt = createContinueRepoPreparationPrompt(input);
         continue;
       }
@@ -273,6 +277,10 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
             workspace: handle,
           };
         }
+        await writeRepoPreparationRetryLog(handle.workspace, {
+          nextAttempt: attempt + 2,
+          reason: readRetryReason(validation.failureReason),
+        });
         prompt = createValidationFeedbackPrompt({
           manifest,
           manifestPath: validationRequest.manifestPath,
@@ -477,6 +485,23 @@ async function writePreparationSandboxLog(
     event: eventName,
     stage: "repo-preparation",
   });
+}
+
+async function writeRepoPreparationRetryLog(
+  workspace: PreparationWorkspace,
+  input: { nextAttempt: number; reason: string },
+): Promise<void> {
+  await writePreparationSandboxLog(workspace, {
+    event: "repo-preparation.retrying",
+    nextAttempt: input.nextAttempt,
+    reason: input.reason,
+  });
+}
+
+function readRetryReason(reason: string | undefined): string {
+  return reason === undefined || reason.trim().length === 0
+    ? "validation-failed"
+    : reason;
 }
 
 function backendToolDeadlineFailure(toolName: string) {

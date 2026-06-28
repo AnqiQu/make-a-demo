@@ -414,6 +414,7 @@ describe("runPipelineJob", () => {
       process.env.MAKEADEMO_CAPTURE_PATH_REPAIR_ATTEMPTS;
     process.env.MAKEADEMO_CAPTURE_PATH_REPAIR_ATTEMPTS = "1";
     const calls: string[] = [];
+    const observer = createRecordingPipelineObserver();
 
     try {
       const result = await runPipelineJob(
@@ -482,6 +483,7 @@ describe("runPipelineJob", () => {
             };
           },
         },
+        { observer },
       );
 
       expect(result.status).toBe("succeeded");
@@ -496,6 +498,17 @@ describe("runPipelineJob", () => {
         "repair:1:scene_validation:session_prepare_123",
         "capture-path-validation:script_repaired",
       ]);
+      expect(observer.events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            event: "stage.retrying",
+            nextAttempt: 2,
+            reason: "Button was not found.",
+            stage: "capture-path-validation",
+            status: "retrying",
+          }),
+        ]),
+      );
     } finally {
       if (previousRepairAttempts === undefined) {
         Reflect.deleteProperty(

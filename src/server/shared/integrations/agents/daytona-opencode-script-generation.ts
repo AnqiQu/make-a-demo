@@ -130,6 +130,11 @@ export class DaytonaOpenCodeScriptGeneration
           `Script Generation OpenCode attempt ${attempt} failed before artifact validation.`,
         );
         prompt = createScriptGenerationRepairPrompt(lastFailure);
+        await writeScriptGenerationRetryLog(input, {
+          attempt,
+          maxAttempts: this.maxAttempts,
+          reason: lastFailure,
+        });
         continue;
       }
 
@@ -145,6 +150,11 @@ export class DaytonaOpenCodeScriptGeneration
           `Script Generation OpenCode attempt ${attempt} did not produce a readable artifact: ${artifact.reason}`,
         );
         prompt = createScriptGenerationRepairPrompt(lastFailure);
+        await writeScriptGenerationRetryLog(input, {
+          attempt,
+          maxAttempts: this.maxAttempts,
+          reason: lastFailure,
+        });
         continue;
       }
 
@@ -171,6 +181,11 @@ export class DaytonaOpenCodeScriptGeneration
           `Script Generation OpenCode attempt ${attempt} produced an invalid artifact: ${lastFailure}`,
         );
         prompt = createScriptGenerationRepairPrompt(lastFailure);
+        await writeScriptGenerationRetryLog(input, {
+          attempt,
+          maxAttempts: this.maxAttempts,
+          reason: lastFailure,
+        });
       }
     }
 
@@ -471,6 +486,22 @@ async function writeScriptGenerationSandboxLog(
     repoUrl: input.repoUrl,
     stage: "script-generation",
     workspaceId: input.preparationManifest.workspaceId,
+  });
+}
+
+async function writeScriptGenerationRetryLog(
+  input: AgenticScriptGenerationInput,
+  retry: { attempt: number; maxAttempts: number; reason: string },
+): Promise<void> {
+  if (retry.attempt >= retry.maxAttempts) {
+    return;
+  }
+
+  await writeScriptGenerationSandboxLog(input, {
+    attempt: retry.attempt,
+    event: "script-generation.retrying",
+    nextAttempt: retry.attempt + 1,
+    reason: retry.reason,
   });
 }
 

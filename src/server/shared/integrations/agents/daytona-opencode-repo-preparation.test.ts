@@ -167,6 +167,67 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     expect(openCodeCommands[1]).toContain("--session 'session_123'");
   });
 
+  it("logs Repo Preparation retries with the reason before resuming OpenCode", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      providerApiKey: "openai_key",
+      provider: fakeProvider(events, {
+        commandStdout: [
+          JSON.stringify({ sessionID: "session_123", type: "session" }),
+          JSON.stringify({
+            assumptions: [],
+            blockers: ["Agent received validation feedback."],
+            status: "failed",
+            suggestedChanges: [],
+          }),
+        ],
+        dependencyInstallRequest: { command: "bun install" },
+        validationRequest: {
+          manifestPath: "/workspace/.makeademo/preparation-manifest.json",
+        },
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+      validatePreparation: async () => ({
+        blockedNetworkAttempts: [],
+        failureReason: "Preview requested https://api.example.test/articles.",
+        logs: ["external runtime request blocked"],
+        status: "failed",
+        warnings: ["network mock needed"],
+      }),
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({ status: "failed" });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "repo-preparation.retrying",
+            nextAttempt: 2,
+            reason: "dependency-install-completed",
+            stage: "repo-preparation",
+          }),
+        },
+        {
+          sandboxLog: expect.objectContaining({
+            event: "repo-preparation.retrying",
+            nextAttempt: 3,
+            reason: "Preview requested https://api.example.test/articles.",
+            stage: "repo-preparation",
+          }),
+        },
+      ]),
+    );
+  });
+
   it("returns a successful preparation result as soon as backend validation passes", async () => {
     const events: unknown[] = [];
     const validations: unknown[] = [];

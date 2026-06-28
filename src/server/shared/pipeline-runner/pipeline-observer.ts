@@ -10,6 +10,7 @@ export type PipelineStage =
 
 type PipelineStageEventName =
   | "stage.failed"
+  | "stage.retrying"
   | "stage.started"
   | "stage.succeeded";
 
@@ -31,12 +32,20 @@ export type PipelineObservabilityEvent = {
   event: ExternalCallEventName | PipelineJobEventName | PipelineStageEventName;
   externalCall?: string;
   mockedServiceCount?: number;
+  nextAttempt?: number;
   projectId?: string;
+  reason?: string;
   riskCount?: number;
   runId?: string;
   sceneCount?: number;
   stage?: PipelineStage;
-  status?: "claimed" | "completed" | "failed" | "started" | "succeeded";
+  status?:
+    | "claimed"
+    | "completed"
+    | "failed"
+    | "retrying"
+    | "started"
+    | "succeeded";
   warningCount?: number;
   workspaceId?: string;
 };
@@ -127,7 +136,9 @@ function toJsonLogEvent(event: PipelineObservabilityEvent) {
     event: event.event,
     externalCall: event.externalCall,
     mockedServiceCount: event.mockedServiceCount,
+    nextAttempt: event.nextAttempt,
     projectId: event.projectId,
+    reason: event.reason,
     riskCount: event.riskCount,
     runId: event.runId,
     sceneCount: event.sceneCount,
