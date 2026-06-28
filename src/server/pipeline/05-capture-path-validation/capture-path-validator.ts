@@ -65,10 +65,13 @@ export interface CapturePathSceneValidator {
 
 export type CapturePathValidationDependencies = {
   sceneValidator: CapturePathSceneValidator;
+  sceneValidationTimeoutMs?: number;
   validateProject(
     input: ProjectValidationInput,
   ): Promise<ProjectValidationResult>;
 };
+
+const defaultSceneValidationTimeoutMs = 2 * 60_000;
 
 export async function validateCapturePath(
   input: CapturePathValidationInput,
@@ -77,6 +80,26 @@ export async function validateCapturePath(
   await writeCapturePathDiagnostics(input, {
     event: "capture-path-validation.run.started",
   });
+
+  let scriptPackage: ReturnType<typeof parseDemoScript>;
+  let firstScene: SceneDescription;
+  try {
+    scriptPackage = parseDemoScript(input.demoScriptPackage);
+    assertDemoScriptCaptureSdkContract(scriptPackage);
+    const declaredFirstScene = scriptPackage.scenes[0];
+    if (declaredFirstScene === undefined) {
+      throw new Error("Demo Script must declare at least one Scene.");
+    }
+    firstScene = declaredFirstScene;
+  } catch (error) {
+    return await capturePathDemoScriptFailure({
+      browserUrl: input.preparationManifest.url,
+      error,
+      input,
+      logs: [],
+    });
+  }
+
   await writeCapturePathSandboxLog(input, {
     diagnosticsLogPath: capturePathDiagnosticsLogPath,
     event: "capture-path-validation.runtime-preflight.started",
@@ -132,16 +155,9 @@ export async function validateCapturePath(
     warningCount: projectValidation.warnings.length,
   });
 
-  const scriptPackage = parseDemoScript(input.demoScriptPackage);
-  assertDemoScriptCaptureSdkContract(scriptPackage);
   const logs = [...projectValidation.logs];
   const browserUrl =
     projectValidation.browserUrl ?? input.preparationManifest.url;
-
-  const firstScene = scriptPackage.scenes[0];
-  if (firstScene === undefined) {
-    throw new Error("Demo Script must declare at least one Scene.");
-  }
   await writeCapturePathSandboxLog(input, {
     diagnosticsLogPath: capturePathDiagnosticsLogPath,
     event: "capture-path-validation.demo-script.started",
@@ -155,15 +171,34 @@ export async function validateCapturePath(
       sceneId: scene.id,
     })),
   });
-  const sceneResult = await dependencies.sceneValidator.validateScene({
-    baseUrl: browserUrl,
-    demoPlaywrightScript: scriptPackage.demoPlaywrightScript,
-    ...(input.preparationWorkspace === undefined
-      ? {}
-      : { preparationWorkspace: input.preparationWorkspace }),
-    scene: firstScene,
-    sectionId: "demo-script",
-  });
+  let sceneResult: CapturePathSceneValidationResult;
+  try {
+    sceneResult = await withTimeout(
+      dependencies.sceneValidator.validateScene({
+        baseUrl: browserUrl,
+        demoPlaywrightScript: scriptPackage.demoPlaywrightScript,
+        ...(input.preparationWorkspace === undefined
+          ? {}
+          : { preparationWorkspace: input.preparationWorkspace }),
+        scene: firstScene,
+        sectionId: "demo-script",
+      }),
+      dependencies.sceneValidationTimeoutMs ?? defaultSceneValidationTimeoutMs,
+      `Demo Script dry-run timed out after ${
+        dependencies.sceneValidationTimeoutMs ?? defaultSceneValidationTimeoutMs
+      }ms.`,
+    );
+  } catch (error) {
+    if (!(error instanceof CapturePathValidationTimeoutError)) {
+      throw error;
+    }
+
+    sceneResult = {
+      failureReason: error.message,
+      logs: [error.message],
+      status: "failed",
+    };
+  }
   logs.push(...sceneResult.logs);
 
   if (sceneResult.status === "failed") {
@@ -233,6 +268,54 @@ export async function validateCapturePath(
       : { screenshotArtifactId: projectValidation.screenshotArtifactId }),
     status: "succeeded",
     warnings: projectValidation.warnings,
+  };
+}
+
+async function capturePathDemoScriptFailure(input: {
+  browserUrl: string;
+  error: unknown;
+  input: CapturePathValidationInput;
+  logs: string[];
+  projectValidation?: ProjectValidationResult & { warnings: string[] };
+}): Promise<CapturePathValidationResult> {
+  const failureReason = readErrorMessage(input.error);
+  const failedSceneId = readFailedContractSceneId(failureReason);
+  const logs = [...input.logs, failureReason];
+  const failureLogExcerpt = createLogExcerpt(logs);
+  const blockedNetworkAttempts =
+    input.projectValidation?.blockedNetworkAttempts ?? [];
+  const warnings = input.projectValidation?.warnings ?? [];
+  await writeCapturePathSandboxLog(input.input, {
+    blockedNetworkAttemptCount: blockedNetworkAttempts.length,
+    diagnosticsLogPath: capturePathDiagnosticsLogPath,
+    event: "capture-path-validation.demo-script.failed",
+    failedSceneId,
+    failureLogExcerpt,
+    failureReason,
+    warningCount: warnings.length,
+  });
+  await writeCapturePathDiagnostics(input.input, {
+    blockedNetworkAttemptCount: blockedNetworkAttempts.length,
+    event: "capture-path-validation.demo-script.failed",
+    failedSceneId,
+    failureLogExcerpt,
+    failureReason,
+    logs,
+    warningCount: warnings.length,
+  });
+
+  return {
+    blockedNetworkAttempts,
+    browserUrl: input.browserUrl,
+    diagnosticsLogPath: capturePathDiagnosticsLogPath,
+    ...(failedSceneId === undefined ? {} : { failedSceneId }),
+    failureReason,
+    logs,
+    ...(input.projectValidation?.screenshotArtifactId === undefined
+      ? {}
+      : { screenshotArtifactId: input.projectValidation.screenshotArtifactId }),
+    status: "failed",
+    warnings,
   };
 }
 
@@ -444,31 +527,45 @@ async function writeCapturePathDiagnostics(
     }),
   );
 
-  const result = await input.preparationWorkspace?.workspace.execute(
+  const write = input.preparationWorkspace?.workspace.execute(
     `mkdir -p ${shellQuote(dirname(capturePathDiagnosticsLogPath))} && printf '%s\\n' ${shellQuote(line)} >> ${shellQuote(capturePathDiagnosticsLogPath)}`,
   );
-
-  if (result !== undefined && result.exitCode !== 0) {
-    await writeCapturePathSandboxLog(input, {
-      diagnosticsLogPath: capturePathDiagnosticsLogPath,
-      event: "capture-path-validation.diagnostics.write_failed",
-      stderr: result.stderr,
-      stdout: result.stdout,
-    });
+  if (write === undefined) {
+    return;
   }
+
+  void write
+    .then((result) => {
+      if (result.exitCode === 0) {
+        return;
+      }
+
+      writeCapturePathSandboxLog(input, {
+        diagnosticsLogPath: capturePathDiagnosticsLogPath,
+        event: "capture-path-validation.diagnostics.write_failed",
+        stderr: result.stderr,
+        stdout: result.stdout,
+      });
+    })
+    .catch(() => {});
 }
 
 async function writeCapturePathSandboxLog(
   input: CapturePathValidationInput,
   entry: Record<string, unknown>,
 ) {
-  await input.preparationWorkspace?.workspace.writeSandboxLog?.({
+  const write = input.preparationWorkspace?.workspace.writeSandboxLog?.({
     ...removeUndefinedValues(entry),
     repoUrl: input.preparationManifest.repoUrl,
     scriptId: input.demoScriptPackage.scriptId,
     stage: "capture-path-validation",
     workspaceId: input.preparationManifest.workspaceId,
   });
+  if (write === undefined) {
+    return;
+  }
+
+  void write.catch(() => {});
 }
 
 function removeUndefinedValues(input: Record<string, unknown>) {
@@ -481,10 +578,41 @@ function createLogExcerpt(logs: string[]) {
   return logs.join("\n").slice(0, 4_000);
 }
 
+function readErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function readFailedContractSceneId(failureReason: string) {
+  return /^Scene ([^ ]+) /.exec(failureReason)?.[1];
+}
+
 function dirname(path: string) {
   return path.slice(0, path.lastIndexOf("/"));
 }
 
 function shellQuote(value: string) {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+class CapturePathValidationTimeoutError extends Error {}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise.finally(() => {
+      if (timeout !== undefined) {
+        clearTimeout(timeout);
+      }
+    }),
+    new Promise<never>((_, reject) => {
+      timeout = setTimeout(
+        () => reject(new CapturePathValidationTimeoutError(message)),
+        timeoutMs,
+      );
+    }),
+  ]);
 }

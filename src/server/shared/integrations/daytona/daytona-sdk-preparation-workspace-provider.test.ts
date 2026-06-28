@@ -130,6 +130,22 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ]);
   });
 
+  it("fails fast when a Daytona command does not finish", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { executeCommandNeverResolves: true }),
+      commandTimeoutMs: 1,
+    });
+    const handle = await provider.create();
+
+    await expect(handle.workspace.execute("npm ci")).rejects.toThrow(
+      "Daytona command did not finish within 1ms.",
+    );
+    expect(calls).toEqual(
+      expect.arrayContaining([{ executeCommand: "npm ci" }]),
+    );
+  });
+
   it("resolves signed preview URLs for browser validation", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -143,6 +159,24 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     expect(calls[1]).toEqual({
       getSignedPreviewUrl: { port: 4173, ttl: 3600 },
     });
+  });
+
+  it("fails fast when Daytona does not return a preview URL", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { previewNeverResolves: true }),
+      previewUrlTimeoutMs: 1,
+    });
+    const handle = await provider.create();
+
+    await expect(handle.workspace.getPreviewUrl(4173)).rejects.toThrow(
+      "Daytona preview URL creation did not finish within 1ms.",
+    );
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        { getSignedPreviewUrl: { port: 4173, ttl: 3600 } },
+      ]),
+    );
   });
 
   it("streams command output through a Daytona PTY when callbacks are provided", async () => {
@@ -260,6 +294,22 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ).toHaveLength(0);
   });
 
+  it("fails fast when a durable sandbox log write does not finish", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { executeCommandNeverResolves: true }),
+      logWriteTimeoutMs: 1,
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.writeSandboxLog?.({
+        event: "project-validation.started",
+        stage: "project-validation",
+      }),
+    ).rejects.toThrow("Daytona sandbox log write did not finish within 1ms.");
+  });
+
   it("disconnects active streaming commands before deleting the sandbox", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -323,6 +373,37 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     );
   });
 
+  it("relays sandbox logs to configured sinks", async () => {
+    const calls: unknown[] = [];
+    const relayedLogs: string[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls),
+      sandboxLogSinks: [
+        {
+          write(line) {
+            relayedLogs.push(line);
+          },
+        },
+      ],
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.writeSandboxLog?.({
+      event: "project-validation.dependency-install.started",
+      stage: "project-validation",
+      workspaceId: "workspace_123",
+    });
+
+    expect(relayedLogs).toHaveLength(1);
+    expect(JSON.parse(relayedLogs[0] ?? "{}")).toMatchObject({
+      component: "daytona-sandbox",
+      event: "project-validation.dependency-install.started",
+      message: "project-validation.dependency-install.started",
+      stage: "project-validation",
+      workspaceId: "workspace_123",
+    });
+  });
+
   it("continues when Daytona org policy rejects sandbox-level network overrides", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -352,7 +433,9 @@ function fakeClient(
   calls: unknown[],
   options: {
     downloadError?: string;
+    executeCommandNeverResolves?: boolean;
     networkError?: Error;
+    previewNeverResolves?: boolean;
     ptyNeverConnects?: boolean;
     ptyWaitsForDisconnect?: boolean;
   } = {},
@@ -378,6 +461,9 @@ function fakeClient(
     id: "sandbox_123",
     async getSignedPreviewUrl(port: number, ttl?: number) {
       calls.push({ getSignedPreviewUrl: { port, ttl } });
+      if (options.previewNeverResolves === true) {
+        await new Promise(() => {});
+      }
       return { url: `https://preview.example.test:${port}` };
     },
     process: {
@@ -442,6 +528,9 @@ function fakeClient(
       },
       async executeCommand(command: string) {
         calls.push({ executeCommand: command });
+        if (options.executeCommandNeverResolves === true) {
+          await new Promise(() => {});
+        }
         return { exitCode: 0, result: "ok" };
       },
       async executeSessionCommand(

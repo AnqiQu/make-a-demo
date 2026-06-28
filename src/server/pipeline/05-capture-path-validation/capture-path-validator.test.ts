@@ -165,68 +165,173 @@ describe("validateCapturePath", () => {
     expect(executedCommands.join("\n")).toContain("article-preview");
   });
 
-  it("rejects Demo Scripts that bypass the generated Capture SDK contract", async () => {
-    await expect(
-      validateCapturePath(
-        {
-          preparationManifest: manifest(),
-          preparationWorkspace: workspaceHandle([]),
-          demoScriptPackage: demoScript({
-            demoPlaywrightScript:
-              "import { setup, scene } from './makeademo-capture-sdk';\nawait scene('scene_validation', async ({ page, expect }) => {\n  await page.context().newPage({ recordVideo: { dir: 'videos' } });\n  console.log('[makeademo:scene]', '{}');\n  await expect(page.locator('body')).toBeVisible();\n});",
-          }),
+  it("returns a repairable failure for Demo Scripts that bypass the generated Capture SDK contract", async () => {
+    const result = await validateCapturePath(
+      {
+        preparationManifest: manifest(),
+        preparationWorkspace: workspaceHandle([]),
+        demoScriptPackage: demoScript({
+          demoPlaywrightScript:
+            "import { setup, scene } from './makeademo-capture-sdk';\nawait scene('scene_validation', async ({ page, expect }) => {\n  await page.context().newPage({ recordVideo: { dir: 'videos' } });\n  console.log('[makeademo:scene]', '{}');\n  await expect(page.locator('body')).toBeVisible();\n});",
+        }),
+      },
+      {
+        async validateProject() {
+          return {
+            blockedNetworkAttempts: [],
+            browserUrl: "https://preview.example.test/",
+            logs: [],
+            status: "succeeded",
+            warnings: [],
+          };
         },
-        {
-          async validateProject() {
-            return {
-              blockedNetworkAttempts: [],
-              browserUrl: "https://preview.example.test/",
-              logs: [],
-              status: "succeeded",
-              warnings: [],
-            };
-          },
-          sceneValidator: {
-            async validateScene() {
-              throw new Error("scene validator should not run");
-            },
+        sceneValidator: {
+          async validateScene() {
+            throw new Error("scene validator should not run");
           },
         },
+      },
+    );
+
+    expect(result).toMatchObject({
+      failureReason: expect.stringContaining(
+        "Playwright recordVideo is owned by MakeADemo",
       ),
-    ).rejects.toThrow("Playwright recordVideo is owned by MakeADemo");
+      status: "failed",
+    });
   });
 
-  it("rejects declared Scenes without visible assertions", async () => {
-    await expect(
+  it("returns a repairable failure for declared Scenes without visible assertions", async () => {
+    const calls: string[] = [];
+    const sandboxLogs: Array<Record<string, unknown>> = [];
+
+    const result = await validateCapturePath(
+      {
+        preparationManifest: manifest(),
+        preparationWorkspace: workspaceHandle(sandboxLogs),
+        demoScriptPackage: demoScript({
+          demoPlaywrightScript:
+            "import { setup, scene } from './makeademo-capture-sdk';\nawait scene('scene_validation', async ({ page }) => {\n  await page.getByRole('button', { name: 'Save' }).click();\n});",
+        }),
+      },
+      {
+        async validateProject() {
+          calls.push("project-checks");
+          return {
+            blockedNetworkAttempts: [],
+            browserUrl: "https://preview.example.test/",
+            logs: [],
+            status: "succeeded",
+            warnings: [],
+          };
+        },
+        sceneValidator: {
+          async validateScene() {
+            calls.push("scene-validation");
+            throw new Error("scene validator should not run");
+          },
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      diagnosticsLogPath:
+        "/workspace/.makeademo/capture-path-validation-diagnostics.jsonl",
+      failedSceneId: "scene_validation",
+      failureReason:
+        "Scene scene_validation must include a visible Playwright assertion before it ends.",
+      status: "failed",
+    });
+    expect(calls).toEqual([]);
+    expect(sandboxLogs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "capture-path-validation.demo-script.failed",
+          failedSceneId: "scene_validation",
+          failureReason:
+            "Scene scene_validation must include a visible Playwright assertion before it ends.",
+        }),
+      ]),
+    );
+  });
+
+  it("does not block Capture Path Validation when workspace log writes hang", async () => {
+    const calls: string[] = [];
+    const result = await Promise.race([
       validateCapturePath(
         {
           preparationManifest: manifest(),
-          preparationWorkspace: workspaceHandle([]),
-          demoScriptPackage: demoScript({
-            demoPlaywrightScript:
-              "import { setup, scene } from './makeademo-capture-sdk';\nawait scene('scene_validation', async ({ page }) => {\n  await page.getByRole('button', { name: 'Save' }).click();\n});",
-          }),
+          preparationWorkspace: hangingLogWorkspaceHandle(),
+          demoScriptPackage: demoScript(),
         },
         {
           async validateProject() {
+            calls.push("project-checks");
             return {
               blockedNetworkAttempts: [],
               browserUrl: "https://preview.example.test/",
-              logs: [],
+              logs: ["project checks passed"],
               status: "succeeded",
               warnings: [],
             };
           },
           sceneValidator: {
             async validateScene() {
-              throw new Error("scene validator should not run");
+              calls.push("scene-validation");
+              return {
+                logs: [
+                  '[makeademo:scene] {"elapsedMs":10,"event":"started","sceneId":"scene_validation"}',
+                  '[makeademo:scene] {"elapsedMs":20,"event":"succeeded","sceneId":"scene_validation"}',
+                ],
+                status: "succeeded",
+              };
             },
           },
         },
       ),
-    ).rejects.toThrow(
-      "Scene scene_validation must include a visible Playwright assertion",
+      delay(10).then(() => "timed-out" as const),
+    ]);
+
+    expect(result).toMatchObject({ status: "succeeded" });
+    expect(calls).toEqual(["project-checks", "scene-validation"]);
+  });
+
+  it("returns a repairable failure when the Demo Script dry-run times out", async () => {
+    const result = await validateCapturePath(
+      {
+        preparationManifest: manifest(),
+        preparationWorkspace: workspaceHandle([]),
+        demoScriptPackage: demoScript(),
+      },
+      {
+        sceneValidationTimeoutMs: 1,
+        async validateProject() {
+          return {
+            blockedNetworkAttempts: [],
+            browserUrl: "https://preview.example.test/",
+            logs: ["project checks passed"],
+            status: "succeeded",
+            warnings: [],
+          };
+        },
+        sceneValidator: {
+          async validateScene() {
+            return await new Promise<never>(() => {});
+          },
+        },
+      },
     );
+
+    expect(result).toMatchObject({
+      browserUrl: "https://preview.example.test/",
+      failedSceneId: "scene_validation",
+      failureReason: "Demo Script dry-run timed out after 1ms.",
+      logs: [
+        "project checks passed",
+        "Demo Script dry-run timed out after 1ms.",
+      ],
+      status: "failed",
+    });
   });
 
   it.each([
@@ -423,4 +528,28 @@ function workspaceHandle(
       },
     },
   };
+}
+
+function hangingLogWorkspaceHandle() {
+  return {
+    async destroy() {},
+    id: "workspace_handle_123",
+    workspace: {
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async getPreviewUrl() {
+        return "https://preview.example.test/";
+      },
+      async setOutboundNetworkAccess() {},
+      async uploadFiles() {},
+      async writeSandboxLog() {
+        await new Promise(() => {});
+      },
+    },
+  };
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

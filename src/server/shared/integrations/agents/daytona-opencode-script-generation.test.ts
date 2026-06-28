@@ -151,6 +151,48 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
     );
   });
 
+  it("keeps Script Generation retry reasons concise after OpenCode failures", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      maxAttempts: 2,
+      modelID: "gpt-5.5",
+      providerApiKey: "openai_key",
+      providerID: "openai",
+    });
+
+    const result = await agent.generateScriptPackage({
+      ...scriptGenerationInput(),
+      opencodeSessionID: "session_prepare_123",
+      preparationWorkspace: workspaceHandle(events, [interactivePackage()], {
+        firstOpenCodeFailure: {
+          stderr: "very verbose stderr that should stay on the failed attempt",
+          stdout: "very verbose stdout that should stay on the failed attempt",
+        },
+      }),
+    });
+
+    expect(result.scriptId).toBe("script_conduit");
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "script-generation.opencode-attempt.failed",
+            reason: expect.stringContaining("very verbose stderr"),
+            stage: "script-generation",
+          }),
+        },
+        {
+          sandboxLog: expect.objectContaining({
+            event: "script-generation.retrying",
+            nextAttempt: 2,
+            reason: "OpenCode Script Generation exited with 1.",
+            stage: "script-generation",
+          }),
+        },
+      ]),
+    );
+  });
+
   it("sends Capture Path Validation failure evidence back to the same OpenCode session for repair", async () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeScriptGeneration({
@@ -372,22 +414,37 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
   });
 });
 
-function workspaceHandle(events: unknown[], artifacts: unknown[]) {
+function workspaceHandle(
+  events: unknown[],
+  artifacts: unknown[],
+  helperOptions: {
+    firstOpenCodeFailure?: { stderr: string; stdout: string };
+  } = {},
+) {
   let latestArtifact: unknown;
+  let openCodeAttempt = 0;
   const workspace: PreparationWorkspace = {
-    async execute(command, options) {
+    async execute(command, commandOptions) {
       events.push({
         execute: command,
-        ...(options?.env?.OPENCODE_CONFIG_DIR === undefined
+        ...(commandOptions?.env?.OPENCODE_CONFIG_DIR === undefined
           ? {}
-          : { configDir: options.env.OPENCODE_CONFIG_DIR }),
-        ...(options?.onStdout === undefined ? {} : { streaming: true }),
+          : { configDir: commandOptions.env.OPENCODE_CONFIG_DIR }),
+        ...(commandOptions?.onStdout === undefined ? {} : { streaming: true }),
       });
 
       if (command.includes("opencode run")) {
+        openCodeAttempt += 1;
+        if (openCodeAttempt === 1 && helperOptions.firstOpenCodeFailure) {
+          return {
+            exitCode: 1,
+            stderr: helperOptions.firstOpenCodeFailure.stderr,
+            stdout: helperOptions.firstOpenCodeFailure.stdout,
+          };
+        }
         latestArtifact = artifacts.shift();
-        options?.onStdout?.("script generation output");
-        options?.onStderr?.("script generation warning");
+        commandOptions?.onStdout?.("script generation output");
+        commandOptions?.onStderr?.("script generation warning");
         return { exitCode: 0, stderr: "", stdout: "generated" };
       }
 

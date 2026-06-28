@@ -26,6 +26,9 @@ import { readRepoSecurityInput } from "./stage1-repo-security";
 
 const options = await readOptions(process.argv.slice(2));
 const daytonaApiKey = process.env.DAYTONA_API_KEY;
+const cliLogSink = createPrettyPipelineLogSink({
+  write: (text) => process.stderr.write(text),
+});
 
 if (daytonaApiKey === undefined || daytonaApiKey === "") {
   throw new Error("DAYTONA_API_KEY is required for Daytona Stage 1 runs.");
@@ -36,14 +39,11 @@ const sandboxProvider = new DaytonaSdkPreparationWorkspaceProvider({
   ...(options.daytonaSnapshot === undefined
     ? {}
     : { snapshot: options.daytonaSnapshot }),
+  sandboxLogSinks: [cliLogSink],
 });
 const cliLogger = createPipelineEventLogger({
   base: { component: "stage1-cli" },
-  sinks: [
-    createPrettyPipelineLogSink({
-      write: (text) => process.stderr.write(text),
-    }),
-  ],
+  sinks: [cliLogSink],
 });
 const repoSecurity = await readRepoSecurityInput(
   sandboxProvider,

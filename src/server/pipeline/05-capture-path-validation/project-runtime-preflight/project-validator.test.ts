@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { PreparationWorkspaceHandle } from "../../03-repo-preparation/preparation-workspace-runner";
 import type { BrowserValidator } from "./browser-validator.interface";
 import { validateProject } from "./project-validator";
 import type { SandboxRunner } from "./sandbox-runner.interface";
@@ -47,6 +48,101 @@ describe("validateProject", () => {
       status: "succeeded",
       warnings: [],
     });
+    expect(browserUrls).toEqual(["https://preview.example.test"]);
+  });
+
+  it("writes browser validation progress to sandbox logs", async () => {
+    const sandboxLogs: Array<Record<string, unknown>> = [];
+    const sandboxRunner: SandboxRunner = {
+      async runValidation() {
+        return {
+          browserUrl: "https://preview.example.test",
+          blockedNetworkAttempts: [],
+          logs: ["installed", "started demo"],
+          repoFiles: ["package.json", "bun.lock"],
+          runtimeExitCode: 0,
+        };
+      },
+    };
+    const browserValidator: BrowserValidator = {
+      async validate() {
+        return {
+          interactable: true,
+          logs: ["loaded app"],
+          screenshotArtifactId: "artifact_screenshot",
+        };
+      },
+    };
+
+    await validateProject(
+      {
+        preparationManifest: manifest({
+          demoCommand: "npm run demo",
+          url: "http://127.0.0.1:3000",
+        }),
+        preparationWorkspace: workspaceHandle(sandboxLogs),
+      },
+      { browserValidator, sandboxRunner },
+    );
+
+    expect(sandboxLogs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          browserUrl: "https://preview.example.test",
+          event: "project-validation.browser-validation.started",
+          stage: "project-validation",
+          workspaceId: "workspace_123",
+        }),
+        expect.objectContaining({
+          browserUrl: "https://preview.example.test",
+          event: "project-validation.browser-validation.succeeded",
+          screenshotArtifactId: "artifact_screenshot",
+          stage: "project-validation",
+          workspaceId: "workspace_123",
+        }),
+      ]),
+    );
+  });
+
+  it("does not block Project Validation when workspace log writes hang", async () => {
+    const browserUrls: string[] = [];
+    const sandboxRunner: SandboxRunner = {
+      async runValidation() {
+        return {
+          browserUrl: "https://preview.example.test",
+          blockedNetworkAttempts: [],
+          logs: ["installed", "started demo"],
+          repoFiles: ["package.json", "bun.lock"],
+          runtimeExitCode: 0,
+        };
+      },
+    };
+    const browserValidator: BrowserValidator = {
+      async validate(input) {
+        browserUrls.push(input.url);
+        return {
+          interactable: true,
+          logs: ["loaded app"],
+          screenshotArtifactId: "artifact_screenshot",
+        };
+      },
+    };
+
+    const result = await Promise.race([
+      validateProject(
+        {
+          preparationManifest: manifest({
+            demoCommand: "npm run demo",
+            url: "http://127.0.0.1:3000",
+          }),
+          preparationWorkspace: hangingLogWorkspaceHandle(),
+        },
+        { browserValidator, sandboxRunner },
+      ),
+      delay(10).then(() => "timed-out" as const),
+    ]);
+
+    expect(result).toMatchObject({ status: "succeeded" });
     expect(browserUrls).toEqual(["https://preview.example.test"]);
   });
 
@@ -100,6 +196,39 @@ describe("validateProject", () => {
     expect(cleanedUp).toBe(true);
   });
 
+  it("returns a failed validation result when sandbox validation throws", async () => {
+    const sandboxRunner: SandboxRunner = {
+      async runValidation() {
+        throw new Error("Daytona command did not finish within 600000ms.");
+      },
+    };
+    const browserValidator: BrowserValidator = {
+      async validate() {
+        throw new Error(
+          "browser validation should not run after sandbox failure",
+        );
+      },
+    };
+
+    const result = await validateProject(
+      {
+        preparationManifest: manifest({
+          demoCommand: "npm run demo",
+          url: "http://localhost:5173",
+        }),
+      },
+      { browserValidator, sandboxRunner },
+    );
+
+    expect(result).toEqual({
+      blockedNetworkAttempts: [],
+      failureReason: "Daytona command did not finish within 600000ms.",
+      logs: ["Daytona command did not finish within 600000ms."],
+      status: "failed",
+      warnings: [],
+    });
+  });
+
   it("preserves browser validation errors when cleanup also fails", async () => {
     const sandboxRunner: SandboxRunner = {
       async runValidation() {
@@ -131,6 +260,46 @@ describe("validateProject", () => {
         { browserValidator, sandboxRunner },
       ),
     ).rejects.toThrow("browser failed");
+  });
+
+  it("returns a failed validation result when browser validation times out", async () => {
+    let cleanedUp = false;
+    const sandboxRunner: SandboxRunner = {
+      async runValidation() {
+        return {
+          blockedNetworkAttempts: [],
+          browserUrl: "https://preview.example.test",
+          cleanup: async () => {
+            cleanedUp = true;
+          },
+          logs: ["started demo"],
+          repoFiles: ["package.json", "package-lock.json"],
+          runtimeExitCode: 0,
+        };
+      },
+    };
+    const browserValidator: BrowserValidator = {
+      async validate() {
+        return await new Promise<never>(() => {});
+      },
+    };
+
+    const result = await validateProject(
+      {
+        preparationManifest: manifest({
+          demoCommand: "npm run demo",
+          url: "http://localhost:5173",
+        }),
+      },
+      { browserValidationTimeoutMs: 1, browserValidator, sandboxRunner },
+    );
+
+    expect(result).toMatchObject({
+      failureReason: "Browser validation timed out after 1ms.",
+      logs: ["started demo", "Browser validation timed out after 1ms."],
+      status: "failed",
+    });
+    expect(cleanedUp).toBe(true);
   });
 
   it("fails validation when browser runtime requests leave the local boundary", async () => {
@@ -203,4 +372,50 @@ function manifest(overrides: { demoCommand: string; url: string }) {
     url: overrides.url,
     workspaceId: "workspace_123",
   };
+}
+
+function workspaceHandle(
+  sandboxLogs: Array<Record<string, unknown>>,
+): PreparationWorkspaceHandle {
+  return {
+    async destroy() {},
+    id: "workspace_123",
+    workspace: {
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async getPreviewUrl() {
+        return "https://preview.example.test";
+      },
+      async setOutboundNetworkAccess() {},
+      async uploadFiles() {},
+      async writeSandboxLog(entry) {
+        sandboxLogs.push(entry);
+      },
+    },
+  };
+}
+
+function hangingLogWorkspaceHandle(): PreparationWorkspaceHandle {
+  return {
+    async destroy() {},
+    id: "workspace_123",
+    workspace: {
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async getPreviewUrl() {
+        return "https://preview.example.test";
+      },
+      async setOutboundNetworkAccess() {},
+      async uploadFiles() {},
+      async writeSandboxLog() {
+        await new Promise(() => {});
+      },
+    },
+  };
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

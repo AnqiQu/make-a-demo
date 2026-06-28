@@ -35,6 +35,9 @@ const runDirectory = join(fullPipelineOutputRoot, runId);
 const rawOpenCodeLog = createOpenCodeRawOutputLog({
   logPath: join(runDirectory, "opencode-raw-output.jsonl"),
 });
+const cliLogSink = createPrettyPipelineLogSink({
+  write: (text) => process.stdout.write(text),
+});
 
 if (daytonaApiKey === undefined || daytonaApiKey === "") {
   throw new Error("DAYTONA_API_KEY is required for full pipeline runs.");
@@ -45,14 +48,11 @@ const sandboxProvider = new DaytonaSdkPreparationWorkspaceProvider({
   ...(options.daytonaSnapshot === undefined
     ? {}
     : { snapshot: options.daytonaSnapshot }),
+  sandboxLogSinks: [cliLogSink],
 });
 const cliLogger = createPipelineEventLogger({
   base: { component: "full-pipeline-cli" },
-  sinks: [
-    createPrettyPipelineLogSink({
-      write: (text) => process.stdout.write(text),
-    }),
-  ],
+  sinks: [cliLogSink],
 });
 const repoSecurity = await readRepoSecurityInput(
   sandboxProvider,
@@ -108,11 +108,7 @@ const result = await runFullPipelineJob(
     scriptGenerationAgent: openCodeAgent,
   }),
   {
-    logSinks: [
-      createPrettyPipelineLogSink({
-        write: (text) => process.stdout.write(text),
-      }),
-    ],
+    logSinks: [cliLogSink],
     outputRoot: fullPipelineOutputRoot,
     prepareFreshCaptureState: createDaytonaFreshCaptureStatePreparer(),
     rawOpenCodeLogPath: rawOpenCodeLog.logPath,

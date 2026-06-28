@@ -119,6 +119,7 @@ export class DaytonaOpenCodeScriptGeneration
       await Promise.all(outputWrites);
 
       if (result.exitCode !== 0) {
+        const retryReason = `OpenCode Script Generation exited with ${result.exitCode}.`;
         lastFailure = `OpenCode Script Generation exited with ${result.exitCode}: ${[result.stderr, result.stdout].filter((line) => line.length > 0).join("\n")}`;
         await writeScriptGenerationSandboxLog(input, {
           attempt,
@@ -133,7 +134,7 @@ export class DaytonaOpenCodeScriptGeneration
         await writeScriptGenerationRetryLog(input, {
           attempt,
           maxAttempts: this.maxAttempts,
-          reason: lastFailure,
+          reason: retryReason,
         });
         continue;
       }

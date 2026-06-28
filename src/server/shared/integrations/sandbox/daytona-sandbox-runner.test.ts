@@ -95,11 +95,45 @@ describe("DaytonaSandboxRunner", () => {
           stage: "project-validation",
         }),
         expect.objectContaining({
+          event: "project-validation.repo-files.started",
+          stage: "project-validation",
+        }),
+        expect.objectContaining({
+          event: "project-validation.repo-files.succeeded",
+          repoFileCount: 2,
+          stage: "project-validation",
+        }),
+        expect.objectContaining({
+          event: "project-validation.dependency-install.started",
+          stage: "project-validation",
+        }),
+        expect.objectContaining({
           event: "project-validation.dependency-install.succeeded",
           stage: "project-validation",
         }),
         expect.objectContaining({
+          event: "project-validation.demo-readiness.started",
+          stage: "project-validation",
+        }),
+        expect.objectContaining({
           event: "project-validation.demo-readiness.succeeded",
+          stage: "project-validation",
+        }),
+        expect.objectContaining({
+          event: "project-validation.fresh-capture-baseline.started",
+          stage: "project-validation",
+        }),
+        expect.objectContaining({
+          event: "project-validation.fresh-capture-baseline.created",
+          stage: "project-validation",
+        }),
+        expect.objectContaining({
+          event: "project-validation.browser-preview.started",
+          port: 3000,
+          stage: "project-validation",
+        }),
+        expect.objectContaining({
+          event: "project-validation.browser-preview.created",
           stage: "project-validation",
         }),
         expect.objectContaining({

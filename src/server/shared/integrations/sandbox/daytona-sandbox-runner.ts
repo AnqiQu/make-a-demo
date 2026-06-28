@@ -44,6 +44,7 @@ export class DaytonaSandboxRunner implements SandboxRunner {
       });
     try {
       await writeSandboxLog({ event: "project-validation.started" });
+      await writeSandboxLog({ event: "project-validation.repo-files.started" });
       const repoFilesResult = await handle.workspace.execute(
         "find /workspace -maxdepth 1 -mindepth 1 -printf '%f\\n' | sort",
       );
@@ -51,6 +52,10 @@ export class DaytonaSandboxRunner implements SandboxRunner {
         .split("\n")
         .map((line) => line.trim())
         .filter((line) => line.length > 0);
+      await writeSandboxLog({
+        event: "project-validation.repo-files.succeeded",
+        repoFileCount: repoFiles.length,
+      });
       const installPlan = inferInstallPlan(repoFiles);
       await writeSandboxLog({
         command: installPlan.command,
@@ -106,6 +111,10 @@ export class DaytonaSandboxRunner implements SandboxRunner {
         exitCode: runtimeResult.exitCode,
         stdout: runtimeResult.stdout,
       });
+      await writeSandboxLog({
+        event: "project-validation.demo-readiness.started",
+        url: input.url,
+      });
       const readinessResult = await waitForDemoReadiness({
         pollIntervalMs: this.readinessPollIntervalMs,
         timeoutMs: this.readinessTimeoutMs,
@@ -142,6 +151,9 @@ export class DaytonaSandboxRunner implements SandboxRunner {
         event: "project-validation.demo-readiness.succeeded",
         url: input.url,
       });
+      await writeSandboxLog({
+        event: "project-validation.fresh-capture-baseline.started",
+      });
       const baselineResult = await handle.workspace.execute(
         createFreshCaptureBaselineCommand(),
       );
@@ -172,6 +184,11 @@ export class DaytonaSandboxRunner implements SandboxRunner {
         "if test -f /tmp/makeademo-demo.log; then cat /tmp/makeademo-demo.log; fi",
       );
       await writeDemoServerLog(writeSandboxLog, demoLogsResult.stdout);
+      await writeSandboxLog({
+        event: "project-validation.browser-preview.started",
+        port: readPortFromLocalUrl(input.url),
+        url: input.url,
+      });
       const browserUrl = await createBrowserPreviewUrl({
         localUrl: input.url,
         workspace: handle.workspace,
