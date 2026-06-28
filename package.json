@@ -26,7 +26,8 @@
     "start": "bun src/server/api/server.mts",
     "worker:demo-generation": "bun src/server/shared/pipeline-runner/project-demo-generation-worker.mts",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "verify:daytona-image": "bun scripts/verify-daytona-image.mts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1063.0",
