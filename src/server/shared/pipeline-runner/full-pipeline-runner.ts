@@ -1172,10 +1172,28 @@ function readStage1Failure(
   }
 
   if (stage1.status === "capture-path-validation-failed") {
+    const capturePathValidation = stage1.capturePathValidation;
     return {
       blockers: [
         "Capture Path Validation failed. Please report this issue to MakeADemo.",
+        ...(capturePathValidation.failureReason === undefined ||
+        capturePathValidation.failureReason.trim().length === 0
+          ? []
+          : [
+              `Capture Path Validation reason: ${capturePathValidation.failureReason}`,
+            ]),
       ],
+      capturePathValidation: removeUndefinedFields({
+        diagnosticsLogPath: capturePathValidation.diagnosticsLogPath,
+        failedAction: capturePathValidation.failedAction,
+        failedSceneId: capturePathValidation.failedSceneId,
+        failureReason: capturePathValidation.failureReason,
+        runDirectory: capturePathValidation.runDirectory,
+        screenshotArtifactId: capturePathValidation.screenshotArtifactId,
+        scriptPath: capturePathValidation.scriptPath,
+        stderrPath: capturePathValidation.stderrPath,
+        stdoutPath: capturePathValidation.stdoutPath,
+      }),
       suggestedChanges: stage1.capturePathValidation.warnings,
     };
   }
@@ -1184,6 +1202,12 @@ function readStage1Failure(
     blockers: stage1.security.rejections,
     suggestedChanges: stage1.security.warnings,
   };
+}
+
+function removeUndefinedFields(input: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(input).filter(([, value]) => value !== undefined),
+  );
 }
 
 function createRunId() {

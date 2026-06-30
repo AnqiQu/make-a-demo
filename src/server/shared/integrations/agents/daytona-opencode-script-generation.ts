@@ -12,6 +12,7 @@ import type {
   CapturePathRepairResult,
   CapturePathRepairer,
 } from "../../../pipeline/05-capture-path-validation/capture-path-repairer.interface";
+import { assertDemoScriptCaptureSdkContract } from "../../../pipeline/06-footage-capture/capture-sdk-contract";
 import {
   type DemoScript,
   parseDemoScript,
@@ -283,6 +284,7 @@ export class DaytonaOpenCodeScriptGeneration
 
     try {
       const demoScript = parseDemoScript(scriptArtifact.value);
+      assertDemoScriptCaptureSdkContract(demoScript);
       assertCaptureReadyScriptQuality(demoScript);
     } catch (error) {
       const reason = readErrorMessage(error);
@@ -710,6 +712,8 @@ function createCapturePathRepairPrompt(
     "## Hard Requirements",
     `- Overwrite ${demoScriptPath} with the repaired Demo Script JSON before finishing.`,
     "- The demoPlaywrightScript must import `{ setup, scene }` from `./makeademo-capture-sdk`.",
+    "- Every `scene(id, async ({ page, expect }) => { ... })` must end with at least one visible Playwright locator assertion such as `await expect(page.getByText('Saved')).toBeVisible()`, `await expect(page.locator('#invoice-table')).toContainText('INV-2049')`, or `await expect(page.locator('[data-testid=\"status\"]')).toHaveText('Paid')`.",
+    "- Primitive assertions like `expect(await locator.innerText()).toBe(...)` do not satisfy the visible assertion contract; pair any DOM reads with a final Playwright locator assertion.",
     `- If you change the prepared app command, URL, assumptions, risks, or workspace-change summary, update ${preparationManifestPath}.`,
     "- Keep Playwright interactions deterministic and use only the provided `baseUrl` variable in Playwright scripts.",
     "- Do not add Scene durations, raw video recording, custom marker writers, or timestamps.",

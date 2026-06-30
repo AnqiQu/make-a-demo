@@ -102,7 +102,7 @@ export class DaytonaSandboxRunner implements SandboxRunner {
         event: "project-validation.demo-command.started",
         url: input.url,
       });
-      await handle.workspace.execute(createStopDemoCommand());
+      await handle.workspace.execute(createStopDemoCommand(input.demoCommand));
       const runtimeResult = await handle.workspace.execute(
         createStartDemoCommand(input.demoCommand),
       );
@@ -243,7 +243,9 @@ export async function restartPreparedDemoForFreshCapture(input: {
     event: "footage-capture.fresh-state.restart.started",
     url: input.preparationManifest.url,
   });
-  await input.preparationWorkspace.workspace.execute(createStopDemoCommand());
+  await input.preparationWorkspace.workspace.execute(
+    createStopDemoCommand(input.preparationManifest.demoCommand),
+  );
   const restoreResult = await input.preparationWorkspace.workspace.execute(
     createFreshCaptureRestoreCommand(),
   );
@@ -319,8 +321,33 @@ function createStartDemoCommand(demoCommand: string): string {
   return `sh -lc ${shellQuote(`cd /workspace && nohup setsid sh -c ${shellQuote(`exec ${demoCommand}`)} > /tmp/makeademo-demo.log 2>&1 & echo $! > /tmp/makeademo-demo.pid && echo $!`)}`;
 }
 
-function createStopDemoCommand(): string {
-  return `sh -lc ${shellQuote("if test -f /tmp/makeademo-demo.pid; then kill -- -$(cat /tmp/makeademo-demo.pid) >/dev/null 2>&1 || true; rm -f /tmp/makeademo-demo.pid; fi")}`;
+function createStopDemoCommand(demoCommand: string): string {
+  return `sh -lc ${shellQuote(
+    [
+      "kill_demo_pid() {",
+      '  pid="$1"',
+      '  if test -n "$pid" && kill -0 "$pid" >/dev/null 2>&1; then',
+      '    kill -- -"$pid" >/dev/null 2>&1 || true',
+      '    kill "$pid" >/dev/null 2>&1 || true',
+      "  fi",
+      "}",
+      "if test -f /tmp/makeademo-demo.pid; then",
+      '  kill_demo_pid "$(cat /tmp/makeademo-demo.pid 2>/dev/null)"',
+      "  rm -f /tmp/makeademo-demo.pid",
+      "fi",
+      `demo_command=${shellQuote(demoCommand)}`,
+      "for cmdline_path in /proc/[0-9]*/cmdline; do",
+      '  test -r "$cmdline_path" || continue',
+      '  pid="${cmdline_path#/proc/}"',
+      '  pid="${pid%/cmdline}"',
+      '  test "$pid" != "$$" || continue',
+      "  cmdline=$(tr '\\0' ' ' < \"$cmdline_path\" 2>/dev/null || true)",
+      '  case "$cmdline" in',
+      '    *"/workspace"*"$demo_command"*|*"/workspace"*"apps/makeademo-demo/server.ts"*) kill_demo_pid "$pid" ;;',
+      "  esac",
+      "done",
+    ].join("\n"),
+  )}`;
 }
 
 function createFreshCaptureBaselineCommand(): string {

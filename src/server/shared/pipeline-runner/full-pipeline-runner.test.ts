@@ -263,7 +263,9 @@ describe("runFullPipelineJob", () => {
           },
         },
       ),
-    ).rejects.toThrow("Capture Path Validation did not return a browser URL");
+    ).rejects.toThrow(
+      "Capture Path Validation succeeded without a browser URL.",
+    );
   });
 
   it("fails default Footage Capture when no fresh-state reset is configured", async () => {
@@ -396,10 +398,21 @@ describe("runFullPipelineJob", () => {
               return {
                 blockedNetworkAttempts: [],
                 browserUrl: "https://preview.example.test/",
+                diagnosticsLogPath:
+                  "/workspace/.makeademo/capture-path-validation-diagnostics.jsonl",
+                failedAction: "locator.click(getByRole(button, Save))",
                 failedSceneId: "scene_article_feed",
                 failureReason: "Generated selector did not match.",
                 logs: ["selector failed"],
+                runDirectory:
+                  "/workspace/.makeademo/capture-path-validation-runs/run/scene_article_feed",
+                scriptPath:
+                  "/workspace/.makeademo/capture-path-validation-runs/run/scene_article_feed/scene_article_feed.ts",
                 status: "failed",
+                stderrPath:
+                  "/workspace/.makeademo/capture-path-validation-runs/run/scene_article_feed/scene_article_feed.stderr.log",
+                stdoutPath:
+                  "/workspace/.makeademo/capture-path-validation-runs/run/scene_article_feed/scene_article_feed.stdout.log",
                 warnings: ["Retry with more seeded data."],
               };
             },
@@ -427,7 +440,24 @@ describe("runFullPipelineJob", () => {
         failure: {
           blockers: [
             "Capture Path Validation failed. Please report this issue to MakeADemo.",
+            "Capture Path Validation reason: Generated selector did not match.",
           ],
+          capturePathValidation: {
+            diagnosticsLogPath:
+              "/workspace/.makeademo/capture-path-validation-diagnostics.jsonl",
+            failedAction: "locator.click(getByRole(button, Save))",
+            failedSceneId: "scene_article_feed",
+            failureReason: "Generated selector did not match.",
+            runDirectory:
+              "/workspace/.makeademo/capture-path-validation-runs/run/scene_article_feed",
+            scriptPath:
+              "/workspace/.makeademo/capture-path-validation-runs/run/scene_article_feed/scene_article_feed.ts",
+            stderrPath:
+              "/workspace/.makeademo/capture-path-validation-runs/run/scene_article_feed/scene_article_feed.stderr.log",
+            stdoutPath:
+              "/workspace/.makeademo/capture-path-validation-runs/run/scene_article_feed/scene_article_feed.stdout.log",
+          },
+          suggestedChanges: ["Retry with more seeded data."],
         },
         status: "capture-path-validation-failed",
       });

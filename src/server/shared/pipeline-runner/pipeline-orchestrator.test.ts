@@ -118,6 +118,69 @@ describe("runPipelineJob", () => {
     ]);
   });
 
+  it("fails the Capture Path Validation stage when a success result omits the browser URL", async () => {
+    const progress: string[] = [];
+    const observer = createRecordingPipelineObserver();
+
+    await expect(
+      runPipelineJob(
+        {
+          demoBrief: { keyProductFeatures: ["validation"] },
+          normalizedSupportingDocuments: [],
+          repoSecurity: {
+            files: [{ path: "package.json", text: "{}" }],
+            repoStats: { fileCount: 1, sizeBytes: 1_000 },
+          },
+          repoUrl: "https://github.com/example/app",
+          workspaceId: "workspace_123",
+        },
+        {
+          async generateScriptPackage({ preparationManifest }) {
+            return scriptPackage({
+              assumptions: preparationManifest.assumptions,
+            });
+          },
+          async prepareRepo() {
+            return {
+              manifest: manifest(),
+              status: "succeeded",
+              workspace: fakeWorkspaceHandle(),
+            };
+          },
+          screenRepoSecurity() {
+            return { rejections: [], status: "passed", warnings: [] };
+          },
+          async validateCapturePath() {
+            return {
+              blockedNetworkAttempts: [],
+              logs: ["validated without preview"],
+              status: "succeeded",
+              warnings: [],
+            };
+          },
+        },
+        {
+          observer,
+          onProgress: (event) =>
+            progress.push(`${event.stage}:${event.status}`),
+        },
+      ),
+    ).rejects.toThrow(
+      "Capture Path Validation succeeded without a browser URL.",
+    );
+
+    expect(progress).toContain("capture-path-validation:failed");
+    expect(observer.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "stage.failed",
+          stage: "capture-path-validation",
+          status: "failed",
+        }),
+      ]),
+    );
+  });
+
   it("reports structured stage observability events with durations and safe summary counts", async () => {
     const observer = createRecordingPipelineObserver();
     let now = 1_000;
@@ -181,6 +244,7 @@ describe("runPipelineJob", () => {
                 phase: "runtime",
               },
             ],
+            browserUrl: "https://preview.example.test/",
             logs: ["validated"],
             status: "succeeded",
             warnings: ["Viewport fallback used."],

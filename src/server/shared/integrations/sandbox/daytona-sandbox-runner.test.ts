@@ -6,8 +6,6 @@ import {
   restartPreparedDemoForFreshCapture,
 } from "./daytona-sandbox-runner";
 
-const STOP_DEMO_COMMAND =
-  "sh -lc 'if test -f /tmp/makeademo-demo.pid; then kill -- -$(cat /tmp/makeademo-demo.pid) >/dev/null 2>&1 || true; rm -f /tmp/makeademo-demo.pid; fi'";
 const START_DEMO_COMMAND =
   "sh -lc 'cd /workspace && nohup setsid sh -c '\\''exec npm run demo'\\'' > /tmp/makeademo-demo.log 2>&1 & echo $! > /tmp/makeademo-demo.pid && echo $!'";
 const FRESH_CAPTURE_BASELINE_COMMAND =
@@ -33,7 +31,7 @@ describe("DaytonaSandboxRunner", () => {
     expect(workspace.commands).toEqual([
       "find /workspace -maxdepth 1 -mindepth 1 -printf '%f\\n' | sort",
       "npm ci",
-      STOP_DEMO_COMMAND,
+      expect.stringContaining("/tmp/makeademo-demo.pid"),
       START_DEMO_COMMAND,
       "node -e 'fetch(process.argv[1]).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));' 'http://localhost:3000'",
       FRESH_CAPTURE_BASELINE_COMMAND,
@@ -235,8 +233,14 @@ describe("DaytonaSandboxRunner", () => {
       url: "http://localhost:3000",
     });
 
-    expect(workspace.commands).toContain(STOP_DEMO_COMMAND);
-    expect(workspace.commands.indexOf(STOP_DEMO_COMMAND)).toBeLessThan(
+    const stopCommand = workspace.commands.find((command) =>
+      command.includes("/tmp/makeademo-demo.pid"),
+    );
+    expect(stopCommand).toBeDefined();
+    expect(stopCommand).toContain("/proc/[0-9]*/cmdline");
+    expect(stopCommand).toContain("npm run demo");
+    expect(stopCommand).toContain("apps/makeademo-demo/server.ts");
+    expect(workspace.commands.indexOf(stopCommand as string)).toBeLessThan(
       workspace.commands.indexOf(START_DEMO_COMMAND),
     );
   });
@@ -322,7 +326,9 @@ describe("DaytonaSandboxRunner", () => {
       readinessPollIntervalMs: 0,
     });
 
-    expect(workspace.commands[0]).toBe(STOP_DEMO_COMMAND);
+    expect(workspace.commands[0]).toContain("/tmp/makeademo-demo.pid");
+    expect(workspace.commands[0]).toContain("/proc/[0-9]*/cmdline");
+    expect(workspace.commands[0]).toContain("npm run demo:makeademo");
     expect(workspace.commands[1]).toBe(FRESH_CAPTURE_RESTORE_COMMAND);
     expect(workspace.commands[2]).toContain("exec npm run demo:makeademo");
     expect(workspace.commands[3]).toBe(

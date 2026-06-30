@@ -355,6 +355,7 @@ async function runCapturePathValidation(input: {
         : { preparationWorkspace: input.preparationWorkspace }),
       demoScriptPackage: input.demoScriptPackage,
     });
+    assertCapturePathValidationBrowserUrlContract(result);
   } catch (error) {
     reportStageFinished("capture-path-validation", "failed", {
       context: input.context,
@@ -387,6 +388,17 @@ async function runCapturePathValidation(input: {
   });
 
   return result;
+}
+
+function assertCapturePathValidationBrowserUrlContract(
+  result: CapturePathValidationResult,
+) {
+  if (
+    result.status === "succeeded" &&
+    (result.browserUrl === undefined || result.browserUrl.trim().length === 0)
+  ) {
+    throw new Error("Capture Path Validation succeeded without a browser URL.");
+  }
 }
 
 function readCapturePathRepairAttemptLimit() {

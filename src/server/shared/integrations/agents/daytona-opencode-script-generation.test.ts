@@ -265,6 +265,77 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
     );
   });
 
+  it("rejects repaired Demo Scripts that still lack visible Playwright assertions", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      modelID: "gpt-5.5",
+      providerApiKey: "openai_key",
+      providerID: "openai",
+    });
+
+    await expect(
+      agent.repairCapturePathFailure({
+        attempt: 1,
+        failure: {
+          blockedNetworkAttempts: [],
+          failedSceneId: "scene_feed",
+          failureReason:
+            "Scene scene_feed must include a visible Playwright assertion before it ends.",
+          logs: [
+            "Scene scene_feed must include a visible Playwright assertion before it ends.",
+          ],
+          status: "failed",
+          warnings: [],
+        },
+        opencodeSessionID: "session_prepare_123",
+        preparationManifest: scriptGenerationInput().preparationManifest,
+        preparationWorkspace: workspaceHandle(events, [
+          {
+            ...interactivePackage(),
+            demoPlaywrightScript: [
+              "import { setup, scene } from './makeademo-capture-sdk';",
+              "await setup(async ({ page, baseUrl }) => { await page.goto(baseUrl + '#/'); });",
+              "await scene('scene_feed', async ({ page, expect }) => {",
+              "  await page.getByText('Global Feed').click();",
+              "  expect(await page.getByText('demo').innerText()).toBe('demo');",
+              "});",
+            ].join("\n"),
+          },
+        ]),
+        repoUrl: "https://github.com/example/conduit",
+        demoScriptPackage: {
+          ...interactivePackage(),
+          assumptions: [],
+          demoPlan: {
+            featureOrder: ["article feed"],
+            narrative: "Conduit article feed demo",
+            risks: [],
+          },
+          exploration: {
+            assumptions: [],
+            productSurfaces: [],
+            summary: "Prepared Conduit with local articles.",
+          },
+        },
+      }),
+    ).rejects.toThrow(
+      "Scene scene_feed must include a visible Playwright assertion before it ends.",
+    );
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "capture-path-repair.script-package.invalid",
+            reason:
+              "Scene scene_feed must include a visible Playwright assertion before it ends.",
+            stage: "capture-path-repair",
+          }),
+        },
+      ]),
+    );
+  });
+
   it("reviews Draft Composites in the same OpenCode session with uploaded evidence", async () => {
     const events: unknown[] = [];
     const reviewDirectory = await mkdtemp(join(tmpdir(), "makeademo-review-"));
@@ -517,7 +588,7 @@ function interactivePackage() {
   return {
     audio: { enabled: true, music: { id: "clean" as const } },
     demoPlaywrightScript:
-      "await setup(async ({ page, baseUrl }) => { await page.goto(baseUrl + '#/'); });\nawait scene('scene_feed', async ({ page }) => {\n  await page.getByText('Global Feed').click();\n  await page.getByText('demo').click();\n  await expect(page.getByText('demo')).toBeVisible();\n});",
+      "import { setup, scene } from './makeademo-capture-sdk';\nawait setup(async ({ page, baseUrl }) => { await page.goto(baseUrl + '#/'); });\nawait scene('scene_feed', async ({ page, expect }) => {\n  await page.getByText('Global Feed').click();\n  await page.getByText('demo').click();\n  await expect(page.getByText('demo')).toBeVisible();\n});",
     format: "16:9",
     presentation: {
       music: { enabled: true, trackId: "clean" as const },
