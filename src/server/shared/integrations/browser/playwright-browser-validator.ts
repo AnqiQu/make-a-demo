@@ -203,8 +203,12 @@ const targetUrl = process.argv[2];
 const localHost = new URL(targetUrl).hostname;
 const blockedRequests = [];
 let browser;
-try {
-  const { chromium } = await import("playwright");
+const { createRequire } = require("node:module");
+const requireGlobalPlaywright = createRequire("/usr/local/lib/node_modules/playwright/package.json");
+
+async function main() {
+  try {
+  const { chromium } = requireGlobalPlaywright("playwright");
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   await page.route("**/*", async (route) => {
@@ -245,6 +249,10 @@ try {
 } finally {
   await browser?.close();
 }
+
+}
+
+void main();
 `;
 
 function tryParseBrowserValidationOutput(

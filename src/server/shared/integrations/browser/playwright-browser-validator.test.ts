@@ -191,6 +191,10 @@ describe("PlaywrightBrowserValidator", () => {
       screenshotArtifactId: "screenshot:inner",
     });
     expect(submittedCommands.join("\n")).toContain("chromium.launch");
+    expect(submittedCommands.join("\n")).toContain(
+      "/usr/local/lib/node_modules/playwright/package.json",
+    );
+    expect(submittedCommands.join("\n")).not.toContain('import("playwright")');
     expect(submittedCommands.join("\n")).toContain('page.route("**/*"');
     expect(submittedCommands.join("\n")).toContain(
       'route.abort("blockedbyclient")',

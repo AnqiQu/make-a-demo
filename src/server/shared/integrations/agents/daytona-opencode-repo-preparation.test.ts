@@ -380,6 +380,39 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     );
   });
 
+  it("clones the submitted repo into the submitted-code workspace when available", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      providerApiKey: "openai_key",
+      provider: fakeProvider(events, [JSON.stringify(successResult())]),
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          submittedCodeExecute:
+            "mkdir -p /workspace && find /workspace -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --depth 1 'https://github.com/example/app' /workspace",
+        },
+      ]),
+    );
+    expect(events).toEqual(
+      expect.arrayContaining([
+        { submittedCodeNetwork: true },
+        { submittedCodeNetwork: false },
+      ]),
+    );
+  });
+
   it("writes Repo Preparation lifecycle events to the sandbox Pino log seam", async () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparation({
@@ -746,6 +779,9 @@ function fakeWorkspace(
     },
     async executeSubmittedCode(command) {
       events.push({ submittedCodeExecute: command });
+      if (command.includes("git clone")) {
+        return { exitCode: 0, stderr: "", stdout: "cloned submitted" };
+      }
       if (command === "bun install") {
         if (input.submittedCodeNeverSettles === true) {
           await new Promise(() => {});

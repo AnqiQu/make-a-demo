@@ -25,7 +25,8 @@ describe("Daytona OpenCode prepared image", () => {
     expect(dockerfile).toContain("ffmpeg");
     expect(dockerfile).toContain("unzip");
     expect(dockerfile).toContain("bun-v1.2.5");
-    expect(dockerfile).toContain("corepack enable");
+    expect(dockerfile).toContain("pnpm@10.12.1");
+    expect(dockerfile).toContain("yarn@1.22.22");
     expect(dockerfile).toContain("@playwright/test@1.49.1");
     expect(dockerfile).toContain("playwright@1.49.1");
     expect(dockerfile).toContain("typescript@5.7.3");

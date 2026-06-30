@@ -148,6 +148,22 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
       return cloneResult;
     }
 
+    const submittedCodeCloneResult = await cloneSubmittedCodeWorkspace(
+      handle.workspace,
+      input.repoUrl,
+    );
+    if (submittedCodeCloneResult !== undefined) {
+      await writePreparationSandboxLog(handle.workspace, {
+        event: "submitted-code-clone-finished",
+        exitCode: submittedCodeCloneResult.exitCode,
+        stderrLength: submittedCodeCloneResult.stderr.length,
+        stdoutLength: submittedCodeCloneResult.stdout.length,
+      });
+      if (submittedCodeCloneResult.exitCode !== 0) {
+        return submittedCodeCloneResult;
+      }
+    }
+
     await installMakeADemoOpenCodeConfig(handle.workspace);
     await writePreparationSandboxLog(handle.workspace, {
       event: "opencode-config-installed",
@@ -475,6 +491,22 @@ async function writePreparationSandboxLog(
     event: eventName,
     stage: "repo-preparation",
   });
+}
+
+async function cloneSubmittedCodeWorkspace(
+  workspace: PreparationWorkspace,
+  repoUrl: string,
+): Promise<PreparationWorkspaceCommandResult | undefined> {
+  if (workspace.executeSubmittedCode === undefined) {
+    return undefined;
+  }
+
+  await workspace.setSubmittedCodeNetworkAccess?.(true);
+  try {
+    return await workspace.executeSubmittedCode(createCloneCommand(repoUrl));
+  } finally {
+    await workspace.setSubmittedCodeNetworkAccess?.(false);
+  }
 }
 
 function backendToolDeadlineFailure(toolName: string) {
