@@ -1,19 +1,18 @@
 import type {
   RepoSecurityInput,
   RepoSecurityResult,
-} from "../../pipeline/02-repo-security-screen/repo-security-screen";
+} from "../02-repo-security-screen/repo-security-screen";
 import type {
   RepoPreparationInput,
   RepoPreparationResult,
-} from "../../pipeline/03-repo-preparation/repo-preparation-agent.interface";
-import type { DemoScriptPackage } from "../../pipeline/04-script-generation/demo-script-package";
-import type { ScriptGenerationInput } from "../../pipeline/04-script-generation/script-generation-orchestrator";
-import type { CapturePathRepairer } from "../../pipeline/05-capture-path-validation/capture-path-repairer.interface";
+} from "../03-repo-preparation/repo-preparation-agent.interface";
+import type { DemoScriptPackage } from "../04-script-generation/demo-script-package";
+import type { ScriptGenerationInput } from "../04-script-generation/script-generation-orchestrator";
+import type { CapturePathRepairer } from "../05-capture-path-validation/capture-path-repairer.interface";
 import type {
   CapturePathValidationInput,
   CapturePathValidationResult,
-  CapturePathValidator,
-} from "../../pipeline/05-capture-path-validation/capture-path-validator.interface";
+} from "../05-capture-path-validation/capture-path-validator.interface";
 import type { PipelineJobInput, PipelineJobResult } from "./pipeline-job";
 import {
   type PipelineObservabilityEvent,
@@ -31,7 +30,9 @@ export type PipelineOrchestratorDependencies = {
   prepareRepo(input: RepoPreparationInput): Promise<RepoPreparationResult>;
   repairCapturePathFailure?: CapturePathRepairer["repairCapturePathFailure"];
   screenRepoSecurity(input: RepoSecurityInput): RepoSecurityResult;
-  validateCapturePath: CapturePathValidator["validate"];
+  validateCapturePath(
+    input: CapturePathValidationInput,
+  ): Promise<CapturePathValidationResult>;
 };
 
 type PipelineProgressEvent = {

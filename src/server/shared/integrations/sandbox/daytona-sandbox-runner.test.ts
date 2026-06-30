@@ -6,56 +6,8 @@ import {
   restartPreparedDemoForFreshCapture,
 } from "./daytona-sandbox-runner";
 
-const START_DEMO_COMMAND =
-  "sh -lc 'cd /workspace && nohup setsid sh -c '\\''exec npm run demo'\\'' > /tmp/makeademo-demo.log 2>&1 & echo $! > /tmp/makeademo-demo.pid && echo $!'";
-const FRESH_CAPTURE_BASELINE_COMMAND =
-  "sh -lc 'mkdir -p /workspace/.makeademo && tar --exclude='\\''./.makeademo'\\'' --exclude='\\''./node_modules'\\'' -czf /workspace/.makeademo/fresh-capture-baseline.tgz -C /workspace .'";
-const FRESH_CAPTURE_RESTORE_COMMAND =
-  "sh -lc 'test -f /workspace/.makeademo/fresh-capture-baseline.tgz && find /workspace -mindepth 1 ! -path '\\''/workspace/.makeademo'\\'' ! -path '\\''/workspace/.makeademo/*'\\'' ! -path '\\''/workspace/node_modules'\\'' ! -path '\\''/workspace/node_modules/*'\\'' -exec rm -rf {} + && tar -xzf /workspace/.makeademo/fresh-capture-baseline.tgz -C /workspace'";
-
 describe("DaytonaSandboxRunner", () => {
   it("validates the retained prepared Daytona workspace", async () => {
-    const workspace = new FakePreparationWorkspaceHandle();
-    const runner = new DaytonaSandboxRunner({
-      destroyWorkspaceOnCleanup: true,
-    });
-
-    const result = await runner.runValidation({
-      demoCommand: "npm run demo",
-      preparationManifest: manifest("workspace_123"),
-      preparationWorkspace: workspace,
-      repoUrl: "https://github.com/example/app",
-      url: "http://localhost:3000",
-    });
-
-    expect(workspace.commands).toEqual([
-      "find /workspace -maxdepth 1 -mindepth 1 -printf '%f\\n' | sort",
-      "npm ci",
-      expect.stringContaining("/tmp/makeademo-demo.pid"),
-      START_DEMO_COMMAND,
-      "node -e 'fetch(process.argv[1]).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));' 'http://localhost:3000'",
-      FRESH_CAPTURE_BASELINE_COMMAND,
-      "if test -f /tmp/makeademo-demo.log; then cat /tmp/makeademo-demo.log; fi",
-    ]);
-    expect(workspace.networkAccess).toEqual([true, false]);
-    expect(result).toMatchObject({
-      browserUrl: "https://preview.example.test:3000/",
-      blockedNetworkAttempts: [],
-      logs: [
-        "package-lock.json\npackage.json\n",
-        "ran npm ci",
-        `ran ${START_DEMO_COMMAND}`,
-      ],
-      repoFiles: ["package-lock.json", "package.json"],
-      runtimeExitCode: 0,
-    });
-
-    await result.cleanup?.();
-
-    expect(workspace.destroyed).toBe(true);
-  });
-
-  it("preserves the prepared Daytona workspace by default after validation", async () => {
     const workspace = new FakePreparationWorkspaceHandle();
     const runner = new DaytonaSandboxRunner();
 
@@ -67,6 +19,33 @@ describe("DaytonaSandboxRunner", () => {
       url: "http://localhost:3000",
     });
 
+    expect(workspace.commands).toEqual([]);
+    expect(workspace.submittedCommands[0]).toContain("find /workspace");
+    expect(workspace.submittedCommands[1]).toBe("npm ci");
+    expect(workspace.submittedCommands[2]).toContain("/tmp/makeademo-demo.pid");
+    expect(workspace.submittedCommands[2]).toContain("/proc/[0-9]*/cmdline");
+    expect(workspace.submittedCommands[2]).toContain("npm run demo");
+    expect(workspace.submittedCommands[3]).toContain("exec npm run demo");
+    expect(workspace.submittedCommands[4]).toContain("fetch");
+    expect(workspace.submittedCommands[5]).toContain(
+      "fresh-capture-baseline.tgz",
+    );
+    expect(workspace.submittedCommands[6]).toBe(
+      "if test -f /tmp/makeademo-demo.log; then cat /tmp/makeademo-demo.log; fi",
+    );
+    expect(workspace.submittedNetworkAccess).toEqual([true, false]);
+    expect(result).toMatchObject({
+      browserUrl: "https://preview.example.test:3000/",
+      blockedNetworkAttempts: [],
+      logs: [
+        "package-lock.json\npackage.json\n",
+        "ran npm ci",
+        expect.stringContaining("exec npm run demo"),
+      ],
+      repoFiles: ["package-lock.json", "package.json"],
+      runtimeExitCode: 0,
+    });
+
     await result.cleanup?.();
 
     expect(workspace.destroyed).toBe(false);
@@ -74,9 +53,7 @@ describe("DaytonaSandboxRunner", () => {
 
   it("writes Project Validation progress and demo server output to sandbox logs", async () => {
     const workspace = new FakePreparationWorkspaceHandle();
-    const runner = new DaytonaSandboxRunner({
-      destroyWorkspaceOnCleanup: true,
-    });
+    const runner = new DaytonaSandboxRunner();
 
     await runner.runValidation({
       demoCommand: "npm run demo",
@@ -136,7 +113,7 @@ describe("DaytonaSandboxRunner", () => {
         }),
         expect.objectContaining({
           event: "project-validation.demo-server-log",
-          log: "demo server ready",
+          log: "demo server failed",
           stage: "project-validation",
         }),
       ]),
@@ -144,9 +121,7 @@ describe("DaytonaSandboxRunner", () => {
   });
 
   it("requires the retained Repo Preparation workspace", async () => {
-    const runner = new DaytonaSandboxRunner({
-      destroyWorkspaceOnCleanup: true,
-    });
+    const runner = new DaytonaSandboxRunner();
 
     await expect(
       runner.runValidation({
@@ -162,9 +137,7 @@ describe("DaytonaSandboxRunner", () => {
     const workspace = new FakePreparationWorkspaceHandle(
       new Map([["npm ci", 1]]),
     );
-    const runner = new DaytonaSandboxRunner({
-      destroyWorkspaceOnCleanup: true,
-    });
+    const runner = new DaytonaSandboxRunner();
 
     const result = await runner.runValidation({
       demoCommand: "npm run demo",
@@ -175,18 +148,14 @@ describe("DaytonaSandboxRunner", () => {
     });
 
     expect(result.runtimeExitCode).toBe(1);
-    expect(workspace.commands).toEqual([
-      "find /workspace -maxdepth 1 -mindepth 1 -printf '%f\\n' | sort",
-      "npm ci",
-    ]);
-    expect(workspace.destroyed).toBe(true);
+    expect(workspace.submittedCommands[0]).toContain("find /workspace");
+    expect(workspace.submittedCommands[1]).toBe("npm ci");
+    expect(workspace.destroyed).toBe(false);
   });
 
   it("closes outbound network and destroys the workspace when install execution throws", async () => {
     const workspace = new FakePreparationWorkspaceHandle(new Map(), "npm ci");
-    const runner = new DaytonaSandboxRunner({
-      destroyWorkspaceOnCleanup: true,
-    });
+    const runner = new DaytonaSandboxRunner();
 
     await expect(
       runner.runValidation({
@@ -198,8 +167,8 @@ describe("DaytonaSandboxRunner", () => {
       }),
     ).rejects.toThrow("npm ci exploded");
 
-    expect(workspace.networkAccess).toEqual([true, false]);
-    expect(workspace.destroyed).toBe(true);
+    expect(workspace.submittedNetworkAccess).toEqual([true, false]);
+    expect(workspace.destroyed).toBe(false);
   });
 
   it("starts long-running demo commands without waiting for the server to exit", async () => {
@@ -216,8 +185,10 @@ describe("DaytonaSandboxRunner", () => {
       url: "http://localhost:3000",
     });
 
-    expect(workspace.commands).not.toContain("npm run demo");
-    expect(workspace.commands).toContain(START_DEMO_COMMAND);
+    expect(workspace.submittedCommands).not.toContain("npm run demo");
+    expect(workspace.submittedCommands).toEqual(
+      expect.arrayContaining([expect.stringContaining("exec npm run demo")]),
+    );
     expect(result.runtimeExitCode).toBe(0);
   });
 
@@ -233,15 +204,19 @@ describe("DaytonaSandboxRunner", () => {
       url: "http://localhost:3000",
     });
 
-    const stopCommand = workspace.commands.find((command) =>
+    const stopCommand = workspace.submittedCommands.find((command) =>
       command.includes("/tmp/makeademo-demo.pid"),
     );
     expect(stopCommand).toBeDefined();
     expect(stopCommand).toContain("/proc/[0-9]*/cmdline");
     expect(stopCommand).toContain("npm run demo");
     expect(stopCommand).toContain("apps/makeademo-demo/server.ts");
-    expect(workspace.commands.indexOf(stopCommand as string)).toBeLessThan(
-      workspace.commands.indexOf(START_DEMO_COMMAND),
+    expect(
+      workspace.submittedCommands.indexOf(stopCommand as string),
+    ).toBeLessThan(
+      workspace.submittedCommands.findIndex((command) =>
+        command.includes("exec npm run demo"),
+      ),
     );
   });
 
@@ -259,7 +234,9 @@ describe("DaytonaSandboxRunner", () => {
     });
 
     expect(
-      workspace.commands.filter((command) => command.includes("fetch")),
+      workspace.submittedCommands.filter((command) =>
+        command.includes("fetch"),
+      ),
     ).toHaveLength(2);
     expect(result.runtimeExitCode).toBe(0);
   });
@@ -284,7 +261,7 @@ describe("DaytonaSandboxRunner", () => {
     expect(result.logs).toContain("demo server failed");
   });
 
-  it("uses the manifest URL port when resolving a browser preview URL", async () => {
+  it("returns a Daytona preview URL for the submitted-code browser URL", async () => {
     const workspace = new FakePreparationWorkspaceHandle();
     const runner = new DaytonaSandboxRunner();
 
@@ -300,7 +277,7 @@ describe("DaytonaSandboxRunner", () => {
     expect(result.browserUrl).toBe("https://preview.example.test:4173/");
   });
 
-  it("preserves the manifest URL path, query, and hash on browser preview URLs", async () => {
+  it("preserves the manifest URL path, query, and hash on submitted-code browser URLs", async () => {
     const workspace = new FakePreparationWorkspaceHandle();
     const runner = new DaytonaSandboxRunner();
 
@@ -326,12 +303,16 @@ describe("DaytonaSandboxRunner", () => {
       readinessPollIntervalMs: 0,
     });
 
-    expect(workspace.commands[0]).toContain("/tmp/makeademo-demo.pid");
-    expect(workspace.commands[0]).toContain("/proc/[0-9]*/cmdline");
-    expect(workspace.commands[0]).toContain("npm run demo:makeademo");
-    expect(workspace.commands[1]).toBe(FRESH_CAPTURE_RESTORE_COMMAND);
-    expect(workspace.commands[2]).toContain("exec npm run demo:makeademo");
-    expect(workspace.commands[3]).toBe(
+    expect(workspace.submittedCommands[0]).toContain("/tmp/makeademo-demo.pid");
+    expect(workspace.submittedCommands[0]).toContain("/proc/[0-9]*/cmdline");
+    expect(workspace.submittedCommands[0]).toContain("npm run demo:makeademo");
+    expect(workspace.submittedCommands[1]).toContain(
+      "fresh-capture-baseline.tgz && find",
+    );
+    expect(workspace.submittedCommands[2]).toEqual(
+      expect.stringContaining("exec npm run demo:makeademo"),
+    );
+    expect(workspace.submittedCommands[3]).toBe(
       "node -e 'fetch(process.argv[1]).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));' 'http://localhost:3000'",
     );
     expect(result.browserUrl).toBe("https://preview.example.test:3000/");
@@ -377,9 +358,9 @@ describe("DaytonaSandboxRunner", () => {
   });
 
   it("fails the fresh capture boundary when the prepared baseline cannot be restored", async () => {
-    const workspace = new FakePreparationWorkspaceHandle(
-      new Map([[FRESH_CAPTURE_RESTORE_COMMAND, 1]]),
-    );
+    const workspace = new FakePreparationWorkspaceHandle(new Map(), undefined, {
+      failFreshCaptureRestore: true,
+    });
 
     await expect(
       restartPreparedDemoForFreshCapture({
@@ -388,7 +369,12 @@ describe("DaytonaSandboxRunner", () => {
         readinessPollIntervalMs: 0,
       }),
     ).rejects.toThrow("Fresh Footage Capture baseline could not be restored");
-    expect(workspace.commands).not.toContain(START_DEMO_COMMAND);
+    expect(workspace.submittedCommands[0]).toContain("/tmp/makeademo-demo.pid");
+    expect(workspace.submittedCommands[0]).toContain("/proc/[0-9]*/cmdline");
+    expect(workspace.submittedCommands[0]).toContain("npm run demo:makeademo");
+    expect(workspace.submittedCommands[1]).toContain(
+      "fresh-capture-baseline.tgz && find",
+    );
     expect(workspace.sandboxLogs).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -408,73 +394,83 @@ class FakePreparationWorkspaceHandle implements PreparationWorkspaceHandle {
   previewPorts: number[] = [];
   readinessResults: number[] = [];
   sandboxLogs: Record<string, unknown>[] = [];
-  private lastReadinessExitCode = 0;
+  submittedCommands: string[] = [];
+  submittedNetworkAccess: boolean[] = [];
 
   constructor(
     private readonly exitCodesByCommand = new Map<string, number>(),
     private readonly commandToThrow?: string,
+    private readonly options: { failFreshCaptureRestore?: boolean } = {},
   ) {}
 
   workspace = {
     execute: async (command: string) => {
       this.commands.push(command);
-      if (command === this.commandToThrow) {
-        throw new Error(`${command} exploded`);
-      }
-
-      if (command.includes("fetch")) {
-        this.lastReadinessExitCode = this.readinessResults.shift() ?? 0;
-        return {
-          exitCode: this.lastReadinessExitCode,
-          stderr: "",
-          stdout: "",
-        };
-      }
-
-      if (command.startsWith("if test -f /tmp/makeademo-demo.log")) {
-        return {
-          exitCode: 0,
-          stderr: "",
-          stdout:
-            this.lastReadinessExitCode === 0
-              ? "demo server ready"
-              : "demo server failed",
-        };
-      }
-
-      if (command.includes("/tmp/makeademo-demo.log")) {
-        return {
-          exitCode: 0,
-          stderr: "",
-          stdout: `ran ${command}`,
-        };
-      }
-
-      return {
-        exitCode: this.exitCodesByCommand.get(command) ?? 0,
-        stderr: "",
-        stdout: command.startsWith("find /workspace")
-          ? "package-lock.json\npackage.json\n"
-          : `ran ${command}`,
-      };
+      return { exitCode: 0, stderr: "", stdout: `outer ${command}` };
     },
-    setOutboundNetworkAccess: async (enabled: boolean) => {
-      this.networkAccess.push(enabled);
-    },
-    writeSandboxLog: async (entry: Record<string, unknown>) => {
-      this.sandboxLogs.push(entry);
+    executeSubmittedCode: async (command: string) => {
+      this.submittedCommands.push(command);
+      return this.runCommand(command);
     },
     getPreviewUrl: async (port: number) => {
       this.previewPorts.push(port);
       return `https://preview.example.test:${port}`;
     },
+    setOutboundNetworkAccess: async (enabled: boolean) => {
+      this.networkAccess.push(enabled);
+    },
+    setSubmittedCodeNetworkAccess: async (enabled: boolean) => {
+      this.submittedNetworkAccess.push(enabled);
+    },
     uploadFiles: async () => {
       throw new Error("Project Validation should use the retained workspace.");
+    },
+    writeSandboxLog: async (entry: Record<string, unknown>) => {
+      this.sandboxLogs.push(entry);
     },
   };
 
   async destroy() {
     this.destroyed = true;
+  }
+
+  private runCommand(command: string) {
+    if (command === this.commandToThrow) {
+      throw new Error(`${command} exploded`);
+    }
+
+    if (
+      this.options.failFreshCaptureRestore === true &&
+      command.includes("fresh-capture-baseline.tgz && find")
+    ) {
+      return { exitCode: 1, stderr: "restore failed", stdout: "" };
+    }
+
+    if (command.includes("fetch")) {
+      return {
+        exitCode: this.readinessResults.shift() ?? 0,
+        stderr: "",
+        stdout: "",
+      };
+    }
+
+    if (command.includes("/tmp/makeademo-demo.log")) {
+      return {
+        exitCode: 0,
+        stderr: "",
+        stdout: command.startsWith("if test -f")
+          ? "demo server failed"
+          : `ran ${command}`,
+      };
+    }
+
+    return {
+      exitCode: this.exitCodesByCommand.get(command) ?? 0,
+      stderr: "",
+      stdout: command.startsWith("find /workspace")
+        ? "package-lock.json\npackage.json\n"
+        : `ran ${command}`,
+    };
   }
 }
 

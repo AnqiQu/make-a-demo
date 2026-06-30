@@ -7,18 +7,6 @@ export type DependencyNetworkDecision =
   | { status: "allowed" }
   | { reason: string; status: "denied" };
 
-const agentOnlyEnvKeys = new Set([
-  "ANTHROPIC_API_KEY",
-  "CONTEXT7_API_KEY",
-  "EXA_API_KEY",
-  "GITHUB_TOKEN",
-  "OPENAI_API_KEY",
-  "OPENCODE_ENABLE_EXA",
-  "OPENCODE_EXPERIMENTAL_EXA",
-  "OPENCODE_CONFIG",
-  "OPENCODE_CONFIG_CONTENT",
-]);
-
 const allowedPackageManagers = new Set(["bun", "npm", "pnpm", "yarn"]);
 const allowedInstallFlags = new Set([
   "--check-files",
@@ -89,7 +77,7 @@ export function createSubmittedRuntimeEnv(
   const runtimeEnv: Record<string, string> = {};
 
   for (const [key, value] of Object.entries(agentEnv)) {
-    if (value === undefined || isAgentOnlyEnvKey(key)) {
+    if (value === undefined || !isSubmittedRuntimeEnvKey(key)) {
       continue;
     }
 
@@ -99,14 +87,12 @@ export function createSubmittedRuntimeEnv(
   return runtimeEnv;
 }
 
-function isAgentOnlyEnvKey(key: string): boolean {
+function isSubmittedRuntimeEnvKey(key: string): boolean {
   return (
-    agentOnlyEnvKeys.has(key) ||
-    key.startsWith("DAYTONA_") ||
-    key.startsWith("OPENCODE_") ||
-    key.endsWith("_API_KEY") ||
-    key.endsWith("_TOKEN") ||
-    key.endsWith("_SECRET")
+    key === "NODE_ENV" ||
+    key.startsWith("PUBLIC_") ||
+    key.startsWith("VITE_") ||
+    key.startsWith("NEXT_PUBLIC_")
   );
 }
 

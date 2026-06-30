@@ -94,6 +94,30 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     );
   });
 
+  it("uploads workspace artifacts to the Daytona workspace", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls),
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.uploadFiles([
+      {
+        destinationPath: "/workspace/.makeademo/capture/script.ts",
+        sourcePath: "/tmp/script.ts",
+      },
+    ]);
+
+    expect(calls[1]).toEqual({
+      uploadFiles: [
+        {
+          destination: "/workspace/.makeademo/capture/script.ts",
+          source: "/tmp/script.ts",
+        },
+      ],
+    });
+  });
+
   it("reconnects to an existing sandbox as a preparation workspace", async () => {
     const calls: unknown[] = [];
 
@@ -244,11 +268,6 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         },
         {
           executeCommand: expect.stringContaining(
-            "/workspace/.makeademo/sandbox-log.jsonl",
-          ),
-        },
-        {
-          executeCommand: expect.stringContaining(
             '"event":"repo-preparation.succeeded"',
           ),
         },
@@ -285,6 +304,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       expect(countOccurrences(command, '"workspaceId"')).toBe(1);
       expect(countOccurrences(command, '"message"')).toBe(1);
       expect(command).not.toContain('"timestamp"');
+      expect(command).not.toContain("/tmp/makeademo/submitted-code");
     }
     expect(
       calls.filter(
@@ -427,19 +447,208 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       { updateNetworkSettings: { networkBlockAll: true } },
     ]);
   });
+
+  it("creates a linked ephemeral submitted-code sandbox when configured", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls),
+      snapshot: "makeademo-opencode",
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+
+    const handle = await provider.create();
+
+    expect(handle.id).toBe("parent_sandbox");
+    expect(calls.slice(0, 2)).toEqual([
+      {
+        create: {
+          disk: 3,
+          snapshot: "makeademo-opencode",
+        },
+      },
+      {
+        create: {
+          autoDeleteInterval: 0,
+          ephemeral: true,
+          linkedSandbox: "parent_sandbox",
+          networkBlockAll: true,
+          snapshot: "makeademo-submitted-code-browser",
+        },
+      },
+    ]);
+  });
+
+  it("routes submitted-code execution, network, preview, and uploads through the linked child sandbox", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.uploadFiles([
+      {
+        destinationPath: "/workspace/package.json",
+        sourcePath: "/tmp/repo/package.json",
+      },
+    ]);
+    const result = await handle.workspace.executeSubmittedCode?.("npm test");
+    await handle.workspace.setSubmittedCodeNetworkAccess?.(true);
+    await expect(handle.workspace.getPreviewUrl(3000)).resolves.toBe(
+      "https://child-preview.example.test:3000",
+    );
+
+    expect(result).toEqual({ exitCode: 0, stderr: "", stdout: "child ok" });
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        {
+          uploadFiles: {
+            files: [
+              {
+                destination: "/workspace/package.json",
+                source: "/tmp/repo/package.json",
+              },
+            ],
+            sandbox: "parent_sandbox",
+          },
+        },
+        {
+          uploadFiles: {
+            files: [
+              {
+                destination: "/workspace/package.json",
+                source: "/tmp/repo/package.json",
+              },
+            ],
+            sandbox: "submitted_sandbox",
+          },
+        },
+        {
+          executeCommand: { command: "npm test", sandbox: "submitted_sandbox" },
+        },
+        {
+          updateNetworkSettings: {
+            sandbox: "submitted_sandbox",
+            settings: { networkBlockAll: false },
+          },
+        },
+        {
+          getSignedPreviewUrl: {
+            port: 3000,
+            sandbox: "submitted_sandbox",
+            ttl: 3600,
+          },
+        },
+      ]),
+    );
+  });
+
+  it("deletes the linked submitted-code sandbox before deleting the parent sandbox", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await handle.destroy();
+
+    expect(calls.slice(-2)).toEqual([
+      { delete: "submitted_sandbox" },
+      { delete: "parent_sandbox" },
+    ]);
+  });
 });
+
+function fakeLinkedClient(calls: unknown[]) {
+  const parentSandbox = fakeLinkedSandbox(calls, "parent_sandbox", "parent ok");
+  const childSandbox = fakeLinkedSandbox(
+    calls,
+    "submitted_sandbox",
+    "child ok",
+  );
+
+  return {
+    async create(input: unknown) {
+      calls.push({ create: input });
+      if (
+        typeof input === "object" &&
+        input !== null &&
+        "linkedSandbox" in input
+      ) {
+        return childSandbox;
+      }
+
+      return parentSandbox;
+    },
+    async delete(input: { id?: string; name?: string }) {
+      calls.push({ delete: input.id ?? input.name });
+    },
+  };
+}
+
+function fakeLinkedSandbox(calls: unknown[], id: string, stdout: string) {
+  return {
+    fs: {
+      async downloadFiles(
+        files: Array<{ destination: string; source: string }>,
+        timeoutSec?: number,
+      ) {
+        calls.push({ downloadFiles: { files, sandbox: id, timeoutSec } });
+        return files.map((file) => ({ source: file.source }));
+      },
+      async uploadFiles(files: unknown[]) {
+        calls.push({ uploadFiles: { files, sandbox: id } });
+      },
+    },
+    id,
+    async getSignedPreviewUrl(port: number, ttl?: number) {
+      calls.push({ getSignedPreviewUrl: { port, sandbox: id, ttl } });
+      return {
+        url: `https://${id === "submitted_sandbox" ? "child" : "parent"}-preview.example.test:${port}`,
+      };
+    },
+    process: {
+      async createPty() {
+        throw new Error("Streaming is not exercised by linked sandbox tests.");
+      },
+      async createSession() {},
+      async deleteSession() {},
+      async executeCommand(command: string) {
+        calls.push({ executeCommand: { command, sandbox: id } });
+        return { exitCode: 0, result: stdout };
+      },
+      async executeSessionCommand() {
+        return { cmdId: "cmd_123" };
+      },
+      async getSessionCommand() {
+        return { exitCode: 0 };
+      },
+      async getSessionCommandLogs() {
+        return { stderr: "", stdout: "" };
+      },
+    },
+    async updateNetworkSettings(settings: unknown) {
+      calls.push({ updateNetworkSettings: { sandbox: id, settings } });
+    },
+  };
+}
 
 function fakeClient(
   calls: unknown[],
   options: {
     downloadError?: string;
     executeCommandNeverResolves?: boolean;
+    failFirstSubmittedCodeInitialization?: boolean;
+    failSubmittedCodeNetworkDisable?: boolean;
+    missingSubmittedCodeImage?: boolean;
     networkError?: Error;
     previewNeverResolves?: boolean;
     ptyNeverConnects?: boolean;
     ptyWaitsForDisconnect?: boolean;
   } = {},
 ) {
+  let submittedCodeInitializationFailures = 0;
   const sandbox = {
     fs: {
       async downloadFiles(
@@ -531,6 +740,35 @@ function fakeClient(
         if (options.executeCommandNeverResolves === true) {
           await new Promise(() => {});
         }
+        if (
+          options.failSubmittedCodeNetworkDisable === true &&
+          command.includes("docker network disconnect bridge")
+        ) {
+          return {
+            exitCode: 1,
+            result: "",
+            stderr: "failed to disable submitted-code network",
+          };
+        }
+        if (
+          options.missingSubmittedCodeImage === true &&
+          command.includes("docker image inspect")
+        ) {
+          return {
+            exitCode: 1,
+            result: "",
+            stderr:
+              "Submitted-code image makeademo-submitted-code:node-browser is missing from the prepared Daytona workspace image.",
+          };
+        }
+        if (
+          options.failFirstSubmittedCodeInitialization === true &&
+          command.includes("docker run -d") &&
+          submittedCodeInitializationFailures === 0
+        ) {
+          submittedCodeInitializationFailures += 1;
+          return { exitCode: 1, result: "", stderr: "docker failed" };
+        }
         return { exitCode: 0, result: "ok" };
       },
       async executeSessionCommand(
@@ -589,4 +827,14 @@ function fakeClient(
 
 function countOccurrences(text: string, needle: string): number {
   return text.split(needle).length - 1;
+}
+
+async function waitForCall(calls: unknown[], key: string): Promise<void> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (calls.some((call) => key in Object(call))) {
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
 }

@@ -1,5 +1,7 @@
+import { runDependencyInstallWithNetworkWindow } from "../../../pipeline/03-repo-preparation/dependency-install-network-window";
 import type { PreparationManifest } from "../../../pipeline/03-repo-preparation/preparation-manifest";
 import type { PreparationWorkspaceHandle } from "../../../pipeline/03-repo-preparation/preparation-workspace-runner";
+import { executeSubmittedCode } from "../../../pipeline/03-repo-preparation/submitted-code-execution";
 import { inferInstallPlan } from "../../../pipeline/05-capture-path-validation/project-runtime-preflight/install-plan";
 import type {
   SandboxRunner,
@@ -42,10 +44,12 @@ export class DaytonaSandboxRunner implements SandboxRunner {
         stage: "project-validation",
         workspaceId: input.preparationManifest.workspaceId,
       });
+
     try {
       await writeSandboxLog({ event: "project-validation.started" });
       await writeSandboxLog({ event: "project-validation.repo-files.started" });
-      const repoFilesResult = await handle.workspace.execute(
+      const repoFilesResult = await executeSubmittedCode(
+        handle.workspace,
         "find /workspace -maxdepth 1 -mindepth 1 -printf '%f\\n' | sort",
       );
       const repoFiles = repoFilesResult.stdout
@@ -62,15 +66,10 @@ export class DaytonaSandboxRunner implements SandboxRunner {
         event: "project-validation.dependency-install.started",
       });
 
-      await handle.workspace.setOutboundNetworkAccess(true);
-      let installResult: Awaited<
-        ReturnType<PreparationWorkspaceHandle["workspace"]["execute"]>
-      >;
-      try {
-        installResult = await handle.workspace.execute(installPlan.command);
-      } finally {
-        await handle.workspace.setOutboundNetworkAccess(false);
-      }
+      const installResult = await runDependencyInstallWithNetworkWindow({
+        command: installPlan.command,
+        workspace: handle.workspace,
+      });
 
       if (installResult.exitCode !== 0) {
         await writeSandboxLog({
@@ -102,8 +101,12 @@ export class DaytonaSandboxRunner implements SandboxRunner {
         event: "project-validation.demo-command.started",
         url: input.url,
       });
-      await handle.workspace.execute(createStopDemoCommand(input.demoCommand));
-      const runtimeResult = await handle.workspace.execute(
+      await executeSubmittedCode(
+        handle.workspace,
+        createStopDemoCommand(input.demoCommand),
+      );
+      const runtimeResult = await executeSubmittedCode(
+        handle.workspace,
         createStartDemoCommand(input.demoCommand),
       );
       await writeSandboxLog({
@@ -116,10 +119,10 @@ export class DaytonaSandboxRunner implements SandboxRunner {
         url: input.url,
       });
       const readinessResult = await waitForDemoReadiness({
+        execute: (command) => executeSubmittedCode(handle.workspace, command),
         pollIntervalMs: this.readinessPollIntervalMs,
         timeoutMs: this.readinessTimeoutMs,
         url: input.url,
-        workspace: handle.workspace,
       });
       if (readinessResult.exitCode !== 0) {
         await writeSandboxLog({
@@ -128,7 +131,8 @@ export class DaytonaSandboxRunner implements SandboxRunner {
           stdout: readinessResult.stdout,
           url: input.url,
         });
-        const demoLogsResult = await handle.workspace.execute(
+        const demoLogsResult = await executeSubmittedCode(
+          handle.workspace,
           "if test -f /tmp/makeademo-demo.log; then cat /tmp/makeademo-demo.log; fi",
         );
         await writeDemoServerLog(writeSandboxLog, demoLogsResult.stdout);
@@ -154,7 +158,8 @@ export class DaytonaSandboxRunner implements SandboxRunner {
       await writeSandboxLog({
         event: "project-validation.fresh-capture-baseline.started",
       });
-      const baselineResult = await handle.workspace.execute(
+      const baselineResult = await executeSubmittedCode(
+        handle.workspace,
         createFreshCaptureBaselineCommand(),
       );
       if (baselineResult.exitCode !== 0) {
@@ -180,7 +185,8 @@ export class DaytonaSandboxRunner implements SandboxRunner {
       await writeSandboxLog({
         event: "project-validation.fresh-capture-baseline.created",
       });
-      const demoLogsResult = await handle.workspace.execute(
+      const demoLogsResult = await executeSubmittedCode(
+        handle.workspace,
         "if test -f /tmp/makeademo-demo.log; then cat /tmp/makeademo-demo.log; fi",
       );
       await writeDemoServerLog(writeSandboxLog, demoLogsResult.stdout);
@@ -243,10 +249,12 @@ export async function restartPreparedDemoForFreshCapture(input: {
     event: "footage-capture.fresh-state.restart.started",
     url: input.preparationManifest.url,
   });
-  await input.preparationWorkspace.workspace.execute(
+  await executeSubmittedCode(
+    input.preparationWorkspace.workspace,
     createStopDemoCommand(input.preparationManifest.demoCommand),
   );
-  const restoreResult = await input.preparationWorkspace.workspace.execute(
+  const restoreResult = await executeSubmittedCode(
+    input.preparationWorkspace.workspace,
     createFreshCaptureRestoreCommand(),
   );
   if (restoreResult.exitCode !== 0) {
@@ -260,7 +268,8 @@ export async function restartPreparedDemoForFreshCapture(input: {
   await writeSandboxLog({
     event: "footage-capture.fresh-state.restore.succeeded",
   });
-  const runtimeResult = await input.preparationWorkspace.workspace.execute(
+  const runtimeResult = await executeSubmittedCode(
+    input.preparationWorkspace.workspace,
     createStartDemoCommand(input.preparationManifest.demoCommand),
   );
   await writeSandboxLog({
@@ -269,10 +278,11 @@ export async function restartPreparedDemoForFreshCapture(input: {
     stdout: runtimeResult.stdout,
   });
   const readinessResult = await waitForDemoReadiness({
+    execute: (command) =>
+      executeSubmittedCode(input.preparationWorkspace.workspace, command),
     pollIntervalMs: input.readinessPollIntervalMs ?? 1_000,
     timeoutMs: input.readinessTimeoutMs ?? 30_000,
     url: input.preparationManifest.url,
-    workspace: input.preparationWorkspace.workspace,
   });
   if (runtimeResult.exitCode !== 0 || readinessResult.exitCode !== 0) {
     await writeSandboxLog({
@@ -359,10 +369,10 @@ function createFreshCaptureRestoreCommand(): string {
 }
 
 async function waitForDemoReadiness(input: {
+  execute: PreparationWorkspaceHandle["workspace"]["execute"];
   pollIntervalMs: number;
   timeoutMs: number;
   url: string;
-  workspace: PreparationWorkspaceHandle["workspace"];
 }) {
   const attempts = Math.max(
     1,
@@ -375,9 +385,7 @@ async function waitForDemoReadiness(input: {
   };
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    lastResult = await input.workspace.execute(
-      createDemoReadinessCommand(input.url),
-    );
+    lastResult = await input.execute(createDemoReadinessCommand(input.url));
     if (lastResult.exitCode === 0) {
       return lastResult;
     }

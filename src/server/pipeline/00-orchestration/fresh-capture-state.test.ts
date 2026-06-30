@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { PreparationWorkspaceHandle } from "../../pipeline/03-repo-preparation/preparation-workspace-runner";
+import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
 import { createDaytonaFreshCaptureStatePreparer } from "./fresh-capture-state";
 
 describe("createDaytonaFreshCaptureStatePreparer", () => {

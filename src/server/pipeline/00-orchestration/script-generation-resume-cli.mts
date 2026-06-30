@@ -1,8 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { DaytonaOpenCodeScriptGeneration } from "../integrations/agents/daytona-opencode-script-generation";
-import { createDaytonaSdkPreparationWorkspaceHandle } from "../integrations/daytona/daytona-sdk-preparation-workspace-provider";
+import { DaytonaOpenCodeScriptGeneration } from "../../shared/integrations/agents/daytona-opencode-script-generation";
+import { createDaytonaSdkPreparationWorkspaceHandle } from "../../shared/integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import { createOpenCodeOutputStream } from "./opencode-output-stream";
 import { createOpenCodeRawOutputLog } from "./opencode-raw-output-log";
 import {
@@ -112,7 +112,8 @@ function readResumeFile(contents: string): ScriptGenerationResumeFile {
     typeof resume.repoUrl !== "string" ||
     typeof resume.runDirectory !== "string" ||
     resume.demoBrief === undefined ||
-    resume.preparationManifest === undefined
+    resume.preparationManifest === undefined ||
+    resume.validation === undefined
   ) {
     throw new Error(
       "Script Generation resume file is missing required fields.",
@@ -127,6 +128,7 @@ function readResumeFile(contents: string): ScriptGenerationResumeFile {
     preparationWorkspaceId: resume.preparationWorkspaceId,
     repoUrl: resume.repoUrl,
     runDirectory: resume.runDirectory,
+    validation: resume.validation,
   };
 }
 

@@ -2,23 +2,23 @@ import { spawn } from "node:child_process";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { PreparationWorkspaceHandle } from "../../pipeline/03-repo-preparation/preparation-workspace-runner";
-import type { DemoRequestScriptStore } from "../../pipeline/04-script-generation/demo-request-script-store.interface";
-import type {
-  CaptureManifest,
-  CaptureScenesFromScriptInput,
-} from "../../pipeline/06-footage-capture/capture-scenes";
-import { captureScenesFromScript } from "../../pipeline/06-footage-capture/capture-scenes";
-import type {
-  CompositeVideoFromScriptInput,
-  CompositedVideoManifest,
-} from "../../pipeline/07-compositing/composite-video";
-import { compositeVideoFromScript } from "../../pipeline/07-compositing/composite-video";
 import {
   type PipelineLogSink,
   createFilePipelineLogSink,
   createPipelineEventLogger,
-} from "../logging/pipeline-event-logger";
+} from "../../shared/logging/pipeline-event-logger";
+import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
+import type { DemoRequestScriptStore } from "../04-script-generation/demo-request-script-store.interface";
+import type {
+  CaptureManifest,
+  CaptureScenesFromScriptInput,
+} from "../06-footage-capture/capture-scenes";
+import { captureScenesFromScript } from "../06-footage-capture/capture-scenes";
+import type {
+  CompositeVideoFromScriptInput,
+  CompositedVideoManifest,
+} from "../07-compositing/composite-video";
+import { compositeVideoFromScript } from "../07-compositing/composite-video";
 import type { PipelineJobInput } from "./pipeline-job";
 import { runPipelineJob } from "./pipeline-orchestrator";
 import type {
@@ -81,7 +81,7 @@ type FullPipelineLogInput = {
   message: string;
 } & Record<string, unknown>;
 
-export type DraftCompositeReviewInput = {
+type DraftCompositeReviewInput = {
   attempt: number;
   captureManifest: CaptureManifest;
   derivedEvidence: {
@@ -116,7 +116,7 @@ type DraftCompositeEvidence = {
   staticSceneIds: string[];
 };
 
-export type DraftCompositeReviewDecision =
+type DraftCompositeReviewDecision =
   | {
       decision: "accept";
       reason?: string;

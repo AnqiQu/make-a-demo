@@ -147,6 +147,119 @@ describe("PlaywrightBrowserValidator", () => {
       screenshotArtifactId: "",
     });
   });
+
+  it("runs browser validation inside the submitted-code container when a preparation workspace is provided", async () => {
+    const submittedCommands: string[] = [];
+    const validator = new PlaywrightBrowserValidator();
+
+    const result = await validator.validate({
+      preparationWorkspace: {
+        async destroy() {},
+        id: "workspace_123",
+        workspace: {
+          async execute() {
+            throw new Error(
+              "outer workspace execution must not validate browser",
+            );
+          },
+          async executeSubmittedCode(command) {
+            submittedCommands.push(command);
+            return {
+              exitCode: 0,
+              stderr: "",
+              stdout: JSON.stringify({
+                interactable: true,
+                logs: ["Loaded http://localhost:3000"],
+                screenshotArtifactId: "screenshot:inner",
+              }),
+            };
+          },
+          async getPreviewUrl() {
+            return "https://preview.example.test";
+          },
+          async setOutboundNetworkAccess() {},
+          async setSubmittedCodeNetworkAccess() {},
+          async uploadFiles() {},
+        },
+      },
+      url: "http://localhost:3000",
+    });
+
+    expect(result).toEqual({
+      interactable: true,
+      logs: ["Loaded http://localhost:3000"],
+      screenshotArtifactId: "screenshot:inner",
+    });
+    expect(submittedCommands.join("\n")).toContain("chromium.launch");
+    expect(submittedCommands.join("\n")).toContain(
+      "/usr/local/lib/node_modules/playwright/package.json",
+    );
+    expect(submittedCommands.join("\n")).not.toContain('import("playwright")');
+    expect(submittedCommands.join("\n")).toContain('page.route("**/*"');
+    expect(submittedCommands.join("\n")).toContain(
+      'route.abort("blockedbyclient")',
+    );
+    expect(submittedCommands.join("\n")).toContain("blockedNetworkAttempts");
+    expect(submittedCommands.join("\n")).toContain("http://localhost:3000");
+  });
+
+  it("preserves submitted-code browser network-blocking evidence", async () => {
+    const validator = new PlaywrightBrowserValidator();
+
+    await expect(
+      validator.validate({
+        preparationWorkspace: {
+          async destroy() {},
+          id: "workspace_123",
+          workspace: {
+            async execute() {
+              throw new Error(
+                "outer workspace execution must not validate browser",
+              );
+            },
+            async executeSubmittedCode() {
+              return {
+                exitCode: 0,
+                stderr: "",
+                stdout: JSON.stringify({
+                  blockedNetworkAttempts: [
+                    {
+                      direction: "outbound",
+                      host: "api.example.com",
+                      phase: "runtime",
+                    },
+                  ],
+                  interactable: false,
+                  logs: [
+                    "Blocked forbidden browser request to api.example.com",
+                  ],
+                  screenshotArtifactId: "",
+                }),
+              };
+            },
+            async getPreviewUrl() {
+              return "https://preview.example.test";
+            },
+            async setOutboundNetworkAccess() {},
+            async setSubmittedCodeNetworkAccess() {},
+            async uploadFiles() {},
+          },
+        },
+        url: "http://localhost:3000",
+      }),
+    ).resolves.toEqual({
+      blockedNetworkAttempts: [
+        {
+          direction: "outbound",
+          host: "api.example.com",
+          phase: "runtime",
+        },
+      ],
+      interactable: false,
+      logs: ["Blocked forbidden browser request to api.example.com"],
+      screenshotArtifactId: "",
+    });
+  });
 });
 
 function fakePage(input: {

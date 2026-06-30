@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import type { RepoPreparationAgent } from "../../pipeline/03-repo-preparation/repo-preparation-agent.interface";
-import type { ScriptGenerationAgent } from "../../pipeline/04-script-generation/script-generation-agent.interface";
-import type { CapturePathRepairer } from "../../pipeline/05-capture-path-validation/capture-path-repairer.interface";
-import type { BrowserValidator } from "../../pipeline/05-capture-path-validation/project-runtime-preflight/browser-validator.interface";
-import type { SandboxRunner } from "../../pipeline/05-capture-path-validation/project-runtime-preflight/sandbox-runner.interface";
-import { parseDemoScript } from "../../pipeline/06-footage-capture/demo-script.schema";
+import type { RepoPreparationAgent } from "../03-repo-preparation/repo-preparation-agent.interface";
+import type { ScriptGenerationAgent } from "../04-script-generation/script-generation-agent.interface";
+import type { CapturePathRepairer } from "../05-capture-path-validation/capture-path-repairer.interface";
+import type { BrowserValidator } from "../05-capture-path-validation/project-runtime-preflight/browser-validator.interface";
+import type { SandboxRunner } from "../05-capture-path-validation/project-runtime-preflight/sandbox-runner.interface";
+import { parseDemoScript } from "../06-footage-capture/demo-script.schema";
 import { runPipelineJob } from "./pipeline-orchestrator";
-import { createStage1PipelineDependencies } from "./stage1-pipeline";
+import { createPreCapturePipelineDependencies } from "./pre-capture-pipeline";
 
-describe("createStage1PipelineDependencies", () => {
+describe("createPreCapturePipelineDependencies", () => {
   it("wires the runnable Stage 1 flow through Script Generation", async () => {
     const repoPreparationAgent: RepoPreparationAgent = {
       async prepare() {
@@ -65,7 +65,7 @@ describe("createStage1PipelineDependencies", () => {
         repoUrl: "https://github.com/example/app",
         workspaceId: "workspace_123",
       },
-      createStage1PipelineDependencies({
+      createPreCapturePipelineDependencies({
         browserValidator,
         repoPreparationAgent,
         sandboxRunner,
@@ -110,7 +110,7 @@ describe("createStage1PipelineDependencies", () => {
       },
     };
 
-    const dependencies = createStage1PipelineDependencies({
+    const dependencies = createPreCapturePipelineDependencies({
       repoPreparationAgent: {
         async prepare() {
           throw new Error("not used");

@@ -73,8 +73,8 @@ export function readBenchmarkManifest(value: unknown): BenchmarkManifest {
 export function buildBenchmarkPipelineArgs(input: BenchmarkPipelineArgsInput) {
   const cliPath =
     input.repo.effectiveMode === "stage1"
-      ? "src/server/shared/pipeline-runner/stage1-cli.mts"
-      : "src/server/shared/pipeline-runner/full-pipeline-cli.mts";
+      ? "src/server/pipeline/00-orchestration/pre-capture-cli.mts"
+      : "src/server/pipeline/00-orchestration/full-pipeline-cli.mts";
   const args = [cliPath];
 
   if (input.repo.effectiveMode === "full") {

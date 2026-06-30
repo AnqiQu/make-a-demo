@@ -19,11 +19,13 @@ describe("NeonProjectDemoGenerationQueueStore", () => {
                           limit: async () => [
                             {
                               context: {
-                                importantFeatures:
-                                  "script generation, video generation",
-                                productSummary: "Creates demo videos.",
-                                requestedDurationSeconds: 60,
-                                targetUsers: "Founders",
+                                structuredContext: {
+                                  importantFeatures:
+                                    "script generation, video generation",
+                                  productSummary: "Creates demo videos.",
+                                  requestedDurationSeconds: 60,
+                                  targetUsers: "Founders",
+                                },
                               },
                               demoRequestId: "demo-request-1",
                               projectId: "project-1",
@@ -123,9 +125,11 @@ describe("NeonProjectDemoGenerationQueueStore", () => {
                           limit: async () => [
                             {
                               context: {
-                                importantFeatures: "script generation",
-                                productSummary: "Creates demo videos.",
-                                targetUsers: "Founders",
+                                structuredContext: {
+                                  importantFeatures: "script generation",
+                                  productSummary: "Creates demo videos.",
+                                  targetUsers: "Founders",
+                                },
                               },
                               demoRequestId: "demo-request-1",
                               projectId: "project-1",

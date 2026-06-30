@@ -1,13 +1,13 @@
-import type { DemoBrief } from "../../pipeline/01-context-gathering/intake/demo-brief.schema";
-import type { NormalizedSupportingDocument } from "../../pipeline/01-context-gathering/supporting-documents";
+import type { DemoBrief } from "../01-context-gathering/intake/demo-brief.schema";
+import type { NormalizedSupportingDocument } from "../01-context-gathering/supporting-documents";
 import type {
   RepoSecurityInput,
   RepoSecurityResult,
-} from "../../pipeline/02-repo-security-screen/repo-security-screen";
-import type { PreparationManifest } from "../../pipeline/03-repo-preparation/preparation-manifest";
-import type { PreparationWorkspaceHandle } from "../../pipeline/03-repo-preparation/preparation-workspace-runner";
-import type { DemoScriptPackage } from "../../pipeline/04-script-generation/demo-script-package";
-import type { CapturePathValidationResult } from "../../pipeline/05-capture-path-validation/capture-path-validator.interface";
+} from "../02-repo-security-screen/repo-security-screen";
+import type { PreparationManifest } from "../03-repo-preparation/preparation-manifest";
+import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
+import type { DemoScriptPackage } from "../04-script-generation/demo-script-package";
+import type { CapturePathValidationResult } from "../05-capture-path-validation/capture-path-validator.interface";
 
 export type PipelineJobInput = {
   demoBrief: DemoBrief;

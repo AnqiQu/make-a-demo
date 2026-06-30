@@ -11,16 +11,19 @@ import {
 } from "./prepared-opencode-config";
 
 describe("createMakeADemoOpenCodeConfigFiles", () => {
-  it("creates OpenCode config files with MakeADemo tools enabled", () => {
+  it("creates OpenCode config files with MakeADemo tools enabled and outer shell execution denied", () => {
     const files = createMakeADemoOpenCodeConfigFiles();
     const configFile = files.find((file) => file.path === "opencode.json");
     const config = JSON.parse(configFile?.content ?? "{}");
 
-    expect(config.tools).toEqual({
-      makeademo_dependency_request_install: true,
-      makeademo_submit_preparation_result: true,
-      makeademo_validate_preparation: true,
+    expect(config.permission).toEqual({
+      "*": "allow",
+      bash: "deny",
+      makeademo_dependency_request_install: "allow",
+      makeademo_submit_preparation_result: "allow",
+      makeademo_validate_preparation: "allow",
     });
+    expect(config.tools).toBeUndefined();
     expect(files.some((file) => file.path.startsWith("agents/"))).toBe(false);
     expect(files.map((file) => file.path).sort()).toEqual([
       "opencode.json",

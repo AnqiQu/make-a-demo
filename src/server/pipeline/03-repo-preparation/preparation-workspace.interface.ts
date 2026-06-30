@@ -34,6 +34,15 @@ export interface PreparationWorkspace {
     command: string,
     options?: PreparationWorkspaceExecuteOptions,
   ): Promise<PreparationWorkspaceCommandResult>;
+  /**
+   * Executes submitted repo code inside the submitted-code runtime boundary.
+   * Implementations must not run these commands in the agent workspace and must
+   * apply submitted-code environment and network policy before execution.
+   */
+  executeSubmittedCode?(
+    command: string,
+    options?: PreparationWorkspaceExecuteOptions,
+  ): Promise<PreparationWorkspaceCommandResult>;
   getPreviewUrl(port: number): Promise<string>;
   /**
    * Emits structured audit logs inside the sandbox. Implementations must keep a
@@ -42,5 +51,7 @@ export interface PreparationWorkspace {
    */
   writeSandboxLog?(entry: PreparationWorkspaceLogEntry): Promise<void>;
   setOutboundNetworkAccess(enabled: boolean): Promise<void>;
+  /** Controls outbound network for submitted-code execution only. */
+  setSubmittedCodeNetworkAccess?(enabled: boolean): Promise<void>;
   uploadFiles(files: PreparationWorkspaceUploadFile[]): Promise<void>;
 }

@@ -46,18 +46,18 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
           execute: expect.stringContaining("plugins/makeademo-tools.ts"),
         },
         {
-          configDir: "/workspace/.makeademo/opencode",
+          configDir: "/tmp/makeademo/opencode",
           execute: expect.stringContaining("opencode run"),
           streaming: true,
         },
         {
           execute: expect.stringContaining(
-            "/workspace/.makeademo/dependency-install-request.json",
+            "/tmp/makeademo/submitted-code/dependency-install-request.json",
           ),
         },
         {
           execute: expect.stringContaining(
-            "/workspace/.makeademo/repo-preparation-result.json",
+            "/tmp/makeademo/submitted-code/repo-preparation-result.json",
           ),
         },
       ]),
@@ -75,7 +75,7 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     expect(command).not.toContain("OPENCODE_ENABLE_EXA");
     expect(command).not.toContain("OPENAI_API_KEY");
     expect(command).toContain("opencode run");
-    expect(command).toContain("--dangerously-skip-permissions");
+    expect(command).not.toContain("--dangerously-skip-permissions");
     expect(command).toContain("--dir /workspace");
     expect(command).toContain("--model 'openai/gpt-5.5'");
   });
@@ -123,31 +123,31 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
           execute: expect.stringContaining("plugins/makeademo-tools.ts"),
         },
         {
-          configDir: "/workspace/.makeademo/opencode",
+          configDir: "/tmp/makeademo/opencode",
           execute: expect.stringContaining("opencode run"),
           streaming: true,
         },
         {
           execute: expect.stringContaining(
-            "/workspace/.makeademo/dependency-install-request.json",
+            "/tmp/makeademo/submitted-code/dependency-install-request.json",
           ),
         },
-        { network: true },
-        { execute: "bun install" },
-        { network: false },
+        { submittedCodeNetwork: true },
+        { submittedCodeExecute: "bun install" },
+        { submittedCodeNetwork: false },
         {
           execute: expect.stringContaining(
-            "/workspace/.makeademo/dependency-install-request.json",
+            "/tmp/makeademo/submitted-code/dependency-install-request.json",
           ),
         },
         {
-          configDir: "/workspace/.makeademo/opencode",
+          configDir: "/tmp/makeademo/opencode",
           execute: expect.stringContaining("opencode run"),
           streaming: true,
         },
         {
           execute: expect.stringContaining(
-            "/workspace/.makeademo/repo-preparation-result.json",
+            "/tmp/makeademo/submitted-code/repo-preparation-result.json",
           ),
         },
       ]),
@@ -184,7 +184,8 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
         ],
         dependencyInstallRequest: { command: "bun install" },
         validationRequest: {
-          manifestPath: "/workspace/.makeademo/preparation-manifest.json",
+          manifestPath:
+            "/tmp/makeademo/submitted-code/preparation-manifest.json",
         },
       }),
       providerID: "openai",
@@ -228,6 +229,43 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     );
   });
 
+  it("reseals submitted-code network when dependency installation times out", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      providerApiKey: "openai_key",
+      provider: fakeProvider(events, {
+        commandStdout: [
+          JSON.stringify({ sessionID: "session_123", type: "session" }),
+        ],
+        dependencyInstallRequest: { command: "bun install" },
+        submittedCodeNeverSettles: true,
+      }),
+      providerID: "openai",
+      timeoutMs: 150,
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({ status: "failed" });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        { submittedCodeNetwork: true },
+        { submittedCodeExecute: "bun install" },
+        { cancelActiveCommands: true },
+        { submittedCodeNetwork: false },
+      ]),
+    );
+    expect(events).toEqual(
+      expect.arrayContaining([{ destroy: "daytona_workspace" }]),
+    );
+  });
+
   it("returns a successful preparation result as soon as backend validation passes", async () => {
     const events: unknown[] = [];
     const validations: unknown[] = [];
@@ -237,7 +275,8 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
       provider: fakeProvider(events, {
         commandStdout: ["Validation requested."],
         validationRequest: {
-          manifestPath: "/workspace/.makeademo/preparation-manifest.json",
+          manifestPath:
+            "/tmp/makeademo/submitted-code/preparation-manifest.json",
         },
       }),
       providerID: "openai",
@@ -277,12 +316,12 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
       expect.arrayContaining([
         {
           execute: expect.stringContaining(
-            "/workspace/.makeademo/validation-request.json",
+            "/tmp/makeademo/submitted-code/validation-request.json",
           ),
         },
         {
           execute: expect.stringContaining(
-            "/workspace/.makeademo/validation-result.json",
+            "/tmp/makeademo/submitted-code/validation-result.json",
           ),
         },
       ]),
@@ -309,7 +348,8 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
           `${JSON.stringify({ sessionID: "session_streamed_123", type: "step_start" })}\n`,
         ],
         validationRequest: {
-          manifestPath: "/workspace/.makeademo/preparation-manifest.json",
+          manifestPath:
+            "/tmp/makeademo/submitted-code/preparation-manifest.json",
         },
       }),
       providerID: "openai",
@@ -353,7 +393,8 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
         ],
         manifestPayload: { demoCommand: "npm run demo" },
         validationRequest: {
-          manifestPath: "/workspace/.makeademo/preparation-manifest.json",
+          manifestPath:
+            "/tmp/makeademo/submitted-code/preparation-manifest.json",
         },
       }),
       providerID: "openai",
@@ -397,6 +438,39 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
             status: "failed",
           }),
         },
+      ]),
+    );
+  });
+
+  it("clones the submitted repo into the submitted-code workspace when available", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      providerApiKey: "openai_key",
+      provider: fakeProvider(events, [JSON.stringify(successResult())]),
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          submittedCodeExecute:
+            "mkdir -p /workspace && find /workspace -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --depth 1 'https://github.com/example/app' /workspace",
+        },
+      ]),
+    );
+    expect(events).toEqual(
+      expect.arrayContaining([
+        { submittedCodeNetwork: true },
+        { submittedCodeNetwork: false },
       ]),
     );
   });
@@ -544,7 +618,8 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
         commandDelayMs: 920,
         commandStdout: ["Validation requested."],
         validationRequest: {
-          manifestPath: "/workspace/.makeademo/preparation-manifest.json",
+          manifestPath:
+            "/tmp/makeademo/submitted-code/preparation-manifest.json",
         },
       }),
       providerID: "openai",
@@ -584,6 +659,7 @@ function fakeProvider(
         dependencyInstallRequest?: { command: string };
         manifestPayload?: unknown;
         preparationResult?: ReturnType<typeof successResult>;
+        submittedCodeNeverSettles?: boolean;
         validationRequest?: {
           manifestPath: string;
         };
@@ -617,6 +693,7 @@ function fakeWorkspace(
     dependencyInstallRequest?: { command: string };
     manifestPayload?: unknown;
     preparationResult?: ReturnType<typeof successResult>;
+    submittedCodeNeverSettles?: boolean;
     validationRequest?: {
       manifestPath: string;
     };
@@ -747,7 +824,9 @@ function fakeWorkspace(
         return { exitCode: 0, stderr: "", stdout: "" };
       }
       if (command === "bun install") {
-        return { exitCode: 0, stderr: "", stdout: "installed" };
+        throw new Error(
+          "outer workspace execution must not install dependencies",
+        );
       }
       return {
         exitCode: 0,
@@ -760,8 +839,28 @@ function fakeWorkspace(
     async setOutboundNetworkAccess(enabled) {
       events.push({ network: enabled });
     },
+    async executeSubmittedCode(command) {
+      events.push({ submittedCodeExecute: command });
+      if (command.includes("git clone")) {
+        return { exitCode: 0, stderr: "", stdout: "cloned submitted" };
+      }
+      if (command === "bun install") {
+        if (input.submittedCodeNeverSettles === true) {
+          await new Promise(() => {});
+        }
+        return { exitCode: 0, stderr: "", stdout: "installed" };
+      }
+      throw new Error(`Unexpected submitted-code command: ${command}`);
+    },
+    async setSubmittedCodeNetworkAccess(enabled) {
+      events.push({ submittedCodeNetwork: enabled });
+    },
     async getPreviewUrl(port) {
       return `https://preview.example.test:${port}`;
+    },
+    async cancelActiveCommands() {
+      events.push({ cancelActiveCommands: true });
+      events.push({ submittedCodeNetwork: false });
     },
     async uploadFiles() {
       throw new Error("Repo Preparation should clone inside Daytona.");

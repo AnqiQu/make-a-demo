@@ -1,6 +1,7 @@
 import { stat } from "node:fs/promises";
 import { basename } from "node:path";
 import { readPreparationManifest } from "../../../pipeline/03-repo-preparation/preparation-manifest";
+import type { PreparationWorkspaceHandle } from "../../../pipeline/03-repo-preparation/preparation-workspace-runner";
 import type { DemoScriptPackage } from "../../../pipeline/04-script-generation/demo-script-package";
 import type {
   AgenticScriptGenerationInput,
@@ -12,15 +13,13 @@ import type {
   CapturePathRepairResult,
   CapturePathRepairer,
 } from "../../../pipeline/05-capture-path-validation/capture-path-repairer.interface";
+import type { CaptureManifest } from "../../../pipeline/06-footage-capture/capture-scenes";
 import { assertDemoScriptCaptureSdkContract } from "../../../pipeline/06-footage-capture/capture-sdk-contract";
 import {
   type DemoScript,
   parseDemoScript,
 } from "../../../pipeline/06-footage-capture/demo-script.schema";
-import type {
-  DraftCompositeReviewDecision,
-  DraftCompositeReviewInput,
-} from "../../pipeline-runner/full-pipeline-runner";
+import type { CompositedVideoManifest } from "../../../pipeline/07-compositing/composite-video";
 import { writeDaytonaOpenCodeActivityLog } from "./daytona-opencode-activity-log";
 
 const makeADemoArtifactDirectory = "/workspace/.makeademo";
@@ -37,6 +36,33 @@ export type DaytonaOpenCodeScriptGenerationOptions = {
   providerApiKey: string;
   providerID: string;
   maxAttempts?: number;
+};
+
+export type DraftCompositeReviewDecision =
+  | { decision: "accept"; reason?: string }
+  | {
+      decision: "repair";
+      reason: string;
+      repairScope: "demo-script" | "workspace";
+    };
+
+export type DraftCompositeReviewInput = {
+  attempt: number;
+  captureManifest: CaptureManifest;
+  derivedEvidence: {
+    contactSheetPaths: string[];
+    draftDurationSeconds?: number;
+    ffmpegFindings: string[];
+    markerSummary: Array<Record<string, unknown>>;
+    qualityFindings: string[];
+    rawDraftCompositePath?: string;
+    rawTakePath?: string;
+    sampledFramePaths: string[];
+  };
+  draftComposite: CompositedVideoManifest;
+  opencodeSessionID?: string;
+  preparationWorkspace?: PreparationWorkspaceHandle;
+  scriptPackage: DemoScriptPackage;
 };
 
 export class DaytonaOpenCodeScriptGeneration

@@ -1,4 +1,4 @@
-import { restartPreparedDemoForFreshCapture } from "../integrations/sandbox/daytona-sandbox-runner";
+import { restartPreparedDemoForFreshCapture } from "../../shared/integrations/sandbox/daytona-sandbox-runner";
 import type { FullPipelineRunnerOptions } from "./full-pipeline-runner";
 
 type FreshCaptureStatePreparer = NonNullable<

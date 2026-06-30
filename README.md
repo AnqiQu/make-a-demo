@@ -246,16 +246,16 @@ The resume command writes a fresh `video-script-package.json` and `script-genera
 
 If the pipeline fails, `full-pipeline-result.json` is still written with failure status, failure details, and available log paths.
 
-Stage 1 can still be run by itself for debugging through Script Generation:
+The pre-capture pipeline can still be run by itself for debugging through Script Generation:
 
 ```bash
-bun run stage1:run -- \
+bun run pre-capture:run -- \
   --repo https://github.com/OWNER/REPO \
   --feature "Feature one" \
   --feature "Feature two"
 ```
 
-Stage 1 emits the same capture-ready Video Script Package shape used by Footage Capture.
+The pre-capture pipeline emits the same capture-ready Video Script Package shape used by Footage Capture.
 
 ## Demo Tooling
 

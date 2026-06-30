@@ -12,11 +12,12 @@ export function createMakeADemoOpenCodeConfigFiles(): PreparedOpenCodeFile[] {
       content: JSON.stringify(
         {
           $schema: "https://opencode.ai/config.json",
-          permission: "allow",
-          tools: {
-            makeademo_dependency_request_install: true,
-            makeademo_submit_preparation_result: true,
-            makeademo_validate_preparation: true,
+          permission: {
+            "*": "allow",
+            bash: "deny",
+            makeademo_dependency_request_install: "allow",
+            makeademo_submit_preparation_result: "allow",
+            makeademo_validate_preparation: "allow",
           },
         },
         null,
@@ -72,7 +73,7 @@ function makeADemoToolsPluginContent(): string {
     'import { dirname } from "node:path"',
     'import { type Plugin, tool } from "@opencode-ai/plugin"',
     "",
-    'const artifactDirectory = "/workspace/.makeademo"',
+    'const artifactDirectory = "/tmp/makeademo/submitted-code"',
     "const dependencyInstallRequestPath = `${artifactDirectory}/dependency-install-request.json`",
     "const preparationManifestPath = `${artifactDirectory}/preparation-manifest.json`",
     "const preparationResultPath = `${artifactDirectory}/repo-preparation-result.json`",
@@ -96,7 +97,7 @@ function makeADemoToolsPluginContent(): string {
     "      makeademo_validate_preparation: tool({",
     '        description: "Ask MakeADemo backend validation to check the prepared demo and return repair feedback. Call this before final submission whenever the demo appears ready.",',
     "        args: {",
-    '          manifestPath: tool.schema.string().describe("Path to the Preparation Manifest JSON file. Must be /workspace/.makeademo/preparation-manifest.json."),',
+    '          manifestPath: tool.schema.string().describe("Path to the Preparation Manifest JSON file. Must be /tmp/makeademo/submitted-code/preparation-manifest.json."),',
     "        },",
     "        async execute(args) {",
     "          assertManifestPath(args.manifestPath)",

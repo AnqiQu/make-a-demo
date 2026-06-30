@@ -146,6 +146,46 @@ describe("validateProject", () => {
     expect(browserUrls).toEqual(["https://preview.example.test"]);
   });
 
+  it("passes the retained preparation workspace to browser validation", async () => {
+    const preparationWorkspace = workspaceHandle([]);
+    let browserWorkspaceId = "";
+    const sandboxRunner: SandboxRunner = {
+      async runValidation() {
+        return {
+          browserUrl: "http://localhost:3000",
+          blockedNetworkAttempts: [],
+          logs: ["started demo"],
+          repoFiles: ["package.json", "bun.lock"],
+          runtimeExitCode: 0,
+        };
+      },
+    };
+    const browserValidator: BrowserValidator = {
+      async validate(input) {
+        browserWorkspaceId = input.preparationWorkspace?.id ?? "";
+        return {
+          interactable: true,
+          logs: ["loaded app inside submitted-code container"],
+          screenshotArtifactId: "artifact_screenshot",
+        };
+      },
+    };
+
+    const result = await validateProject(
+      {
+        preparationManifest: manifest({
+          demoCommand: "npm run demo",
+          url: "http://localhost:3000",
+        }),
+        preparationWorkspace,
+      },
+      { browserValidator, sandboxRunner },
+    );
+
+    expect(result.status).toBe("succeeded");
+    expect(browserWorkspaceId).toBe("workspace_123");
+  });
+
   it("fails validation when runtime network attempts cross the sandbox boundary", async () => {
     let cleanedUp = false;
     const sandboxRunner: SandboxRunner = {
@@ -384,10 +424,14 @@ function workspaceHandle(
       async execute() {
         return { exitCode: 0, stderr: "", stdout: "" };
       },
+      async executeSubmittedCode() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
       async getPreviewUrl() {
         return "https://preview.example.test";
       },
       async setOutboundNetworkAccess() {},
+      async setSubmittedCodeNetworkAccess() {},
       async uploadFiles() {},
       async writeSandboxLog(entry) {
         sandboxLogs.push(entry);
@@ -404,10 +448,14 @@ function hangingLogWorkspaceHandle(): PreparationWorkspaceHandle {
       async execute() {
         return { exitCode: 0, stderr: "", stdout: "" };
       },
+      async executeSubmittedCode() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
       async getPreviewUrl() {
         return "https://preview.example.test";
       },
       async setOutboundNetworkAccess() {},
+      async setSubmittedCodeNetworkAccess() {},
       async uploadFiles() {},
       async writeSandboxLog() {
         await new Promise(() => {});

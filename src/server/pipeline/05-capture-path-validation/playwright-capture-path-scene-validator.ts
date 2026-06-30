@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { executeSubmittedCode } from "../03-repo-preparation/submitted-code-execution";
 import {
   validateDemoScriptCaptureSdkTypes,
   writeGeneratedCaptureSdkHarness,
@@ -169,7 +170,8 @@ export class DefaultCapturePathSceneValidator
           pauseAfterSceneMs: 0,
         }),
       );
-      await preparationWorkspace.workspace.execute(
+      await executeSubmittedCode(
+        preparationWorkspace.workspace,
         `mkdir -p ${shellQuote(remoteRunDirectory)}`,
       );
       await preparationWorkspace.workspace.uploadFiles([
@@ -192,10 +194,11 @@ export class DefaultCapturePathSceneValidator
         { destinationPath: remoteScenePath, sourcePath: localScenePath },
       ]);
 
-      const result = await preparationWorkspace.workspace.execute(
+      const result = await executeSubmittedCode(
+        preparationWorkspace.workspace,
         [
           `cd ${shellQuote(remoteRunDirectory)}`,
-          `bun ${shellQuote(remoteScenePath)} > ${shellQuote(remoteStdoutPath)} 2> ${shellQuote(remoteStderrPath)}`,
+          `timeout -s TERM 120 bun ${shellQuote(remoteScenePath)} > ${shellQuote(remoteStdoutPath)} 2> ${shellQuote(remoteStderrPath)}`,
           "code=$?",
           `cat ${shellQuote(remoteStdoutPath)}`,
           `cat ${shellQuote(remoteStderrPath)} >&2`,

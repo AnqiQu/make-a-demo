@@ -77,21 +77,43 @@ describe("evaluateDependencyNetworkRequest", () => {
 });
 
 describe("createSubmittedRuntimeEnv", () => {
-  it("keeps safe runtime variables while removing agent-only secrets and OpenCode settings", () => {
+  it("keeps only safe runtime variables while removing agent-only settings and unknown host state", () => {
     const env = createSubmittedRuntimeEnv({
       ANTHROPIC_API_KEY: "secret",
-      HOME: "/home/agent",
+      CONTEXT7_API_KEY: "secret",
+      DAYTONA_API_KEY: "secret",
+      DOCKER_HOST: "unix:///var/run/docker.sock",
+      HTTP_PROXY: "http://proxy.example",
+      MAKEADEMO_AGENT_TOKEN: "secret",
       NODE_ENV: "production",
+      NPM_CONFIG__AUTH_TOKEN: "secret",
+      NPM_CONFIG_TOKEN: "secret",
+      NPM_CONFIG_USERCONFIG: "/home/agent/.npmrc",
+      OPENCODE_CONFIG: "/home/agent/.opencode/config.json",
+      OPENCODE_CONFIG_CONTENT: "secret config",
       OPENCODE_ENABLE_EXA: "1",
+      OPENCODE_EXPERIMENTAL_EXA: "1",
       OPENAI_API_KEY: "secret",
       PATH: "/usr/local/bin:/usr/bin",
+      R2_ACCESS_KEY_ID: "secret",
+      R2_SECRET_ACCESS_KEY: "secret",
+      RESEND_API_KEY: "secret",
+      OAUTH_CLIENT_SECRET: "secret",
+      POSTGRES_PASSWORD: "secret",
+      GOOGLE_APPLICATION_CREDENTIALS: "secret",
+      GITHUB_PRIVATE_KEY: "secret",
+      GITHUB_TOKEN: "secret",
+      DATABASE_URL: "postgres://secret",
+      SESSION_SECRET: "secret",
+      SSH_AUTH_SOCK: "/tmp/ssh-agent.sock",
+      UNKNOWN_ENV: "host state",
       VITE_PUBLIC_DEMO_MODE: "1",
+      token: "lowercase-secret",
+      npm_config_cache: "/home/agent/.npm",
     });
 
     expect(env).toEqual({
-      HOME: "/home/agent",
       NODE_ENV: "production",
-      PATH: "/usr/local/bin:/usr/bin",
       VITE_PUBLIC_DEMO_MODE: "1",
     });
   });

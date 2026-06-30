@@ -1,17 +1,16 @@
-import type { Stage1CliDefaults, Stage1CliOptions } from "./stage1-cli-options";
+import type { PreCaptureCliOptions } from "./pre-capture-cli-options";
 
-type Stage1CliPrompt = (question: string) => Promise<string>;
+type PreCaptureCliPrompt = (question: string) => Promise<string>;
 
-export type Stage1CliInteractiveIO = {
-  prompt: Stage1CliPrompt;
+export type PreCaptureCliInteractiveIO = {
+  prompt: PreCaptureCliPrompt;
   write: (message: string) => void;
 };
 
-export async function collectStage1CliOptions(
-  io: Stage1CliInteractiveIO,
-  defaults: Stage1CliDefaults = {},
-): Promise<Stage1CliOptions> {
-  io.write("MakeADemo Stage 1 CLI");
+export async function collectPreCaptureCliOptions(
+  io: PreCaptureCliInteractiveIO,
+): Promise<PreCaptureCliOptions> {
+  io.write("MakeADemo Pre-Capture CLI");
   io.write("Press Enter to accept defaults where shown.");
 
   const repoUrl = await promptUntilValid(
@@ -34,9 +33,6 @@ export async function collectStage1CliOptions(
     ),
   );
   return {
-    ...(defaults.daytonaSnapshot === undefined
-      ? {}
-      : { daytonaSnapshot: defaults.daytonaSnapshot }),
     docs,
     features,
     modelID: "gpt-5.5",
@@ -47,7 +43,7 @@ export async function collectStage1CliOptions(
 }
 
 async function promptUntilValid(
-  io: Stage1CliInteractiveIO,
+  io: PreCaptureCliInteractiveIO,
   question: string,
   validate: (value: string) => boolean,
   invalidMessage: string,

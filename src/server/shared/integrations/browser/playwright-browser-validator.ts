@@ -1,5 +1,6 @@
 import { chromium } from "@playwright/test";
 
+import { executeSubmittedCode } from "../../../pipeline/03-repo-preparation/submitted-code-execution";
 import type {
   BrowserValidationInput,
   BrowserValidationOutput,
@@ -47,6 +48,10 @@ export class PlaywrightBrowserValidator implements BrowserValidator {
   async validate(
     input: BrowserValidationInput,
   ): Promise<BrowserValidationOutput> {
+    if (input.preparationWorkspace !== undefined) {
+      return await this.validateInsideSubmittedCode(input);
+    }
+
     const page = await withTimeout(
       this.pageFactory(),
       this.validationTimeoutMs,
@@ -74,6 +79,48 @@ export class PlaywrightBrowserValidator implements BrowserValidator {
     } finally {
       await closeQuietly(page);
     }
+  }
+
+  private async validateInsideSubmittedCode(
+    input: BrowserValidationInput,
+  ): Promise<BrowserValidationOutput> {
+    const preparationWorkspace = input.preparationWorkspace;
+    if (preparationWorkspace === undefined) {
+      throw new Error(
+        "Submitted-code browser validation requires a workspace.",
+      );
+    }
+
+    const result = await executeSubmittedCode(
+      preparationWorkspace.workspace,
+      createSubmittedCodeBrowserValidationCommand(input.url),
+    );
+    if (result.exitCode !== 0) {
+      return {
+        interactable: false,
+        logs: [
+          `Browser validation failed inside submitted-code container for ${input.url}`,
+          ...[result.stdout, result.stderr].filter(
+            (output) => output.length > 0,
+          ),
+        ],
+        screenshotArtifactId: "",
+      };
+    }
+
+    const parsed = tryParseBrowserValidationOutput(result.stdout);
+    if (parsed === undefined) {
+      return {
+        interactable: false,
+        logs: [
+          `Browser validation returned malformed output for ${input.url}`,
+          result.stdout,
+        ].filter((output) => output.length > 0),
+        screenshotArtifactId: "",
+      };
+    }
+
+    return parsed;
   }
 
   private async validatePage(
@@ -139,6 +186,98 @@ export class PlaywrightBrowserValidator implements BrowserValidator {
       screenshotArtifactId,
     };
   }
+}
+
+function createSubmittedCodeBrowserValidationCommand(url: string): string {
+  return [
+    "node -",
+    shellQuote(url),
+    "<<'MAKEADEMO_BROWSER_VALIDATION'",
+    submittedCodeBrowserValidationScript,
+    "MAKEADEMO_BROWSER_VALIDATION",
+  ].join(" ");
+}
+
+const submittedCodeBrowserValidationScript = String.raw`
+const targetUrl = process.argv[2];
+const localHost = new URL(targetUrl).hostname;
+const blockedRequests = [];
+let browser;
+const { createRequire } = require("node:module");
+const requireGlobalPlaywright = createRequire("/usr/local/lib/node_modules/playwright/package.json");
+
+async function main() {
+  try {
+  const { chromium } = requireGlobalPlaywright("playwright");
+  browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  await page.route("**/*", async (route) => {
+    const requestUrl = route.request().url();
+    const host = new URL(requestUrl).hostname;
+    if (host !== localHost && host !== "localhost" && host !== "127.0.0.1" && host !== "::1") {
+      blockedRequests.push({ direction: "outbound", host, phase: "runtime" });
+      await route.abort("blockedbyclient");
+      return;
+    }
+    await route.continue();
+  });
+  await page.goto(targetUrl, { timeout: 15000, waitUntil: "domcontentloaded" });
+  if (blockedRequests.length > 0) {
+    console.log(JSON.stringify({
+      blockedNetworkAttempts: blockedRequests,
+      interactable: false,
+      logs: blockedRequests.map((request) => "Blocked forbidden browser request to " + request.host),
+      screenshotArtifactId: "",
+    }));
+    process.exit(0);
+  }
+  const bodyText = (await page.textContent("body")) ?? "";
+  const screenshot = await page.screenshot({ type: "png" });
+  const screenshotArtifactId = "screenshot:" + screenshot.toString("base64");
+  const interactable = bodyText.trim().length > 0 && !/error|exception|stack trace|not found/i.test(bodyText);
+  console.log(JSON.stringify({
+    interactable,
+    logs: ["Loaded " + targetUrl, "Captured screenshot " + screenshotArtifactId],
+    screenshotArtifactId,
+  }));
+} catch (error) {
+  console.log(JSON.stringify({
+    interactable: false,
+    logs: ["Failed to load " + targetUrl + ": " + (error instanceof Error ? error.message : String(error))],
+    screenshotArtifactId: "",
+  }));
+} finally {
+  await browser?.close();
+}
+
+}
+
+void main();
+`;
+
+function tryParseBrowserValidationOutput(
+  output: string,
+): BrowserValidationOutput | undefined {
+  try {
+    const payload = JSON.parse(output.trim()) as BrowserValidationOutput;
+    if (
+      typeof payload === "object" &&
+      payload !== null &&
+      typeof payload.interactable === "boolean" &&
+      Array.isArray(payload.logs) &&
+      typeof payload.screenshotArtifactId === "string"
+    ) {
+      return payload;
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 class BrowserValidationTimeoutError extends Error {}

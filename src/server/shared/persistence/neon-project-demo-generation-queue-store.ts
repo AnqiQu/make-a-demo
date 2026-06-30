@@ -2,8 +2,8 @@ import { and, asc, eq } from "drizzle-orm";
 import { type PostgresJsDatabase, drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
+import type { ProjectDemoGenerationQueueStore } from "../../pipeline/00-orchestration/project-demo-generation-queue";
 import type { NormalizedSupportingDocument } from "../../pipeline/01-context-gathering/supporting-documents";
-import type { ProjectDemoGenerationQueueStore } from "../pipeline-runner/project-demo-generation-queue";
 import { demoRequests, projects } from "./schema";
 
 export type QueuedSupportingDocumentUpload = {
@@ -95,19 +95,10 @@ export class NeonProjectDemoGenerationQueueStore
     }
 
     try {
-      const supportingFiles = readQueuedSupportingDocuments(
-        row.supportingFiles,
-      );
-
       return {
         demoBrief: readDemoBriefFromProjectContext(row.context),
         demoRequestId: readString(row, "demoRequestId"),
-        normalizedSupportingDocuments:
-          supportingFiles.length === 0 || !this.supportingDocumentLoader
-            ? []
-            : await this.supportingDocumentLoader.loadSupportingDocuments(
-                supportingFiles,
-              ),
+        normalizedSupportingDocuments: await this.loadSupportingDocuments(row),
         projectId,
         repoUrl: readString(row, "repoUrl"),
         workspaceId: projectId,
@@ -117,7 +108,7 @@ export class NeonProjectDemoGenerationQueueStore
         error:
           error instanceof Error
             ? error.message
-            : "Project queue claim failed after processing started",
+            : "Supporting Document normalization failed",
         projectId,
       });
       return undefined;
@@ -154,58 +145,34 @@ export class NeonProjectDemoGenerationQueueStore
       throw new Error(`Failed to mark Project ${status}`);
     }
   }
-}
 
-function readQueuedSupportingDocuments(
-  value: unknown,
-): QueuedSupportingDocumentUpload[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value.flatMap((item) => {
-    if (typeof item !== "string" || !item.trim().startsWith("{")) {
+  private async loadSupportingDocuments(
+    row: Record<string, unknown>,
+  ): Promise<NormalizedSupportingDocument[]> {
+    const uploads = readQueuedSupportingDocumentUploads(row.supportingFiles);
+    if (uploads.length === 0 || this.supportingDocumentLoader === undefined) {
       return [];
     }
 
-    return [readQueuedSupportingDocument(JSON.parse(item))];
-  });
-}
-
-function readQueuedSupportingDocument(
-  value: unknown,
-): QueuedSupportingDocumentUpload {
-  const record = readRecord(value, "Supporting Document metadata");
-
-  return {
-    fileName: readString(record, "fileName"),
-    mimeType: readString(record, "mimeType"),
-    r2Key: readString(record, "r2Key"),
-    r2Url: readString(record, "r2Url"),
-    sizeBytes: readPositiveNumber(record, "sizeBytes"),
-  };
+    return this.supportingDocumentLoader.loadSupportingDocuments(uploads);
+  }
 }
 
 export function createNeonProjectDemoGenerationQueueStore(
   databaseUrl = readRequiredEnv("DATABASE_URL"),
-  supportingDocumentLoader?: SupportingDocumentLoader,
 ): NeonProjectDemoGenerationQueueStore {
   const client = postgres(databaseUrl, { max: 5 });
   return new NeonProjectDemoGenerationQueueStore(
     drizzle(client) as PostgresJsDatabase<Record<string, never>>,
-    supportingDocumentLoader,
   );
 }
 
 function readDemoBriefFromProjectContext(value: unknown) {
   const context = readRecord(value, "Project context");
-  const structuredContext =
-    context.structuredContext === undefined
-      ? context
-      : readRecord(
-          context.structuredContext,
-          "Project context.structuredContext",
-        );
+  const structuredContext = readRecord(
+    context.structuredContext,
+    "Project context.structuredContext",
+  );
   const targetUsers = readOptionalString(structuredContext, "targetUsers");
 
   return {
@@ -225,6 +192,38 @@ function splitFeatures(value: string) {
   return features.length > 0 ? features : [value.trim()];
 }
 
+function readQueuedSupportingDocumentUploads(
+  value: unknown,
+): QueuedSupportingDocumentUpload[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((entry, index) => {
+    const record = readRecord(
+      typeof entry === "string" ? JSON.parse(entry) : entry,
+      `supportingFiles[${index}]`,
+    );
+
+    return {
+      fileName: readString(record, "fileName"),
+      mimeType: readString(record, "mimeType"),
+      r2Key: readString(record, "r2Key"),
+      r2Url: readString(record, "r2Url"),
+      sizeBytes: readNumber(record, "sizeBytes"),
+    };
+  });
+}
+
+function readNumber(record: Record<string, unknown>, key: string) {
+  const value = record[key];
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${key} must be a finite number`);
+  }
+
+  return value;
+}
+
 function readRecord(value: unknown, path: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error(`${path} must be an object`);
@@ -237,15 +236,6 @@ function readString(record: Record<string, unknown>, key: string) {
   const value = record[key];
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new Error(`${key} must be a non-empty string`);
-  }
-
-  return value;
-}
-
-function readPositiveNumber(record: Record<string, unknown>, key: string) {
-  const value = record[key];
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    throw new Error(`${key} must be a positive number`);
   }
 
   return value;

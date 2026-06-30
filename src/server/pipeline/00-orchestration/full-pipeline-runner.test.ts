@@ -5,8 +5,8 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import type { CaptureManifest } from "../../pipeline/06-footage-capture/capture-scenes";
-import type { CompositedVideoManifest } from "../../pipeline/07-compositing/composite-video";
+import type { CaptureManifest } from "../06-footage-capture/capture-scenes";
+import type { CompositedVideoManifest } from "../07-compositing/composite-video";
 import { runFullPipelineJob } from "./full-pipeline-runner";
 import type { PipelineOrchestratorDependencies } from "./pipeline-orchestrator";
 

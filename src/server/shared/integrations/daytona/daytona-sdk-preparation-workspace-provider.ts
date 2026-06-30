@@ -108,6 +108,7 @@ export type DaytonaSdkPreparationWorkspaceProviderOptions = {
   ptyConnectionTimeoutMs?: number;
   sandboxLogSinks?: PipelineLogSink[];
   snapshot?: string;
+  submittedCodeSnapshot?: string;
 };
 
 const defaultSandboxDiskGB = 3;
@@ -165,6 +166,7 @@ export class DaytonaSdkPreparationWorkspaceProvider
   private readonly ptyConnectionTimeoutMs: number;
   private readonly sandboxLogSinks: PipelineLogSink[];
   private readonly snapshot: string | undefined;
+  private readonly submittedCodeSnapshot: string | undefined;
 
   constructor(options: DaytonaSdkPreparationWorkspaceProviderOptions = {}) {
     this.client =
@@ -174,6 +176,7 @@ export class DaytonaSdkPreparationWorkspaceProvider
       ) as DaytonaSdkClient);
     this.commandTimeoutMs = options.commandTimeoutMs ?? defaultCommandTimeoutMs;
     this.snapshot = options.snapshot;
+    this.submittedCodeSnapshot = options.submittedCodeSnapshot;
     this.diskGB = options.diskGB ?? defaultSandboxDiskGB;
     this.logWriteTimeoutMs =
       options.logWriteTimeoutMs ?? defaultLogWriteTimeoutMs;
@@ -194,6 +197,17 @@ export class DaytonaSdkPreparationWorkspaceProvider
       throw new Error("Daytona did not return a sandbox id.");
     }
 
+    const submittedCodeSandbox =
+      this.submittedCodeSnapshot === undefined
+        ? undefined
+        : await this.client.create({
+            autoDeleteInterval: 0,
+            ephemeral: true,
+            linkedSandbox: id,
+            networkBlockAll: true,
+            snapshot: this.submittedCodeSnapshot,
+          });
+
     return createPreparationWorkspaceHandle({
       client: this.client,
       commandTimeoutMs: this.commandTimeoutMs,
@@ -203,6 +217,7 @@ export class DaytonaSdkPreparationWorkspaceProvider
       ptyConnectionTimeoutMs: this.ptyConnectionTimeoutMs,
       sandboxLogSinks: this.sandboxLogSinks,
       sandbox,
+      ...(submittedCodeSandbox === undefined ? {} : { submittedCodeSandbox }),
     });
   }
 }
@@ -216,9 +231,11 @@ function createPreparationWorkspaceHandle(input: {
   ptyConnectionTimeoutMs: number;
   sandboxLogSinks?: PipelineLogSink[];
   sandbox: DaytonaSdkSandbox;
+  submittedCodeSandbox?: DaytonaSdkSandbox;
 }): PreparationWorkspaceHandle {
   const workspace = new DaytonaSdkPreparationWorkspace(
     input.sandbox,
+    input.submittedCodeSandbox,
     input.id,
     input.commandTimeoutMs,
     input.logWriteTimeoutMs,
@@ -230,6 +247,9 @@ function createPreparationWorkspaceHandle(input: {
   return {
     async destroy() {
       await workspace.cancelActiveCommands();
+      if (input.submittedCodeSandbox !== undefined) {
+        await input.client.delete(input.submittedCodeSandbox);
+      }
       await input.client.delete(input.sandbox);
     },
     id: input.id,
@@ -243,6 +263,7 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
 
   constructor(
     private readonly sandbox: DaytonaSdkSandbox,
+    private readonly submittedCodeSandbox: DaytonaSdkSandbox | undefined,
     private readonly workspaceId: string,
     private readonly commandTimeoutMs: number,
     private readonly logWriteTimeoutMs: number,
@@ -366,9 +387,53 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
     }
   }
 
+  async executeSubmittedCode(
+    command: string,
+    options: PreparationWorkspaceExecuteOptions = {},
+  ): Promise<PreparationWorkspaceCommandResult> {
+    if (this.submittedCodeSandbox === undefined) {
+      throw new Error("Submitted-code Daytona sandbox is not configured.");
+    }
+
+    if (options.onStdout !== undefined || options.onStderr !== undefined) {
+      return this.executeStreamingInSandbox(
+        this.submittedCodeSandbox,
+        command,
+        options,
+      );
+    }
+
+    const response = await this.submittedCodeSandbox.process.executeCommand(
+      command,
+      undefined,
+      options.env,
+    );
+
+    return {
+      exitCode: response.exitCode ?? 0,
+      stderr: response.stderr ?? "",
+      stdout: response.stdout ?? response.result ?? "",
+    };
+  }
+
   async setOutboundNetworkAccess(enabled: boolean): Promise<void> {
+    await this.setSandboxNetworkAccess(this.sandbox, enabled);
+  }
+
+  async setSubmittedCodeNetworkAccess(enabled: boolean): Promise<void> {
+    if (this.submittedCodeSandbox === undefined) {
+      throw new Error("Submitted-code Daytona sandbox is not configured.");
+    }
+
+    await this.setSandboxNetworkAccess(this.submittedCodeSandbox, enabled);
+  }
+
+  private async setSandboxNetworkAccess(
+    sandbox: DaytonaSdkSandbox,
+    enabled: boolean,
+  ): Promise<void> {
     try {
-      await this.sandbox.updateNetworkSettings({ networkBlockAll: !enabled });
+      await sandbox.updateNetworkSettings({ networkBlockAll: !enabled });
     } catch (error) {
       if (isRestrictedNetworkPolicyError(error)) {
         return;
@@ -379,8 +444,9 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
   }
 
   async getPreviewUrl(port: number): Promise<string> {
+    const previewSandbox = this.submittedCodeSandbox ?? this.sandbox;
     const preview = await withTimeout(
-      this.sandbox.getSignedPreviewUrl(port, 60 * 60),
+      previewSandbox.getSignedPreviewUrl(port, 60 * 60),
       this.previewUrlTimeoutMs,
       `Daytona preview URL creation did not finish within ${this.previewUrlTimeoutMs}ms.`,
     );
@@ -392,12 +458,12 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
   }
 
   async uploadFiles(files: PreparationWorkspaceUploadFile[]): Promise<void> {
-    await this.sandbox.fs.uploadFiles(
-      files.map((file) => ({
-        destination: file.destinationPath,
-        source: file.sourcePath,
-      })),
-    );
+    const uploadedFiles = files.map((file) => ({
+      destination: file.destinationPath,
+      source: file.sourcePath,
+    }));
+    await this.sandbox.fs.uploadFiles(uploadedFiles);
+    await this.submittedCodeSandbox?.fs.uploadFiles(uploadedFiles);
   }
 
   async downloadFiles(
@@ -415,6 +481,55 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
       throw new Error(
         `Failed to download Daytona sandbox file ${failed.source}: ${failed.error}`,
       );
+    }
+  }
+
+  private async executeStreamingInSandbox(
+    sandbox: DaytonaSdkSandbox,
+    command: string,
+    options: PreparationWorkspaceExecuteOptions,
+  ): Promise<PreparationWorkspaceCommandResult> {
+    const output: string[] = [];
+    const decoder = new TextDecoder();
+    const rawPty = await sandbox.process.createPty({
+      cols: 120,
+      cwd: "/workspace",
+      envs: options.env ?? {},
+      id: `makeademo-${randomUUID()}`,
+      onData: (data) => {
+        const chunk = decoder.decode(data);
+        output.push(chunk);
+        const visibleChunk = removeExitMarker(chunk);
+        if (visibleChunk.length > 0) {
+          options.onStdout?.(visibleChunk);
+        }
+      },
+      rows: 30,
+    });
+    const pty = new ManagedPty(rawPty);
+    this.activePtys.add(pty);
+
+    try {
+      await withTimeout(
+        pty.waitForConnection(),
+        this.ptyConnectionTimeoutMs,
+        `Daytona PTY did not connect within ${this.ptyConnectionTimeoutMs}ms.`,
+      );
+      await pty.sendInput(
+        `stty -echo\n${command}\nprintf '\n__MAKEADEMO_EXIT__:%s\n' $?\nexit\n`,
+      );
+      const result = await pty.wait();
+      const stdout = output.join("");
+      const exitCode = readExitCode(stdout) ?? result.exitCode ?? 0;
+
+      return {
+        exitCode,
+        stderr: result.error ?? "",
+        stdout: removeExitMarker(stdout),
+      };
+    } finally {
+      this.activePtys.delete(pty);
+      await pty.disconnect();
     }
   }
 }

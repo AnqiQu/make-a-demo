@@ -1,4 +1,4 @@
-import { createPipelineEventLogger } from "../logging/pipeline-event-logger";
+import { createPipelineEventLogger } from "../../shared/logging/pipeline-event-logger";
 
 export type PipelineStage =
   | "compositing"
@@ -20,6 +20,11 @@ type ExternalCallEventName =
   | "external_call.failed"
   | "external_call.started"
   | "external_call.succeeded";
+
+export type PipelineObservationContext = Pick<
+  PipelineObservabilityEvent,
+  "demoRequestId" | "projectId" | "runId" | "workspaceId"
+>;
 
 export type PipelineObservabilityEvent = {
   blockedNetworkAttemptCount?: number;
@@ -62,13 +67,6 @@ export interface PipelineObserver {
 
 export const noopPipelineObserver: PipelineObserver = {
   record() {},
-};
-
-export type PipelineObservationContext = {
-  demoRequestId?: string;
-  projectId?: string;
-  runId?: string;
-  workspaceId?: string;
 };
 
 export function createRecordingPipelineObserver() {

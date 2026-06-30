@@ -88,6 +88,9 @@ export async function validateProject(
     try {
       browserResult = await withTimeout(
         dependencies.browserValidator.validate({
+          ...(input.preparationWorkspace === undefined
+            ? {}
+            : { preparationWorkspace: input.preparationWorkspace }),
           url: browserUrl,
         }),
         browserValidationTimeoutMs,
