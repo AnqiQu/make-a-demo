@@ -1,25 +1,21 @@
 import { describe, expect, it } from "vitest";
 
-import { collectStage1CliOptions } from "./stage1-cli-interactive";
+import { collectPreCaptureCliOptions } from "./pre-capture-cli-interactive";
 
-describe("collectStage1CliOptions", () => {
-  it("collects Stage 1 options through deterministic prompts", async () => {
+describe("collectPreCaptureCliOptions", () => {
+  it("collects Pre-Capture options through deterministic prompts", async () => {
     const answers = [
       "https://github.com/example/app",
       "validation dashboard, script package",
       "./brief.md, ./setup-notes.txt",
     ];
 
-    const options = await collectStage1CliOptions(
-      {
-        prompt: async () => answers.shift() ?? "",
-        write: () => {},
-      },
-      { daytonaSnapshot: "makeademo-opencode" },
-    );
+    const options = await collectPreCaptureCliOptions({
+      prompt: async () => answers.shift() ?? "",
+      write: () => {},
+    });
 
     expect(options).toEqual({
-      daytonaSnapshot: "makeademo-opencode",
       docs: ["./brief.md", "./setup-notes.txt"],
       features: ["validation dashboard", "script package"],
       modelID: "gpt-5.5",
@@ -40,7 +36,7 @@ describe("collectStage1CliOptions", () => {
     ];
     const messages: string[] = [];
 
-    const options = await collectStage1CliOptions({
+    const options = await collectPreCaptureCliOptions({
       prompt: async () => answers.shift() ?? "",
       write: (message) => messages.push(message),
     });

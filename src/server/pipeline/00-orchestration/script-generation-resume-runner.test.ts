@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import type { ScriptGenerationAgent } from "../../pipeline/04-script-generation/script-generation-agent.interface";
+import type { ScriptGenerationAgent } from "../04-script-generation/script-generation-agent.interface";
 import { runScriptGenerationResume } from "./script-generation-resume-runner";
 
 describe("runScriptGenerationResume", () => {
@@ -32,6 +32,13 @@ describe("runScriptGenerationResume", () => {
           preparationWorkspaceId: "daytona_workspace",
           repoUrl: "https://github.com/example/app",
           runDirectory: outputRoot,
+          validation: {
+            blockedNetworkAttempts: [],
+            browserUrl: "https://preview.example.test/",
+            logs: ["validated"],
+            status: "succeeded",
+            warnings: [],
+          },
         },
         {
           preparationWorkspace: fakePreparationWorkspaceHandle(),
@@ -49,7 +56,7 @@ describe("runScriptGenerationResume", () => {
       ]);
       expect(result).toMatchObject({
         rawOpenCodeLogPath: join(outputRoot, "scriptgen-raw.jsonl"),
-        scriptPath: join(outputRoot, "demo-script.json"),
+        scriptPath: join(outputRoot, "video-script-package.json"),
         status: "succeeded",
       });
       await expect(readJsonFile(result.scriptPath)).resolves.toMatchObject({
@@ -106,7 +113,7 @@ function scriptPackage() {
       risks: [],
     },
     demoPlaywrightScript:
-      "await scene('scene_article_feed', async () => { await page.goto(baseUrl); });",
+      "await setup(async () => {}); await scene('scene_feed', async () => {});",
     exploration: {
       assumptions: [],
       productSurfaces: ["article feed"],
@@ -114,15 +121,15 @@ function scriptPackage() {
     },
     format: "16:9" as const,
     presentation: {
-      music: { enabled: false as const },
+      music: { enabled: true as const, trackId: "clean" as const },
       textOverlays: [],
       transitions: [],
     },
     scenes: [
       {
-        expectedVisibleOutcome: "The article feed is visible.",
-        humanReadableDescription: "Show article feed.",
-        id: "scene_article_feed",
+        expectedVisibleOutcome: "Article feed is visible.",
+        humanReadableDescription: "Show the article feed.",
+        id: "scene_feed",
       },
     ],
     scriptId: "script_test",

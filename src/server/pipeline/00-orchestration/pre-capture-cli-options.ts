@@ -1,5 +1,4 @@
-export type Stage1CliOptions = {
-  daytonaSnapshot?: string;
+export type PreCaptureCliOptions = {
   docs: string[];
   features: string[];
   modelID: string;
@@ -8,27 +7,13 @@ export type Stage1CliOptions = {
   workspaceId: string;
 };
 
-export type Stage1CliDefaults = {
-  daytonaSnapshot?: string;
-};
-
-export function readStage1CliDefaults(
-  env: NodeJS.ProcessEnv = process.env,
-): Stage1CliDefaults {
-  const daytonaSnapshot = env.DAYTONA_SNAPSHOT;
-
-  return daytonaSnapshot === undefined || daytonaSnapshot.trim() === ""
-    ? {}
-    : { daytonaSnapshot };
-}
-
-export function parseStage1CliArgs(
-  args: string[],
-  defaults: Stage1CliDefaults = {},
-): Stage1CliOptions {
+export function parsePreCaptureCliArgs(args: string[]): PreCaptureCliOptions {
   const docs: string[] = [];
   const features: string[] = [];
+  let modelID = "gpt-5.5";
+  let providerID = "openai";
   let repoUrl: string | undefined;
+  let workspaceId: string | undefined;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -42,8 +27,20 @@ export function parseStage1CliArgs(
         features.push(readValue(args, index, arg));
         index += 1;
         break;
+      case "--model":
+        modelID = readValue(args, index, arg);
+        index += 1;
+        break;
+      case "--provider":
+        providerID = readValue(args, index, arg);
+        index += 1;
+        break;
       case "--repo":
         repoUrl = readValue(args, index, arg);
+        index += 1;
+        break;
+      case "--workspace-id":
+        workspaceId = readValue(args, index, arg);
         index += 1;
         break;
       default:
@@ -60,15 +57,12 @@ export function parseStage1CliArgs(
   }
 
   return {
-    ...(defaults.daytonaSnapshot === undefined
-      ? {}
-      : { daytonaSnapshot: defaults.daytonaSnapshot }),
     docs,
     features,
-    modelID: "gpt-5.5",
-    providerID: "openai",
+    modelID,
+    providerID,
     repoUrl,
-    workspaceId: createWorkspaceId(repoUrl),
+    workspaceId: workspaceId ?? createWorkspaceId(repoUrl),
   };
 }
 

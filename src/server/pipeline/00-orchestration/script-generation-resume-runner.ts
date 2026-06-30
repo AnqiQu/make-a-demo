@@ -1,12 +1,13 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { DemoBrief } from "../../pipeline/01-context-gathering/intake/demo-brief.schema";
-import type { NormalizedSupportingDocument } from "../../pipeline/01-context-gathering/supporting-documents";
-import type { PreparationManifest } from "../../pipeline/03-repo-preparation/preparation-manifest";
-import type { PreparationWorkspaceHandle } from "../../pipeline/03-repo-preparation/preparation-workspace-runner";
-import type { DemoScriptPackage } from "../../pipeline/04-script-generation/demo-script-package";
-import type { ScriptGenerationAgent } from "../../pipeline/04-script-generation/script-generation-agent.interface";
+import type { DemoBrief } from "../01-context-gathering/intake/demo-brief.schema";
+import type { NormalizedSupportingDocument } from "../01-context-gathering/supporting-documents";
+import type { PreparationManifest } from "../03-repo-preparation/preparation-manifest";
+import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
+import type { DemoScriptPackage } from "../04-script-generation/demo-script-package";
+import type { ScriptGenerationAgent } from "../04-script-generation/script-generation-agent.interface";
+import type { ProjectValidationResult } from "../05-capture-path-validation/project-runtime-preflight/validation-result";
 
 export type ScriptGenerationResumeFile = {
   demoBrief: DemoBrief;
@@ -16,6 +17,7 @@ export type ScriptGenerationResumeFile = {
   preparationWorkspaceId: string;
   repoUrl: string;
   runDirectory: string;
+  validation: ProjectValidationResult;
 };
 
 export type ScriptGenerationResumeResult = {
@@ -34,7 +36,8 @@ export async function runScriptGenerationResume(
   options: { rawOpenCodeLogPath?: string; scriptPath?: string } = {},
 ): Promise<ScriptGenerationResumeResult> {
   const scriptPath =
-    options.scriptPath ?? join(resume.runDirectory, "demo-script.json");
+    options.scriptPath ??
+    join(resume.runDirectory, "video-script-package.json");
   await mkdir(resume.runDirectory, { recursive: true });
   const scriptPackage =
     await dependencies.scriptGenerationAgent.generateScriptPackage({
@@ -44,6 +47,7 @@ export async function runScriptGenerationResume(
       preparationManifest: resume.preparationManifest,
       preparationWorkspace: dependencies.preparationWorkspace,
       repoUrl: resume.repoUrl,
+      validation: resume.validation,
     });
   await writeFile(scriptPath, `${JSON.stringify(scriptPackage, null, 2)}\n`);
 

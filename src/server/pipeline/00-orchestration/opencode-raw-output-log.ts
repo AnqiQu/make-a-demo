@@ -1,7 +1,7 @@
 import {
   createFilePipelineLogSink,
   createPipelineEventLogger,
-} from "../logging/pipeline-event-logger";
+} from "../../shared/logging/pipeline-event-logger";
 
 type OpenCodeRawOutputChannel = "stderr" | "stdout";
 

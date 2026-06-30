@@ -1,6 +1,6 @@
-import type { RepoSecurityInput } from "../../pipeline/02-repo-security-screen/repo-security-screen";
-import type { PreparationWorkspaceProvider } from "../../pipeline/03-repo-preparation/preparation-workspace-runner";
-import type { PipelineEventLogger } from "../logging/pipeline-event-logger";
+import type { PipelineEventLogger } from "../../shared/logging/pipeline-event-logger";
+import type { RepoSecurityInput } from "../02-repo-security-screen/repo-security-screen";
+import type { PreparationWorkspaceProvider } from "../03-repo-preparation/preparation-workspace-runner";
 
 export async function readRepoSecurityInput(
   provider: PreparationWorkspaceProvider,

@@ -1,6 +1,6 @@
-import { createPipelineEventLogger } from "../logging/pipeline-event-logger";
+import { createPipelineEventLogger } from "../../shared/logging/pipeline-event-logger";
 
-export type PipelineStage =
+type PipelineStage =
   | "compositing"
   | "capture-path-validation"
   | "project-validation"
@@ -53,13 +53,6 @@ export interface PipelineObserver {
 
 export const noopPipelineObserver: PipelineObserver = {
   record() {},
-};
-
-export type PipelineObservationContext = {
-  demoRequestId?: string;
-  projectId?: string;
-  runId?: string;
-  workspaceId?: string;
 };
 
 export function createRecordingPipelineObserver() {

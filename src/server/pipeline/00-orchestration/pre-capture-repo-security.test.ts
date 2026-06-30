@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
 
+import { createPipelineEventLogger } from "../../shared/logging/pipeline-event-logger";
 import type {
   PreparationWorkspaceHandle,
   PreparationWorkspaceProvider,
-} from "../../pipeline/03-repo-preparation/preparation-workspace-runner";
+} from "../03-repo-preparation/preparation-workspace-runner";
 import type {
   PreparationWorkspace,
   PreparationWorkspaceCommandResult,
-} from "../../pipeline/03-repo-preparation/preparation-workspace.interface";
-import { createPipelineEventLogger } from "../logging/pipeline-event-logger";
-import { readRepoSecurityInput } from "./stage1-repo-security";
+} from "../03-repo-preparation/preparation-workspace.interface";
+import { readRepoSecurityInput } from "./pre-capture-repo-security";
 
 describe("readRepoSecurityInput", () => {
   it("logs Daytona clone progress through Pino JSON", async () => {
