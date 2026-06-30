@@ -32,7 +32,7 @@ export type CapturePathValidationResult = {
  * project-level checks before generated Browser Actions, produce structured
  * failure evidence, and must not produce final Scene footage.
  */
-export interface CapturePathValidator {
+interface CapturePathValidator {
   validate(
     input: CapturePathValidationInput,
   ): Promise<CapturePathValidationResult>;
