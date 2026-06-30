@@ -82,10 +82,17 @@ export class DefaultCapturePathSceneValidator
     }
 
     if (result.exitCode !== 0) {
-      return {
-        failureReason: `Scene ${input.scene.id} failed during Capture Path Validation.`,
+      const failedAction = readFailedAction(logs);
+      const screenshotArtifactId = readValidationFailureScreenshotPath(
         logs,
         runDirectory,
+      );
+      return {
+        ...(failedAction === undefined ? {} : { failedAction }),
+        failureReason: createSceneFailureReason(input.scene.id, failedAction),
+        logs,
+        runDirectory,
+        ...(screenshotArtifactId === undefined ? {} : { screenshotArtifactId }),
         scriptPath: scenePath,
         stderrPath,
         status: "failed",
@@ -214,10 +221,19 @@ export class DefaultCapturePathSceneValidator
       }
 
       if (result.exitCode !== 0) {
+        const failedAction = readFailedAction(logs);
+        const screenshotArtifactId = readValidationFailureScreenshotPath(
+          logs,
+          remoteRunDirectory,
+        );
         return {
-          failureReason: `Scene ${input.scene.id} failed during Capture Path Validation.`,
+          ...(failedAction === undefined ? {} : { failedAction }),
+          failureReason: createSceneFailureReason(input.scene.id, failedAction),
           logs,
           runDirectory: remoteRunDirectory,
+          ...(screenshotArtifactId === undefined
+            ? {}
+            : { screenshotArtifactId }),
           scriptPath: remoteScenePath,
           stderrPath: remoteStderrPath,
           status: "failed",
@@ -287,6 +303,109 @@ function readBlockedNetworkAttempts(stderr: string) {
       host: value.host as string,
       phase: "runtime" as const,
     }));
+}
+
+type ParsedActionMarker =
+  | {
+      event: "failed" | "started" | "succeeded";
+      label: string;
+      status: "valid";
+    }
+  | { status: "malformed" };
+
+function createSceneFailureReason(sceneId: string, failedAction?: string) {
+  return `Scene ${sceneId} failed during Capture Path Validation${
+    failedAction === undefined ? "" : ` while running ${failedAction}`
+  }.`;
+}
+
+function readFailedAction(logs: string[]) {
+  let openAction: string | undefined;
+  let failedAction: string | undefined;
+
+  for (const marker of readActionMarkers(logs)) {
+    if (marker.status !== "valid") {
+      continue;
+    }
+
+    if (marker.event === "started") {
+      openAction = marker.label;
+      continue;
+    }
+
+    if (marker.event === "succeeded" && openAction === marker.label) {
+      openAction = undefined;
+      continue;
+    }
+
+    if (marker.event === "failed") {
+      failedAction = marker.label;
+      openAction = undefined;
+    }
+  }
+
+  return failedAction ?? openAction;
+}
+
+function readActionMarkers(logs: string[]): ParsedActionMarker[] {
+  return logs
+    .join("\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("[makeademo:action] "))
+    .map((line) => readActionMarker(line));
+}
+
+function readActionMarker(line: string): ParsedActionMarker {
+  try {
+    const marker = JSON.parse(line.slice("[makeademo:action] ".length));
+    if (
+      typeof marker === "object" &&
+      marker !== null &&
+      typeof marker.label === "string" &&
+      (marker.event === "started" ||
+        marker.event === "succeeded" ||
+        marker.event === "failed")
+    ) {
+      return {
+        event: marker.event,
+        label: marker.label,
+        status: "valid",
+      };
+    }
+  } catch {}
+
+  return { status: "malformed" };
+}
+
+function readValidationFailureScreenshotPath(
+  logs: string[],
+  runDirectory: string,
+) {
+  for (const line of logs.join("\n").split("\n")) {
+    const marker = line.trim();
+    if (!marker.startsWith("[makeademo:validation] script failed ")) {
+      continue;
+    }
+
+    try {
+      const failure = JSON.parse(
+        marker.slice("[makeademo:validation] script failed ".length),
+      );
+      if (
+        typeof failure === "object" &&
+        failure !== null &&
+        typeof failure.screenshotPath === "string" &&
+        failure.screenshotPath.trim().length > 0
+      ) {
+        return failure.screenshotPath.startsWith("/")
+          ? failure.screenshotPath
+          : join(runDirectory, failure.screenshotPath);
+      }
+    } catch {}
+  }
+
+  return undefined;
 }
 
 function createRunId() {

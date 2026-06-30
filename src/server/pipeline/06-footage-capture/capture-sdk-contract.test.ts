@@ -15,9 +15,13 @@ describe("Capture SDK Contract", () => {
 
     await writeGeneratedCaptureSdkHarness(workspace);
 
-    await expect(
-      readFile(join(workspace, "makeademo-capture-sdk.js"), "utf8"),
-    ).resolves.toContain("export async function setup");
+    const runtime = await readFile(
+      join(workspace, "makeademo-capture-sdk.js"),
+      "utf8",
+    );
+    expect(runtime).toContain("export async function setup");
+    expect(runtime).toContain("[makeademo:action]");
+    expect(runtime).toContain("timeoutMs");
     await expect(
       readFile(join(workspace, "makeademo-capture-sdk.d.ts"), "utf8"),
     ).resolves.toContain("MakeADemoSceneContext");

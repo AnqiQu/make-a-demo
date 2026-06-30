@@ -7,6 +7,7 @@ export type PrepareStylizedPlaywrightScriptInput = {
 };
 
 const humanTypingDelayMs = 100;
+const validationActionTimeoutMs = 10_000;
 
 export function prepareStylizedPlaywrightScript(
   script: string,
@@ -112,15 +113,29 @@ ${runtimeNetworkLockdownSource()}
 const page = await context.newPage();
 const makeADemoCaptureStartedAt = performance.now();
 const makeADemoCaptureContext = { page, baseUrl, expect };
-globalThis.__makeademoCaptureSdk = { context: makeADemoCaptureContext, startedAt: makeADemoCaptureStartedAt };
+globalThis.__makeademoCaptureSdk = {
+  actionTimeoutMs: ${validationActionTimeoutMs},
+  context: makeADemoCaptureContext,
+  startedAt: makeADemoCaptureStartedAt,
+};
+const makeADemoFailureScreenshotPath = new URL(
+  "./makeademo-validation-failure.png",
+  import.meta.url,
+).pathname;
 
 try {
   console.log("[makeademo:validation] script started", JSON.stringify({ baseUrl }));
 ${indentScriptBody(script)}
   console.log("[makeademo:validation] script succeeded", JSON.stringify({ title: await page.title(), url: page.url() }));
 } catch (error) {
+  let screenshotPath;
+  try {
+    await page.screenshot({ fullPage: true, path: makeADemoFailureScreenshotPath });
+    screenshotPath = makeADemoFailureScreenshotPath;
+  } catch {}
   console.error("[makeademo:validation] script failed", JSON.stringify({
     message: error instanceof Error ? error.message : String(error),
+    ...(screenshotPath === undefined ? {} : { screenshotPath }),
     title: await page.title().catch(() => ""),
     url: page.url(),
   }));

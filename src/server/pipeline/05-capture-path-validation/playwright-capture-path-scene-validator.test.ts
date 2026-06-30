@@ -179,4 +179,76 @@ describe("DefaultCapturePathSceneValidator", () => {
       "/workspace/.makeademo/capture-path-validation-runs/",
     );
   }, 20_000);
+
+  it("reports the active SDK action and screenshot path when a prepared workspace dry-run scene fails", async () => {
+    const validator = new DefaultCapturePathSceneValidator();
+    const preparationWorkspace: PreparationWorkspaceHandle = {
+      async destroy() {},
+      id: "workspace_123",
+      workspace: {
+        async execute(command) {
+          if (command.includes("bun '/workspace/.makeademo/")) {
+            return {
+              exitCode: 1,
+              stderr:
+                '[makeademo:validation] script failed {"message":"Timed out after 5000ms","screenshotPath":"makeademo-validation-failure.png"}',
+              stdout: [
+                '[makeademo:scene] {"elapsedMs":10,"event":"started","sceneId":"scene_action_timeout"}',
+                '[makeademo:action] {"elapsedMs":12,"event":"started","label":"locator.click(#save)","sceneId":"scene_action_timeout","timeoutMs":5000}',
+                '[makeademo:action] {"elapsedMs":5013,"event":"failed","label":"locator.click(#save)","message":"Timed out after 5000ms","sceneId":"scene_action_timeout","timeoutMs":5000}',
+                '[makeademo:scene] {"elapsedMs":5014,"event":"failed","message":"Timed out after 5000ms","sceneId":"scene_action_timeout"}',
+              ].join("\n"),
+            };
+          }
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async getPreviewUrl() {
+          return "https://preview.example.test/";
+        },
+        async setOutboundNetworkAccess() {},
+        async uploadFiles() {},
+      },
+    };
+
+    const result = await validator.validateScene({
+      baseUrl: "https://preview.example.test/",
+      demoPlaywrightScript: [
+        "import { setup, scene } from './makeademo-capture-sdk';",
+        "await setup(async ({ page, baseUrl, expect }) => {",
+        "  await page.goto(baseUrl);",
+        "  await expect(page.locator('body')).toBeVisible();",
+        "});",
+        "await scene('scene_action_timeout', async ({ page, expect }) => {",
+        "  await expect(page.locator('body')).toBeVisible();",
+        "  await page.locator('#save').click();",
+        "});",
+      ].join("\n"),
+      preparationWorkspace,
+      scene: {
+        expectedVisibleOutcome: "The save result is visible.",
+        humanReadableDescription: "Click save.",
+        id: "scene_action_timeout",
+      },
+      sectionId: "section_action_timeout",
+    });
+
+    expect(result).toMatchObject({
+      failedAction: "locator.click(#save)",
+      failureReason:
+        "Scene scene_action_timeout failed during Capture Path Validation while running locator.click(#save).",
+      screenshotArtifactId: expect.stringContaining(
+        "/workspace/.makeademo/capture-path-validation-runs/",
+      ),
+      status: "failed",
+      stderrPath: expect.stringContaining("scene_action_timeout.stderr.log"),
+      stdoutPath: expect.stringContaining("scene_action_timeout.stdout.log"),
+    });
+    expect(result.status).toBe("failed");
+    if (result.status !== "failed") {
+      throw new Error("Expected dry-run scene validation to fail.");
+    }
+    expect(result.screenshotArtifactId).toContain(
+      "makeademo-validation-failure.png",
+    );
+  }, 20_000);
 });

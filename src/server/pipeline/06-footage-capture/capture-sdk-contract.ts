@@ -182,7 +182,7 @@ function runtimeSource() {
   return `export async function setup() {
   const sdk = readMakeADemoCaptureSdk();
   const callback = arguments[0];
-  await callback(sdk.context);
+  await callback(createInstrumentedContext(sdk, 'setup'));
 }
 
 export async function scene() {
@@ -191,7 +191,7 @@ export async function scene() {
   const callback = arguments[1];
   console.log('[makeademo:scene]', JSON.stringify({ elapsedMs: elapsedMs(sdk), event: 'started', sceneId: id }));
   try {
-    await callback(sdk.context);
+    await callback(createInstrumentedContext(sdk, id));
     console.log('[makeademo:scene]', JSON.stringify({ elapsedMs: elapsedMs(sdk), event: 'succeeded', sceneId: id }));
   } catch (error) {
     console.log('[makeademo:scene]', JSON.stringify({
@@ -214,6 +214,306 @@ function readMakeADemoCaptureSdk() {
 
 function elapsedMs(sdk) {
   return Math.max(0, Math.round(performance.now() - sdk.startedAt));
+}
+
+function createInstrumentedContext(sdk, sceneId) {
+  const timeoutMs = typeof sdk.actionTimeoutMs === 'number'
+    ? sdk.actionTimeoutMs
+    : undefined;
+  return {
+    ...sdk.context,
+    expect: instrumentExpect(sdk.context.expect, sdk, sceneId, timeoutMs),
+    page: instrumentPage(sdk.context.page, sdk, sceneId, timeoutMs),
+  };
+}
+
+const makeADemoPageActionMethods = new Set([
+  'check',
+  'click',
+  'dblclick',
+  'fill',
+  'focus',
+  'goto',
+  'hover',
+  'press',
+  'reload',
+  'selectOption',
+  'tap',
+  'type',
+  'uncheck',
+  'waitForFunction',
+  'waitForLoadState',
+  'waitForRequest',
+  'waitForResponse',
+  'waitForSelector',
+  'waitForTimeout',
+  'waitForURL',
+]);
+const makeADemoLocatorActionMethods = new Set([
+  'blur',
+  'check',
+  'clear',
+  'click',
+  'dblclick',
+  'fill',
+  'focus',
+  'hover',
+  'press',
+  'scrollIntoViewIfNeeded',
+  'selectOption',
+  'tap',
+  'type',
+  'uncheck',
+  'waitFor',
+]);
+const makeADemoLocatorFactoryMethods = new Set([
+  'frameLocator',
+  'getByAltText',
+  'getByLabel',
+  'getByPlaceholder',
+  'getByRole',
+  'getByTestId',
+  'getByText',
+  'getByTitle',
+  'locator',
+]);
+const makeADemoLocatorChainMethods = new Set([
+  'filter',
+  'first',
+  'getByAltText',
+  'getByLabel',
+  'getByPlaceholder',
+  'getByRole',
+  'getByTestId',
+  'getByText',
+  'getByTitle',
+  'last',
+  'locator',
+  'nth',
+]);
+const makeADemoExpectAssertionMethods = new Set([
+  'toBeDisabled',
+  'toBeEnabled',
+  'toBeHidden',
+  'toBeInViewport',
+  'toBeVisible',
+  'toContainText',
+  'toHaveAttribute',
+  'toHaveCount',
+  'toHaveText',
+  'toHaveTitle',
+  'toHaveURL',
+  'toHaveValue',
+]);
+
+function instrumentPage(page, sdk, sceneId, timeoutMs) {
+  return new Proxy(page, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (typeof property !== 'string' || typeof value !== 'function') {
+        return value;
+      }
+
+      if (makeADemoLocatorFactoryMethods.has(property)) {
+        return (...args) => {
+          const locator = value.apply(target, args);
+          return instrumentLocator(locator, sdk, sceneId, property, formatActionArguments(args), timeoutMs);
+        };
+      }
+
+      if (!makeADemoPageActionMethods.has(property)) {
+        return value.bind(target);
+      }
+
+      return (...args) =>
+        runInstrumentedStep({
+          callback: () =>
+            property === 'waitForTimeout'
+              ? runBoundedWaitForTimeout(value, target, args, timeoutMs)
+              : value.apply(target, withTimeoutOptions(args, timeoutMs)),
+          label: \`page.\${property}(\${formatActionArguments(args)})\`,
+          sceneId,
+          sdk,
+          timeoutMs,
+        });
+    },
+  });
+}
+
+function instrumentLocator(locator, sdk, sceneId, source, sourceArguments, timeoutMs) {
+  const sourceLabel = sourceArguments.length > 0
+    ? \`\${source}(\${sourceArguments})\`
+    : source;
+  return new Proxy(locator, {
+    get(target, property, receiver) {
+      if (property === '__makeademoDescription') {
+        return sourceLabel;
+      }
+
+      const value = Reflect.get(target, property, receiver);
+      if (typeof property !== 'string' || typeof value !== 'function') {
+        return value;
+      }
+
+      if (makeADemoLocatorChainMethods.has(property)) {
+        return (...args) => {
+          const nextLocator = value.apply(target, args);
+          return instrumentLocator(
+            nextLocator,
+            sdk,
+            sceneId,
+            \`\${sourceLabel}.\${property}\`,
+            formatActionArguments(args),
+            timeoutMs,
+          );
+        };
+      }
+
+      if (!makeADemoLocatorActionMethods.has(property)) {
+        return value.bind(target);
+      }
+
+      return (...args) =>
+        runInstrumentedStep({
+          callback: () => value.apply(target, withTimeoutOptions(args, timeoutMs)),
+          label: \`locator.\${property}(\${[sourceLabel, formatActionArguments(args)].filter(Boolean).join(', ')})\`,
+          sceneId,
+          sdk,
+          timeoutMs,
+        });
+    },
+  });
+}
+
+function instrumentExpect(playwrightExpect, sdk, sceneId, timeoutMs) {
+  return (actual, ...args) => {
+    const assertion = playwrightExpect(actual, ...args);
+    return new Proxy(assertion, {
+      get(target, property, receiver) {
+        const value = Reflect.get(target, property, receiver);
+        if (
+          typeof property !== 'string' ||
+          typeof value !== 'function' ||
+          !makeADemoExpectAssertionMethods.has(property)
+        ) {
+          return typeof value === 'function' ? value.bind(target) : value;
+        }
+
+        return (...assertionArgs) =>
+          runInstrumentedStep({
+            callback: () => value.apply(target, withTimeoutOptions(assertionArgs, timeoutMs)),
+            label: \`expect.\${property}(\${describeAssertionSubject(actual)})\`,
+            sceneId,
+            sdk,
+            timeoutMs,
+          });
+      },
+    });
+  };
+}
+
+async function runInstrumentedStep(input) {
+  console.log('[makeademo:action]', JSON.stringify(removeUndefinedValues({
+    elapsedMs: elapsedMs(input.sdk),
+    event: 'started',
+    label: input.label,
+    sceneId: input.sceneId,
+    timeoutMs: input.timeoutMs,
+  })));
+  try {
+    const result = await input.callback();
+    console.log('[makeademo:action]', JSON.stringify(removeUndefinedValues({
+      elapsedMs: elapsedMs(input.sdk),
+      event: 'succeeded',
+      label: input.label,
+      sceneId: input.sceneId,
+      timeoutMs: input.timeoutMs,
+    })));
+    return result;
+  } catch (error) {
+    console.log('[makeademo:action]', JSON.stringify(removeUndefinedValues({
+      elapsedMs: elapsedMs(input.sdk),
+      event: 'failed',
+      label: input.label,
+      message: error instanceof Error ? error.message : String(error),
+      sceneId: input.sceneId,
+      timeoutMs: input.timeoutMs,
+    })));
+    throw error;
+  }
+}
+
+function withTimeoutOptions(args, timeoutMs) {
+  if (timeoutMs === undefined) {
+    return args;
+  }
+
+  const nextArgs = [...args];
+  const last = nextArgs.at(-1);
+  if (isPlainObject(last)) {
+    nextArgs[nextArgs.length - 1] = { ...last, timeout: last.timeout ?? timeoutMs };
+    return nextArgs;
+  }
+
+  return [...nextArgs, { timeout: timeoutMs }];
+}
+
+function runBoundedWaitForTimeout(waitForTimeout, target, args, timeoutMs) {
+  const requestedTimeoutMs = Number(args[0] ?? 0);
+  if (
+    timeoutMs !== undefined &&
+    Number.isFinite(requestedTimeoutMs) &&
+    requestedTimeoutMs > timeoutMs
+  ) {
+    throw new Error(
+      \`page.waitForTimeout requested \${requestedTimeoutMs}ms, above the MakeADemo validation action timeout of \${timeoutMs}ms.\`,
+    );
+  }
+
+  return waitForTimeout.apply(target, args);
+}
+
+function describeAssertionSubject(actual) {
+  if (actual && typeof actual === 'object' && typeof actual.__makeademoDescription === 'string') {
+    return actual.__makeademoDescription;
+  }
+
+  return 'subject';
+}
+
+function formatActionArguments(args) {
+  return args
+    .filter((arg) => !isPlainObject(arg))
+    .map((arg) => {
+      if (typeof arg === 'string') {
+        return arg;
+      }
+      if (typeof arg === 'number' || typeof arg === 'boolean') {
+        return String(arg);
+      }
+      if (arg === null) {
+        return 'null';
+      }
+      if (Array.isArray(arg)) {
+        return JSON.stringify(arg);
+      }
+      return typeof arg;
+    })
+    .join(', ');
+}
+
+function isPlainObject(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function removeUndefinedValues(value) {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entryValue]) => entryValue !== undefined),
+  );
 }
 `;
 }
