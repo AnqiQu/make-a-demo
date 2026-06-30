@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 
 import { Daytona } from "@daytona/sdk";
 
-import { createSubmittedRuntimeEnv } from "../../../pipeline/03-repo-preparation/dependency-network-gate";
 import type {
   PreparationWorkspaceHandle,
   PreparationWorkspaceProvider,
@@ -104,16 +103,15 @@ export type DaytonaSdkPreparationWorkspaceProviderOptions = {
   diskGB?: number;
   ptyConnectionTimeoutMs?: number;
   snapshot?: string;
-  submittedCodeImage?: string;
+  submittedCodeSnapshot?: string;
 };
 
 const defaultSandboxDiskGB = 3;
 const defaultPtyConnectionTimeoutMs = 30_000;
 const makeADemoArtifactDirectory = "/tmp/makeademo";
-const submittedCodeControlDirectory = `${makeADemoArtifactDirectory}/submitted-code`;
-const defaultSubmittedCodeImage = "makeademo-submitted-code:node-browser";
-const innerSubmittedCodeMakeADemoDirectory = "/workspace/.makeademo";
+const workspaceMakeADemoDirectory = "/workspace/.makeademo";
 const sandboxAuditLogPath = `${makeADemoArtifactDirectory}/sandbox-log.jsonl`;
+const workspaceSandboxAuditLogPath = `${workspaceMakeADemoDirectory}/sandbox-log.jsonl`;
 
 export async function createDaytonaSdkPreparationWorkspaceHandle(input: {
   apiKey?: string;
@@ -147,7 +145,7 @@ export class DaytonaSdkPreparationWorkspaceProvider
   private readonly diskGB: number;
   private readonly ptyConnectionTimeoutMs: number;
   private readonly snapshot: string | undefined;
-  private readonly submittedCodeImage: string;
+  private readonly submittedCodeSnapshot: string | undefined;
 
   constructor(options: DaytonaSdkPreparationWorkspaceProviderOptions = {}) {
     this.client =
@@ -156,11 +154,10 @@ export class DaytonaSdkPreparationWorkspaceProvider
         options.apiKey === undefined ? undefined : { apiKey: options.apiKey },
       ) as DaytonaSdkClient);
     this.snapshot = options.snapshot;
+    this.submittedCodeSnapshot = options.submittedCodeSnapshot;
     this.diskGB = options.diskGB ?? defaultSandboxDiskGB;
     this.ptyConnectionTimeoutMs =
       options.ptyConnectionTimeoutMs ?? defaultPtyConnectionTimeoutMs;
-    this.submittedCodeImage =
-      options.submittedCodeImage ?? defaultSubmittedCodeImage;
   }
 
   async create(): Promise<PreparationWorkspaceHandle> {
@@ -173,12 +170,23 @@ export class DaytonaSdkPreparationWorkspaceProvider
       throw new Error("Daytona did not return a sandbox id.");
     }
 
+    const submittedCodeSandbox =
+      this.submittedCodeSnapshot === undefined
+        ? undefined
+        : await this.client.create({
+            autoDeleteInterval: 0,
+            ephemeral: true,
+            linkedSandbox: id,
+            networkBlockAll: true,
+            snapshot: this.submittedCodeSnapshot,
+          });
+
     return createPreparationWorkspaceHandle({
       client: this.client,
       id,
       ptyConnectionTimeoutMs: this.ptyConnectionTimeoutMs,
       sandbox,
-      submittedCodeImage: this.submittedCodeImage,
+      ...(submittedCodeSandbox === undefined ? {} : { submittedCodeSandbox }),
     });
   }
 }
@@ -188,32 +196,22 @@ function createPreparationWorkspaceHandle(input: {
   id: string;
   ptyConnectionTimeoutMs: number;
   sandbox: DaytonaSdkSandbox;
-  submittedCodeImage?: string;
+  submittedCodeSandbox?: DaytonaSdkSandbox;
 }): PreparationWorkspaceHandle {
   const workspace = new DaytonaSdkPreparationWorkspace(
     input.sandbox,
+    input.submittedCodeSandbox,
     input.id,
     input.ptyConnectionTimeoutMs,
-    input.submittedCodeImage ?? defaultSubmittedCodeImage,
   );
 
   return {
     async destroy() {
-      let cleanupError: unknown;
-      try {
-        await workspace.cancelActiveCommands();
-      } catch (error) {
-        cleanupError = error;
-      }
-      try {
-        await workspace.destroySubmittedCodeContainer();
-      } catch (error) {
-        cleanupError ??= error;
+      await workspace.cancelActiveCommands();
+      if (input.submittedCodeSandbox !== undefined) {
+        await input.client.delete(input.submittedCodeSandbox);
       }
       await input.client.delete(input.sandbox);
-      if (cleanupError !== undefined) {
-        throw cleanupError;
-      }
     },
     id: input.id,
     workspace,
@@ -223,14 +221,12 @@ function createPreparationWorkspaceHandle(input: {
 class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
   private readonly activePtys = new Set<ManagedPty>();
   private readonly sandboxLogger: PipelineEventLogger;
-  private submittedCodeContainerReady = false;
-  private submittedCodeNetworkEnabled = false;
 
   constructor(
     private readonly sandbox: DaytonaSdkSandbox,
+    private readonly submittedCodeSandbox: DaytonaSdkSandbox | undefined,
     private readonly workspaceId: string,
     private readonly ptyConnectionTimeoutMs: number,
-    private readonly submittedCodeImage: string,
   ) {
     this.sandboxLogger = createPipelineEventLogger({
       base: {
@@ -313,55 +309,6 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
     await Promise.allSettled(
       [...this.activePtys].map((pty) => pty.disconnect()),
     );
-    if (this.submittedCodeNetworkEnabled) {
-      await this.setSubmittedCodeNetworkAccess(false);
-    }
-  }
-
-  async executeSubmittedCode(
-    command: string,
-    options: PreparationWorkspaceExecuteOptions = {},
-  ): Promise<PreparationWorkspaceCommandResult> {
-    await this.ensureSubmittedCodeContainer();
-    const env = createSubmittedRuntimeEnv(options.env ?? {});
-    return this.executeStreaming(
-      [
-        "docker exec",
-        ...Object.entries(env).map(
-          ([key, value]) => `-e ${shellQuote(`${key}=${value}`)}`,
-        ),
-        shellQuote(this.submittedCodeContainerName),
-        "sh -lc",
-        shellQuote(command),
-      ].join(" "),
-      { ...options, env: {} },
-    );
-  }
-
-  async setSubmittedCodeNetworkAccess(enabled: boolean): Promise<void> {
-    await this.ensureSubmittedCodeContainer();
-    const command = enabled
-      ? `docker network connect bridge ${shellQuote(this.submittedCodeContainerName)} >/dev/null 2>&1`
-      : `docker network disconnect bridge ${shellQuote(this.submittedCodeContainerName)} >/dev/null 2>&1`;
-    const response = await this.sandbox.process.executeCommand(command);
-    if ((response.exitCode ?? 0) !== 0) {
-      throw new Error(
-        "Failed to update submitted-code container network access.",
-      );
-    }
-    this.submittedCodeNetworkEnabled = enabled;
-  }
-
-  async destroySubmittedCodeContainer(): Promise<void> {
-    if (!this.submittedCodeContainerReady) {
-      return;
-    }
-
-    await this.sandbox.process.executeCommand(
-      `docker rm -f ${shellQuote(this.submittedCodeContainerName)} >/dev/null 2>&1 || true`,
-    );
-    this.submittedCodeContainerReady = false;
-    this.submittedCodeNetworkEnabled = false;
   }
 
   async writeSandboxLog(entry: PreparationWorkspaceLogEntry): Promise<void> {
@@ -380,43 +327,9 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
     );
   }
 
-  private async ensureSubmittedCodeContainer(): Promise<void> {
-    if (this.submittedCodeContainerReady) {
-      return;
-    }
-
-    const response = await this.sandbox.process.executeCommand(
-      [
-        "sh -lc",
-        shellQuote(
-          [
-            "set -e",
-            `trap 'docker rm -f ${shellQuote(this.submittedCodeContainerName)} >/dev/null 2>&1 || true' ERR`,
-            `mkdir -p ${shellQuote(submittedCodeControlDirectory)}`,
-            "if ! docker info >/dev/null 2>&1; then nohup dockerd >/tmp/makeademo-dockerd.log 2>&1 & for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done; docker info >/dev/null 2>&1; fi",
-            `docker image inspect ${shellQuote(this.submittedCodeImage)} >/dev/null 2>&1 || { echo 'Submitted-code image ${this.submittedCodeImage} is missing from the prepared Daytona workspace image.' >&2; exit 1; }`,
-            `if ! docker inspect ${shellQuote(this.submittedCodeContainerName)} >/dev/null 2>&1; then docker run -d --name ${shellQuote(this.submittedCodeContainerName)} --network none --read-only --tmpfs /tmp --tmpfs /root/.cache --tmpfs /root/.npm --tmpfs /root/.bun --workdir /workspace -v '/workspace:/workspace' -v '${submittedCodeControlDirectory}:${innerSubmittedCodeMakeADemoDirectory}' ${shellQuote(this.submittedCodeImage)} tail -f /dev/null; fi`,
-          ].join("\n"),
-        ),
-      ].join(" "),
-    );
-
-    if ((response.exitCode ?? 0) !== 0) {
-      throw new Error(
-        `Failed to initialize submitted-code container: ${[response.stdout ?? response.result ?? "", response.stderr ?? ""].filter(Boolean).join("\n")}`,
-      );
-    }
-
-    this.submittedCodeContainerReady = true;
-  }
-
-  private get submittedCodeContainerName(): string {
-    return `makeademo-submitted-${sanitizeContainerName(this.workspaceId)}`;
-  }
-
   private async writeSandboxLogLine(line: string): Promise<void> {
     const response = await this.sandbox.process.executeCommand(
-      `mkdir -p ${shellQuote(makeADemoArtifactDirectory)} && printf '%s' ${shellQuote(line)} >> ${shellQuote(sandboxAuditLogPath)}`,
+      `mkdir -p ${shellQuote(makeADemoArtifactDirectory)} ${shellQuote(workspaceMakeADemoDirectory)} && printf '%s' ${shellQuote(line)} >> ${shellQuote(sandboxAuditLogPath)} && cp ${shellQuote(sandboxAuditLogPath)} ${shellQuote(workspaceSandboxAuditLogPath)}`,
     );
 
     if ((response.exitCode ?? 0) !== 0) {
@@ -424,9 +337,53 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
     }
   }
 
+  async executeSubmittedCode(
+    command: string,
+    options: PreparationWorkspaceExecuteOptions = {},
+  ): Promise<PreparationWorkspaceCommandResult> {
+    if (this.submittedCodeSandbox === undefined) {
+      throw new Error("Submitted-code Daytona sandbox is not configured.");
+    }
+
+    if (options.onStdout !== undefined || options.onStderr !== undefined) {
+      return this.executeStreamingInSandbox(
+        this.submittedCodeSandbox,
+        command,
+        options,
+      );
+    }
+
+    const response = await this.submittedCodeSandbox.process.executeCommand(
+      command,
+      undefined,
+      options.env,
+    );
+
+    return {
+      exitCode: response.exitCode ?? 0,
+      stderr: response.stderr ?? "",
+      stdout: response.stdout ?? response.result ?? "",
+    };
+  }
+
   async setOutboundNetworkAccess(enabled: boolean): Promise<void> {
+    await this.setSandboxNetworkAccess(this.sandbox, enabled);
+  }
+
+  async setSubmittedCodeNetworkAccess(enabled: boolean): Promise<void> {
+    if (this.submittedCodeSandbox === undefined) {
+      throw new Error("Submitted-code Daytona sandbox is not configured.");
+    }
+
+    await this.setSandboxNetworkAccess(this.submittedCodeSandbox, enabled);
+  }
+
+  private async setSandboxNetworkAccess(
+    sandbox: DaytonaSdkSandbox,
+    enabled: boolean,
+  ): Promise<void> {
     try {
-      await this.sandbox.updateNetworkSettings({ networkBlockAll: !enabled });
+      await sandbox.updateNetworkSettings({ networkBlockAll: !enabled });
     } catch (error) {
       if (isRestrictedNetworkPolicyError(error)) {
         return;
@@ -437,7 +394,8 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
   }
 
   async getPreviewUrl(port: number): Promise<string> {
-    const preview = await this.sandbox.getSignedPreviewUrl(port, 60 * 60);
+    const previewSandbox = this.submittedCodeSandbox ?? this.sandbox;
+    const preview = await previewSandbox.getSignedPreviewUrl(port, 60 * 60);
     if (preview.url === undefined || preview.url.trim().length === 0) {
       throw new Error("Daytona did not return a preview URL.");
     }
@@ -446,12 +404,12 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
   }
 
   async uploadFiles(files: PreparationWorkspaceUploadFile[]): Promise<void> {
-    await this.sandbox.fs.uploadFiles(
-      files.map((file) => ({
-        destination: mapSubmittedCodeControlPath(file.destinationPath),
-        source: file.sourcePath,
-      })),
-    );
+    const uploadedFiles = files.map((file) => ({
+      destination: file.destinationPath,
+      source: file.sourcePath,
+    }));
+    await this.sandbox.fs.uploadFiles(uploadedFiles);
+    await this.submittedCodeSandbox?.fs.uploadFiles(uploadedFiles);
   }
 
   async downloadFiles(
@@ -460,7 +418,7 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
     const results = await this.sandbox.fs.downloadFiles(
       files.map((file) => ({
         destination: file.destinationPath,
-        source: mapSubmittedCodeControlPath(file.sourcePath),
+        source: file.sourcePath,
       })),
       0,
     );
@@ -469,6 +427,55 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
       throw new Error(
         `Failed to download Daytona sandbox file ${failed.source}: ${failed.error}`,
       );
+    }
+  }
+
+  private async executeStreamingInSandbox(
+    sandbox: DaytonaSdkSandbox,
+    command: string,
+    options: PreparationWorkspaceExecuteOptions,
+  ): Promise<PreparationWorkspaceCommandResult> {
+    const output: string[] = [];
+    const decoder = new TextDecoder();
+    const rawPty = await sandbox.process.createPty({
+      cols: 120,
+      cwd: "/workspace",
+      envs: options.env ?? {},
+      id: `makeademo-${randomUUID()}`,
+      onData: (data) => {
+        const chunk = decoder.decode(data);
+        output.push(chunk);
+        const visibleChunk = removeExitMarker(chunk);
+        if (visibleChunk.length > 0) {
+          options.onStdout?.(visibleChunk);
+        }
+      },
+      rows: 30,
+    });
+    const pty = new ManagedPty(rawPty);
+    this.activePtys.add(pty);
+
+    try {
+      await withTimeout(
+        pty.waitForConnection(),
+        this.ptyConnectionTimeoutMs,
+        `Daytona PTY did not connect within ${this.ptyConnectionTimeoutMs}ms.`,
+      );
+      await pty.sendInput(
+        `stty -echo\n${command}\nprintf '\n__MAKEADEMO_EXIT__:%s\n' $?\nexit\n`,
+      );
+      const result = await pty.wait();
+      const stdout = output.join("");
+      const exitCode = readExitCode(stdout) ?? result.exitCode ?? 0;
+
+      return {
+        exitCode,
+        stderr: result.error ?? "",
+        stdout: removeExitMarker(stdout),
+      };
+    } finally {
+      this.activePtys.delete(pty);
+      await pty.disconnect();
     }
   }
 }
@@ -555,22 +562,6 @@ function readSandboxLogMessage(entry: PreparationWorkspaceLogEntry): string {
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-function sanitizeContainerName(value: string): string {
-  return value.replace(/[^A-Za-z0-9_.-]/g, "-").slice(0, 48);
-}
-
-function mapSubmittedCodeControlPath(path: string): string {
-  if (path === innerSubmittedCodeMakeADemoDirectory) {
-    return submittedCodeControlDirectory;
-  }
-
-  if (path.startsWith(`${innerSubmittedCodeMakeADemoDirectory}/`)) {
-    return `${submittedCodeControlDirectory}${path.slice(innerSubmittedCodeMakeADemoDirectory.length)}`;
-  }
-
-  return path;
 }
 
 function isRestrictedNetworkPolicyError(error: unknown): boolean {

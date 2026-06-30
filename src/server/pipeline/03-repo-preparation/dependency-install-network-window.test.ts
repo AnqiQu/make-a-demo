@@ -122,6 +122,29 @@ describe("runDependencyInstallWithNetworkWindow", () => {
       "log:submitted-code-network.closed",
     ]);
   });
+
+  it("uses the submitted-code sandbox network window and executor when available", async () => {
+    const events: string[] = [];
+    const workspace = fakeWorkspace(events, undefined, {
+      submittedCode: true,
+    });
+
+    const result = await runDependencyInstallWithNetworkWindow({
+      command: "pnpm install",
+      workspace,
+    });
+
+    expect(result).toEqual({ exitCode: 0, stderr: "", stdout: "installed" });
+    expect(events).toEqual([
+      "log:submitted-code-network.opening",
+      "submitted-network:unblocked",
+      "log:submitted-code-network.opened",
+      "submitted-execute:pnpm install",
+      "log:submitted-code-network.closing",
+      "submitted-network:blocked",
+      "log:submitted-code-network.closed",
+    ]);
+  });
 });
 
 function fakeWorkspace(
@@ -131,9 +154,9 @@ function fakeWorkspace(
     stderr: "",
     stdout: "installed",
   },
-  options: { failNetworkDisable?: boolean } = {},
+  options: { failNetworkDisable?: boolean; submittedCode?: boolean } = {},
 ): PreparationWorkspace {
-  return {
+  const workspace: PreparationWorkspace = {
     async execute(command) {
       events.push(`execute:${command}`);
       return { stdout: "", ...result };
@@ -161,4 +184,18 @@ function fakeWorkspace(
     },
     async uploadFiles() {},
   };
+
+  if (options.submittedCode === true) {
+    workspace.executeSubmittedCode = async (command) => {
+      events.push(`submitted-execute:${command}`);
+      return { stdout: "", ...result };
+    };
+    workspace.setSubmittedCodeNetworkAccess = async (enabled) => {
+      events.push(
+        enabled ? "submitted-network:unblocked" : "submitted-network:blocked",
+      );
+    };
+  }
+
+  return workspace;
 }

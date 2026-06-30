@@ -44,6 +44,7 @@ export class DaytonaSandboxRunner implements SandboxRunner {
         stage: "project-validation",
         workspaceId: input.preparationManifest.workspaceId,
       });
+
     try {
       await writeSandboxLog({ event: "project-validation.started" });
       const repoFilesResult = await executeSubmittedCode(
@@ -60,10 +61,7 @@ export class DaytonaSandboxRunner implements SandboxRunner {
         event: "project-validation.dependency-install.started",
       });
 
-      let installResult: Awaited<
-        ReturnType<PreparationWorkspaceHandle["workspace"]["execute"]>
-      >;
-      installResult = await runDependencyInstallWithNetworkWindow({
+      const installResult = await runDependencyInstallWithNetworkWindow({
         command: installPlan.command,
         workspace: handle.workspace,
       });
@@ -109,10 +107,10 @@ export class DaytonaSandboxRunner implements SandboxRunner {
         stdout: runtimeResult.stdout,
       });
       const readinessResult = await waitForDemoReadiness({
+        execute: (command) => executeSubmittedCode(handle.workspace, command),
         pollIntervalMs: this.readinessPollIntervalMs,
         timeoutMs: this.readinessTimeoutMs,
         url: input.url,
-        workspace: handle.workspace,
       });
       if (readinessResult.exitCode !== 0) {
         await writeSandboxLog({
@@ -177,7 +175,10 @@ export class DaytonaSandboxRunner implements SandboxRunner {
         "if test -f /tmp/makeademo-demo.log; then cat /tmp/makeademo-demo.log; fi",
       );
       await writeDemoServerLog(writeSandboxLog, demoLogsResult.stdout);
-      const browserUrl = input.url;
+      const browserUrl = await createBrowserPreviewUrl({
+        localUrl: input.url,
+        workspace: handle.workspace,
+      });
       await writeSandboxLog({
         browserUrl,
         event: "project-validation.browser-preview.created",
@@ -257,10 +258,11 @@ export async function restartPreparedDemoForFreshCapture(input: {
     stdout: runtimeResult.stdout,
   });
   const readinessResult = await waitForDemoReadiness({
+    execute: (command) =>
+      executeSubmittedCode(input.preparationWorkspace.workspace, command),
     pollIntervalMs: input.readinessPollIntervalMs ?? 1_000,
     timeoutMs: input.readinessTimeoutMs ?? 30_000,
     url: input.preparationManifest.url,
-    workspace: input.preparationWorkspace.workspace,
   });
   if (runtimeResult.exitCode !== 0 || readinessResult.exitCode !== 0) {
     await writeSandboxLog({
@@ -273,7 +275,10 @@ export async function restartPreparedDemoForFreshCapture(input: {
     throw new Error("Fresh Footage Capture state did not become ready.");
   }
 
-  const browserUrl = input.preparationManifest.url;
+  const browserUrl = await createBrowserPreviewUrl({
+    localUrl: input.preparationManifest.url,
+    workspace: input.preparationWorkspace.workspace,
+  });
   await writeSandboxLog({
     browserUrl,
     event: "footage-capture.fresh-state.restart.succeeded",
@@ -319,10 +324,10 @@ function createFreshCaptureRestoreCommand(): string {
 }
 
 async function waitForDemoReadiness(input: {
+  execute: PreparationWorkspaceHandle["workspace"]["execute"];
   pollIntervalMs: number;
   timeoutMs: number;
   url: string;
-  workspace: PreparationWorkspaceHandle["workspace"];
 }) {
   const attempts = Math.max(
     1,
@@ -335,10 +340,7 @@ async function waitForDemoReadiness(input: {
   };
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    lastResult = await executeSubmittedCode(
-      input.workspace,
-      createDemoReadinessCommand(input.url),
-    );
+    lastResult = await input.execute(createDemoReadinessCommand(input.url));
     if (lastResult.exitCode === 0) {
       return lastResult;
     }
@@ -360,6 +362,30 @@ async function waitForDemoReadiness(input: {
 
 function createDemoReadinessCommand(url: string): string {
   return `node -e ${shellQuote("fetch(process.argv[1]).then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1));")} ${shellQuote(url)}`;
+}
+
+function readPortFromLocalUrl(url: string): number {
+  const parsedUrl = new URL(url);
+  if (parsedUrl.port.length > 0) {
+    return Number(parsedUrl.port);
+  }
+
+  return parsedUrl.protocol === "https:" ? 443 : 80;
+}
+
+async function createBrowserPreviewUrl(input: {
+  localUrl: string;
+  workspace: PreparationWorkspaceHandle["workspace"];
+}): Promise<string> {
+  const localUrl = new URL(input.localUrl);
+  const previewUrl = new URL(
+    await input.workspace.getPreviewUrl(readPortFromLocalUrl(input.localUrl)),
+  );
+  previewUrl.pathname = localUrl.pathname;
+  previewUrl.search = localUrl.search;
+  previewUrl.hash = localUrl.hash;
+
+  return previewUrl.toString();
 }
 
 function delay(milliseconds: number): Promise<void> {
