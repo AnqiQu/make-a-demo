@@ -8,9 +8,8 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v1.2.5" \
   && ln -sf /root/.bun/bin/bun /usr/local/bin/bun \
   && ln -sf /root/.bun/bin/bunx /usr/local/bin/bunx
 
-RUN corepack enable \
-  && corepack prepare pnpm@latest --activate \
-  && corepack prepare yarn@stable --activate
+RUN npm install -g --force pnpm@10.12.1 yarn@1.22.22 \
+  && npm cache clean --force
 
 RUN npm install -g \
     @playwright/test@1.49.1 \
