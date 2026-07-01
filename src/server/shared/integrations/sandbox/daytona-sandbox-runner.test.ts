@@ -51,6 +51,24 @@ describe("DaytonaSandboxRunner", () => {
     expect(workspace.destroyed).toBe(false);
   });
 
+  it("syncs prepared parent workspace changes before submitted-code validation", async () => {
+    const workspace = new FakePreparationWorkspaceHandle();
+    const runner = new DaytonaSandboxRunner();
+
+    await runner.runValidation({
+      demoCommand: "npm run demo",
+      preparationManifest: manifest("workspace_123"),
+      preparationWorkspace: workspace,
+      repoUrl: "https://github.com/example/app",
+      url: "http://localhost:3000",
+    });
+
+    expect(workspace.events.slice(0, 2)).toEqual([
+      "syncSubmittedCodeWorkspace",
+      expect.stringContaining("find /workspace"),
+    ]);
+  });
+
   it("writes Project Validation progress and demo server output to sandbox logs", async () => {
     const workspace = new FakePreparationWorkspaceHandle();
     const runner = new DaytonaSandboxRunner();
@@ -294,6 +312,41 @@ describe("DaytonaSandboxRunner", () => {
     );
   });
 
+  it("excludes nested dependency caches from the fresh baseline and preserves them during restore", async () => {
+    const validationWorkspace = new FakePreparationWorkspaceHandle();
+    const runner = new DaytonaSandboxRunner();
+
+    await runner.runValidation({
+      demoCommand: "npm run demo",
+      preparationManifest: manifest("workspace_123"),
+      preparationWorkspace: validationWorkspace,
+      repoUrl: "https://github.com/example/app",
+      url: "http://localhost:3000",
+    });
+
+    const baselineCommand = validationWorkspace.submittedCommands.find(
+      (command) => command.includes("fresh-capture-baseline.tgz"),
+    );
+    expect(baselineCommand).toContain("./*/node_modules");
+    expect(baselineCommand).toContain("./*/node_modules/*");
+    expect(baselineCommand).toContain("./*/.vite");
+
+    const restoreWorkspace = new FakePreparationWorkspaceHandle();
+    await restartPreparedDemoForFreshCapture({
+      preparationManifest: manifest("workspace_123"),
+      preparationWorkspace: restoreWorkspace,
+      readinessPollIntervalMs: 0,
+    });
+
+    const restoreCommand = restoreWorkspace.submittedCommands.find((command) =>
+      command.includes("fresh-capture-baseline.tgz && find"),
+    );
+    expect(restoreCommand).toContain("/workspace/*/node_modules");
+    expect(restoreCommand).toContain("/workspace/*/node_modules/*");
+    expect(restoreCommand).toContain("/workspace/*/.vite");
+    expect(restoreCommand).not.toContain("-exec rm -rf");
+  });
+
   it("restores the prepared baseline before Footage Capture and returns a fresh preview URL", async () => {
     const workspace = new FakePreparationWorkspaceHandle();
 
@@ -396,6 +449,7 @@ class FakePreparationWorkspaceHandle implements PreparationWorkspaceHandle {
   sandboxLogs: Record<string, unknown>[] = [];
   submittedCommands: string[] = [];
   submittedNetworkAccess: boolean[] = [];
+  events: string[] = [];
 
   constructor(
     private readonly exitCodesByCommand = new Map<string, number>(),
@@ -410,6 +464,7 @@ class FakePreparationWorkspaceHandle implements PreparationWorkspaceHandle {
     },
     executeSubmittedCode: async (command: string) => {
       this.submittedCommands.push(command);
+      this.events.push(command);
       return this.runCommand(command);
     },
     getPreviewUrl: async (port: number) => {
@@ -421,6 +476,9 @@ class FakePreparationWorkspaceHandle implements PreparationWorkspaceHandle {
     },
     setSubmittedCodeNetworkAccess: async (enabled: boolean) => {
       this.submittedNetworkAccess.push(enabled);
+    },
+    syncSubmittedCodeWorkspace: async () => {
+      this.events.push("syncSubmittedCodeWorkspace");
     },
     uploadFiles: async () => {
       throw new Error("Project Validation should use the retained workspace.");

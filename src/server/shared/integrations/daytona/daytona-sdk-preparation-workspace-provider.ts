@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { Daytona } from "@daytona/sdk";
 
@@ -428,6 +431,95 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
     await this.setSandboxNetworkAccess(this.submittedCodeSandbox, enabled);
   }
 
+  async syncSubmittedCodeWorkspace(): Promise<void> {
+    if (this.submittedCodeSandbox === undefined) {
+      throw new Error("Submitted-code Daytona sandbox is not configured.");
+    }
+
+    const archiveName = `prepared-workspace-${randomUUID()}.tgz`;
+    const remoteArchivePath = `${makeADemoArtifactDirectory}/${archiveName}`;
+    const localDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-daytona-sync-"),
+    );
+    const localArchivePath = join(localDirectory, archiveName);
+
+    try {
+      const archiveResult = await withTimeout(
+        this.sandbox.process.executeCommand(
+          createPreparedWorkspaceArchiveCommand(remoteArchivePath),
+        ),
+        this.commandTimeoutMs,
+        `Daytona prepared workspace archive did not finish within ${this.commandTimeoutMs}ms.`,
+      );
+      if ((archiveResult.exitCode ?? 0) !== 0) {
+        throw new Error(
+          formatCommandFailure(
+            "Failed to archive prepared Daytona workspace",
+            archiveResult,
+          ),
+        );
+      }
+
+      const downloadResults = await withTimeout(
+        this.sandbox.fs.downloadFiles(
+          [{ destination: localArchivePath, source: remoteArchivePath }],
+          0,
+        ),
+        this.commandTimeoutMs,
+        `Daytona prepared workspace archive download did not finish within ${this.commandTimeoutMs}ms.`,
+      );
+      const failedDownload = downloadResults.find(
+        (result) => result.error !== undefined,
+      );
+      if (failedDownload !== undefined) {
+        throw new Error(
+          `Failed to download prepared Daytona workspace archive ${failedDownload.source}: ${failedDownload.error}`,
+        );
+      }
+
+      await withTimeout(
+        this.submittedCodeSandbox.fs.uploadFiles([
+          { destination: remoteArchivePath, source: localArchivePath },
+        ]),
+        this.commandTimeoutMs,
+        `Daytona prepared workspace archive upload did not finish within ${this.commandTimeoutMs}ms.`,
+      );
+      const extractResult = await withTimeout(
+        this.submittedCodeSandbox.process.executeCommand(
+          createSubmittedCodeWorkspaceExtractCommand(remoteArchivePath),
+        ),
+        this.commandTimeoutMs,
+        `Daytona submitted-code workspace restore did not finish within ${this.commandTimeoutMs}ms.`,
+      );
+      if ((extractResult.exitCode ?? 0) !== 0) {
+        throw new Error(
+          formatCommandFailure(
+            "Failed to restore prepared files in submitted-code sandbox",
+            extractResult,
+          ),
+        );
+      }
+    } finally {
+      await Promise.allSettled([
+        withTimeout(
+          this.sandbox.process.executeCommand(
+            `rm -f ${shellQuote(remoteArchivePath)}`,
+          ),
+          this.commandTimeoutMs,
+          `Daytona prepared workspace archive cleanup did not finish within ${this.commandTimeoutMs}ms.`,
+        ),
+        withTimeout(
+          this.submittedCodeSandbox.process.executeCommand(
+            `rm -f ${shellQuote(remoteArchivePath)}`,
+          ),
+          this.commandTimeoutMs,
+          `Daytona submitted-code workspace archive cleanup did not finish within ${this.commandTimeoutMs}ms.`,
+        ),
+        rm(localDirectory, { force: true, recursive: true }),
+      ]);
+    }
+  }
+
   private async setSandboxNetworkAccess(
     sandbox: DaytonaSdkSandbox,
     enabled: boolean,
@@ -616,6 +708,107 @@ function readSandboxLogMessage(entry: PreparationWorkspaceLogEntry): string {
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function createPreparedWorkspaceArchiveCommand(archivePath: string): string {
+  const excludedArchivePaths = [
+    "./.git",
+    "./.git/*",
+    "./*/.git",
+    "./*/.git/*",
+    "./node_modules",
+    "./node_modules/*",
+    "./*/node_modules",
+    "./*/node_modules/*",
+    "./.vite",
+    "./.vite/*",
+    "./*/.vite",
+    "./*/.vite/*",
+    "./.turbo",
+    "./.turbo/*",
+    "./*/.turbo",
+    "./*/.turbo/*",
+    "./.npm",
+    "./.npm/*",
+    "./*/.npm",
+    "./*/.npm/*",
+    "./.pnpm-store",
+    "./.pnpm-store/*",
+    "./*/.pnpm-store",
+    "./*/.pnpm-store/*",
+    "./.yarn/cache",
+    "./.yarn/cache/*",
+    "./*/.yarn/cache",
+    "./*/.yarn/cache/*",
+    "./.next/cache",
+    "./.next/cache/*",
+    "./*/.next/cache",
+    "./*/.next/cache/*",
+    "./.bun",
+    "./.bun/*",
+    "./*/.bun",
+    "./*/.bun/*",
+    "./.cache",
+    "./.cache/*",
+    "./*/.cache",
+    "./*/.cache/*",
+  ];
+  const excludeFlags = excludedArchivePaths
+    .map((path) => `--exclude=${shellQuote(path)}`)
+    .join(" ");
+
+  return `sh -lc ${shellQuote(
+    [
+      `mkdir -p ${shellQuote(makeADemoArtifactDirectory)}`,
+      `tar ${excludeFlags} -czf ${shellQuote(archivePath)} -C /workspace .`,
+    ].join(" && "),
+  )}`;
+}
+
+function createSubmittedCodeWorkspaceExtractCommand(
+  archivePath: string,
+): string {
+  const preservedWorkspacePaths = [
+    "-name node_modules",
+    "-name .vite",
+    "-name .turbo",
+    "-name .npm",
+    "-name .pnpm-store",
+    "-path '*/.yarn/cache'",
+    "-path '*/.next/cache'",
+    "-name .bun",
+    "-name .cache",
+  ].join(" -o ");
+
+  return `sh -lc ${shellQuote(
+    [
+      "preserved=$(mktemp -d)",
+      "preserved_paths=$(mktemp)",
+      'cleanup() { rm -f -- "$preserved_paths"; rm -rf -- "$preserved"; }',
+      "trap cleanup EXIT",
+      `find /workspace -mindepth 1 \( ${preservedWorkspacePaths} \) -prune -print > "$preserved_paths"`,
+      `while IFS= read -r path; do relative="\${path#/workspace/}"; mkdir -p -- "\$preserved/\$(dirname -- "\$relative")" || exit 1; mv -- "\$path" "\$preserved/\$relative" || exit 1; done < "$preserved_paths"`,
+      "rm -rf -- /workspace/* /workspace/.[!.]* /workspace/..?*",
+      '{ cp -a "$preserved"/. /workspace/ 2>/dev/null || true; }',
+      `tar -xzf ${shellQuote(archivePath)} -C /workspace`,
+    ].join(" && "),
+  )}`;
+}
+
+function formatCommandFailure(
+  message: string,
+  result: {
+    exitCode?: number;
+    result?: string;
+    stderr?: string;
+    stdout?: string;
+  },
+): string {
+  const exitCode = result.exitCode ?? 0;
+  const stderr = result.stderr ?? "";
+  const stdout = result.stdout ?? result.result ?? "";
+
+  return `${message} (exit code ${exitCode}). stderr: ${stderr} stdout: ${stdout}`;
 }
 
 function isRestrictedNetworkPolicyError(error: unknown): boolean {

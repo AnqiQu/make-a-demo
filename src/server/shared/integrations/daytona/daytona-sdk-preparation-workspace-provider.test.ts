@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   DaytonaSdkPreparationWorkspaceProvider,
@@ -314,20 +314,32 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ).toHaveLength(0);
   });
 
-  it("fails fast when a durable sandbox log write does not finish", async () => {
+  it("keeps sandbox log write timeouts host-visible without failing callers", async () => {
     const calls: unknown[] = [];
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
       client: fakeClient(calls, { executeCommandNeverResolves: true }),
       logWriteTimeoutMs: 1,
     });
     const handle = await provider.create();
 
-    await expect(
-      handle.workspace.writeSandboxLog?.({
-        event: "project-validation.started",
-        stage: "project-validation",
-      }),
-    ).rejects.toThrow("Daytona sandbox log write did not finish within 1ms.");
+    try {
+      await expect(
+        handle.workspace.writeSandboxLog?.({
+          event: "project-validation.started",
+          stage: "project-validation",
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(warn).toHaveBeenCalledWith(
+        "Pipeline log sink write failed.",
+        expect.objectContaining({
+          message: "Daytona sandbox log write did not finish within 1ms.",
+        }),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("disconnects active streaming commands before deleting the sandbox", async () => {
@@ -543,6 +555,206 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     );
   });
 
+  it("syncs prepared parent workspace files into the linked submitted-code sandbox", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.syncSubmittedCodeWorkspace?.();
+
+    expect(calls).toContainEqual({
+      executeCommand: {
+        command: expect.stringContaining("./.git"),
+        sandbox: "parent_sandbox",
+      },
+    });
+    expect(calls).toContainEqual({
+      executeCommand: {
+        command: expect.stringContaining("./*/node_modules/*"),
+        sandbox: "parent_sandbox",
+      },
+    });
+    const archiveCommand = calls.find(
+      (
+        call,
+      ): call is { executeCommand: { command: string; sandbox: string } } =>
+        typeof call === "object" &&
+        call !== null &&
+        "executeCommand" in call &&
+        typeof call.executeCommand === "object" &&
+        call.executeCommand !== null &&
+        "command" in call.executeCommand &&
+        typeof call.executeCommand.command === "string" &&
+        call.executeCommand.command.includes("tar ") &&
+        call.executeCommand.command.includes("-czf"),
+    )?.executeCommand.command;
+    expect(archiveCommand).toEqual(expect.stringContaining("./.vite/*"));
+    expect(archiveCommand).toEqual(expect.stringContaining("./*/.turbo/*"));
+    expect(archiveCommand).toEqual(expect.stringContaining("./.npm/*"));
+    expect(archiveCommand).toEqual(
+      expect.stringContaining("./*/.pnpm-store/*"),
+    );
+    expect(archiveCommand).toEqual(expect.stringContaining("./.yarn/cache/*"));
+    expect(archiveCommand).toEqual(
+      expect.stringContaining("./*/.next/cache/*"),
+    );
+    expect(archiveCommand).not.toContain("./.makeademo");
+    expect(calls).toContainEqual({
+      downloadFiles: {
+        files: [
+          {
+            destination: expect.stringContaining("makeademo-daytona-sync-"),
+            source: expect.stringContaining(
+              "/tmp/makeademo/prepared-workspace-",
+            ),
+          },
+        ],
+        sandbox: "parent_sandbox",
+        timeoutSec: 0,
+      },
+    });
+    expect(calls).toContainEqual({
+      uploadFiles: {
+        files: [
+          {
+            destination: expect.stringContaining(
+              "/tmp/makeademo/prepared-workspace-",
+            ),
+            source: expect.stringContaining("makeademo-daytona-sync-"),
+          },
+        ],
+        sandbox: "submitted_sandbox",
+      },
+    });
+    expect(calls).toContainEqual({
+      executeCommand: {
+        command: expect.stringContaining("tar -xzf"),
+        sandbox: "submitted_sandbox",
+      },
+    });
+    const restoreCommand = calls.find(
+      (
+        call,
+      ): call is { executeCommand: { command: string; sandbox: string } } =>
+        typeof call === "object" &&
+        call !== null &&
+        "executeCommand" in call &&
+        typeof call.executeCommand === "object" &&
+        call.executeCommand !== null &&
+        "command" in call.executeCommand &&
+        "sandbox" in call.executeCommand &&
+        typeof call.executeCommand.command === "string" &&
+        call.executeCommand.sandbox === "submitted_sandbox" &&
+        call.executeCommand.command.includes("tar -xzf"),
+    )?.executeCommand.command;
+    expect(restoreCommand).toEqual(expect.stringContaining("node_modules"));
+    expect(restoreCommand).toEqual(expect.stringContaining(".vite"));
+    expect(restoreCommand).toEqual(expect.stringContaining(".turbo"));
+    expect(restoreCommand).toEqual(expect.stringContaining(".npm"));
+    expect(restoreCommand).toEqual(expect.stringContaining(".pnpm-store"));
+    expect(restoreCommand).toEqual(expect.stringContaining(".yarn/cache"));
+    expect(restoreCommand).toEqual(expect.stringContaining(".next/cache"));
+    expect(restoreCommand).toEqual(expect.stringContaining(".bun"));
+    expect(restoreCommand).toEqual(expect.stringContaining(".cache"));
+    expect(restoreCommand).toEqual(
+      expect.stringContaining(
+        '{ cp -a "$preserved"/. /workspace/ 2>/dev/null || true; }',
+      ),
+    );
+    expect(restoreCommand).toEqual(
+      expect.stringContaining("preserved_paths=$(mktemp)"),
+    );
+    expect(restoreCommand).toEqual(
+      expect.stringContaining('> "$preserved_paths"'),
+    );
+    expect(restoreCommand).toEqual(
+      expect.stringContaining('done < "$preserved_paths"'),
+    );
+    expect(restoreCommand).toEqual(expect.stringContaining("mkdir -p"));
+    expect(restoreCommand).toEqual(
+      expect.stringContaining('mv -- "$path" "$preserved/$relative" || exit 1'),
+    );
+    expect(restoreCommand).toEqual(expect.stringContaining(" || exit 1"));
+    expect(restoreCommand).not.toContain("| while");
+    expect(restoreCommand).not.toMatch(/&& cp -a .* \|\| true && tar -xzf/);
+    expect(restoreCommand).not.toContain(
+      "find /workspace -mindepth 1 -exec rm -rf {} +",
+    );
+  });
+
+  it("reports parent archive stdout, stderr, and exit code when archiving prepared files fails", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls, {
+        failParentArchive: true,
+      }),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.syncSubmittedCodeWorkspace?.(),
+    ).rejects.toThrow(
+      "Failed to archive prepared Daytona workspace (exit code 8). stderr: tar: permission denied stdout: archive started",
+    );
+  });
+
+  it("reports submitted-code restore stderr when extracting prepared files fails", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls, {
+        failSubmittedRestore: true,
+      }),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.syncSubmittedCodeWorkspace?.(),
+    ).rejects.toThrow(
+      "Failed to restore prepared files in submitted-code sandbox (exit code 9). stderr: tar: corrupt archive stdout: restore started",
+    );
+  });
+
+  it("fails sync when Daytona archive transfer hangs without waiting for remote cleanup", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls, {
+        downloadFilesNeverResolves: true,
+        remoteCleanupNeverResolves: true,
+      }),
+      commandTimeoutMs: 1,
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.syncSubmittedCodeWorkspace?.(),
+    ).rejects.toThrow(
+      "Daytona prepared workspace archive download did not finish within 1ms.",
+    );
+
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        {
+          executeCommand: {
+            command: expect.stringContaining("rm -f"),
+            sandbox: "parent_sandbox",
+          },
+        },
+        {
+          executeCommand: {
+            command: expect.stringContaining("rm -f"),
+            sandbox: "submitted_sandbox",
+          },
+        },
+      ]),
+    );
+  });
+
   it("deletes the linked submitted-code sandbox before deleting the parent sandbox", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -560,12 +772,26 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
   });
 });
 
-function fakeLinkedClient(calls: unknown[]) {
-  const parentSandbox = fakeLinkedSandbox(calls, "parent_sandbox", "parent ok");
+function fakeLinkedClient(
+  calls: unknown[],
+  options: {
+    downloadFilesNeverResolves?: boolean;
+    failParentArchive?: boolean;
+    failSubmittedRestore?: boolean;
+    remoteCleanupNeverResolves?: boolean;
+  } = {},
+) {
+  const parentSandbox = fakeLinkedSandbox(
+    calls,
+    "parent_sandbox",
+    "parent ok",
+    options,
+  );
   const childSandbox = fakeLinkedSandbox(
     calls,
     "submitted_sandbox",
     "child ok",
+    options,
   );
 
   return {
@@ -587,7 +813,17 @@ function fakeLinkedClient(calls: unknown[]) {
   };
 }
 
-function fakeLinkedSandbox(calls: unknown[], id: string, stdout: string) {
+function fakeLinkedSandbox(
+  calls: unknown[],
+  id: string,
+  stdout: string,
+  options: {
+    downloadFilesNeverResolves?: boolean;
+    failParentArchive?: boolean;
+    failSubmittedRestore?: boolean;
+    remoteCleanupNeverResolves?: boolean;
+  } = {},
+) {
   return {
     fs: {
       async downloadFiles(
@@ -595,6 +831,9 @@ function fakeLinkedSandbox(calls: unknown[], id: string, stdout: string) {
         timeoutSec?: number,
       ) {
         calls.push({ downloadFiles: { files, sandbox: id, timeoutSec } });
+        if (options.downloadFilesNeverResolves === true) {
+          await new Promise(() => {});
+        }
         return files.map((file) => ({ source: file.source }));
       },
       async uploadFiles(files: unknown[]) {
@@ -616,6 +855,35 @@ function fakeLinkedSandbox(calls: unknown[], id: string, stdout: string) {
       async deleteSession() {},
       async executeCommand(command: string) {
         calls.push({ executeCommand: { command, sandbox: id } });
+        if (
+          options.failParentArchive === true &&
+          id === "parent_sandbox" &&
+          command.includes("tar ") &&
+          command.includes("-czf")
+        ) {
+          return {
+            exitCode: 8,
+            result: "archive started",
+            stderr: "tar: permission denied",
+          };
+        }
+        if (
+          options.failSubmittedRestore === true &&
+          id === "submitted_sandbox" &&
+          command.includes("tar -xzf")
+        ) {
+          return {
+            exitCode: 9,
+            result: "restore started",
+            stderr: "tar: corrupt archive",
+          };
+        }
+        if (
+          options.remoteCleanupNeverResolves === true &&
+          command.includes("rm -f")
+        ) {
+          await new Promise(() => {});
+        }
         return { exitCode: 0, result: stdout };
       },
       async executeSessionCommand() {

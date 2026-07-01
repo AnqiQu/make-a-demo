@@ -28,3 +28,15 @@ export async function setSubmittedCodeNetworkAccess(
 
   await workspace.setSubmittedCodeNetworkAccess(enabled);
 }
+
+export async function syncSubmittedCodeWorkspace(
+  workspace: PreparationWorkspace,
+): Promise<void> {
+  if (workspace.syncSubmittedCodeWorkspace === undefined) {
+    throw new Error(
+      "Preparation workspace cannot sync prepared files to submitted code.",
+    );
+  }
+
+  await workspace.syncSubmittedCodeWorkspace();
+}
