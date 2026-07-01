@@ -38,8 +38,12 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
       expect.arrayContaining([
         { network: true },
         {
-          execute:
-            "mkdir -p /workspace && find /workspace -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --depth 1 'https://github.com/example/app' /workspace",
+          execute: expect.stringContaining("sudo mkdir -p '/workspace'"),
+        },
+        {
+          execute: expect.stringContaining(
+            "git clone --depth 1 'https://github.com/example/app' '/workspace'",
+          ),
         },
         { network: false },
         {
@@ -115,8 +119,12 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
       expect.arrayContaining([
         { network: true },
         {
-          execute:
-            "mkdir -p /workspace && find /workspace -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --depth 1 'https://github.com/example/app' /workspace",
+          execute: expect.stringContaining("sudo mkdir -p '/workspace'"),
+        },
+        {
+          execute: expect.stringContaining(
+            "git clone --depth 1 'https://github.com/example/app' '/workspace'",
+          ),
         },
         { network: false },
         {
@@ -462,8 +470,14 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     expect(events).toEqual(
       expect.arrayContaining([
         {
-          submittedCodeExecute:
-            "mkdir -p /workspace && find /workspace -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --depth 1 'https://github.com/example/app' /workspace",
+          submittedCodeExecute: expect.stringContaining(
+            "sudo mkdir -p '/workspace'",
+          ),
+        },
+        {
+          submittedCodeExecute: expect.stringContaining(
+            "git clone --depth 1 'https://github.com/example/app' '/workspace'",
+          ),
         },
       ]),
     );

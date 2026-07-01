@@ -1,3 +1,7 @@
+import {
+  createDaytonaWorkspaceResetCommand,
+  daytonaWorkspaceDirectory,
+} from "../../shared/integrations/daytona/workspace-command";
 import type { PipelineEventLogger } from "../../shared/logging/pipeline-event-logger";
 import type { RepoSecurityInput } from "../02-repo-security-screen/repo-security-screen";
 import type { PreparationWorkspaceProvider } from "../03-repo-preparation/preparation-workspace-runner";
@@ -13,7 +17,7 @@ export async function readRepoSecurityInput(
     await logCloneEvent(options.logger, "started", repoUrl);
     await handle.workspace.setOutboundNetworkAccess(true);
     const cloneResult = await handle.workspace.execute(
-      `mkdir -p /workspace && find /workspace -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --depth 1 ${shellQuote(repoUrl)} /workspace`,
+      `${createDaytonaWorkspaceResetCommand()} && git clone --depth 1 ${shellQuote(repoUrl)} ${shellQuote(daytonaWorkspaceDirectory)}`,
     );
     await handle.workspace.setOutboundNetworkAccess(false);
     if (cloneResult.exitCode !== 0) {
@@ -26,7 +30,7 @@ export async function readRepoSecurityInput(
     await logCloneEvent(options.logger, "succeeded", repoUrl);
 
     const statsResult = await handle.workspace.execute(
-      "find /workspace -path /workspace/.git -prune -o -path /workspace/node_modules -prune -o -type f -printf '%P\\t%s\\n'",
+      `find ${shellQuote(daytonaWorkspaceDirectory)} -path ${shellQuote(`${daytonaWorkspaceDirectory}/.git`)} -prune -o -path ${shellQuote(`${daytonaWorkspaceDirectory}/node_modules`)} -prune -o -type f -printf '%P\\t%s\\n'`,
     );
     if (statsResult.exitCode !== 0) {
       throw new Error(`Daytona repo stats failed: ${statsResult.stderr}`);
@@ -47,7 +51,7 @@ export async function readRepoSecurityInput(
         }
 
         const textResult = await handle.workspace.execute(
-          `cat ${shellQuote(`/workspace/${file.path}`)}`,
+          `cat ${shellQuote(`${daytonaWorkspaceDirectory}/${file.path}`)}`,
         );
 
         return {

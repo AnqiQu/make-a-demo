@@ -15,6 +15,10 @@ import type {
   RepoPreparationInput,
 } from "../../../pipeline/03-repo-preparation/repo-preparation-agent.interface";
 import type { ProjectValidationResult } from "../../../pipeline/05-capture-path-validation/project-runtime-preflight/validation-result";
+import {
+  createDaytonaWorkspaceResetCommand,
+  daytonaWorkspaceDirectory,
+} from "../daytona/workspace-command";
 import { writeDaytonaOpenCodeActivityLog } from "./daytona-opencode-activity-log";
 import { createMakeADemoOpenCodeConfigFiles } from "./prepared-opencode-config";
 
@@ -564,7 +568,7 @@ function createValidationHandoffFailure(
 }
 
 function createCloneCommand(repoUrl: string): string {
-  return `mkdir -p /workspace && find /workspace -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --depth 1 ${shellQuote(repoUrl)} /workspace`;
+  return `${createDaytonaWorkspaceResetCommand()} && git clone --depth 1 ${shellQuote(repoUrl)} ${shellQuote(daytonaWorkspaceDirectory)}`;
 }
 
 function createOpenCodeRunCommand(input: {

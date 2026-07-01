@@ -14,6 +14,7 @@ import { readRepoSecurityInput } from "./pre-capture-repo-security";
 describe("readRepoSecurityInput", () => {
   it("logs Daytona clone progress through Pino JSON", async () => {
     const lines: string[] = [];
+    const commands: string[] = [];
     const logger = createPipelineEventLogger({
       base: { component: "repo-security-screen" },
       sinks: [{ write: (line) => void lines.push(line) }],
@@ -21,12 +22,17 @@ describe("readRepoSecurityInput", () => {
     });
 
     const result = await readRepoSecurityInput(
-      new FakePreparationWorkspaceProvider(),
+      new FakePreparationWorkspaceProvider(commands),
       "https://github.com/example/app",
       { logger },
     );
 
     expect(result.repoStats).toEqual({ fileCount: 1, sizeBytes: 17 });
+    expect(commands[0]).toContain("sudo mkdir -p '/workspace'");
+    expect(commands[0]).toContain("sudo chown -R");
+    expect(commands[0]).toContain(
+      "git clone --depth 1 'https://github.com/example/app' '/workspace'",
+    );
     expect(lines.map((line) => JSON.parse(line))).toEqual([
       {
         component: "repo-security-screen",
@@ -55,17 +61,22 @@ describe("readRepoSecurityInput", () => {
 });
 
 class FakePreparationWorkspaceProvider implements PreparationWorkspaceProvider {
+  constructor(private readonly commands: string[]) {}
+
   async create(): Promise<PreparationWorkspaceHandle> {
     return {
       async destroy() {},
       id: "workspace-1",
-      workspace: new FakePreparationWorkspace(),
+      workspace: new FakePreparationWorkspace(this.commands),
     };
   }
 }
 
 class FakePreparationWorkspace implements PreparationWorkspace {
+  constructor(private readonly commands: string[]) {}
+
   async execute(command: string): Promise<PreparationWorkspaceCommandResult> {
+    this.commands.push(command);
     if (command.includes("git clone")) {
       return { exitCode: 0, stderr: "", stdout: "" };
     }
