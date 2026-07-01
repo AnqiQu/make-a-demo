@@ -7,6 +7,7 @@ dist/
 .demo-composite-renders/
 .demo-script-runs/
 .makeademo-capture-path-validation-runs/
+.makeademo-benchmark-runs/
 .makeademo-full-pipeline-runs/
 .playwright-cli/
 artifacts/
