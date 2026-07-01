@@ -376,7 +376,7 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
   private async writeSandboxLogLine(line: string): Promise<void> {
     const response = await withTimeout(
       this.sandbox.process.executeCommand(
-        `mkdir -p ${shellQuote(makeADemoArtifactDirectory)} ${shellQuote(workspaceMakeADemoDirectory)} && printf '%s' ${shellQuote(line)} >> ${shellQuote(sandboxAuditLogPath)} && cp ${shellQuote(sandboxAuditLogPath)} ${shellQuote(workspaceSandboxAuditLogPath)}`,
+        `mkdir -p ${shellQuote(makeADemoArtifactDirectory)} && printf '%s' ${shellQuote(line)} >> ${shellQuote(sandboxAuditLogPath)}`,
       ),
       this.logWriteTimeoutMs,
       `Daytona sandbox log write did not finish within ${this.logWriteTimeoutMs}ms.`,
@@ -385,6 +385,14 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
     if ((response.exitCode ?? 0) !== 0) {
       throw new Error("Failed to write Daytona sandbox audit log.");
     }
+
+    void withTimeout(
+      this.sandbox.process.executeCommand(
+        `mkdir -p ${shellQuote(workspaceMakeADemoDirectory)} && cp ${shellQuote(sandboxAuditLogPath)} ${shellQuote(workspaceSandboxAuditLogPath)}`,
+      ),
+      this.logWriteTimeoutMs,
+      `Daytona sandbox log mirror did not finish within ${this.logWriteTimeoutMs}ms.`,
+    ).catch(() => {});
   }
 
   async executeSubmittedCode(
