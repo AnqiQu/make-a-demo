@@ -143,7 +143,7 @@ describe("validateProject", () => {
     ]);
 
     expect(result).toMatchObject({ status: "succeeded" });
-    expect(browserUrls).toEqual(["https://preview.example.test"]);
+    expect(browserUrls).toEqual(["http://127.0.0.1:3000"]);
   });
 
   it("passes the retained preparation workspace to browser validation", async () => {
@@ -184,6 +184,48 @@ describe("validateProject", () => {
 
     expect(result.status).toBe("succeeded");
     expect(browserWorkspaceId).toBe("workspace_123");
+  });
+
+  it("validates the manifest local URL inside a preparation workspace while preserving the preview URL", async () => {
+    const browserUrls: string[] = [];
+    const sandboxRunner: SandboxRunner = {
+      async runValidation() {
+        return {
+          browserUrl: "https://preview.example.test/",
+          blockedNetworkAttempts: [],
+          logs: ["started demo"],
+          repoFiles: ["package.json", "bun.lock"],
+          runtimeExitCode: 0,
+        };
+      },
+    };
+    const browserValidator: BrowserValidator = {
+      async validate(input) {
+        browserUrls.push(input.url);
+        return {
+          interactable: true,
+          logs: ["loaded app inside submitted-code container"],
+          screenshotArtifactId: "artifact_screenshot",
+        };
+      },
+    };
+
+    const result = await validateProject(
+      {
+        preparationManifest: manifest({
+          demoCommand: "npm run demo",
+          url: "http://localhost:4173/",
+        }),
+        preparationWorkspace: workspaceHandle([]),
+      },
+      { browserValidator, sandboxRunner },
+    );
+
+    expect(browserUrls).toEqual(["http://localhost:4173/"]);
+    expect(result).toMatchObject({
+      browserUrl: "https://preview.example.test/",
+      status: "succeeded",
+    });
   });
 
   it("fails validation when runtime network attempts cross the sandbox boundary", async () => {
@@ -390,6 +432,53 @@ describe("validateProject", () => {
       ],
       failureReason:
         "Runtime network communication across the sandbox boundary is not allowed.",
+      status: "failed",
+    });
+  });
+
+  it("preserves MakeADemo validator dependency failures from browser validation", async () => {
+    const sandboxRunner: SandboxRunner = {
+      async runValidation() {
+        return {
+          blockedNetworkAttempts: [],
+          browserUrl: "https://preview.example.test",
+          logs: ["started demo"],
+          repoFiles: ["package.json", "bun.lock"],
+          runtimeExitCode: 0,
+        };
+      },
+    };
+    const browserValidator: BrowserValidator = {
+      async validate() {
+        return {
+          interactable: false,
+          logs: [
+            "MakeADemo validator dependency failure: Playwright is not available inside the submitted-code sandbox.",
+            "Cannot find module 'playwright'",
+          ],
+          screenshotArtifactId: "",
+        };
+      },
+    };
+
+    const result = await validateProject(
+      {
+        preparationManifest: manifest({
+          demoCommand: "npm run demo",
+          url: "http://localhost:5173",
+        }),
+      },
+      { browserValidator, sandboxRunner },
+    );
+
+    expect(result).toMatchObject({
+      failureReason:
+        "MakeADemo validator dependency failure: Playwright is not available inside the submitted-code sandbox.",
+      logs: [
+        "started demo",
+        "MakeADemo validator dependency failure: Playwright is not available inside the submitted-code sandbox.",
+        "Cannot find module 'playwright'",
+      ],
       status: "failed",
     });
   });

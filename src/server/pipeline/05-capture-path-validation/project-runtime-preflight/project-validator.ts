@@ -84,6 +84,10 @@ export async function validateProject(
     const browserValidationTimeoutMs =
       dependencies.browserValidationTimeoutMs ??
       defaultBrowserValidationTimeoutMs;
+    const browserValidationUrl =
+      input.preparationWorkspace === undefined
+        ? browserUrl
+        : input.preparationManifest.url;
     let browserResult: Awaited<ReturnType<BrowserValidator["validate"]>>;
     try {
       browserResult = await withTimeout(
@@ -91,7 +95,7 @@ export async function validateProject(
           ...(input.preparationWorkspace === undefined
             ? {}
             : { preparationWorkspace: input.preparationWorkspace }),
-          url: browserUrl,
+          url: browserValidationUrl,
         }),
         browserValidationTimeoutMs,
         `Browser validation timed out after ${browserValidationTimeoutMs}ms.`,
@@ -146,16 +150,19 @@ export async function validateProject(
     }
 
     if (!browserResult.interactable) {
+      const failureReason =
+        readMakeADemoValidatorDependencyFailure(browserResult.logs) ??
+        "Configured URL loaded but was not interactable.";
       await writeProjectValidationSandboxLog(input, {
         browserUrl,
         event: "project-validation.browser-validation.failed",
-        failureReason: "Configured URL loaded but was not interactable.",
+        failureReason,
         screenshotArtifactId: browserResult.screenshotArtifactId,
       });
       return {
         blockedNetworkAttempts: [],
         browserUrl,
-        failureReason: "Configured URL loaded but was not interactable.",
+        failureReason,
         logs: [...sandboxResult.logs, ...browserResult.logs],
         screenshotArtifactId: browserResult.screenshotArtifactId,
         status: "failed",
@@ -210,6 +217,17 @@ class ProjectValidationTimeoutError extends Error {}
 
 function readErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function readMakeADemoValidatorDependencyFailure(logs: string[]) {
+  for (const log of logs) {
+    const match = /MakeADemo validator dependency failure:[^\n]*/.exec(log);
+    if (match !== null) {
+      return match[0];
+    }
+  }
+
+  return undefined;
 }
 
 function withTimeout<T>(

@@ -96,13 +96,25 @@ export class PlaywrightBrowserValidator implements BrowserValidator {
       createSubmittedCodeBrowserValidationCommand(input.url),
     );
     if (result.exitCode !== 0) {
+      const logs = [result.stdout, result.stderr].filter(
+        (output) => output.length > 0,
+      );
+      if (isMissingSandboxPlaywrightError(logs)) {
+        return {
+          interactable: false,
+          logs: [
+            "MakeADemo validator dependency failure: Playwright is not available inside the submitted-code sandbox.",
+            ...logs,
+          ],
+          screenshotArtifactId: "",
+        };
+      }
+
       return {
         interactable: false,
         logs: [
           `Browser validation failed inside submitted-code container for ${input.url}`,
-          ...[result.stdout, result.stderr].filter(
-            (output) => output.length > 0,
-          ),
+          ...logs,
         ],
         screenshotArtifactId: "",
       };
@@ -190,12 +202,10 @@ export class PlaywrightBrowserValidator implements BrowserValidator {
 
 function createSubmittedCodeBrowserValidationCommand(url: string): string {
   return [
-    "node -",
-    shellQuote(url),
-    "<<'MAKEADEMO_BROWSER_VALIDATION'",
+    `node - ${shellQuote(url)} <<'MAKEADEMO_BROWSER_VALIDATION'`,
     submittedCodeBrowserValidationScript,
     "MAKEADEMO_BROWSER_VALIDATION",
-  ].join(" ");
+  ].join("\n");
 }
 
 const submittedCodeBrowserValidationScript = String.raw`
@@ -203,12 +213,43 @@ const targetUrl = process.argv[2];
 const localHost = new URL(targetUrl).hostname;
 const blockedRequests = [];
 let browser;
+const { execSync } = require("node:child_process");
 const { createRequire } = require("node:module");
-const requireGlobalPlaywright = createRequire("/usr/local/lib/node_modules/playwright/package.json");
+
+function requireSandboxPlaywright() {
+  const globalNodeModules = readGlobalNodeModules();
+  const candidates = [
+    ...(globalNodeModules.length === 0 ? [] : [
+      { createRequireFrom: globalNodeModules + "/playwright/package.json", id: "playwright" },
+      { createRequireFrom: globalNodeModules + "/@playwright/test/package.json", id: "@playwright/test" },
+    ]),
+    { createRequireFrom: process.cwd() + "/package.json", id: "playwright" },
+    { createRequireFrom: process.cwd() + "/package.json", id: "@playwright/test" },
+  ];
+
+  const failures = [];
+  for (const candidate of candidates) {
+    try {
+      return createRequire(candidate.createRequireFrom)(candidate.id);
+    } catch (error) {
+      failures.push(candidate.id + " from " + candidate.createRequireFrom + ": " + (error instanceof Error ? error.message : String(error)));
+    }
+  }
+
+  throw new Error("MakeADemo validator dependency failure: Playwright is not available inside the submitted-code sandbox. " + failures.join(" | "));
+}
+
+function readGlobalNodeModules() {
+  try {
+    return execSync("npm root -g", { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return "";
+  }
+}
 
 async function main() {
+  const { chromium } = requireSandboxPlaywright();
   try {
-  const { chromium } = requireGlobalPlaywright("playwright");
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   await page.route("**/*", async (route) => {
@@ -274,6 +315,14 @@ function tryParseBrowserValidationOutput(
   }
 
   return undefined;
+}
+
+function isMissingSandboxPlaywrightError(logs: string[]): boolean {
+  const output = logs.join("\n");
+  return (
+    output.includes("MakeADemo validator dependency failure: Playwright") ||
+    /Cannot find module ['\"](?:playwright|@playwright\/test)['\"]/.test(output)
+  );
 }
 
 function shellQuote(value: string): string {
