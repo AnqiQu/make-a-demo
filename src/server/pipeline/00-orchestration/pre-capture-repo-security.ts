@@ -1,6 +1,8 @@
 import type { PipelineEventLogger } from "../../shared/logging/pipeline-event-logger";
 import type { RepoSecurityInput } from "../02-repo-security-screen/repo-security-screen";
+import { runGitCloneWithTransientRetry } from "../03-repo-preparation/git-clone-retry";
 import type { PreparationWorkspaceProvider } from "../03-repo-preparation/preparation-workspace-runner";
+import type { PreparationWorkspace } from "../03-repo-preparation/preparation-workspace.interface";
 
 export async function readRepoSecurityInput(
   provider: PreparationWorkspaceProvider,
@@ -12,10 +14,7 @@ export async function readRepoSecurityInput(
   try {
     await logCloneEvent(options.logger, "started", repoUrl);
     await handle.workspace.setOutboundNetworkAccess(true);
-    const cloneResult = await handle.workspace.execute(
-      `mkdir -p /workspace && find /workspace -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --depth 1 ${shellQuote(repoUrl)} /workspace`,
-    );
-    await handle.workspace.setOutboundNetworkAccess(false);
+    const cloneResult = await cloneWithNetworkAccess(handle.workspace, repoUrl);
     if (cloneResult.exitCode !== 0) {
       const error = new Error(
         `Daytona git clone failed: ${[cloneResult.stderr, cloneResult.stdout].filter((line) => line.length > 0).join("\n")}`,
@@ -66,6 +65,22 @@ export async function readRepoSecurityInput(
     };
   } finally {
     await handle.destroy();
+  }
+}
+
+async function cloneWithNetworkAccess(
+  workspace: PreparationWorkspace,
+  repoUrl: string,
+) {
+  try {
+    return await runGitCloneWithTransientRetry({
+      clone: () =>
+        workspace.execute(
+          `mkdir -p /workspace && find /workspace -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --depth 1 ${shellQuote(repoUrl)} /workspace`,
+        ),
+    });
+  } finally {
+    await workspace.setOutboundNetworkAccess(false);
   }
 }
 

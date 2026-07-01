@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   createFilePipelineLogSink,
@@ -149,6 +149,42 @@ describe("createPipelineEventLogger", () => {
     expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
       event: "pipeline-started",
     });
+  });
+
+  it("continues writing later events after an async sink write rejects", async () => {
+    const lines: string[] = [];
+    const logger = createPipelineEventLogger({
+      sinks: [
+        {
+          async write(line) {
+            const entry = JSON.parse(line) as { event?: string };
+            if (entry.event === "first-event") {
+              throw new Error("temporary sink failure");
+            }
+            lines.push(line);
+          },
+        },
+      ],
+      timestamp: () => "2026-06-17T00:00:00.000Z",
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      await logger.info({ event: "first-event" });
+      await logger.info({ event: "second-event" });
+      await logger.flush();
+
+      expect(lines.map((line) => JSON.parse(line).event)).toEqual([
+        "second-event",
+      ]);
+      expect(warn).toHaveBeenCalledWith(
+        "Pipeline log sink write failed.",
+        expect.any(Error),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("formats Pino JSON lines for stdout pretty streaming", async () => {

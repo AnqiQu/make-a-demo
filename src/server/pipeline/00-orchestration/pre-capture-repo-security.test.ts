@@ -12,6 +12,49 @@ import type {
 import { readRepoSecurityInput } from "./pre-capture-repo-security";
 
 describe("readRepoSecurityInput", () => {
+  it("retries transient Daytona clone failures before reading repo security input", async () => {
+    const workspace = new FakePreparationWorkspace({
+      cloneResults: [
+        {
+          exitCode: 128,
+          stderr:
+            "fatal: unable to access 'https://github.com/example/app/': Could not resolve host: github.com",
+          stdout: "",
+        },
+        { exitCode: 0, stderr: "", stdout: "" },
+      ],
+    });
+
+    const result = await readRepoSecurityInput(
+      new FakePreparationWorkspaceProvider(workspace),
+      "https://github.com/example/app",
+    );
+
+    expect(result.repoStats).toEqual({ fileCount: 1, sizeBytes: 17 });
+    expect(workspace.cloneAttempts).toBe(2);
+  });
+
+  it("does not retry deterministic git clone failures", async () => {
+    const workspace = new FakePreparationWorkspace({
+      cloneResults: [
+        {
+          exitCode: 128,
+          stderr:
+            "remote: Repository not found.\nfatal: repository 'https://github.com/example/missing/' not found",
+          stdout: "",
+        },
+      ],
+    });
+
+    await expect(
+      readRepoSecurityInput(
+        new FakePreparationWorkspaceProvider(workspace),
+        "https://github.com/example/missing",
+      ),
+    ).rejects.toThrow("Repository not found");
+    expect(workspace.cloneAttempts).toBe(1);
+  });
+
   it("logs Daytona clone progress through Pino JSON", async () => {
     const lines: string[] = [];
     const logger = createPipelineEventLogger({
@@ -55,19 +98,37 @@ describe("readRepoSecurityInput", () => {
 });
 
 class FakePreparationWorkspaceProvider implements PreparationWorkspaceProvider {
+  constructor(
+    private readonly workspace: PreparationWorkspace = new FakePreparationWorkspace(),
+  ) {}
+
   async create(): Promise<PreparationWorkspaceHandle> {
     return {
       async destroy() {},
       id: "workspace-1",
-      workspace: new FakePreparationWorkspace(),
+      workspace: this.workspace,
     };
   }
 }
 
 class FakePreparationWorkspace implements PreparationWorkspace {
+  cloneAttempts = 0;
+
+  constructor(
+    private readonly input: {
+      cloneResults?: PreparationWorkspaceCommandResult[];
+    } = {},
+  ) {}
+
   async execute(command: string): Promise<PreparationWorkspaceCommandResult> {
     if (command.includes("git clone")) {
-      return { exitCode: 0, stderr: "", stdout: "" };
+      const result = this.input.cloneResults?.[this.cloneAttempts] ?? {
+        exitCode: 0,
+        stderr: "",
+        stdout: "",
+      };
+      this.cloneAttempts += 1;
+      return result;
     }
 
     if (command.includes("-printf '%P\\t%s\\n'")) {

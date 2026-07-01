@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { PreparationWorkspaceProvider } from "../../../pipeline/03-repo-preparation/preparation-workspace-runner";
-import type { PreparationWorkspace } from "../../../pipeline/03-repo-preparation/preparation-workspace.interface";
+import type {
+  PreparationWorkspace,
+  PreparationWorkspaceCommandResult,
+} from "../../../pipeline/03-repo-preparation/preparation-workspace.interface";
 import { DaytonaOpenCodeRepoPreparation } from "./daytona-opencode-repo-preparation";
 
 describe("DaytonaOpenCodeRepoPreparation", () => {
@@ -78,6 +81,178 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     expect(command).not.toContain("--dangerously-skip-permissions");
     expect(command).toContain("--dir /workspace");
     expect(command).toContain("--model 'openai/gpt-5.5'");
+  });
+
+  it("streams OpenCode chunks without writing them to the sandbox audit log", async () => {
+    const events: unknown[] = [];
+    const streamed: string[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      onStderr: (chunk) => streamed.push(`stderr:${chunk}`),
+      onStdout: (chunk) => streamed.push(`stdout:${chunk}`),
+      provider: fakeProvider(events, {
+        commandStderrChunks: ["agent warning"],
+        commandStdout: ["Submitted preparation result."],
+        commandStdoutChunks: ["agent output"],
+        preparationResult: successResult(),
+        validationResult: validationArtifact(),
+      }),
+      providerApiKey: "openai_key",
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      manifest: { demoCommand: "npm run demo:makeademo" },
+      status: "succeeded",
+    });
+    expect(streamed).toEqual(["stdout:agent output", "stderr:agent warning"]);
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        { sandboxLog: expect.objectContaining({ event: "opencode.output" }) },
+      ]),
+    );
+  });
+
+  it("does not queue lifecycle progress behind wedged OpenCode activity log writes", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandStderrChunks: ["agent warning"],
+        commandStdout: ["Submitted preparation result."],
+        commandStdoutChunks: ["agent output 1", "agent output 2"],
+        preparationResult: successResult(),
+        queuedSandboxLogWrites: true,
+        sandboxLogNeverSettlesEvent: "opencode.output",
+        validationResult: validationArtifact(),
+      }),
+      providerApiKey: "openai_key",
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    const result = await Promise.race([
+      agent.prepare({
+        normalizedSupportingDocuments: [],
+        repoUrl: "https://github.com/example/app",
+        structuredDemoIntent: { keyProductFeatures: ["validation"] },
+        workspaceId: "workspace_123",
+      }),
+      new Promise<"activity-log-waited">((resolve) =>
+        setTimeout(() => resolve("activity-log-waited"), 50),
+      ),
+    ]);
+
+    expect(result).toMatchObject({
+      manifest: { demoCommand: "npm run demo:makeademo" },
+      status: "succeeded",
+    });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        { sandboxLog: expect.objectContaining({ event: "opencode-finished" }) },
+      ]),
+    );
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        { sandboxLog: expect.objectContaining({ event: "opencode.output" }) },
+      ]),
+    );
+  });
+
+  it("continues Repo Preparation when sandbox progress logging fails", async () => {
+    const events: unknown[] = [];
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandStdout: ["Submitted preparation result."],
+        preparationResult: successResult(),
+        sandboxLogFailureEvent: "workspace-created",
+        validationResult: validationArtifact(),
+      }),
+      providerApiKey: "openai_key",
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    try {
+      const result = await agent.prepare({
+        normalizedSupportingDocuments: [],
+        repoUrl: "https://github.com/example/app",
+        structuredDemoIntent: { keyProductFeatures: ["validation"] },
+        workspaceId: "workspace_123",
+      });
+
+      expect(result).toMatchObject({
+        manifest: { demoCommand: "npm run demo:makeademo" },
+        status: "succeeded",
+      });
+      expect(warn).toHaveBeenCalledWith(
+        "Repo Preparation sandbox log write failed.",
+        expect.any(Error),
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("retries transient Daytona clone connection failures before starting OpenCode", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        cloneResults: [
+          new Error(
+            "DaytonaConnectionError: connect ECONNREFUSED 127.0.0.1:443",
+          ),
+          { exitCode: 0, stderr: "", stdout: "cloned" },
+        ],
+        commandStdout: ["Submitted preparation result."],
+        preparationResult: successResult(),
+        validationResult: validationArtifact(),
+      }),
+      providerApiKey: "openai_key",
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({ status: "succeeded" });
+    expect(
+      events.filter(
+        (event): event is { execute: string } =>
+          typeof event === "object" &&
+          event !== null &&
+          "execute" in event &&
+          typeof event.execute === "string" &&
+          event.execute.includes("git clone"),
+      ),
+    ).toHaveLength(2);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        { network: true },
+        { network: false },
+        {
+          configDir: "/tmp/makeademo/opencode",
+          execute: expect.stringContaining("opencode run"),
+          streaming: true,
+        },
+      ]),
+    );
   });
 
   it("handles custom tool dependency install requests in the retained Daytona workspace", async () => {
@@ -519,7 +694,7 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     );
   });
 
-  it("mirrors meaningful streamed OpenCode output into the sandbox Pino log seam", async () => {
+  it("streams meaningful OpenCode output without legacy activity artifacts", async () => {
     const events: unknown[] = [];
     const streamed: string[] = [];
     const agent = new DaytonaOpenCodeRepoPreparation({
@@ -546,24 +721,9 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     });
 
     expect(streamed).toEqual(["stdout:agent output", "stderr:agent warning"]);
-    expect(events).toEqual(
+    expect(events).not.toEqual(
       expect.arrayContaining([
-        {
-          sandboxLog: expect.objectContaining({
-            channel: "stdout",
-            event: "opencode.output",
-            raw: "agent output",
-            stage: "repo-preparation",
-          }),
-        },
-        {
-          sandboxLog: expect.objectContaining({
-            channel: "stderr",
-            event: "opencode.output",
-            raw: "agent warning",
-            stage: "repo-preparation",
-          }),
-        },
+        { sandboxLog: expect.objectContaining({ event: "opencode.output" }) },
       ]),
     );
     expect(events).not.toEqual(
@@ -656,9 +816,13 @@ function fakeProvider(
         commandStderrChunks?: string[];
         commandStdoutChunks?: string[];
         commandDelayMs?: number;
+        cloneResults?: Array<PreparationWorkspaceCommandResult | Error>;
         dependencyInstallRequest?: { command: string };
         manifestPayload?: unknown;
         preparationResult?: ReturnType<typeof successResult>;
+        queuedSandboxLogWrites?: boolean;
+        sandboxLogFailureEvent?: string;
+        sandboxLogNeverSettlesEvent?: string;
         submittedCodeNeverSettles?: boolean;
         validationRequest?: {
           manifestPath: string;
@@ -690,9 +854,13 @@ function fakeWorkspace(
     commandStderrChunks?: string[];
     commandStdoutChunks?: string[];
     commandDelayMs?: number;
+    cloneResults?: Array<PreparationWorkspaceCommandResult | Error>;
     dependencyInstallRequest?: { command: string };
     manifestPayload?: unknown;
     preparationResult?: ReturnType<typeof successResult>;
+    queuedSandboxLogWrites?: boolean;
+    sandboxLogFailureEvent?: string;
+    sandboxLogNeverSettlesEvent?: string;
     submittedCodeNeverSettles?: boolean;
     validationRequest?: {
       manifestPath: string;
@@ -703,7 +871,9 @@ function fakeWorkspace(
   const commandStdout = input.commandStdout ?? [
     JSON.stringify(successResult()),
   ];
+  const cloneResults = [...(input.cloneResults ?? [])];
   let dependencyInstallRequest = input.dependencyInstallRequest;
+  let sandboxLogChain = Promise.resolve();
   let validationRequest = input.validationRequest;
   let validationResult = input.validationResult;
 
@@ -828,6 +998,13 @@ function fakeWorkspace(
           "outer workspace execution must not install dependencies",
         );
       }
+      if (command.includes("git clone") && cloneResults.length > 0) {
+        const cloneResult = cloneResults.shift();
+        if (cloneResult instanceof Error) {
+          throw cloneResult;
+        }
+        return cloneResult ?? { exitCode: 0, stderr: "", stdout: "cloned" };
+      }
       return {
         exitCode: 0,
         stderr: "",
@@ -865,8 +1042,22 @@ function fakeWorkspace(
     async uploadFiles() {
       throw new Error("Repo Preparation should clone inside Daytona.");
     },
-    async writeSandboxLog(entry) {
-      events.push({ sandboxLog: entry });
+    writeSandboxLog(entry) {
+      const write = async () => {
+        events.push({ sandboxLog: entry });
+        if (entry.event === input.sandboxLogNeverSettlesEvent) {
+          await new Promise(() => {});
+        }
+        if (entry.event === input.sandboxLogFailureEvent) {
+          throw new Error("sandbox log sink failed");
+        }
+      };
+      if (input.queuedSandboxLogWrites !== true) {
+        return write();
+      }
+
+      sandboxLogChain = sandboxLogChain.then(write, write);
+      return sandboxLogChain;
     },
   };
 }

@@ -62,9 +62,6 @@ if (daytonaApiKey === undefined || daytonaApiKey === "") {
 const sandboxProvider = new DaytonaSdkPreparationWorkspaceProvider({
   apiKey: daytonaApiKey,
   ...(daytonaSnapshot === undefined ? {} : { snapshot: daytonaSnapshot }),
-  ...(daytonaSubmittedCodeSnapshot === undefined
-    ? {}
-    : { submittedCodeSnapshot: daytonaSubmittedCodeSnapshot }),
   sandboxLogSinks: [cliLogSink],
 });
 const cliLogger = createPipelineEventLogger({

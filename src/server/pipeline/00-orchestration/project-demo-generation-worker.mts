@@ -40,9 +40,6 @@ const finalVideoEmailNotifier = shouldSendFinalVideoEmail
 const sandboxProvider = new DaytonaSdkPreparationWorkspaceProvider({
   apiKey: daytonaApiKey,
   ...(daytonaSnapshot === undefined ? {} : { snapshot: daytonaSnapshot }),
-  ...(daytonaSubmittedCodeSnapshot === undefined
-    ? {}
-    : { submittedCodeSnapshot: daytonaSubmittedCodeSnapshot }),
 });
 const repoPreparationAgent = createRepoPreparationAgent({
   daytonaApiKey,

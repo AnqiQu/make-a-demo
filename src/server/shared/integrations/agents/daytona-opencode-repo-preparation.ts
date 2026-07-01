@@ -1,6 +1,7 @@
 import { posix } from "node:path";
 
 import { runDependencyInstallWithNetworkWindow } from "../../../pipeline/03-repo-preparation/dependency-install-network-window";
+import { runGitCloneWithTransientRetry } from "../../../pipeline/03-repo-preparation/git-clone-retry";
 import { readPreparationManifest } from "../../../pipeline/03-repo-preparation/preparation-manifest";
 import type {
   PreparationWorkspaceHandle,
@@ -15,7 +16,6 @@ import type {
   RepoPreparationInput,
 } from "../../../pipeline/03-repo-preparation/repo-preparation-agent.interface";
 import type { ProjectValidationResult } from "../../../pipeline/05-capture-path-validation/project-runtime-preflight/validation-result";
-import { writeDaytonaOpenCodeActivityLog } from "./daytona-opencode-activity-log";
 import { createMakeADemoOpenCodeConfigFiles } from "./prepared-opencode-config";
 
 const makeADemoOuterControlDirectory = "/tmp/makeademo/submitted-code";
@@ -133,10 +133,10 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
       event: "clone-started",
     });
     await handle.workspace.setOutboundNetworkAccess(true);
-    const cloneResult = await handle.workspace.execute(
-      createCloneCommand(input.repoUrl),
+    const cloneResult = await cloneWorkspaceWithNetworkAccess(
+      handle.workspace,
+      input.repoUrl,
     );
-    await handle.workspace.setOutboundNetworkAccess(false);
     await writePreparationSandboxLog(handle.workspace, {
       event: "clone-finished",
       exitCode: cloneResult.exitCode,
@@ -352,30 +352,13 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
       sessionID?: string;
     },
   ): Promise<PreparationWorkspaceCommandResult & { sessionID?: string }> {
-    const outputWrites: Promise<void>[] = [];
     let streamedStdout = "";
     const onStdout = (chunk: string) => {
       streamedStdout += chunk;
       this.onStdout?.(chunk);
-      outputWrites.push(
-        writeDaytonaOpenCodeActivityLog(handle.workspace, {
-          attempt: input.attempt,
-          channel: "stdout",
-          raw: chunk,
-          stage: "repo-preparation",
-        }),
-      );
     };
     const onStderr = (chunk: string) => {
       this.onStderr?.(chunk);
-      outputWrites.push(
-        writeDaytonaOpenCodeActivityLog(handle.workspace, {
-          attempt: input.attempt,
-          channel: "stderr",
-          raw: chunk,
-          stage: "repo-preparation",
-        }),
-      );
     };
     const options = {
       env: createOpenCodeEnv(input),
@@ -387,7 +370,6 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
       createOpenCodeRunCommand(input),
       options,
     );
-    await Promise.all(outputWrites);
 
     const sessionID = readOpenCodeSessionID(
       `${streamedStdout}\n${result.stdout}`,
@@ -494,11 +476,15 @@ async function writePreparationSandboxLog(
 ): Promise<void> {
   const eventName =
     typeof event.event === "string" ? event.event : "repo-preparation.debug";
-  await workspace.writeSandboxLog?.({
-    ...event,
-    event: eventName,
-    stage: "repo-preparation",
-  });
+  try {
+    await workspace.writeSandboxLog?.({
+      ...event,
+      event: eventName,
+      stage: "repo-preparation",
+    });
+  } catch (error) {
+    console.warn("Repo Preparation sandbox log write failed.", error);
+  }
 }
 
 async function writeRepoPreparationRetryLog(
@@ -522,15 +508,32 @@ async function cloneSubmittedCodeWorkspace(
   workspace: PreparationWorkspace,
   repoUrl: string,
 ): Promise<PreparationWorkspaceCommandResult | undefined> {
-  if (workspace.executeSubmittedCode === undefined) {
+  const executeSubmittedCode = workspace.executeSubmittedCode;
+  if (executeSubmittedCode === undefined) {
     return undefined;
   }
 
   await workspace.setSubmittedCodeNetworkAccess?.(true);
   try {
-    return await workspace.executeSubmittedCode(createCloneCommand(repoUrl));
+    return await runGitCloneWithTransientRetry({
+      clone: () =>
+        executeSubmittedCode.call(workspace, createCloneCommand(repoUrl)),
+    });
   } finally {
     await workspace.setSubmittedCodeNetworkAccess?.(false);
+  }
+}
+
+async function cloneWorkspaceWithNetworkAccess(
+  workspace: PreparationWorkspace,
+  repoUrl: string,
+): Promise<PreparationWorkspaceCommandResult> {
+  try {
+    return await runGitCloneWithTransientRetry({
+      clone: () => workspace.execute(createCloneCommand(repoUrl)),
+    });
+  } finally {
+    await workspace.setOutboundNetworkAccess(false);
   }
 }
 
