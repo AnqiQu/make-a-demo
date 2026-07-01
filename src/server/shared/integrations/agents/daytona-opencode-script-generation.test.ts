@@ -32,6 +32,14 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
     expect(events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
+          configDir: "/tmp/makeademo/opencode",
+          execute: expect.stringContaining("opencode run"),
+        }),
+      ]),
+    );
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
           configDir: "/workspace/.makeademo/opencode",
           execute: expect.stringContaining("opencode run"),
         }),

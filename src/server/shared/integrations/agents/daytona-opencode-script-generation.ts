@@ -23,7 +23,7 @@ import type { CompositedVideoManifest } from "../../../pipeline/07-compositing/c
 import { writeDaytonaOpenCodeActivityLog } from "./daytona-opencode-activity-log";
 
 const makeADemoArtifactDirectory = "/workspace/.makeademo";
-const makeADemoOpenCodeConfigDirectory = `${makeADemoArtifactDirectory}/opencode`;
+const makeADemoOpenCodeConfigDirectory = "/tmp/makeademo/opencode";
 const preparationManifestPath = `${makeADemoArtifactDirectory}/preparation-manifest.json`;
 const demoScriptPath = `${makeADemoArtifactDirectory}/demo-script.json`;
 const draftCompositeReviewPath = `${makeADemoArtifactDirectory}/draft-composite-review.json`;
