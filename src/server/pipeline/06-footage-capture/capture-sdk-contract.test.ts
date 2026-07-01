@@ -25,12 +25,14 @@ describe("Capture SDK Contract", () => {
     await expect(
       readFile(join(workspace, "makeademo-capture-sdk.d.ts"), "utf8"),
     ).resolves.toContain("MakeADemoSceneContext");
-    await expect(
-      readFile(
-        join(workspace, "makeademo-capture-sdk.instructions.md"),
-        "utf8",
-      ),
-    ).resolves.toContain("Do not launch browsers");
+    const instructions = await readFile(
+      join(workspace, "makeademo-capture-sdk.instructions.md"),
+      "utf8",
+    );
+    expect(instructions).toContain("Do not launch browsers");
+    expect(instructions).toContain("Do not use real-time network access");
+    expect(instructions).toContain("fetch");
+    expect(instructions).toContain("page.evaluate");
   });
 
   it("requires Demo Scripts to import both setup and scene from the SDK", () => {
@@ -84,6 +86,75 @@ describe("Capture SDK Contract", () => {
       expect(() =>
         assertDemoScriptCaptureSdkContract(demoScript(script)),
       ).toThrow("visible Playwright assertion");
+    }
+  });
+
+  it("rejects generated Demo Scripts that use runtime network APIs", () => {
+    for (const [script, expectedReason] of [
+      [
+        [
+          "import { setup, scene } from './makeademo-capture-sdk';",
+          "await scene('scene_one', async ({ page, expect }) => {",
+          "  await fetch('https://analytics.example.com/pixel');",
+          "  await expect(page.locator('body')).toBeVisible();",
+          "});",
+        ].join("\n"),
+        "Generated Demo Scripts must not call fetch",
+      ],
+      [
+        [
+          "import { setup, scene } from './makeademo-capture-sdk';",
+          "import http from 'node:http';",
+          "void http;",
+          "await scene('scene_one', async ({ page, expect }) => {",
+          "  await expect(page.locator('body')).toBeVisible();",
+          "});",
+        ].join("\n"),
+        "Generated Demo Scripts must not import Node network modules",
+      ],
+      [
+        [
+          "import { setup, scene } from './makeademo-capture-sdk';",
+          "await scene('scene_one', async ({ page, expect }) => {",
+          "  await page.waitForResponse('https://api.example.com/data');",
+          "  await expect(page.locator('body')).toBeVisible();",
+          "});",
+        ].join("\n"),
+        "Generated Demo Scripts must not wait on network requests",
+      ],
+    ] as const) {
+      expect(() =>
+        assertDemoScriptCaptureSdkContract(demoScript(script)),
+      ).toThrow(expectedReason);
+    }
+  });
+
+  it("rejects generated Demo Scripts that mutate or inspect app internals", () => {
+    for (const [script, expectedReason] of [
+      [
+        [
+          "import { setup, scene } from './makeademo-capture-sdk';",
+          "await scene('scene_one', async ({ page, expect }) => {",
+          "  await page.evaluate(() => localStorage.setItem('demo', 'ready'));",
+          "  await expect(page.locator('body')).toBeVisible();",
+          "});",
+        ].join("\n"),
+        "Generated Demo Scripts must not execute arbitrary page JavaScript",
+      ],
+      [
+        [
+          "import { setup, scene } from './makeademo-capture-sdk';",
+          "await scene('scene_one', async ({ page, expect }) => {",
+          "  await page.addScriptTag({ content: 'window.demo = true' });",
+          "  await expect(page.locator('body')).toBeVisible();",
+          "});",
+        ].join("\n"),
+        "Generated Demo Scripts must not inject scripts into the prepared app",
+      ],
+    ] as const) {
+      expect(() =>
+        assertDemoScriptCaptureSdkContract(demoScript(script)),
+      ).toThrow(expectedReason);
     }
   });
 

@@ -28,6 +28,9 @@ describe("DefaultCapturePathSceneValidator", () => {
     });
 
     expect(result.status).toBe("failed");
+    expect(result).toMatchObject({
+      errorMessage: "selector exploded",
+    });
     expect(result.stdoutPath).toContain("scene_failure_evidence.stdout.log");
     expect(result.stderrPath).toContain("scene_failure_evidence.stderr.log");
     expect(await readFile(result.stdoutPath as string, "utf8")).toContain(

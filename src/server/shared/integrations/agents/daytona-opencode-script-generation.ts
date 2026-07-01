@@ -654,6 +654,7 @@ function createScriptGenerationPrompt(
     "- Put login, seeding, navigation, and setup outside on-camera Scenes unless that setup is the feature being demonstrated.",
     "- Do not provide Scene durations. Timing comes from Footage Capture.",
     "- Do not use Playwright `recordVideo`, custom marker writers, or agent-authored timestamps.",
+    ...createDemoScriptCaptureContractPrompt(),
     "- Do not emit placeholder scripts that only load the page, wait, smoke-check body text, or set inert DOM attributes.",
     "- Keep scripts deterministic and short enough for capture.",
     "- Do not call Repo Preparation tools. Do not request dependency installs. Do not run preparation preflight or Capture Path Validation.",
@@ -708,6 +709,7 @@ function createCapturePathRepairPrompt(
     `- If you change the prepared app command, URL, assumptions, risks, or workspace-change summary, update ${preparationManifestPath}.`,
     "- Keep Playwright interactions deterministic and use only the provided `baseUrl` variable in Playwright scripts.",
     "- Do not add Scene durations, raw video recording, custom marker writers, or timestamps.",
+    ...createDemoScriptCaptureContractPrompt(),
     "- Do not run final Footage Capture. You may run fast local checks if useful.",
     "",
     "## Failure Evidence",
@@ -845,6 +847,15 @@ function createScriptPackageSchemaPrompt(): string {
     "Top-level `scriptId`, `title`, `format`, `version`, `demoPlaywrightScript`, non-empty `scenes`, and `presentation` are mandatory on every attempt.",
     "Each Scene must include `id`, `description`, and `expectedVisibleOutcome`. Do not include `durationSeconds` on recorded Scenes.",
   ].join("\n");
+}
+
+function createDemoScriptCaptureContractPrompt(): string[] {
+  return [
+    "- Only use the MakeADemo Capture SDK: import `{ setup, scene }` from `./makeademo-capture-sdk` and write interactions inside those callbacks.",
+    "- Do not use real-time network access in the Demo Script. Do not call `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`, `navigator.sendBeacon`, `page.request`, `page.waitForRequest`, `page.waitForResponse`, `page.route`, `page.unroute`, or Node network modules such as `http`, `https`, `net`, or `dns`.",
+    "- Use the prepared app through the provided `baseUrl`, deterministic user-visible interactions, and Playwright locator assertions. Do not inspect app internals, mutate app state with injected JavaScript, or depend on network request timing.",
+    "- Every Scene step must be executable against the prepared app and must finish with a visible locator assertion proving the expected outcome.",
+  ];
 }
 
 function readErrorMessage(error: unknown): string {

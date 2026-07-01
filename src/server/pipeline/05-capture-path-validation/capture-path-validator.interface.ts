@@ -17,6 +17,7 @@ export type CapturePathValidationResult = {
   blockedNetworkAttempts: NetworkAttempt[];
   browserUrl?: string;
   diagnosticsLogPath?: string;
+  errorMessage?: string;
   failedAction?: string;
   failedSceneId?: string;
   failureReason?: string;

@@ -118,6 +118,8 @@ describe("validateCapturePath", () => {
         sceneValidator: {
           async validateScene() {
             return {
+              errorMessage:
+                "Timed out waiting for locator('.article-preview') to be visible",
               failureReason:
                 "Scene scene_validation failed during Capture Path Validation.",
               logs: [
@@ -142,6 +144,8 @@ describe("validateCapturePath", () => {
       diagnosticsLogPath:
         "/workspace/.makeademo/capture-path-validation-diagnostics.jsonl",
       failedSceneId: "scene_validation",
+      errorMessage:
+        "Timed out waiting for locator('.article-preview') to be visible",
       failureReason:
         "Scene scene_validation failed during Capture Path Validation.",
       status: "failed",
@@ -152,6 +156,8 @@ describe("validateCapturePath", () => {
           diagnosticsLogPath:
             "/workspace/.makeademo/capture-path-validation-diagnostics.jsonl",
           event: "capture-path-validation.scene.failed",
+          errorMessage:
+            "Timed out waiting for locator('.article-preview') to be visible",
           failureLogExcerpt: expect.stringContaining("article-preview"),
           sceneId: "scene_validation",
         }),

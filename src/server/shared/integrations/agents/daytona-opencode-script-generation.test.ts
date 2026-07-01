@@ -46,6 +46,10 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
         event.execute.includes("opencode run"),
     )?.execute;
     expect(openCodeCommand).toContain("--session 'session_prepare_123'");
+    expect(openCodeCommand).toContain("Do not use real-time network access");
+    expect(openCodeCommand).toContain("fetch");
+    expect(openCodeCommand).toContain("waitForResponse");
+    expect(openCodeCommand).toContain("Only use the MakeADemo Capture SDK");
     expect(openCodeCommand).not.toContain("OPENAI_API_KEY");
     expect(stdout.join("\n")).toContain(
       "Script Generation OpenCode attempt 1 starting in session session_prepare_123.",
@@ -247,6 +251,8 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
         event.execute.includes("opencode run"),
     )?.execute;
     expect(openCodeCommand).toContain("--session 'session_prepare_123'");
+    expect(openCodeCommand).toContain("Do not use real-time network access");
+    expect(openCodeCommand).toContain("Only use the MakeADemo Capture SDK");
     expect(events).toEqual(
       expect.arrayContaining([
         {

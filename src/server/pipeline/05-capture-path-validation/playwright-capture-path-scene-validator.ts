@@ -84,11 +84,13 @@ export class DefaultCapturePathSceneValidator
 
     if (result.exitCode !== 0) {
       const failedAction = readFailedAction(logs);
+      const errorMessage = readValidationFailureMessage(logs);
       const screenshotArtifactId = readValidationFailureScreenshotPath(
         logs,
         runDirectory,
       );
       return {
+        ...(errorMessage === undefined ? {} : { errorMessage }),
         ...(failedAction === undefined ? {} : { failedAction }),
         failureReason: createSceneFailureReason(input.scene.id, failedAction),
         logs,
@@ -225,11 +227,13 @@ export class DefaultCapturePathSceneValidator
 
       if (result.exitCode !== 0) {
         const failedAction = readFailedAction(logs);
+        const errorMessage = readValidationFailureMessage(logs);
         const screenshotArtifactId = readValidationFailureScreenshotPath(
           logs,
           remoteRunDirectory,
         );
         return {
+          ...(errorMessage === undefined ? {} : { errorMessage }),
           ...(failedAction === undefined ? {} : { failedAction }),
           failureReason: createSceneFailureReason(input.scene.id, failedAction),
           logs,
@@ -385,6 +389,28 @@ function readValidationFailureScreenshotPath(
   logs: string[],
   runDirectory: string,
 ) {
+  const failure = readValidationFailure(logs);
+  if (
+    failure !== undefined &&
+    typeof failure.screenshotPath === "string" &&
+    failure.screenshotPath.trim().length > 0
+  ) {
+    return failure.screenshotPath.startsWith("/")
+      ? failure.screenshotPath
+      : join(runDirectory, failure.screenshotPath);
+  }
+
+  return undefined;
+}
+
+function readValidationFailureMessage(logs: string[]) {
+  const failure = readValidationFailure(logs);
+  return typeof failure?.message === "string" && failure.message.length > 0
+    ? failure.message
+    : undefined;
+}
+
+function readValidationFailure(logs: string[]) {
   for (const line of logs.join("\n").split("\n")) {
     const marker = line.trim();
     if (!marker.startsWith("[makeademo:validation] script failed ")) {
@@ -395,15 +421,8 @@ function readValidationFailureScreenshotPath(
       const failure = JSON.parse(
         marker.slice("[makeademo:validation] script failed ".length),
       );
-      if (
-        typeof failure === "object" &&
-        failure !== null &&
-        typeof failure.screenshotPath === "string" &&
-        failure.screenshotPath.trim().length > 0
-      ) {
-        return failure.screenshotPath.startsWith("/")
-          ? failure.screenshotPath
-          : join(runDirectory, failure.screenshotPath);
+      if (typeof failure === "object" && failure !== null) {
+        return failure as Record<string, unknown>;
       }
     } catch {}
   }
