@@ -13,6 +13,7 @@ describe("evaluateDependencyNetworkRequest", () => {
     "npm ci --include=dev --ignore-scripts",
     "npm install",
     "npm install --ignore-scripts",
+    "npm install --workspaces=false --ignore-scripts",
     "npm install --legacy-peer-deps",
     "npm install --force",
     "pnpm install",
