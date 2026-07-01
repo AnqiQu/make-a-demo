@@ -6,7 +6,11 @@ import type {
   RepoPreparationInput,
   RepoPreparationResult,
 } from "../03-repo-preparation/repo-preparation-agent.interface";
-import type { DemoScriptPackage } from "../04-script-generation/demo-script-package";
+import type {
+  AcceptedDemoScript,
+  DemoScriptCandidate,
+  DemoScriptPackage,
+} from "../04-script-generation/demo-script-package";
 import type { ScriptGenerationInput } from "../04-script-generation/script-generation-orchestrator";
 import type { CapturePathRepairer } from "../05-capture-path-validation/capture-path-repairer.interface";
 import type {
@@ -26,7 +30,7 @@ import {
 export type PipelineOrchestratorDependencies = {
   generateScriptPackage(
     input: ScriptGenerationInput,
-  ): Promise<DemoScriptPackage>;
+  ): Promise<DemoScriptCandidate>;
   prepareRepo(input: RepoPreparationInput): Promise<RepoPreparationResult>;
   repairCapturePathFailure?: CapturePathRepairer["repairCapturePathFailure"];
   screenRepoSecurity(input: RepoSecurityInput): RepoSecurityResult;
@@ -201,7 +205,7 @@ export async function runPipelineJob(
     status: "started",
   });
 
-  let demoScriptPackage: DemoScriptPackage;
+  let demoScriptCandidate: DemoScriptCandidate;
   const scriptGenerationInput = {
     demoBrief: input.demoBrief,
     normalizedSupportingDocuments: input.normalizedSupportingDocuments,
@@ -217,7 +221,7 @@ export async function runPipelineJob(
   let preparationManifest = preparation.manifest;
   try {
     await options.onScriptGenerationReady?.(scriptGenerationInput);
-    demoScriptPackage = await dependencies.generateScriptPackage(
+    demoScriptCandidate = await dependencies.generateScriptPackage(
       scriptGenerationInput,
     );
   } catch (error) {
@@ -240,8 +244,8 @@ export async function runPipelineJob(
     now,
     observer,
     onProgress: options.onProgress,
-    riskCount: demoScriptPackage.demoPlan.risks.length,
-    sceneCount: countScenes(demoScriptPackage),
+    riskCount: demoScriptCandidate.demoPlan.risks.length,
+    sceneCount: countScenes(demoScriptCandidate),
     startedAt: scriptStartedAt,
   });
   await emitProgress(options, {
@@ -260,7 +264,8 @@ export async function runPipelineJob(
       observer,
       preparationManifest,
       preparationWorkspace: preparation.workspace,
-      demoScriptPackage,
+      demoScriptCandidate,
+      demoScriptPackage: demoScriptCandidate,
     });
 
     if (capturePathValidation.status === "succeeded") {
@@ -294,11 +299,13 @@ export async function runPipelineJob(
         ? {}
         : { preparationWorkspace: preparation.workspace }),
       repoUrl: input.repoUrl,
-      demoScriptPackage,
+      demoScriptPackage: demoScriptCandidate,
     });
     preparationManifest = repair.preparationManifest;
-    demoScriptPackage = repair.demoScriptPackage;
+    demoScriptCandidate = repair.demoScriptPackage;
   }
+
+  const acceptedDemoScript: AcceptedDemoScript = demoScriptCandidate;
 
   return {
     capturePathValidation: requireCapturePathValidation(capturePathValidation),
@@ -310,7 +317,8 @@ export async function runPipelineJob(
       ? {}
       : { preparationWorkspace: preparation.workspace }),
     status: "succeeded",
-    demoScriptPackage,
+    acceptedDemoScript,
+    demoScriptPackage: acceptedDemoScript,
   };
 }
 
@@ -334,6 +342,7 @@ async function runCapturePathValidation(input: {
     | undefined;
   preparationManifest: CapturePathValidationInput["preparationManifest"];
   preparationWorkspace: CapturePathValidationInput["preparationWorkspace"];
+  demoScriptCandidate: DemoScriptCandidate;
   demoScriptPackage: DemoScriptPackage;
 }) {
   const startedAt = reportStageStarted("capture-path-validation", {
@@ -354,6 +363,7 @@ async function runCapturePathValidation(input: {
       ...(input.preparationWorkspace === undefined
         ? {}
         : { preparationWorkspace: input.preparationWorkspace }),
+      demoScriptCandidate: input.demoScriptCandidate,
       demoScriptPackage: input.demoScriptPackage,
     });
     assertCapturePathValidationBrowserUrlContract(result);

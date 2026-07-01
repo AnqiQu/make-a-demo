@@ -1,11 +1,15 @@
 import type { PreparationManifest } from "../03-repo-preparation/preparation-manifest";
 import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
-import type { DemoScriptPackage } from "../04-script-generation/demo-script-package";
+import type {
+  DemoScriptCandidate,
+  DemoScriptPackage,
+} from "../04-script-generation/demo-script-package";
 import type { NetworkAttempt } from "./project-runtime-preflight/network-isolation-policy";
 
 export type CapturePathValidationInput = {
   preparationManifest: PreparationManifest;
   preparationWorkspace?: PreparationWorkspaceHandle;
+  demoScriptCandidate: DemoScriptCandidate;
   demoScriptPackage: DemoScriptPackage;
 };
 
@@ -27,7 +31,7 @@ export type CapturePathValidationResult = {
 };
 
 /**
- * Validates that a Demo Script's generated capture path can run against
+ * Validates that a Demo Script candidate's generated capture path can run against
  * the prepared app under Runtime Network Lockdown. Implementations must run
  * project-level checks before generated Browser Actions, produce structured
  * failure evidence, and must not produce final Scene footage.

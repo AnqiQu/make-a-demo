@@ -9,6 +9,18 @@ export type DemoScriptPackage = DemoScript & {
   exploration: ProjectExplorationResult;
 };
 
+/**
+ * Script Generation output that has passed local schema and quality checks but
+ * has not yet passed Capture Path Validation.
+ */
+export type DemoScriptCandidate = DemoScriptPackage;
+
+/**
+ * Demo Script candidate promoted by successful Capture Path Validation.
+ * Callers should use this type for Footage Capture and persistence handoffs.
+ */
+export type AcceptedDemoScript = DemoScriptPackage;
+
 export function buildDemoScriptPackage(input: {
   demoPlan: DemoPlan;
   exploration: ProjectExplorationResult;

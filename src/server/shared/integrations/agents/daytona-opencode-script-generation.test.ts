@@ -51,7 +51,7 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
       "Script Generation OpenCode attempt 1 starting in session session_prepare_123.",
     );
     expect(stdout.join("\n")).toContain(
-      "Script Generation OpenCode attempt 1 produced a valid Demo Script.",
+      "Script Generation OpenCode attempt 1 produced a Demo Script candidate.",
     );
   });
 

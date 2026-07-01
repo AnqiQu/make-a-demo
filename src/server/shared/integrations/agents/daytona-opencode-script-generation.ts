@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises";
 import { basename } from "node:path";
 import { readPreparationManifest } from "../../../pipeline/03-repo-preparation/preparation-manifest";
 import type { PreparationWorkspaceHandle } from "../../../pipeline/03-repo-preparation/preparation-workspace-runner";
+import type { PreparationWorkspace } from "../../../pipeline/03-repo-preparation/preparation-workspace.interface";
 import type { DemoScriptPackage } from "../../../pipeline/04-script-generation/demo-script-package";
 import type {
   AgenticScriptGenerationInput,
@@ -65,10 +66,7 @@ export type DraftCompositeReviewInput = {
   scriptPackage: DemoScriptPackage;
 };
 
-export class DaytonaOpenCodeScriptGeneration
-  implements CapturePathRepairer, ScriptGenerationAgent
-{
-  private readonly maxAttempts: number;
+class DaytonaOpenCodeSessionRunner {
   private readonly modelID: string;
   private readonly onStderr: ((chunk: string) => void) | undefined;
   private readonly onStdout: ((chunk: string) => void) | undefined;
@@ -76,12 +74,75 @@ export class DaytonaOpenCodeScriptGeneration
   private readonly providerID: string;
 
   constructor(options: DaytonaOpenCodeScriptGenerationOptions) {
-    this.maxAttempts = options.maxAttempts ?? 3;
     this.modelID = options.modelID;
     this.onStderr = options.onStderr;
     this.onStdout = options.onStdout;
     this.providerApiKey = options.providerApiKey;
     this.providerID = options.providerID;
+  }
+
+  async run(input: {
+    attempt: number;
+    prompt: string;
+    sessionID: string;
+    stage:
+      | "capture-path-repair"
+      | "draft-composite-review"
+      | "script-generation";
+    workspace: PreparationWorkspace;
+  }) {
+    const outputWrites: Promise<void>[] = [];
+    const result = await input.workspace.execute(
+      createOpenCodeRunCommand({
+        model: `${this.providerID}/${this.modelID}`,
+        prompt: input.prompt,
+        sessionID: input.sessionID,
+      }),
+      removeUndefinedOptions({
+        env: createOpenCodeEnv({
+          providerApiKey: this.providerApiKey,
+          providerID: this.providerID,
+        }),
+        onStderr: (chunk) => {
+          this.onStderr?.(chunk);
+          outputWrites.push(
+            writeDaytonaOpenCodeActivityLog(input.workspace, {
+              attempt: input.attempt,
+              channel: "stderr",
+              raw: chunk,
+              stage: input.stage,
+            }),
+          );
+        },
+        onStdout: (chunk) => {
+          this.onStdout?.(chunk);
+          outputWrites.push(
+            writeDaytonaOpenCodeActivityLog(input.workspace, {
+              attempt: input.attempt,
+              channel: "stdout",
+              raw: chunk,
+              stage: input.stage,
+            }),
+          );
+        },
+      }),
+    );
+    await Promise.all(outputWrites);
+    return result;
+  }
+}
+
+export class DaytonaOpenCodeScriptGeneration
+  implements CapturePathRepairer, ScriptGenerationAgent
+{
+  private readonly maxAttempts: number;
+  private readonly onStdout: ((chunk: string) => void) | undefined;
+  private readonly openCode: DaytonaOpenCodeSessionRunner;
+
+  constructor(options: DaytonaOpenCodeScriptGenerationOptions) {
+    this.maxAttempts = options.maxAttempts ?? 3;
+    this.onStdout = options.onStdout;
+    this.openCode = new DaytonaOpenCodeSessionRunner(options);
   }
 
   async generateScriptPackage(
@@ -101,49 +162,13 @@ export class DaytonaOpenCodeScriptGeneration
         `Script Generation OpenCode attempt ${attempt} starting in session ${input.opencodeSessionID}.`,
       );
       await removePreviousScriptPackage(input);
-      const outputWrites: Promise<void>[] = [];
-      const result = await input.preparationWorkspace.workspace.execute(
-        createOpenCodeRunCommand({
-          model: `${this.providerID}/${this.modelID}`,
-          prompt,
-          sessionID: input.opencodeSessionID,
-        }),
-        removeUndefinedOptions({
-          env: createOpenCodeEnv({
-            providerApiKey: this.providerApiKey,
-            providerID: this.providerID,
-          }),
-          onStderr: (chunk) => {
-            this.onStderr?.(chunk);
-            outputWrites.push(
-              writeDaytonaOpenCodeActivityLog(
-                input.preparationWorkspace.workspace,
-                {
-                  attempt,
-                  channel: "stderr",
-                  raw: chunk,
-                  stage: "script-generation",
-                },
-              ),
-            );
-          },
-          onStdout: (chunk) => {
-            this.onStdout?.(chunk);
-            outputWrites.push(
-              writeDaytonaOpenCodeActivityLog(
-                input.preparationWorkspace.workspace,
-                {
-                  attempt,
-                  channel: "stdout",
-                  raw: chunk,
-                  stage: "script-generation",
-                },
-              ),
-            );
-          },
-        }),
-      );
-      await Promise.all(outputWrites);
+      const result = await this.openCode.run({
+        attempt,
+        prompt,
+        sessionID: input.opencodeSessionID,
+        stage: "script-generation",
+        workspace: input.preparationWorkspace.workspace,
+      });
 
       if (result.exitCode !== 0) {
         const retryReason = `OpenCode Script Generation exited with ${result.exitCode}.`;
@@ -191,11 +216,11 @@ export class DaytonaOpenCodeScriptGeneration
         assertCaptureReadyScriptQuality(demoScript);
         await writeScriptGenerationSandboxLog(input, {
           attempt,
-          event: "script-generation.script-package.succeeded",
+          event: "script-generation.demo-script-candidate.succeeded",
           scriptId: demoScript.scriptId,
         });
         this.writeStatus(
-          `Script Generation OpenCode attempt ${attempt} produced a valid Demo Script.`,
+          `Script Generation OpenCode attempt ${attempt} produced a Demo Script candidate.`,
         );
         return attachPipelineMetadata(demoScript, input);
       } catch (error) {
@@ -241,43 +266,13 @@ export class DaytonaOpenCodeScriptGeneration
       `Capture Path repair attempt ${input.attempt} starting in session ${input.opencodeSessionID}.`,
     );
 
-    const outputWrites: Promise<void>[] = [];
-    const result = await preparationWorkspace.workspace.execute(
-      createOpenCodeRunCommand({
-        model: `${this.providerID}/${this.modelID}`,
-        prompt: createCapturePathRepairPrompt(input),
-        sessionID: input.opencodeSessionID,
-      }),
-      removeUndefinedOptions({
-        env: createOpenCodeEnv({
-          providerApiKey: this.providerApiKey,
-          providerID: this.providerID,
-        }),
-        onStderr: (chunk) => {
-          this.onStderr?.(chunk);
-          outputWrites.push(
-            writeDaytonaOpenCodeActivityLog(preparationWorkspace.workspace, {
-              attempt: input.attempt,
-              channel: "stderr",
-              raw: chunk,
-              stage: "capture-path-repair",
-            }),
-          );
-        },
-        onStdout: (chunk) => {
-          this.onStdout?.(chunk);
-          outputWrites.push(
-            writeDaytonaOpenCodeActivityLog(preparationWorkspace.workspace, {
-              attempt: input.attempt,
-              channel: "stdout",
-              raw: chunk,
-              stage: "capture-path-repair",
-            }),
-          );
-        },
-      }),
-    );
-    await Promise.all(outputWrites);
+    const result = await this.openCode.run({
+      attempt: input.attempt,
+      prompt: createCapturePathRepairPrompt(input),
+      sessionID: input.opencodeSessionID,
+      stage: "capture-path-repair",
+      workspace: preparationWorkspace.workspace,
+    });
 
     if (result.exitCode !== 0) {
       const reason = `OpenCode Capture Path repair exited with ${result.exitCode}: ${[result.stderr, result.stdout].filter((line) => line.length > 0).join("\n")}`;
@@ -365,43 +360,13 @@ export class DaytonaOpenCodeScriptGeneration
     const preparationWorkspace = input.preparationWorkspace;
 
     await uploadDraftReviewFiles(input);
-    const outputWrites: Promise<void>[] = [];
-    const result = await preparationWorkspace.workspace.execute(
-      createOpenCodeRunCommand({
-        model: `${this.providerID}/${this.modelID}`,
-        prompt: createDraftCompositeReviewPrompt(input),
-        sessionID: input.opencodeSessionID,
-      }),
-      removeUndefinedOptions({
-        env: createOpenCodeEnv({
-          providerApiKey: this.providerApiKey,
-          providerID: this.providerID,
-        }),
-        onStderr: (chunk) => {
-          this.onStderr?.(chunk);
-          outputWrites.push(
-            writeDaytonaOpenCodeActivityLog(preparationWorkspace.workspace, {
-              attempt: input.attempt,
-              channel: "stderr",
-              raw: chunk,
-              stage: "draft-composite-review",
-            }),
-          );
-        },
-        onStdout: (chunk) => {
-          this.onStdout?.(chunk);
-          outputWrites.push(
-            writeDaytonaOpenCodeActivityLog(preparationWorkspace.workspace, {
-              attempt: input.attempt,
-              channel: "stdout",
-              raw: chunk,
-              stage: "draft-composite-review",
-            }),
-          );
-        },
-      }),
-    );
-    await Promise.all(outputWrites);
+    const result = await this.openCode.run({
+      attempt: input.attempt,
+      prompt: createDraftCompositeReviewPrompt(input),
+      sessionID: input.opencodeSessionID,
+      stage: "draft-composite-review",
+      workspace: preparationWorkspace.workspace,
+    });
 
     if (result.exitCode !== 0) {
       throw new Error(
@@ -691,7 +656,7 @@ function createScriptGenerationPrompt(
     "- Do not use Playwright `recordVideo`, custom marker writers, or agent-authored timestamps.",
     "- Do not emit placeholder scripts that only load the page, wait, smoke-check body text, or set inert DOM attributes.",
     "- Keep scripts deterministic and short enough for capture.",
-    "- Do not call Repo Preparation tools. Do not request dependency installs. Do not run backend validation.",
+    "- Do not call Repo Preparation tools. Do not request dependency installs. Do not run preparation preflight or Capture Path Validation.",
     "",
     "## Artifact Path",
     demoScriptPath,

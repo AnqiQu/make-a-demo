@@ -5,7 +5,7 @@ import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparat
 import type { ProjectValidationResult } from "../05-capture-path-validation/project-runtime-preflight/validation-result";
 import type { DemoPlanner } from "./demo-planning/demo-planner.interface";
 import {
-  type DemoScriptPackage,
+  type DemoScriptCandidate,
   buildDemoScriptPackage,
 } from "./demo-script-package";
 import type { ProjectExplorer } from "./project-exploration/project-explorer.interface";
@@ -33,7 +33,7 @@ export type ScriptGenerationDependencies = {
 export async function generateDemoScriptPackage(
   input: ScriptGenerationInput,
   dependencies: ScriptGenerationDependencies,
-): Promise<DemoScriptPackage> {
+): Promise<DemoScriptCandidate> {
   if (dependencies.scriptGenerationAgent !== undefined) {
     if (
       input.preparationWorkspace === undefined ||
