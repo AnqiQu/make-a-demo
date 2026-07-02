@@ -105,8 +105,9 @@ describe("readRepoSecurityInput", () => {
 
 class FakePreparationWorkspaceProvider implements PreparationWorkspaceProvider {
   constructor(
-    private readonly input: PreparationWorkspace | string[] =
-      new FakePreparationWorkspace(),
+    private readonly input:
+      | PreparationWorkspace
+      | string[] = new FakePreparationWorkspace(),
   ) {}
 
   async create(): Promise<PreparationWorkspaceHandle> {

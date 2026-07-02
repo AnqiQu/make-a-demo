@@ -348,6 +348,12 @@ describe("DefaultCapturePathSceneValidator", () => {
       sectionId: "section_action_timeout",
     });
 
+    expect(result.status).toBe("failed");
+    if (result.status !== "failed") {
+      throw new Error("Expected dry-run scene validation to fail.");
+    }
+    const { screenshotArtifactId } = result;
+
     expect(result).toMatchObject({
       failedAction: "locator.click(#save)",
       failureReason:
@@ -359,13 +365,7 @@ describe("DefaultCapturePathSceneValidator", () => {
       stderrPath: expect.stringContaining("scene_action_timeout.stderr.log"),
       stdoutPath: expect.stringContaining("scene_action_timeout.stdout.log"),
     });
-    expect(result.status).toBe("failed");
-    if (result.status !== "failed") {
-      throw new Error("Expected dry-run scene validation to fail.");
-    }
-    expect(result.screenshotArtifactId).toContain(
-      "makeademo-validation-failure.png",
-    );
+    expect(screenshotArtifactId).toContain("makeademo-validation-failure.png");
   }, 20_000);
 
   it("reports blocked runtime network from prepared-workspace dry-runs", async () => {
