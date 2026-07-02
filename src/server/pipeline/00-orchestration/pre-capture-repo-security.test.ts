@@ -57,6 +57,7 @@ describe("readRepoSecurityInput", () => {
 
   it("logs Daytona clone progress through Pino JSON", async () => {
     const lines: string[] = [];
+    const commands: string[] = [];
     const logger = createPipelineEventLogger({
       base: { component: "repo-security-screen" },
       sinks: [{ write: (line) => void lines.push(line) }],
@@ -64,12 +65,17 @@ describe("readRepoSecurityInput", () => {
     });
 
     const result = await readRepoSecurityInput(
-      new FakePreparationWorkspaceProvider(),
+      new FakePreparationWorkspaceProvider(commands),
       "https://github.com/example/app",
       { logger },
     );
 
     expect(result.repoStats).toEqual({ fileCount: 1, sizeBytes: 17 });
+    expect(commands[0]).toContain("sudo mkdir -p '/workspace'");
+    expect(commands[0]).toContain("sudo chown -R");
+    expect(commands[0]).toContain(
+      "git clone --depth 1 'https://github.com/example/app' '/workspace'",
+    );
     expect(lines.map((line) => JSON.parse(line))).toEqual([
       {
         component: "repo-security-screen",
@@ -99,14 +105,19 @@ describe("readRepoSecurityInput", () => {
 
 class FakePreparationWorkspaceProvider implements PreparationWorkspaceProvider {
   constructor(
-    private readonly workspace: PreparationWorkspace = new FakePreparationWorkspace(),
+    private readonly input: PreparationWorkspace | string[] =
+      new FakePreparationWorkspace(),
   ) {}
 
   async create(): Promise<PreparationWorkspaceHandle> {
+    const workspace = Array.isArray(this.input)
+      ? new FakePreparationWorkspace({ commands: this.input })
+      : this.input;
+
     return {
       async destroy() {},
       id: "workspace-1",
-      workspace: this.workspace,
+      workspace,
     };
   }
 }
@@ -117,10 +128,12 @@ class FakePreparationWorkspace implements PreparationWorkspace {
   constructor(
     private readonly input: {
       cloneResults?: PreparationWorkspaceCommandResult[];
+      commands?: string[];
     } = {},
   ) {}
 
   async execute(command: string): Promise<PreparationWorkspaceCommandResult> {
+    this.input.commands?.push(command);
     if (command.includes("git clone")) {
       const result = this.input.cloneResults?.[this.cloneAttempts] ?? {
         exitCode: 0,

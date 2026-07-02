@@ -597,6 +597,7 @@ async function captureCompositeAndReview(input: {
           ...(stage1.preparationWorkspace === undefined
             ? {}
             : { preparationWorkspace: stage1.preparationWorkspace }),
+          demoScriptCandidate: repair.demoScriptPackage,
           demoScriptPackage: repair.demoScriptPackage,
         });
       if (capturePathValidation.status !== "succeeded") {
@@ -708,7 +709,7 @@ async function persistGeneratedScript(input: {
 function scriptGeneratedMessage(
   scriptSummary: ReturnType<typeof summarizeScriptPackage>,
 ) {
-  return `Demo Script generated: ${scriptSummary.sceneCount} scene(s).`;
+  return `Accepted Demo Script ready: ${scriptSummary.sceneCount} scene(s).`;
 }
 
 async function defaultDraftReview(): Promise<DraftCompositeReviewDecision> {

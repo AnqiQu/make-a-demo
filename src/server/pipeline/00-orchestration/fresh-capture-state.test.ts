@@ -45,7 +45,29 @@ describe("createDaytonaFreshCaptureStatePreparer", () => {
 });
 
 function succeededStage1(preparationWorkspace?: PreparationWorkspaceHandle) {
+  const acceptedDemoScript = {
+    assumptions: [],
+    demoPlan: { featureOrder: [], narrative: "Demo.", risks: [] },
+    demoPlaywrightScript: "",
+    exploration: {
+      assumptions: [],
+      productSurfaces: [],
+      summary: "Prepared app.",
+    },
+    format: "16:9" as const,
+    presentation: {
+      music: { enabled: false as const },
+      textOverlays: [],
+      transitions: [],
+    },
+    scenes: [],
+    scriptId: "script_test",
+    title: "Demo",
+    version: 1 as const,
+  };
+
   return {
+    acceptedDemoScript,
     capturePathValidation: {
       blockedNetworkAttempts: [],
       browserUrl: "https://preview.example.test/",
@@ -53,26 +75,7 @@ function succeededStage1(preparationWorkspace?: PreparationWorkspaceHandle) {
       status: "succeeded" as const,
       warnings: [],
     },
-    demoScriptPackage: {
-      assumptions: [],
-      demoPlan: { featureOrder: [], narrative: "Demo.", risks: [] },
-      demoPlaywrightScript: "",
-      exploration: {
-        assumptions: [],
-        productSurfaces: [],
-        summary: "Prepared app.",
-      },
-      format: "16:9" as const,
-      presentation: {
-        music: { enabled: false as const },
-        textOverlays: [],
-        transitions: [],
-      },
-      scenes: [],
-      scriptId: "script_test",
-      title: "Demo",
-      version: 1 as const,
-    },
+    demoScriptPackage: acceptedDemoScript,
     opencodeSessionID: "session_123",
     preparationManifest: preparationManifest(),
     ...(preparationWorkspace === undefined ? {} : { preparationWorkspace }),

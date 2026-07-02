@@ -613,7 +613,7 @@ describe("runFullPipelineJob", () => {
           "repo-preparation started.",
           "script-generation succeeded.",
           "capture-path-validation succeeded.",
-          "Demo Script generated: 1 scene(s).",
+          "Accepted Demo Script ready: 1 scene(s).",
           "Footage Capture started.",
           "Footage Capture succeeded: 1 scene video(s).",
           "Compositing started.",
@@ -630,7 +630,7 @@ describe("runFullPipelineJob", () => {
         expect.arrayContaining([
           expect.objectContaining({
             event: "demo-script-written",
-            message: "Demo Script generated: 1 scene(s).",
+            message: "Accepted Demo Script ready: 1 scene(s).",
             scriptPath: result.scriptPath,
           }),
           expect.objectContaining({

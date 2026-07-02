@@ -35,6 +35,7 @@ describe("createMakeADemoOpenCodeConfigFiles", () => {
     )?.content;
     expect(plugin).toContain("preparationManifestPath");
     expect(plugin).toContain("manifestPath: tool.schema.string()");
+    expect(plugin).toContain("preparation preflight");
     expect(plugin).toContain("manifest = await assertValidationPassed()");
     expect(plugin).not.toContain("assertValidationPassed(args.manifest)");
   });

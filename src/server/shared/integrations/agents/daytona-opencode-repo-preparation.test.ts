@@ -41,8 +41,12 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
       expect.arrayContaining([
         { network: true },
         {
-          execute:
-            "mkdir -p /workspace && find /workspace -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --depth 1 'https://github.com/example/app' /workspace",
+          execute: expect.stringContaining("sudo mkdir -p '/workspace'"),
+        },
+        {
+          execute: expect.stringContaining(
+            "git clone --depth 1 'https://github.com/example/app' '/workspace'",
+          ),
         },
         { network: false },
         {
@@ -290,8 +294,12 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
       expect.arrayContaining([
         { network: true },
         {
-          execute:
-            "mkdir -p /workspace && find /workspace -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --depth 1 'https://github.com/example/app' /workspace",
+          execute: expect.stringContaining("sudo mkdir -p '/workspace'"),
+        },
+        {
+          execute: expect.stringContaining(
+            "git clone --depth 1 'https://github.com/example/app' '/workspace'",
+          ),
         },
         { network: false },
         {
@@ -441,7 +449,7 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     );
   });
 
-  it("returns a successful preparation result as soon as backend validation passes", async () => {
+  it("returns a successful preparation result as soon as preparation preflight passes", async () => {
     const events: unknown[] = [];
     const validations: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparation({
@@ -550,7 +558,7 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     });
   });
 
-  it("returns malformed manifest handoff failures to the agent as validation feedback", async () => {
+  it("returns malformed manifest handoff failures to the agent as preparation preflight feedback", async () => {
     const events: unknown[] = [];
     let validationStarted = false;
     const agent = new DaytonaOpenCodeRepoPreparation({
@@ -606,7 +614,7 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
       expect.arrayContaining([
         {
           sandboxLog: expect.objectContaining({
-            event: "validation-finished",
+            event: "preparation-preflight.finished",
             failureReason:
               "Preparation manifest handoff is invalid: status must be a non-empty string",
             stage: "repo-preparation",
@@ -637,8 +645,14 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     expect(events).toEqual(
       expect.arrayContaining([
         {
-          submittedCodeExecute:
-            "mkdir -p /workspace && find /workspace -mindepth 1 -maxdepth 1 -exec rm -rf {} + && git clone --depth 1 'https://github.com/example/app' /workspace",
+          submittedCodeExecute: expect.stringContaining(
+            "sudo mkdir -p '/workspace'",
+          ),
+        },
+        {
+          submittedCodeExecute: expect.stringContaining(
+            "git clone --depth 1 'https://github.com/example/app' '/workspace'",
+          ),
         },
       ]),
     );
@@ -768,7 +782,7 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     );
   });
 
-  it("fails fast instead of starting backend validation when the preparation deadline is nearly exhausted", async () => {
+  it("fails fast instead of starting preparation preflight when the preparation deadline is nearly exhausted", async () => {
     const events: unknown[] = [];
     let validationStarted = false;
     const agent = new DaytonaOpenCodeRepoPreparation({
@@ -799,7 +813,7 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
 
     expect(result).toMatchObject({
       blockers: [
-        "Repo Preparation ran out of time before backend validation could start.",
+        "Repo Preparation ran out of time before preparation preflight could start.",
       ],
       status: "failed",
     });

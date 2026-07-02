@@ -6,7 +6,10 @@ import type {
 } from "../02-repo-security-screen/repo-security-screen";
 import type { PreparationManifest } from "../03-repo-preparation/preparation-manifest";
 import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
-import type { DemoScriptPackage } from "../04-script-generation/demo-script-package";
+import type {
+  AcceptedDemoScript,
+  DemoScriptPackage,
+} from "../04-script-generation/demo-script-package";
 import type { CapturePathValidationResult } from "../05-capture-path-validation/capture-path-validator.interface";
 
 export type PipelineJobInput = {
@@ -36,5 +39,6 @@ export type PipelineJobResult =
       preparationWorkspace?: PreparationWorkspaceHandle;
       capturePathValidation: CapturePathValidationResult;
       status: "succeeded";
+      acceptedDemoScript: AcceptedDemoScript;
       demoScriptPackage: DemoScriptPackage;
     };

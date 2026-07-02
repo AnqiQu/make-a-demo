@@ -17,10 +17,54 @@ const forbiddenCaptureControlPatterns: Array<[RegExp, string]> = [
   [/\belapsedMs\b/, "marker timing is owned by MakeADemo"],
 ];
 
+const forbiddenRuntimeNetworkPatterns: Array<[RegExp, string]> = [
+  [/\bfetch\s*\(/, "Generated Demo Scripts must not call fetch"],
+  [
+    /\bXMLHttpRequest\b/,
+    "Generated Demo Scripts must not create XMLHttpRequest calls",
+  ],
+  [/\bWebSocket\b/, "Generated Demo Scripts must not create WebSocket clients"],
+  [
+    /\bEventSource\b/,
+    "Generated Demo Scripts must not create EventSource clients",
+  ],
+  [
+    /\bnavigator\s*\.\s*sendBeacon\s*\(/,
+    "Generated Demo Scripts must not call navigator.sendBeacon",
+  ],
+  [
+    /\bpage\s*\.\s*(?:waitForRequest|waitForResponse|route|unroute)\s*\(/,
+    "Generated Demo Scripts must not wait on network requests or install request routes",
+  ],
+  [
+    /\bpage\s*\.\s*request\b/,
+    "Generated Demo Scripts must not use page.request",
+  ],
+];
+
+const forbiddenNetworkImportPatterns: Array<[RegExp, string]> = [
+  [
+    /\b(?:import\s+(?:[^'"]+\s+from\s+)?|require\s*\(\s*)['"](?:node:)?(?:http|https|net|dns)['"]\s*\)?/,
+    "Generated Demo Scripts must not import Node network modules",
+  ],
+];
+
+const forbiddenAppBypassPatterns: Array<[RegExp, string]> = [
+  [
+    /\bpage\s*\.\s*(?:evaluate|evaluateHandle|waitForFunction)\s*\(/,
+    "Generated Demo Scripts must not execute arbitrary page JavaScript",
+  ],
+  [
+    /\bpage\s*\.\s*(?:addScriptTag|addInitScript|exposeFunction|exposeBinding)\s*\(/,
+    "Generated Demo Scripts must not inject scripts into the prepared app",
+  ],
+];
+
 /**
  * Validates agent-authored Demo Script code against the generated Capture SDK
  * contract. The agent may import and call setup/scene, but must not own
- * browser recording, marker emission, output paths, or capture timestamps.
+ * browser recording, marker emission, output paths, capture timestamps, or
+ * runtime network behavior.
  */
 export function assertDemoScriptCaptureSdkContract(script: DemoScript): void {
   if (!SDK_IMPORT_PATTERN.test(script.demoPlaywrightScript)) {
@@ -31,6 +75,35 @@ export function assertDemoScriptCaptureSdkContract(script: DemoScript): void {
 
   for (const [pattern, reason] of forbiddenCaptureControlPatterns) {
     if (pattern.test(script.demoPlaywrightScript)) {
+      throw new Error(
+        `Demo Script violates the Capture SDK Contract: ${reason}.`,
+      );
+    }
+  }
+
+  const networkSource = stripCommentsAndStringLiterals(
+    script.demoPlaywrightScript,
+  );
+  for (const [pattern, reason] of forbiddenRuntimeNetworkPatterns) {
+    if (pattern.test(networkSource)) {
+      throw new Error(
+        `Demo Script violates the Capture SDK Contract: ${reason}.`,
+      );
+    }
+  }
+  for (const [pattern, reason] of forbiddenNetworkImportPatterns) {
+    if (pattern.test(script.demoPlaywrightScript)) {
+      throw new Error(
+        `Demo Script violates the Capture SDK Contract: ${reason}.`,
+      );
+    }
+  }
+
+  const bypassSource = stripCommentsAndStringLiterals(
+    script.demoPlaywrightScript,
+  );
+  for (const [pattern, reason] of forbiddenAppBypassPatterns) {
+    if (pattern.test(bypassSource)) {
       throw new Error(
         `Demo Script violates the Capture SDK Contract: ${reason}.`,
       );
@@ -544,5 +617,9 @@ function instructionsSource() {
 Import setup and scene from './makeademo-capture-sdk'. Put off-camera login, seeding, and navigation in setup. Put each on-camera product moment in scene(id, async ({ page, baseUrl, expect }) => { ... }). Each scene must assert a visible outcome with Playwright expect before it ends.
 
 Do not launch browsers, create contexts, configure recordVideo, write marker logs, print [makeademo:scene] lines, or provide timestamps/durations.
+
+Do not use real-time network access from the Demo Script. Do not call fetch, XMLHttpRequest, WebSocket, EventSource, navigator.sendBeacon, page.waitForRequest, page.waitForResponse, page.route, page.unroute, or Node network modules.
+
+Do not bypass the prepared app UI with app-internal JavaScript such as page.evaluate, page.addScriptTag, page.addInitScript, page.exposeFunction, or page.exposeBinding. Demo Scripts must use user-visible navigation, interactions, and locator assertions against the prepared app.
 `;
 }

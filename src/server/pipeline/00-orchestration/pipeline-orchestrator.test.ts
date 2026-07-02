@@ -40,6 +40,7 @@ describe("runPipelineJob", () => {
         async validateCapturePath(input) {
           calls.push("capture-path-validation");
           expect(input.preparationWorkspace?.id).toBe("daytona_workspace");
+          expect(input.demoScriptCandidate.scriptId).toBe("script_test");
           expect(input.demoScriptPackage.scriptId).toBe("script_test");
           return {
             blockedNetworkAttempts: [],
@@ -53,6 +54,10 @@ describe("runPipelineJob", () => {
     );
 
     expect(result.status).toBe("succeeded");
+    if (result.status === "succeeded") {
+      expect(result.acceptedDemoScript.scriptId).toBe("script_test");
+      expect(result.demoScriptPackage).toBe(result.acceptedDemoScript);
+    }
     expect(calls).toEqual([
       "repo-security-screen",
       "repo-preparation",

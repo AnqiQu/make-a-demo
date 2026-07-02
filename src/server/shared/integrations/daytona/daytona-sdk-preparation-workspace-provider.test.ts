@@ -296,6 +296,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
           call !== null &&
           "executeCommand" in call &&
           typeof call.executeCommand === "string" &&
+          call.executeCommand.includes("printf '%s'") &&
           call.executeCommand.includes("/tmp/makeademo/sandbox-log.jsonl"),
       )
       .map((call) => call.executeCommand);
@@ -312,6 +313,36 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
           typeof call === "object" && call !== null && "createSession" in call,
       ),
     ).toHaveLength(0);
+  });
+
+  it("does not fail sandbox logging when the workspace mirror path is unavailable", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { failWorkspaceLogMirror: true }),
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.writeSandboxLog?.({
+        event: "repo-preparation.started",
+        stage: "repo-preparation",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        {
+          executeCommand: expect.stringContaining(
+            ">> '/tmp/makeademo/sandbox-log.jsonl'",
+          ),
+        },
+        {
+          executeCommand: expect.stringContaining(
+            "cp '/tmp/makeademo/sandbox-log.jsonl' '/workspace/.makeademo/sandbox-log.jsonl'",
+          ),
+        },
+      ]),
+    );
   });
 
   it("keeps sandbox log write timeouts host-visible without failing callers", async () => {
@@ -908,6 +939,7 @@ function fakeClient(
     downloadError?: string;
     executeCommandNeverResolves?: boolean;
     failFirstSubmittedCodeInitialization?: boolean;
+    failWorkspaceLogMirror?: boolean;
     failSubmittedCodeNetworkDisable?: boolean;
     missingSubmittedCodeImage?: boolean;
     networkError?: Error;
@@ -1016,6 +1048,17 @@ function fakeClient(
             exitCode: 1,
             result: "",
             stderr: "failed to disable submitted-code network",
+          };
+        }
+        if (
+          options.failWorkspaceLogMirror === true &&
+          command.includes("/workspace/.makeademo/sandbox-log.jsonl")
+        ) {
+          return {
+            exitCode: 1,
+            result: "",
+            stderr:
+              "mkdir: cannot create directory '/workspace': Permission denied",
           };
         }
         if (

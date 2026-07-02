@@ -41,6 +41,7 @@ const allowedInstallFlags = new Set([
   "--pure-lockfile",
   "--silent",
   "--verbose",
+  "--workspaces=false",
 ]);
 const deniedDependencyCommandReason =
   "Dependency installation network access is limited to allowlisted package-manager install commands.";

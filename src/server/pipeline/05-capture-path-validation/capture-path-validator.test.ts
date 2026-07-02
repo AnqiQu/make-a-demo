@@ -11,6 +11,7 @@ describe("validateCapturePath", () => {
       {
         preparationManifest: manifest(),
         preparationWorkspace: workspaceHandle(sandboxLogs),
+        demoScriptCandidate: demoScript(),
         demoScriptPackage: demoScript(),
       },
       {
@@ -101,6 +102,7 @@ describe("validateCapturePath", () => {
       {
         preparationManifest: manifest(),
         preparationWorkspace: workspaceHandle(sandboxLogs, executedCommands),
+        demoScriptCandidate: demoScript(),
         demoScriptPackage: demoScript(),
       },
       {
@@ -116,6 +118,8 @@ describe("validateCapturePath", () => {
         sceneValidator: {
           async validateScene() {
             return {
+              errorMessage:
+                "Timed out waiting for locator('.article-preview') to be visible",
               failureReason:
                 "Scene scene_validation failed during Capture Path Validation.",
               logs: [
@@ -140,6 +144,8 @@ describe("validateCapturePath", () => {
       diagnosticsLogPath:
         "/workspace/.makeademo/capture-path-validation-diagnostics.jsonl",
       failedSceneId: "scene_validation",
+      errorMessage:
+        "Timed out waiting for locator('.article-preview') to be visible",
       failureReason:
         "Scene scene_validation failed during Capture Path Validation.",
       status: "failed",
@@ -150,6 +156,8 @@ describe("validateCapturePath", () => {
           diagnosticsLogPath:
             "/workspace/.makeademo/capture-path-validation-diagnostics.jsonl",
           event: "capture-path-validation.scene.failed",
+          errorMessage:
+            "Timed out waiting for locator('.article-preview') to be visible",
           failureLogExcerpt: expect.stringContaining("article-preview"),
           sceneId: "scene_validation",
         }),
@@ -166,14 +174,16 @@ describe("validateCapturePath", () => {
   });
 
   it("returns a repairable failure for Demo Scripts that bypass the generated Capture SDK contract", async () => {
+    const script = demoScript({
+      demoPlaywrightScript:
+        "import { setup, scene } from './makeademo-capture-sdk';\nawait scene('scene_validation', async ({ page, expect }) => {\n  await page.context().newPage({ recordVideo: { dir: 'videos' } });\n  console.log('[makeademo:scene]', '{}');\n  await expect(page.locator('body')).toBeVisible();\n});",
+    });
     const result = await validateCapturePath(
       {
         preparationManifest: manifest(),
         preparationWorkspace: workspaceHandle([]),
-        demoScriptPackage: demoScript({
-          demoPlaywrightScript:
-            "import { setup, scene } from './makeademo-capture-sdk';\nawait scene('scene_validation', async ({ page, expect }) => {\n  await page.context().newPage({ recordVideo: { dir: 'videos' } });\n  console.log('[makeademo:scene]', '{}');\n  await expect(page.locator('body')).toBeVisible();\n});",
-        }),
+        demoScriptCandidate: script,
+        demoScriptPackage: script,
       },
       {
         async validateProject() {
@@ -204,15 +214,17 @@ describe("validateCapturePath", () => {
   it("returns a repairable failure for declared Scenes without visible assertions", async () => {
     const calls: string[] = [];
     const sandboxLogs: Array<Record<string, unknown>> = [];
+    const script = demoScript({
+      demoPlaywrightScript:
+        "import { setup, scene } from './makeademo-capture-sdk';\nawait scene('scene_validation', async ({ page }) => {\n  await page.getByRole('button', { name: 'Save' }).click();\n});",
+    });
 
     const result = await validateCapturePath(
       {
         preparationManifest: manifest(),
         preparationWorkspace: workspaceHandle(sandboxLogs),
-        demoScriptPackage: demoScript({
-          demoPlaywrightScript:
-            "import { setup, scene } from './makeademo-capture-sdk';\nawait scene('scene_validation', async ({ page }) => {\n  await page.getByRole('button', { name: 'Save' }).click();\n});",
-        }),
+        demoScriptCandidate: script,
+        demoScriptPackage: script,
       },
       {
         async validateProject() {
@@ -262,6 +274,7 @@ describe("validateCapturePath", () => {
         {
           preparationManifest: manifest(),
           preparationWorkspace: hangingLogWorkspaceHandle(),
+          demoScriptCandidate: demoScript(),
           demoScriptPackage: demoScript(),
         },
         {
@@ -301,6 +314,7 @@ describe("validateCapturePath", () => {
       {
         preparationManifest: manifest(),
         preparationWorkspace: workspaceHandle([]),
+        demoScriptCandidate: demoScript(),
         demoScriptPackage: demoScript(),
       },
       {
@@ -393,25 +407,27 @@ describe("validateCapturePath", () => {
       name: "missing terminal marker",
     },
   ])("rejects $name", async ({ expectedReason, logs }) => {
+    const script = demoScript({
+      demoPlaywrightScript: validTwoSceneDemoPlaywrightScript(),
+      scenes: [
+        {
+          expectedVisibleOutcome: "Validation is visible.",
+          humanReadableDescription: "Show validation.",
+          id: "scene_validation",
+        },
+        {
+          expectedVisibleOutcome: "Second scene is visible.",
+          humanReadableDescription: "Show second scene.",
+          id: "scene_second",
+        },
+      ],
+    });
     const result = await validateCapturePath(
       {
         preparationManifest: manifest(),
         preparationWorkspace: workspaceHandle([]),
-        demoScriptPackage: demoScript({
-          demoPlaywrightScript: validTwoSceneDemoPlaywrightScript(),
-          scenes: [
-            {
-              expectedVisibleOutcome: "Validation is visible.",
-              humanReadableDescription: "Show validation.",
-              id: "scene_validation",
-            },
-            {
-              expectedVisibleOutcome: "Second scene is visible.",
-              humanReadableDescription: "Show second scene.",
-              id: "scene_second",
-            },
-          ],
-        }),
+        demoScriptCandidate: script,
+        demoScriptPackage: script,
       },
       {
         async validateProject() {

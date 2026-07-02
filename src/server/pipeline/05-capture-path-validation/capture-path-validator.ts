@@ -32,6 +32,7 @@ export type CapturePathSceneValidationResult =
     }
   | {
       blockedNetworkAttempts?: CapturePathValidationResult["blockedNetworkAttempts"];
+      errorMessage?: string;
       failedAction?: string;
       failureReason: string;
       logs: string[];
@@ -334,6 +335,7 @@ async function capturePathSceneFailure(input: {
     diagnosticsLogPath: capturePathDiagnosticsLogPath,
     event: "capture-path-validation.scene.failed",
     failedAction: input.sceneResult.failedAction,
+    errorMessage: input.sceneResult.errorMessage,
     failureLogExcerpt,
     failureReason: input.sceneResult.failureReason,
     runDirectory: input.sceneResult.runDirectory,
@@ -349,6 +351,7 @@ async function capturePathSceneFailure(input: {
       input.sceneResult.blockedNetworkAttempts?.length ?? 0,
     event: "capture-path-validation.scene.failed",
     failedAction: input.sceneResult.failedAction,
+    errorMessage: input.sceneResult.errorMessage,
     failureLogExcerpt,
     failureReason: input.sceneResult.failureReason,
     logs: input.sceneResult.logs,
@@ -371,6 +374,9 @@ async function capturePathSceneFailure(input: {
     ...(input.sceneResult.failedAction === undefined
       ? {}
       : { failedAction: input.sceneResult.failedAction }),
+    ...(input.sceneResult.errorMessage === undefined
+      ? {}
+      : { errorMessage: input.sceneResult.errorMessage }),
     ...(input.sceneResult.runDirectory === undefined
       ? {}
       : { runDirectory: input.sceneResult.runDirectory }),
