@@ -345,32 +345,20 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     );
   });
 
-  it("keeps sandbox log write timeouts host-visible without failing callers", async () => {
+  it("fails fast when a durable sandbox log write does not finish", async () => {
     const calls: unknown[] = [];
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
       client: fakeClient(calls, { executeCommandNeverResolves: true }),
       logWriteTimeoutMs: 1,
     });
     const handle = await provider.create();
 
-    try {
-      await expect(
-        handle.workspace.writeSandboxLog?.({
-          event: "project-validation.started",
-          stage: "project-validation",
-        }),
-      ).resolves.toBeUndefined();
-
-      expect(warn).toHaveBeenCalledWith(
-        "Pipeline log sink write failed.",
-        expect.objectContaining({
-          message: "Daytona sandbox log write did not finish within 1ms.",
-        }),
-      );
-    } finally {
-      warn.mockRestore();
-    }
+    await expect(
+      handle.workspace.writeSandboxLog?.({
+        event: "project-validation.started",
+        stage: "project-validation",
+      }),
+    ).rejects.toThrow("Daytona sandbox log write did not finish within 1ms.");
   });
 
   it("disconnects active streaming commands before deleting the sandbox", async () => {

@@ -20,6 +20,7 @@ import {
   createDaytonaWorkspaceResetCommand,
   daytonaWorkspaceDirectory,
 } from "../daytona/workspace-command";
+import { writeDaytonaOpenCodeActivityLog } from "./daytona-opencode-activity-log";
 import { createMakeADemoOpenCodeConfigFiles } from "./prepared-opencode-config";
 
 const makeADemoOuterControlDirectory = "/tmp/makeademo/submitted-code";
@@ -356,13 +357,30 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
       sessionID?: string;
     },
   ): Promise<PreparationWorkspaceCommandResult & { sessionID?: string }> {
+    const outputWrites: Promise<void>[] = [];
     let streamedStdout = "";
     const onStdout = (chunk: string) => {
       streamedStdout += chunk;
       this.onStdout?.(chunk);
+      outputWrites.push(
+        writeDaytonaOpenCodeActivityLog(handle.workspace, {
+          attempt: input.attempt,
+          channel: "stdout",
+          raw: chunk,
+          stage: "repo-preparation",
+        }),
+      );
     };
     const onStderr = (chunk: string) => {
       this.onStderr?.(chunk);
+      outputWrites.push(
+        writeDaytonaOpenCodeActivityLog(handle.workspace, {
+          attempt: input.attempt,
+          channel: "stderr",
+          raw: chunk,
+          stage: "repo-preparation",
+        }),
+      );
     };
     const options = {
       env: createOpenCodeEnv(input),
@@ -374,6 +392,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
       createOpenCodeRunCommand(input),
       options,
     );
+    await Promise.all(outputWrites);
 
     const sessionID = readOpenCodeSessionID(
       `${streamedStdout}\n${result.stdout}`,

@@ -125,14 +125,7 @@ function createPinoLogger(
           }
         }
         state.writeChain = state.writeChain.then(async () => {
-          const results = await Promise.allSettled(
-            asyncWrites.map((write) => write()),
-          );
-          for (const result of results) {
-            if (result.status === "rejected") {
-              console.warn("Pipeline log sink write failed.", result.reason);
-            }
-          }
+          await Promise.all(asyncWrites.map((write) => write()));
         });
       },
     },

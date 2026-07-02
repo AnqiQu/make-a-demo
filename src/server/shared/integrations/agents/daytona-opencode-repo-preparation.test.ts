@@ -87,7 +87,7 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     expect(command).toContain("--model 'openai/gpt-5.5'");
   });
 
-  it("streams OpenCode chunks without writing them to the sandbox audit log", async () => {
+  it("mirrors streamed OpenCode chunks to the sandbox audit log", async () => {
     const events: unknown[] = [];
     const streamed: string[] = [];
     const agent = new DaytonaOpenCodeRepoPreparation({
@@ -118,55 +118,24 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
       status: "succeeded",
     });
     expect(streamed).toEqual(["stdout:agent output", "stderr:agent warning"]);
-    expect(events).not.toEqual(
-      expect.arrayContaining([
-        { sandboxLog: expect.objectContaining({ event: "opencode.output" }) },
-      ]),
-    );
-  });
-
-  it("does not queue lifecycle progress behind wedged OpenCode activity log writes", async () => {
-    const events: unknown[] = [];
-    const agent = new DaytonaOpenCodeRepoPreparation({
-      modelID: "gpt-5.5",
-      provider: fakeProvider(events, {
-        commandStderrChunks: ["agent warning"],
-        commandStdout: ["Submitted preparation result."],
-        commandStdoutChunks: ["agent output 1", "agent output 2"],
-        preparationResult: successResult(),
-        queuedSandboxLogWrites: true,
-        sandboxLogNeverSettlesEvent: "opencode.output",
-        validationResult: validationArtifact(),
-      }),
-      providerApiKey: "openai_key",
-      providerID: "openai",
-      timeoutMs: 1_000,
-    });
-
-    const result = await Promise.race([
-      agent.prepare({
-        normalizedSupportingDocuments: [],
-        repoUrl: "https://github.com/example/app",
-        structuredDemoIntent: { keyProductFeatures: ["validation"] },
-        workspaceId: "workspace_123",
-      }),
-      new Promise<"activity-log-waited">((resolve) =>
-        setTimeout(() => resolve("activity-log-waited"), 50),
-      ),
-    ]);
-
-    expect(result).toMatchObject({
-      manifest: { demoCommand: "npm run demo:makeademo" },
-      status: "succeeded",
-    });
     expect(events).toEqual(
       expect.arrayContaining([
-        { sandboxLog: expect.objectContaining({ event: "opencode-finished" }) },
-      ]),
-    );
-    expect(events).not.toEqual(
-      expect.arrayContaining([
-        { sandboxLog: expect.objectContaining({ event: "opencode.output" }) },
+        {
+          sandboxLog: expect.objectContaining({
+            channel: "stdout",
+            event: "opencode.output",
+            raw: "agent output",
+            stage: "repo-preparation",
+          }),
+        },
+        {
+          sandboxLog: expect.objectContaining({
+            channel: "stderr",
+            event: "opencode.output",
+            raw: "agent warning",
+            stage: "repo-preparation",
+          }),
+        },
       ]),
     );
   });
@@ -708,7 +677,7 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     );
   });
 
-  it("streams meaningful OpenCode output without legacy activity artifacts", async () => {
+  it("mirrors meaningful streamed OpenCode output into the sandbox Pino log seam", async () => {
     const events: unknown[] = [];
     const streamed: string[] = [];
     const agent = new DaytonaOpenCodeRepoPreparation({
@@ -735,9 +704,24 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     });
 
     expect(streamed).toEqual(["stdout:agent output", "stderr:agent warning"]);
-    expect(events).not.toEqual(
+    expect(events).toEqual(
       expect.arrayContaining([
-        { sandboxLog: expect.objectContaining({ event: "opencode.output" }) },
+        {
+          sandboxLog: expect.objectContaining({
+            channel: "stdout",
+            event: "opencode.output",
+            raw: "agent output",
+            stage: "repo-preparation",
+          }),
+        },
+        {
+          sandboxLog: expect.objectContaining({
+            channel: "stderr",
+            event: "opencode.output",
+            raw: "agent warning",
+            stage: "repo-preparation",
+          }),
+        },
       ]),
     );
     expect(events).not.toEqual(
