@@ -1,5 +1,6 @@
 import type { PreparationManifest } from "../../03-repo-preparation/preparation-manifest";
 import type { PreparationWorkspaceHandle } from "../../03-repo-preparation/preparation-workspace-runner";
+import { SubmittedCodeWorkspaceSyncError } from "../../03-repo-preparation/submitted-code-execution";
 import type { BrowserValidator } from "./browser-validator.interface";
 import { inferInstallPlan } from "./install-plan";
 import { findRuntimeBoundaryViolations } from "./network-isolation-policy";
@@ -42,6 +43,9 @@ export async function validateProject(
     });
     return {
       blockedNetworkAttempts: [],
+      ...(error instanceof SubmittedCodeWorkspaceSyncError
+        ? { failureKind: error.failureKind }
+        : {}),
       failureReason,
       logs: [failureReason],
       status: "failed",

@@ -4,6 +4,30 @@ import type {
   PreparationWorkspaceExecuteOptions,
 } from "./preparation-workspace.interface";
 
+/**
+ * Raised when MakeADemo cannot copy the prepared workspace into the
+ * submitted-code runtime boundary. Callers must treat this as infrastructure
+ * failure metadata and must not ask the preparation agent to repair app code.
+ */
+export class SubmittedCodeWorkspaceSyncError extends Error {
+  readonly failureKind = "submitted-code-workspace-sync-failed" as const;
+
+  constructor(cause: unknown) {
+    super(readSubmittedCodeSyncFailureMessage(cause), {
+      cause,
+    });
+    this.name = "SubmittedCodeWorkspaceSyncError";
+  }
+}
+
+function readSubmittedCodeSyncFailureMessage(cause: unknown): string {
+  if (cause instanceof Error && cause.message.length > 0) {
+    return cause.message;
+  }
+
+  return "Failed to sync prepared files to submitted-code workspace.";
+}
+
 export async function executeSubmittedCode(
   workspace: PreparationWorkspace,
   command: string,
@@ -38,5 +62,9 @@ export async function syncSubmittedCodeWorkspace(
     );
   }
 
-  await workspace.syncSubmittedCodeWorkspace();
+  try {
+    await workspace.syncSubmittedCodeWorkspace();
+  } catch (error) {
+    throw new SubmittedCodeWorkspaceSyncError(error);
+  }
 }

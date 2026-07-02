@@ -381,6 +381,144 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     );
   });
 
+  it("fails fast when preparation preflight cannot restore submitted-code files", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      providerApiKey: "openai_key",
+      provider: fakeProvider(events, {
+        commandStdout: ["Validation requested."],
+        validationRequest: {
+          manifestPath:
+            "/tmp/makeademo/submitted-code/preparation-manifest.json",
+        },
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+      validatePreparation: async () => ({
+        blockedNetworkAttempts: [],
+        failureKind: "submitted-code-workspace-sync-failed",
+        failureReason:
+          "Failed to sync prepared files to submitted-code workspace.",
+        logs: ["Failed to sync prepared files to submitted-code workspace."],
+        status: "failed",
+        warnings: [],
+      }),
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      blockers: [
+        expect.stringContaining(
+          "non-retryable MakeADemo infrastructure failure",
+        ),
+      ],
+      status: "failed",
+    });
+    expect(
+      events.filter(
+        (event): event is { execute: string } =>
+          typeof event === "object" &&
+          event !== null &&
+          "execute" in event &&
+          typeof event.execute === "string" &&
+          event.execute.includes("opencode run"),
+      ),
+    ).toHaveLength(1);
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "repo-preparation.retrying",
+          }),
+        },
+      ]),
+    );
+  });
+
+  it("retries preparation preflight feedback when restore-looking text has no failure kind", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      providerApiKey: "openai_key",
+      provider: fakeProvider(events, {
+        commandStdout: [
+          "Validation requested.",
+          JSON.stringify({
+            assumptions: [],
+            blockers: ["Agent received validation feedback."],
+            status: "failed",
+            suggestedChanges: [],
+          }),
+        ],
+        validationRequest: {
+          manifestPath:
+            "/tmp/makeademo/submitted-code/preparation-manifest.json",
+        },
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+      validatePreparation: async () => ({
+        blockedNetworkAttempts: [],
+        failureReason:
+          'Failed to restore prepared files in submitted-code sandbox (exit code 2). stderr: sh: 1: Syntax error: "(" unexpected',
+        logs: [
+          'Failed to restore prepared files in submitted-code sandbox (exit code 2). stderr: sh: 1: Syntax error: "(" unexpected',
+        ],
+        status: "failed",
+        warnings: [],
+      }),
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      blockers: ["Agent received validation feedback."],
+      status: "failed",
+    });
+    expect(
+      events.filter(
+        (event): event is { execute: string } =>
+          typeof event === "object" &&
+          event !== null &&
+          "execute" in event &&
+          typeof event.execute === "string" &&
+          event.execute.includes("opencode run"),
+      ),
+    ).toHaveLength(2);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "repo-preparation.retrying",
+            reason:
+              'Failed to restore prepared files in submitted-code sandbox (exit code 2). stderr: sh: 1: Syntax error: "(" unexpected',
+          }),
+        },
+      ]),
+    );
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "preparation-preflight.non-retryable-failure",
+          }),
+        },
+      ]),
+    );
+  });
+
   it("reseals submitted-code network when dependency installation times out", async () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparation({

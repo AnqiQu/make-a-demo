@@ -281,6 +281,22 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
           validation,
         });
         await clearValidationRequest(handle.workspace);
+        const nonRetryablePreflightFailure =
+          readNonRetryablePreflightFailure(validation);
+        if (nonRetryablePreflightFailure !== undefined) {
+          await writePreparationSandboxLog(handle.workspace, {
+            event: "preparation-preflight.non-retryable-failure",
+            failureReason: nonRetryablePreflightFailure,
+          });
+          return {
+            assumptions: [],
+            blockers: [nonRetryablePreflightFailure],
+            status: "failed" as const,
+            suggestedChanges: [
+              "Report this MakeADemo infrastructure failure instead of asking the app preparation agent to repair the submitted repo.",
+            ],
+          };
+        }
         if (validation.status === "succeeded" && manifest !== undefined) {
           await writePreparationSandboxLog(handle.workspace, {
             event: "preparation-auto-succeeded-after-preflight",
@@ -525,6 +541,16 @@ function readRetryReason(reason: string | undefined): string {
   return reason === undefined || reason.trim().length === 0
     ? "validation-failed"
     : reason;
+}
+
+function readNonRetryablePreflightFailure(
+  validation: ProjectValidationResult,
+): string | undefined {
+  if (validation.failureKind !== "submitted-code-workspace-sync-failed") {
+    return undefined;
+  }
+
+  return `Preparation preflight failed with a non-retryable MakeADemo infrastructure failure: ${validation.failureReason ?? validation.failureKind}`;
 }
 
 async function cloneSubmittedCodeWorkspace(

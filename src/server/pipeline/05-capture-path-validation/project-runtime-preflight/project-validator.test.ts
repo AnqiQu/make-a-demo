@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PreparationWorkspaceHandle } from "../../03-repo-preparation/preparation-workspace-runner";
+import { SubmittedCodeWorkspaceSyncError } from "../../03-repo-preparation/submitted-code-execution";
 import type { BrowserValidator } from "./browser-validator.interface";
 import { validateProject } from "./project-validator";
 import type { SandboxRunner } from "./sandbox-runner.interface";
@@ -308,6 +309,40 @@ describe("validateProject", () => {
       logs: ["Daytona command did not finish within 600000ms."],
       status: "failed",
       warnings: [],
+    });
+  });
+
+  it("classifies submitted-code workspace sync failures in validation metadata", async () => {
+    const sandboxRunner: SandboxRunner = {
+      async runValidation() {
+        throw new SubmittedCodeWorkspaceSyncError(
+          new Error("restore archive failed"),
+        );
+      },
+    };
+    const browserValidator: BrowserValidator = {
+      async validate() {
+        throw new Error(
+          "browser validation should not run after sandbox failure",
+        );
+      },
+    };
+
+    const result = await validateProject(
+      {
+        preparationManifest: manifest({
+          demoCommand: "npm run demo",
+          url: "http://localhost:5173",
+        }),
+      },
+      { browserValidator, sandboxRunner },
+    );
+
+    expect(result).toMatchObject({
+      failureKind: "submitted-code-workspace-sync-failed",
+      failureReason: "restore archive failed",
+      logs: ["restore archive failed"],
+      status: "failed",
     });
   });
 

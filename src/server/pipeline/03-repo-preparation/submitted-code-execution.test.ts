@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import type { PreparationWorkspace } from "./preparation-workspace.interface";
 import {
+  SubmittedCodeWorkspaceSyncError,
   executeSubmittedCode,
   setSubmittedCodeNetworkAccess,
+  syncSubmittedCodeWorkspace,
 } from "./submitted-code-execution";
 
 describe("submitted-code execution helpers", () => {
@@ -19,6 +21,36 @@ describe("submitted-code execution helpers", () => {
     ).rejects.toThrow(
       "Preparation workspace cannot control submitted-code network access",
     );
+  });
+
+  it("wraps submitted-code workspace sync failures with structured metadata", async () => {
+    const cause = new Error("tar restore failed");
+
+    await expect(
+      syncSubmittedCodeWorkspace({
+        ...fakeWorkspace(),
+        async syncSubmittedCodeWorkspace() {
+          throw cause;
+        },
+      }),
+    ).rejects.toMatchObject({
+      cause,
+      failureKind: "submitted-code-workspace-sync-failed",
+      message: "tar restore failed",
+    });
+  });
+
+  it("exposes submitted-code workspace sync failures as a typed error", async () => {
+    const cause = new Error("archive upload failed");
+
+    await expect(
+      syncSubmittedCodeWorkspace({
+        ...fakeWorkspace(),
+        async syncSubmittedCodeWorkspace() {
+          throw cause;
+        },
+      }),
+    ).rejects.toBeInstanceOf(SubmittedCodeWorkspaceSyncError);
   });
 });
 
