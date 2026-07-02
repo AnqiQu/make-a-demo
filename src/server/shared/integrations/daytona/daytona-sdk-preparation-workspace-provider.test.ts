@@ -1,9 +1,25 @@
-import { describe, expect, it, vi } from "vitest";
+import { execFile } from "node:child_process";
+import {
+  access,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { promisify } from "node:util";
+
+import { describe, expect, it } from "vitest";
 
 import {
   DaytonaSdkPreparationWorkspaceProvider,
   createDaytonaSdkPreparationWorkspaceHandle,
 } from "./daytona-sdk-preparation-workspace-provider";
+
+const execFileAsync = promisify(execFile);
 
 describe("DaytonaSdkPreparationWorkspaceProvider", () => {
   it("creates a sandbox from the configured snapshot", async () => {
@@ -574,7 +590,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     );
   });
 
-  it("syncs prepared parent workspace files into the linked submitted-code sandbox", async () => {
+  it("syncs prepared parent workspace files into the linked submitted-code sandbox while excluding generated artifacts", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
       client: fakeLinkedClient(calls),
@@ -620,7 +636,12 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     expect(archiveCommand).toEqual(
       expect.stringContaining("./*/.next/cache/*"),
     );
-    expect(archiveCommand).not.toContain("./.makeademo");
+    expect(archiveCommand).toEqual(expect.stringContaining("./.makeademo"));
+    expect(archiveCommand).toEqual(expect.stringContaining("./.makeademo/*"));
+    expect(archiveCommand).toEqual(expect.stringContaining("-C /workspace ."));
+    expect(archiveCommand).not.toEqual(
+      expect.stringContaining("--exclude='./*'"),
+    );
     expect(calls).toContainEqual({
       downloadFiles: {
         files: [
@@ -702,6 +723,94 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     expect(restoreCommand).not.toContain(
       "find /workspace -mindepth 1 -exec rm -rf {} +",
     );
+  });
+
+  it("escapes submitted-code restore find grouping for the sandbox shell", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.syncSubmittedCodeWorkspace?.();
+
+    const restoreCommand = calls.find(
+      (
+        call,
+      ): call is { executeCommand: { command: string; sandbox: string } } =>
+        typeof call === "object" &&
+        call !== null &&
+        "executeCommand" in call &&
+        typeof call.executeCommand === "object" &&
+        call.executeCommand !== null &&
+        "command" in call.executeCommand &&
+        "sandbox" in call.executeCommand &&
+        typeof call.executeCommand.command === "string" &&
+        call.executeCommand.sandbox === "submitted_sandbox" &&
+        call.executeCommand.command.includes("tar -xzf"),
+    )?.executeCommand.command;
+
+    expect(restoreCommand).toEqual(
+      expect.stringContaining("find /workspace -mindepth 1 \\( "),
+    );
+    expect(restoreCommand).toEqual(
+      expect.stringContaining(" \\) -prune -print"),
+    );
+  });
+
+  it("restores submitted-code workspace through a POSIX shell while preserving caches and excluding MakeADemo artifacts", async () => {
+    const root = await mkdtemp(join(tmpdir(), "makeademo-daytona-shell-"));
+    const parentWorkspace = join(root, "parent");
+    const submittedWorkspace = join(root, "submitted");
+    const calls: unknown[] = [];
+    await mkdir(join(parentWorkspace, ".makeademo"), { recursive: true });
+    await mkdir(join(parentWorkspace, "node_modules"), { recursive: true });
+    await mkdir(join(submittedWorkspace, "node_modules"), { recursive: true });
+    await writeFile(join(parentWorkspace, "package.json"), "prepared app");
+    await writeFile(
+      join(parentWorkspace, ".makeademo", "capture.webm"),
+      "generated artifact",
+    );
+    await writeFile(
+      join(parentWorkspace, "node_modules", "prepared-cache.txt"),
+      "must stay excluded",
+    );
+    await writeFile(
+      join(submittedWorkspace, "node_modules", "preserved-cache.txt"),
+      "keep me",
+    );
+    await writeFile(join(submittedWorkspace, "stale.txt"), "remove me");
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLocalShellLinkedClient(calls, {
+        parentWorkspace,
+        submittedWorkspace,
+      }),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+
+    try {
+      const handle = await provider.create();
+
+      await handle.workspace.syncSubmittedCodeWorkspace?.();
+
+      await expect(
+        readFile(join(submittedWorkspace, "package.json"), "utf8"),
+      ).resolves.toBe("prepared app");
+      await expect(
+        readFile(
+          join(submittedWorkspace, "node_modules", "preserved-cache.txt"),
+          "utf8",
+        ),
+      ).resolves.toBe("keep me");
+      await expectPathMissing(
+        join(submittedWorkspace, "node_modules", "prepared-cache.txt"),
+      );
+      await expectPathMissing(join(submittedWorkspace, ".makeademo"));
+      await expectPathMissing(join(submittedWorkspace, "stale.txt"));
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
   });
 
   it("reports parent archive stdout, stderr, and exit code when archiving prepared files fails", async () => {
@@ -830,6 +939,123 @@ function fakeLinkedClient(
       calls.push({ delete: input.id ?? input.name });
     },
   };
+}
+
+function fakeLocalShellLinkedClient(
+  calls: unknown[],
+  workspaces: { parentWorkspace: string; submittedWorkspace: string },
+) {
+  const parentSandbox = fakeLocalShellSandbox(
+    calls,
+    "parent_sandbox",
+    workspaces.parentWorkspace,
+  );
+  const childSandbox = fakeLocalShellSandbox(
+    calls,
+    "submitted_sandbox",
+    workspaces.submittedWorkspace,
+  );
+
+  return {
+    async create(input: unknown) {
+      calls.push({ create: input });
+      if (
+        typeof input === "object" &&
+        input !== null &&
+        "linkedSandbox" in input
+      ) {
+        return childSandbox;
+      }
+
+      return parentSandbox;
+    },
+    async delete(input: { id?: string; name?: string }) {
+      calls.push({ delete: input.id ?? input.name });
+    },
+  };
+}
+
+function fakeLocalShellSandbox(
+  calls: unknown[],
+  id: string,
+  workspacePath: string,
+) {
+  return {
+    fs: {
+      async downloadFiles(
+        files: Array<{ destination: string; source: string }>,
+        timeoutSec?: number,
+      ) {
+        calls.push({ downloadFiles: { files, sandbox: id, timeoutSec } });
+        for (const file of files) {
+          await mkdir(dirname(file.destination), { recursive: true });
+          await copyFile(file.source, file.destination);
+        }
+        return files.map((file) => ({ source: file.source }));
+      },
+      async uploadFiles(files: Array<{ destination: string; source: string }>) {
+        calls.push({ uploadFiles: { files, sandbox: id } });
+        for (const file of files) {
+          await mkdir(dirname(file.destination), { recursive: true });
+          await copyFile(file.source, file.destination);
+        }
+      },
+    },
+    id,
+    async getSignedPreviewUrl(port: number) {
+      return { url: `https://local-shell.example.test:${port}` };
+    },
+    process: {
+      async createPty() {
+        throw new Error("Streaming is not exercised by local shell tests.");
+      },
+      async createSession() {},
+      async deleteSession() {},
+      async executeCommand(command: string) {
+        calls.push({ executeCommand: { command, sandbox: id } });
+        return runLocalWorkspaceCommand(command, workspacePath);
+      },
+      async executeSessionCommand() {
+        return { cmdId: "cmd_123" };
+      },
+      async getSessionCommand() {
+        return { exitCode: 0 };
+      },
+      async getSessionCommandLogs() {
+        return { stderr: "", stdout: "" };
+      },
+    },
+    async updateNetworkSettings() {},
+  };
+}
+
+async function runLocalWorkspaceCommand(
+  command: string,
+  workspacePath: string,
+): Promise<{ exitCode: number; result: string; stderr: string }> {
+  try {
+    const result = await execFileAsync(
+      "/bin/sh",
+      ["-c", command.replaceAll("/workspace", workspacePath)],
+      { timeout: 5_000 },
+    );
+    return { exitCode: 0, result: result.stdout, stderr: result.stderr };
+  } catch (error) {
+    const failure = error as {
+      code?: number;
+      stderr?: string;
+      stdout?: string;
+    };
+    return {
+      exitCode: typeof failure.code === "number" ? failure.code : 1,
+      result: failure.stdout ?? "",
+      stderr: failure.stderr ?? String(error),
+    };
+  }
+}
+
+async function expectPathMissing(path: string): Promise<void> {
+  await expect(access(path)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 function fakeLinkedSandbox(
