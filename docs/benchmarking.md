@@ -23,6 +23,10 @@ DAYTONA_API_KEY=...
 OPENAI_API_KEY=...
 ```
 
+MakeADemo creates or updates a Daytona secret from `OPENAI_API_KEY` before
+creating Repo Preparation sandboxes. The benchmarked OpenCode process receives a
+Daytona secret placeholder, not the plaintext local value.
+
 The first benchmark should use `mode: "stage1"` so the run focuses on Repo Security Screen, Repo Preparation, Project Validation, and Script Generation. Switch selected repos to `mode: "full"` after Stage 1 behavior is stable.
 
 ## Success Levels
