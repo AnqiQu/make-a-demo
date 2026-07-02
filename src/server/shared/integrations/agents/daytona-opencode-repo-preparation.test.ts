@@ -224,6 +224,60 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     );
   });
 
+  it("reports pre-OpenCode git clone failures as Repo Preparation clone blockers", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        cloneResults: [
+          {
+            exitCode: 128,
+            stderr:
+              "fatal: unable to access 'https://github.com/example/app/': server certificate verification failed. CAfile: none CRLfile: none",
+            stdout: "",
+          },
+        ],
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      blockers: [
+        expect.stringMatching(
+          /^(?!.*OpenCode exited)[\s\S]*Repo Preparation could not clone the submitted repository[\s\S]*server certificate verification failed/,
+        ),
+      ],
+      status: "failed",
+      suggestedChanges: [
+        "Retry Repo Preparation after the submitted repository can be cloned from the Daytona workspace.",
+      ],
+    });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        { network: true },
+        { network: false },
+        { destroy: "daytona_workspace" },
+      ]),
+    );
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        {
+          configDir: "/tmp/makeademo/opencode",
+          execute: expect.stringContaining("opencode run"),
+          streaming: true,
+        },
+      ]),
+    );
+  });
+
   it("handles custom tool dependency install requests in the retained Daytona workspace", async () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparation({

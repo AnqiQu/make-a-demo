@@ -147,7 +147,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
     });
 
     if (cloneResult.exitCode !== 0) {
-      return cloneResult;
+      return createRepoCloneFailure(cloneResult);
     }
 
     const submittedCodeCloneResult = await cloneSubmittedCodeWorkspace(
@@ -162,7 +162,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
         stdoutLength: submittedCodeCloneResult.stdout.length,
       });
       if (submittedCodeCloneResult.exitCode !== 0) {
-        return submittedCodeCloneResult;
+        return createRepoCloneFailure(submittedCodeCloneResult);
       }
     }
 
@@ -590,6 +590,23 @@ function backendToolDeadlineFailure(toolName: string) {
     status: "failed" as const,
     suggestedChanges: [
       "Retry Repo Preparation with a fresh Daytona workspace or a longer preparation timeout.",
+    ],
+  };
+}
+
+function createRepoCloneFailure(result: PreparationWorkspaceCommandResult) {
+  const output = [result.stderr, result.stdout]
+    .filter((line) => line.length > 0)
+    .join("\n");
+
+  return {
+    assumptions: [],
+    blockers: [
+      `Repo Preparation could not clone the submitted repository (git exited with ${result.exitCode}): ${output}`,
+    ],
+    status: "failed" as const,
+    suggestedChanges: [
+      "Retry Repo Preparation after the submitted repository can be cloned from the Daytona workspace.",
     ],
   };
 }

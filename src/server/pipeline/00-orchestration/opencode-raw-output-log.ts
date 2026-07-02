@@ -30,6 +30,10 @@ export function createOpenCodeRawOutputLog(
   const appendEntry = (entry: Record<string, unknown>) => {
     void logger.info(entry, `OpenCode ${entry.channel ?? "output"}.`);
   };
+  appendEntry({
+    raw: "OpenCode raw log initialized.",
+    source: "makeademo",
+  });
 
   return {
     async close() {
