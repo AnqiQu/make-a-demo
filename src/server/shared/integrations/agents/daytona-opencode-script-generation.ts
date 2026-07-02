@@ -34,7 +34,6 @@ export type DaytonaOpenCodeScriptGenerationOptions = {
   modelID: string;
   onStderr?: (chunk: string) => void;
   onStdout?: (chunk: string) => void;
-  providerApiKey: string;
   providerID: string;
   maxAttempts?: number;
 };
@@ -70,14 +69,12 @@ class DaytonaOpenCodeSessionRunner {
   private readonly modelID: string;
   private readonly onStderr: ((chunk: string) => void) | undefined;
   private readonly onStdout: ((chunk: string) => void) | undefined;
-  private readonly providerApiKey: string;
   private readonly providerID: string;
 
   constructor(options: DaytonaOpenCodeScriptGenerationOptions) {
     this.modelID = options.modelID;
     this.onStderr = options.onStderr;
     this.onStdout = options.onStdout;
-    this.providerApiKey = options.providerApiKey;
     this.providerID = options.providerID;
   }
 
@@ -99,10 +96,7 @@ class DaytonaOpenCodeSessionRunner {
         sessionID: input.sessionID,
       }),
       removeUndefinedOptions({
-        env: createOpenCodeEnv({
-          providerApiKey: this.providerApiKey,
-          providerID: this.providerID,
-        }),
+        env: createOpenCodeEnv(),
         onStderr: (chunk) => {
           this.onStderr?.(chunk);
           outputWrites.push(
@@ -612,23 +606,11 @@ function removeUndefinedOptions(input: {
   };
 }
 
-function createOpenCodeEnv(input: {
-  providerApiKey: string;
-  providerID: string;
-}): Record<string, string> {
+function createOpenCodeEnv(): Record<string, string> {
   return {
-    [readProviderApiKeyEnvName(input.providerID)]: input.providerApiKey,
     OPENCODE_CONFIG_DIR: makeADemoOpenCodeConfigDirectory,
     OPENCODE_ENABLE_EXA: "1",
   };
-}
-
-function readProviderApiKeyEnvName(providerID: string): string {
-  if (providerID === "openai") {
-    return "OPENAI_API_KEY";
-  }
-
-  throw new Error(`Unsupported Script Generation provider: ${providerID}`);
 }
 
 function createScriptGenerationPrompt(

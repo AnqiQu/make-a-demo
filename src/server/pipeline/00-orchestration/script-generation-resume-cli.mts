@@ -49,7 +49,6 @@ const scriptGenerationAgent = new DaytonaOpenCodeScriptGeneration({
     rawOpenCodeLog.write("stdout", chunk);
     openCodeOutput.write(chunk);
   },
-  providerApiKey: readProviderApiKey(options.providerID),
   providerID: options.providerID,
 });
 
@@ -130,19 +129,6 @@ function readResumeFile(contents: string): ScriptGenerationResumeFile {
     runDirectory: resume.runDirectory,
     validation: resume.validation,
   };
-}
-
-function readProviderApiKey(providerID: string): string {
-  if (providerID !== "openai") {
-    throw new Error(`Unsupported Script Generation provider: ${providerID}`);
-  }
-
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (apiKey === undefined || apiKey === "") {
-    throw new Error("OPENAI_API_KEY is required for OpenAI Script Generation.");
-  }
-
-  return apiKey;
 }
 
 function readFlagValue(args: string[], index: number, flag: string): string {

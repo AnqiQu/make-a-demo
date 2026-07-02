@@ -8,8 +8,8 @@ describe("DaytonaOpenCodeAgent", () => {
       () =>
         new DaytonaOpenCodeAgent({
           modelID: "gpt-5.5",
-          providerApiKey: "openai_key",
           providerID: "openai",
+          providerSecretName: "openai-daytona-secret",
         }),
     ).toThrow("DAYTONA_API_KEY is required for Daytona OpenCode agent runs.");
   });

@@ -1,4 +1,5 @@
 import { DaytonaOpenCodeScriptGeneration } from "../../shared/integrations/agents/daytona-opencode-script-generation";
+import { ensureOpenCodeProviderDaytonaSecret } from "../../shared/integrations/agents/opencode-provider-secrets";
 import { createRepoPreparationAgent } from "../../shared/integrations/agents/repo-preparation-agent-factory";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../../shared/integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import { createResendFinalVideoEmailNotifierFromEnv } from "../../shared/integrations/email/resend-final-video-email-notifier";
@@ -41,6 +42,10 @@ const sandboxProvider = new DaytonaSdkPreparationWorkspaceProvider({
   apiKey: daytonaApiKey,
   ...(daytonaSnapshot === undefined ? {} : { snapshot: daytonaSnapshot }),
 });
+const providerSecretName = await ensureOpenCodeProviderDaytonaSecret({
+  daytonaApiKey,
+  providerID,
+});
 const repoPreparationAgent = createRepoPreparationAgent({
   daytonaApiKey,
   ...(daytonaSnapshot === undefined ? {} : { daytonaSnapshot }),
@@ -48,12 +53,11 @@ const repoPreparationAgent = createRepoPreparationAgent({
     ? {}
     : { daytonaSubmittedCodeSnapshot }),
   modelID,
-  providerApiKey: readProviderApiKey(providerID),
   providerID,
+  providerSecretName,
 });
 const scriptGenerationAgent = new DaytonaOpenCodeScriptGeneration({
   modelID,
-  providerApiKey: readProviderApiKey(providerID),
   providerID,
 });
 
@@ -121,14 +125,6 @@ do {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function readProviderApiKey(provider: string): string {
-  if (provider !== "openai") {
-    throw new Error(`Unsupported Repo Preparation provider: ${provider}`);
-  }
-
-  return readRequiredEnv("OPENAI_API_KEY");
 }
 
 function readRequiredEnv(name: string) {

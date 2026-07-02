@@ -40,6 +40,23 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
   });
 
+  it("attaches configured Daytona secrets to the parent sandbox", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls),
+      secrets: { OPENAI_API_KEY: "makeademo-openai" },
+    });
+
+    await provider.create();
+
+    expect(calls[0]).toEqual({
+      create: {
+        disk: 3,
+        secrets: { OPENAI_API_KEY: "makeademo-openai" },
+      },
+    });
+  });
+
   it("uploads screened workspace files with Daytona fs.uploadFiles", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -407,13 +424,13 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     const handle = await provider.create();
 
     await handle.workspace.execute("opencode run hello", {
-      env: { OPENAI_API_KEY: "secret" },
+      env: { OPENCODE_CONFIG_DIR: "/tmp/makeademo/opencode" },
       onStdout: () => {},
     });
 
     expect(calls[1]).toEqual({
       createPty: expect.objectContaining({
-        envs: { OPENAI_API_KEY: "secret" },
+        envs: { OPENCODE_CONFIG_DIR: "/tmp/makeademo/opencode" },
       }),
     });
   });
@@ -511,6 +528,35 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         create: {
           disk: 3,
           snapshot: "makeademo-opencode",
+        },
+      },
+      {
+        create: {
+          autoDeleteInterval: 0,
+          ephemeral: true,
+          linkedSandbox: "parent_sandbox",
+          networkBlockAll: true,
+          snapshot: "makeademo-submitted-code-browser",
+        },
+      },
+    ]);
+  });
+
+  it("does not attach parent Daytona secrets to the linked submitted-code sandbox", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls),
+      secrets: { OPENAI_API_KEY: "makeademo-openai" },
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+
+    await provider.create();
+
+    expect(calls.slice(0, 2)).toEqual([
+      {
+        create: {
+          disk: 3,
+          secrets: { OPENAI_API_KEY: "makeademo-openai" },
         },
       },
       {

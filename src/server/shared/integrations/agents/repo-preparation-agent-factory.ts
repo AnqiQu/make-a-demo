@@ -4,6 +4,7 @@ import { PlaywrightBrowserValidator } from "../browser/playwright-browser-valida
 import { DaytonaSdkPreparationWorkspaceProvider } from "../daytona/daytona-sdk-preparation-workspace-provider";
 import { DaytonaSandboxRunner } from "../sandbox/daytona-sandbox-runner";
 import { DaytonaOpenCodeRepoPreparation } from "./daytona-opencode-repo-preparation";
+import { createOpenCodeProviderSandboxSecrets } from "./opencode-provider-secrets";
 
 export type RepoPreparationAgentFactoryOptions = {
   daytonaApiKey?: string;
@@ -12,8 +13,8 @@ export type RepoPreparationAgentFactoryOptions = {
   modelID: string;
   onStderr?: (chunk: string) => void;
   onStdout?: (chunk: string) => void;
-  providerApiKey: string;
   providerID: string;
+  providerSecretName: string;
 };
 
 export function createRepoPreparationAgent(
@@ -29,9 +30,12 @@ export function createRepoPreparationAgent(
     modelID: options.modelID,
     ...(options.onStderr === undefined ? {} : { onStderr: options.onStderr }),
     ...(options.onStdout === undefined ? {} : { onStdout: options.onStdout }),
-    providerApiKey: options.providerApiKey,
     provider: new DaytonaSdkPreparationWorkspaceProvider({
       apiKey: options.daytonaApiKey,
+      secrets: createOpenCodeProviderSandboxSecrets({
+        providerID: options.providerID,
+        providerSecretName: options.providerSecretName,
+      }),
       ...(options.daytonaSnapshot === undefined
         ? {}
         : { snapshot: options.daytonaSnapshot }),

@@ -37,7 +37,6 @@ export type DaytonaOpenCodeRepoPreparationOptions = {
   modelID: string;
   onStderr?: (chunk: string) => void;
   onStdout?: (chunk: string) => void;
-  providerApiKey: string;
   provider: PreparationWorkspaceProvider;
   providerID: string;
   timeoutMs?: number;
@@ -51,7 +50,6 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
   private readonly modelID: string;
   private readonly onStderr: ((chunk: string) => void) | undefined;
   private readonly onStdout: ((chunk: string) => void) | undefined;
-  private readonly providerApiKey: string;
   private readonly provider: PreparationWorkspaceProvider;
   private readonly providerID: string;
   private readonly timeoutMs: number;
@@ -66,7 +64,6 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
     this.modelID = options.modelID;
     this.onStderr = options.onStderr;
     this.onStdout = options.onStdout;
-    this.providerApiKey = options.providerApiKey;
     this.provider = options.provider;
     this.providerID = options.providerID;
     this.timeoutMs = options.timeoutMs ?? 10 * 60 * 1_000;
@@ -200,7 +197,6 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
         attempt: attempt + 1,
         model: `${this.providerID}/${this.modelID}`,
         prompt,
-        providerApiKey: this.providerApiKey,
         providerID: this.providerID,
         ...(currentSessionID === undefined
           ? {}
@@ -368,7 +364,6 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
       attempt: number;
       model: string;
       prompt: string;
-      providerApiKey: string;
       providerID: string;
       sessionID?: string;
     },
@@ -622,7 +617,6 @@ function createCloneCommand(repoUrl: string): string {
 function createOpenCodeRunCommand(input: {
   model: string;
   prompt: string;
-  providerApiKey: string;
   providerID: string;
   sessionID?: string;
 }): string {
@@ -638,23 +632,14 @@ function createOpenCodeRunCommand(input: {
   ].join(" ");
 }
 
-function createOpenCodeEnv(input: {
-  providerApiKey: string;
-  providerID: string;
-}): Record<string, string> {
+function createOpenCodeEnv(_input: { providerID: string }): Record<
+  string,
+  string
+> {
   return {
-    [readProviderApiKeyEnvName(input.providerID)]: input.providerApiKey,
     OPENCODE_CONFIG_DIR: makeADemoOpenCodeConfigDirectory,
     OPENCODE_ENABLE_EXA: "1",
   };
-}
-
-function readProviderApiKeyEnvName(providerID: string): string {
-  if (providerID === "openai") {
-    return "OPENAI_API_KEY";
-  }
-
-  throw new Error(`Unsupported Repo Preparation provider: ${providerID}`);
 }
 
 function createDaytonaRepoPreparationPrompt(

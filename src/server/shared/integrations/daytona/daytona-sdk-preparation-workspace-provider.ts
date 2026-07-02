@@ -110,6 +110,7 @@ export type DaytonaSdkPreparationWorkspaceProviderOptions = {
   previewUrlTimeoutMs?: number;
   ptyConnectionTimeoutMs?: number;
   sandboxLogSinks?: PipelineLogSink[];
+  secrets?: Record<string, string>;
   snapshot?: string;
   submittedCodeSnapshot?: string;
 };
@@ -168,6 +169,7 @@ export class DaytonaSdkPreparationWorkspaceProvider
   private readonly previewUrlTimeoutMs: number;
   private readonly ptyConnectionTimeoutMs: number;
   private readonly sandboxLogSinks: PipelineLogSink[];
+  private readonly secrets: Record<string, string> | undefined;
   private readonly snapshot: string | undefined;
   private readonly submittedCodeSnapshot: string | undefined;
 
@@ -178,6 +180,7 @@ export class DaytonaSdkPreparationWorkspaceProvider
         options.apiKey === undefined ? undefined : { apiKey: options.apiKey },
       ) as DaytonaSdkClient);
     this.commandTimeoutMs = options.commandTimeoutMs ?? defaultCommandTimeoutMs;
+    this.secrets = options.secrets;
     this.snapshot = options.snapshot;
     this.submittedCodeSnapshot = options.submittedCodeSnapshot;
     this.diskGB = options.diskGB ?? defaultSandboxDiskGB;
@@ -193,6 +196,7 @@ export class DaytonaSdkPreparationWorkspaceProvider
   async create(): Promise<PreparationWorkspaceHandle> {
     const sandbox = await this.client.create({
       disk: this.diskGB,
+      ...(this.secrets === undefined ? {} : { secrets: this.secrets }),
       ...(this.snapshot === undefined ? {} : { snapshot: this.snapshot }),
     });
     const id = sandbox.id ?? sandbox.name;

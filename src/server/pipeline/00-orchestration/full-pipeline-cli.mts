@@ -3,6 +3,7 @@ import { basename, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 
 import { DaytonaOpenCodeScriptGeneration } from "../../shared/integrations/agents/daytona-opencode-script-generation";
+import { ensureOpenCodeProviderDaytonaSecret } from "../../shared/integrations/agents/opencode-provider-secrets";
 import { createRepoPreparationAgent } from "../../shared/integrations/agents/repo-preparation-agent-factory";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../../shared/integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import { DaytonaSandboxRunner } from "../../shared/integrations/sandbox/daytona-sandbox-runner";
@@ -90,6 +91,10 @@ const normalizedSupportingDocuments = await Promise.all(
 const openCodeOutput = createOpenCodeOutputStream({
   write: (text) => process.stdout.write(text),
 });
+const providerSecretName = await ensureOpenCodeProviderDaytonaSecret({
+  daytonaApiKey,
+  providerID: options.providerID,
+});
 const repoPreparationAgent = createRepoPreparationAgent({
   daytonaApiKey,
   ...(daytonaSnapshot === undefined ? {} : { daytonaSnapshot }),
@@ -105,8 +110,8 @@ const repoPreparationAgent = createRepoPreparationAgent({
     rawOpenCodeLog.write("stdout", chunk);
     openCodeOutput.write(chunk);
   },
-  providerApiKey: readProviderApiKey(options.providerID),
   providerID: options.providerID,
+  providerSecretName,
 });
 const scriptGenerationAgent = new DaytonaOpenCodeScriptGeneration({
   modelID: options.modelID,
@@ -120,7 +125,6 @@ const scriptGenerationAgent = new DaytonaOpenCodeScriptGeneration({
     scriptGenerationRawOpenCodeLog.write("stdout", chunk);
     openCodeOutput.write(chunk);
   },
-  providerApiKey: readProviderApiKey(options.providerID),
   providerID: options.providerID,
 });
 
@@ -227,19 +231,6 @@ function inferTextMimeType(path: string): string {
   }
 
   return "text/plain";
-}
-
-function readProviderApiKey(providerID: string): string {
-  if (providerID !== "openai") {
-    throw new Error(`Unsupported Repo Preparation provider: ${providerID}`);
-  }
-
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (apiKey === undefined || apiKey === "") {
-    throw new Error("OPENAI_API_KEY is required for OpenAI Repo Preparation.");
-  }
-
-  return apiKey;
 }
 
 function readOptionalEnv(name: string): string | undefined {

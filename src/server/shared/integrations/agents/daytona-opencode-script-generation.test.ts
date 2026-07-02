@@ -13,7 +13,6 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
     const agent = new DaytonaOpenCodeScriptGeneration({
       modelID: "gpt-5.5",
       onStdout: (chunk) => stdout.push(chunk),
-      providerApiKey: "openai_key",
       providerID: "openai",
     });
 
@@ -75,7 +74,6 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
       modelID: "gpt-5.5",
       onStderr: (chunk) => stderr.push(chunk),
       onStdout: (chunk) => stdout.push(chunk),
-      providerApiKey: "openai_key",
       providerID: "openai",
     });
 
@@ -123,7 +121,6 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
     const agent = new DaytonaOpenCodeScriptGeneration({
       maxAttempts: 2,
       modelID: "gpt-5.5",
-      providerApiKey: "openai_key",
       providerID: "openai",
     });
 
@@ -168,7 +165,6 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
     const agent = new DaytonaOpenCodeScriptGeneration({
       maxAttempts: 2,
       modelID: "gpt-5.5",
-      providerApiKey: "openai_key",
       providerID: "openai",
     });
 
@@ -209,7 +205,6 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeScriptGeneration({
       modelID: "gpt-5.5",
-      providerApiKey: "openai_key",
       providerID: "openai",
     });
 
@@ -283,7 +278,6 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeScriptGeneration({
       modelID: "gpt-5.5",
-      providerApiKey: "openai_key",
       providerID: "openai",
     });
 
@@ -363,7 +357,6 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
     await writeFile(sampledFramePath, "sampled frame");
     const agent = new DaytonaOpenCodeScriptGeneration({
       modelID: "gpt-5.5",
-      providerApiKey: "openai_key",
       providerID: "openai",
     });
 

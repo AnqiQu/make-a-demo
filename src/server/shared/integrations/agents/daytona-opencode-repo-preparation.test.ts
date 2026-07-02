@@ -20,7 +20,6 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
         preparationResult: successResult(),
         validationResult: validationArtifact(),
       }),
-      providerApiKey: "openai_key",
       providerID: "openai",
       timeoutMs: 1_000,
     });
@@ -101,7 +100,6 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
         preparationResult: successResult(),
         validationResult: validationArtifact(),
       }),
-      providerApiKey: "openai_key",
       providerID: "openai",
       timeoutMs: 1_000,
     });
@@ -151,7 +149,6 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
         sandboxLogFailureEvent: "workspace-created",
         validationResult: validationArtifact(),
       }),
-      providerApiKey: "openai_key",
       providerID: "openai",
       timeoutMs: 1_000,
     });
@@ -192,7 +189,6 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
         preparationResult: successResult(),
         validationResult: validationArtifact(),
       }),
-      providerApiKey: "openai_key",
       providerID: "openai",
       timeoutMs: 1_000,
     });
@@ -232,7 +228,6 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
-      providerApiKey: "openai_key",
       provider: fakeProvider(events, {
         commandStdout: [
           JSON.stringify({ sessionID: "session_123", type: "session" }),
@@ -323,7 +318,6 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
-      providerApiKey: "openai_key",
       provider: fakeProvider(events, {
         commandStdout: [
           JSON.stringify({ sessionID: "session_123", type: "session" }),
@@ -385,7 +379,6 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
-      providerApiKey: "openai_key",
       provider: fakeProvider(events, {
         commandStdout: ["Validation requested."],
         validationRequest: {
@@ -446,7 +439,6 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
-      providerApiKey: "openai_key",
       provider: fakeProvider(events, {
         commandStdout: [
           "Validation requested.",
@@ -523,7 +515,6 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
-      providerApiKey: "openai_key",
       provider: fakeProvider(events, {
         commandStdout: [
           JSON.stringify({ sessionID: "session_123", type: "session" }),
@@ -561,7 +552,6 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     const validations: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
-      providerApiKey: "openai_key",
       provider: fakeProvider(events, {
         commandStdout: ["Validation requested."],
         validationRequest: {
@@ -631,7 +621,6 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
   it("preserves the OpenCode session ID from streamed output when validation passes", async () => {
     const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
-      providerApiKey: "openai_key",
       provider: fakeProvider([], {
         commandStdout: ["Validation requested."],
         commandStdoutChunks: [
@@ -670,7 +659,6 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     let validationStarted = false;
     const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
-      providerApiKey: "openai_key",
       provider: fakeProvider(events, {
         commandStdout: [
           "Validation requested.",
@@ -736,7 +724,6 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
-      providerApiKey: "openai_key",
       provider: fakeProvider(events, [JSON.stringify(successResult())]),
       providerID: "openai",
       timeoutMs: 1_000,
@@ -780,7 +767,6 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
         preparationResult: successResult(),
         validationResult: validationArtifact(),
       }),
-      providerApiKey: "openai_key",
       providerID: "openai",
       timeoutMs: 1_000,
     });
@@ -829,7 +815,6 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
         preparationResult: successResult(),
         validationResult: validationArtifact(),
       }),
-      providerApiKey: "openai_key",
       providerID: "openai",
       timeoutMs: 1_000,
     });
@@ -882,7 +867,6 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
         preparationResult: successResult(),
         validationResult: validationArtifact(),
       }),
-      providerApiKey: "openai_key",
       providerID: "openai",
       timeoutMs: 1_000,
     });
@@ -909,7 +893,6 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     let validationStarted = false;
     const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
-      providerApiKey: "openai_key",
       provider: fakeProvider(events, {
         commandDelayMs: 920,
         commandStdout: ["Validation requested."],
