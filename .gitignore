@@ -8,6 +8,7 @@ dist/
 .demo-script-runs/
 .makeademo-capture-path-validation-runs/
 .makeademo-full-pipeline-runs/
+.makeademo-benchmark-runs/
 .playwright-cli/
 artifacts/
 demo/artifacts/
