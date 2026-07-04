@@ -398,8 +398,7 @@ describe("runFullPipelineJob", () => {
               return {
                 blockedNetworkAttempts: [],
                 browserUrl: "https://preview.example.test/",
-                diagnosticsLogPath:
-                  "/workspace/.makeademo/capture-path-validation-diagnostics.jsonl",
+                diagnosticsLogPath: "/workspace/.makeademo/sandbox-log.jsonl",
                 failedAction: "locator.click(getByRole(button, Save))",
                 failedSceneId: "scene_article_feed",
                 failureReason: "Generated selector did not match.",
@@ -443,8 +442,7 @@ describe("runFullPipelineJob", () => {
             "Capture Path Validation reason: Generated selector did not match.",
           ],
           capturePathValidation: {
-            diagnosticsLogPath:
-              "/workspace/.makeademo/capture-path-validation-diagnostics.jsonl",
+            diagnosticsLogPath: "/workspace/.makeademo/sandbox-log.jsonl",
             failedAction: "locator.click(getByRole(button, Save))",
             failedSceneId: "scene_article_feed",
             failureReason: "Generated selector did not match.",

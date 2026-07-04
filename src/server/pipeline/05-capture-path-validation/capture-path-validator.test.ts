@@ -1,8 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { validateCapturePath } from "./capture-path-validator";
 
 describe("validateCapturePath", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
   it("runs project-level checks before generated capture actions", async () => {
     const calls: string[] = [];
     const sandboxLogs: Array<Record<string, unknown>> = [];
@@ -49,8 +54,7 @@ describe("validateCapturePath", () => {
     expect(result).toEqual({
       blockedNetworkAttempts: [],
       browserUrl: "https://preview.example.test/",
-      diagnosticsLogPath:
-        "/workspace/.makeademo/capture-path-validation-diagnostics.jsonl",
+      diagnosticsLogPath: "/workspace/.makeademo/sandbox-log.jsonl",
       logs: [
         "project checks passed",
         '[makeademo:scene] {"elapsedMs":10,"event":"started","sceneId":"scene_validation"}',
@@ -64,37 +68,39 @@ describe("validateCapturePath", () => {
       "project-checks",
       "scene:scene_validation:https://preview.example.test/:import { setup, scene } from './makeademo-capture-sdk';\n\nawait setup(async ({ page, baseUrl, expect }) => {\n  await page.goto(baseUrl);\n  await expect(page.locator('body')).toBeVisible();\n});\nawait scene('scene_validation', async ({ page, expect }) => {\n  await expect(page.locator('body')).toBeVisible();\n});",
     ]);
-    expect(sandboxLogs).toEqual([
-      expect.objectContaining({
-        event: "capture-path-validation.runtime-preflight.started",
-        stage: "capture-path-validation",
-        workspaceId: "workspace_123",
-      }),
-      expect.objectContaining({
-        event: "capture-path-validation.runtime-preflight.succeeded",
-        stage: "capture-path-validation",
-        workspaceId: "workspace_123",
-      }),
-      expect.objectContaining({
-        event: "capture-path-validation.demo-script.started",
-        sceneCount: 1,
-        stage: "capture-path-validation",
-        workspaceId: "workspace_123",
-      }),
-      expect.objectContaining({
-        event: "capture-path-validation.scene.succeeded",
-        runDirectory: ".makeademo-capture-path-validation-runs/run_123",
-        sceneId: "scene_validation",
-        scriptPath:
-          ".makeademo-capture-path-validation-runs/run_123/scene_validation.ts",
-        sectionId: "demo-script",
-        stage: "capture-path-validation",
-        workspaceId: "workspace_123",
-      }),
-    ]);
+    expect(sandboxLogs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "capture-path-validation.runtime-preflight.started",
+          stage: "capture-path-validation",
+          workspaceId: "workspace_123",
+        }),
+        expect.objectContaining({
+          event: "capture-path-validation.runtime-preflight.succeeded",
+          stage: "capture-path-validation",
+          workspaceId: "workspace_123",
+        }),
+        expect.objectContaining({
+          event: "capture-path-validation.demo-script.started",
+          sceneCount: 1,
+          stage: "capture-path-validation",
+          workspaceId: "workspace_123",
+        }),
+        expect.objectContaining({
+          event: "capture-path-validation.scene.succeeded",
+          runDirectory: ".makeademo-capture-path-validation-runs/run_123",
+          sceneId: "scene_validation",
+          scriptPath:
+            ".makeademo-capture-path-validation-runs/run_123/scene_validation.ts",
+          sectionId: "demo-script",
+          stage: "capture-path-validation",
+          workspaceId: "workspace_123",
+        }),
+      ]),
+    );
   });
 
-  it("writes verbose failure diagnostics to sandbox logs and a workspace-visible log for agent repair", async () => {
+  it("writes verbose failure diagnostics through sandbox logs without the legacy diagnostics JSONL append", async () => {
     const sandboxLogs: Array<Record<string, unknown>> = [];
     const executedCommands: string[] = [];
 
@@ -141,8 +147,7 @@ describe("validateCapturePath", () => {
     );
 
     expect(result).toMatchObject({
-      diagnosticsLogPath:
-        "/workspace/.makeademo/capture-path-validation-diagnostics.jsonl",
+      diagnosticsLogPath: "/workspace/.makeademo/sandbox-log.jsonl",
       failedSceneId: "scene_validation",
       errorMessage:
         "Timed out waiting for locator('.article-preview') to be visible",
@@ -153,8 +158,7 @@ describe("validateCapturePath", () => {
     expect(sandboxLogs).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          diagnosticsLogPath:
-            "/workspace/.makeademo/capture-path-validation-diagnostics.jsonl",
+          diagnosticsLogPath: "/workspace/.makeademo/sandbox-log.jsonl",
           event: "capture-path-validation.scene.failed",
           errorMessage:
             "Timed out waiting for locator('.article-preview') to be visible",
@@ -163,14 +167,288 @@ describe("validateCapturePath", () => {
         }),
       ]),
     );
-    expect(executedCommands).toEqual(
+    expect(sandboxLogs).toEqual(
       expect.arrayContaining([
-        expect.stringContaining(
-          "/workspace/.makeademo/capture-path-validation-diagnostics.jsonl",
-        ),
+        expect.objectContaining({
+          diagnosticsLogPath: "/workspace/.makeademo/sandbox-log.jsonl",
+          event: "capture-path-validation.scene.failed",
+          logs: expect.arrayContaining([
+            expect.stringContaining("article-preview"),
+          ]),
+        }),
       ]),
     );
-    expect(executedCommands.join("\n")).toContain("article-preview");
+    expect(executedCommands.join("\n")).not.toContain(
+      "/workspace/.makeademo/capture-path-validation-diagnostics.jsonl",
+    );
+  });
+
+  it("waits for returned verbose repair diagnostics to become durable before returning", async () => {
+    const sandboxLogs: Array<Record<string, unknown>> = [];
+    const workspace = controlledVerboseDiagnosticsWorkspaceHandle(sandboxLogs);
+    let settled = false;
+
+    const validation = validateCapturePath(
+      {
+        preparationManifest: manifest(),
+        preparationWorkspace: workspace.handle,
+        demoScriptCandidate: demoScript(),
+        demoScriptPackage: demoScript(),
+      },
+      {
+        async validateProject() {
+          return {
+            blockedNetworkAttempts: [],
+            browserUrl: "https://preview.example.test/",
+            logs: ["project checks passed"],
+            status: "succeeded",
+            warnings: [],
+          };
+        },
+        sceneValidator: {
+          async validateScene() {
+            return {
+              failureReason: "Scene scene_validation failed.",
+              logs: ["stdout: before failure"],
+              status: "failed",
+            };
+          },
+        },
+      },
+    ).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    await workspace.verboseDiagnosticsStarted;
+    await flushPromises();
+
+    expect(settled).toBe(false);
+
+    workspace.releaseVerboseDiagnostics?.();
+    const result = await validation;
+
+    expect(result).toMatchObject({
+      diagnosticsLogPath: "/workspace/.makeademo/sandbox-log.jsonl",
+      status: "failed",
+    });
+    expect(sandboxLogs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "capture-path-validation.scene.failed",
+          logs: ["stdout: before failure"],
+        }),
+      ]),
+    );
+  });
+
+  it("logs a structured fallback when verbose diagnostics cannot be written", async () => {
+    const fallbackWarnings: Array<Record<string, unknown>> = [];
+
+    const result = await validateCapturePath(
+      {
+        preparationManifest: manifest(),
+        preparationWorkspace: failingLogWorkspaceHandle(),
+        demoScriptCandidate: demoScript(),
+        demoScriptPackage: demoScript(),
+      },
+      {
+        diagnosticsLogger: {
+          async warn(entry) {
+            fallbackWarnings.push(entry);
+          },
+        },
+        async validateProject() {
+          return {
+            blockedNetworkAttempts: [],
+            browserUrl: "https://preview.example.test/",
+            logs: [],
+            status: "succeeded",
+            warnings: [],
+          };
+        },
+        sceneValidator: {
+          async validateScene() {
+            return {
+              failureReason: "Scene scene_validation failed.",
+              logs: ["stdout: before failure"],
+              status: "failed",
+            };
+          },
+        },
+      },
+    );
+
+    expect(result).toMatchObject({ status: "failed" });
+    expect(fallbackWarnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          diagnosticsLogPath: "/workspace/.makeademo/sandbox-log.jsonl",
+          diagnosticsSource: "capture-path-validation",
+          error: "disk full",
+          event: "capture-path-validation.diagnostics-log-write-failed",
+          failedEvent: "capture-path-validation.scene.failed",
+          stage: "capture-path-validation",
+          workspaceId: "workspace_123",
+        }),
+      ]),
+    );
+  });
+
+  it("logs diagnostics write failures through the default structured fallback logger", async () => {
+    const fallbackWarnings: Array<Record<string, unknown>> = [];
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      fallbackWarnings.push(
+        JSON.parse(String(chunk)) as Record<string, unknown>,
+      );
+      return true;
+    });
+
+    const result = await validateCapturePath(
+      {
+        preparationManifest: manifest(),
+        preparationWorkspace: failingLogWorkspaceHandle(),
+        demoScriptCandidate: demoScript(),
+        demoScriptPackage: demoScript(),
+      },
+      {
+        async validateProject() {
+          return {
+            blockedNetworkAttempts: [],
+            browserUrl: "https://preview.example.test/",
+            logs: [],
+            status: "succeeded",
+            warnings: [],
+          };
+        },
+        sceneValidator: {
+          async validateScene() {
+            return {
+              failureReason: "Scene scene_validation failed.",
+              logs: ["stdout: before failure"],
+              status: "failed",
+            };
+          },
+        },
+      },
+    );
+
+    expect(result).toMatchObject({ status: "failed" });
+    expect(fallbackWarnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          component: "capture-path-validation",
+          diagnosticsLogPath: "/workspace/.makeademo/sandbox-log.jsonl",
+          diagnosticsSource: "capture-path-validation",
+          error: "disk full",
+          event: "capture-path-validation.diagnostics-log-write-failed",
+          failedEvent: "capture-path-validation.scene.failed",
+          level: "warn",
+          service: "makeademo",
+          stage: "capture-path-validation",
+          workspaceId: "workspace_123",
+        }),
+      ]),
+    );
+  });
+
+  it("does not block Capture Path Validation when fallback warning logging hangs", async () => {
+    vi.useFakeTimers();
+    const resultPromise = validateCapturePath(
+      {
+        preparationManifest: manifest(),
+        preparationWorkspace: failingLogWorkspaceHandle(),
+        demoScriptCandidate: demoScript(),
+        demoScriptPackage: demoScript(),
+      },
+      {
+        diagnosticsLogger: {
+          async warn() {
+            await new Promise(() => {});
+          },
+        },
+        diagnosticsWriteTimeoutMs: 100,
+        async validateProject() {
+          return {
+            blockedNetworkAttempts: [],
+            browserUrl: "https://preview.example.test/",
+            logs: [],
+            status: "succeeded",
+            warnings: [],
+          };
+        },
+        sceneValidator: {
+          async validateScene() {
+            return {
+              failureReason: "Scene scene_validation failed.",
+              logs: ["stdout: before failure"],
+              status: "failed",
+            };
+          },
+        },
+      },
+    );
+
+    await expect(
+      resolveAfterCapturePathTimers(resultPromise),
+    ).resolves.toMatchObject({ status: "failed" });
+  });
+
+  it("reports diagnostics write timeouts through fallback warning logging", async () => {
+    vi.useFakeTimers();
+    const fallbackWarnings: Array<Record<string, unknown>> = [];
+    const resultPromise = validateCapturePath(
+      {
+        preparationManifest: manifest(),
+        preparationWorkspace: hangingLogWorkspaceHandle(),
+        demoScriptCandidate: demoScript(),
+        demoScriptPackage: demoScript(),
+      },
+      {
+        diagnosticsLogger: {
+          async warn(entry) {
+            fallbackWarnings.push(entry);
+          },
+        },
+        diagnosticsWriteTimeoutMs: 100,
+        async validateProject() {
+          return {
+            blockedNetworkAttempts: [],
+            browserUrl: "https://preview.example.test/",
+            logs: ["project checks passed"],
+            status: "succeeded",
+            warnings: [],
+          };
+        },
+        sceneValidator: {
+          async validateScene() {
+            return {
+              logs: [
+                '[makeademo:scene] {"elapsedMs":10,"event":"started","sceneId":"scene_validation"}',
+                '[makeademo:scene] {"elapsedMs":20,"event":"succeeded","sceneId":"scene_validation"}',
+              ],
+              status: "succeeded",
+            };
+          },
+        },
+      },
+    );
+
+    await expect(
+      resolveAfterCapturePathTimers(resultPromise),
+    ).resolves.toMatchObject({ status: "succeeded" });
+    expect(fallbackWarnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          error:
+            "Capture Path Validation diagnostics log write timed out after 100ms.",
+          event: "capture-path-validation.diagnostics-log-write-failed",
+          failedEvent: "capture-path-validation.run.started",
+          stage: "capture-path-validation",
+          workspaceId: "workspace_123",
+        }),
+      ]),
+    );
   });
 
   it("returns a repairable failure for Demo Scripts that bypass the generated Capture SDK contract", async () => {
@@ -247,8 +525,7 @@ describe("validateCapturePath", () => {
     );
 
     expect(result).toMatchObject({
-      diagnosticsLogPath:
-        "/workspace/.makeademo/capture-path-validation-diagnostics.jsonl",
+      diagnosticsLogPath: "/workspace/.makeademo/sandbox-log.jsonl",
       failedSceneId: "scene_validation",
       failureReason:
         "Scene scene_validation must include a visible Playwright assertion before it ends.",
@@ -268,42 +545,44 @@ describe("validateCapturePath", () => {
   });
 
   it("does not block Capture Path Validation when workspace log writes hang", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const calls: string[] = [];
-    const result = await Promise.race([
-      validateCapturePath(
-        {
-          preparationManifest: manifest(),
-          preparationWorkspace: hangingLogWorkspaceHandle(),
-          demoScriptCandidate: demoScript(),
-          demoScriptPackage: demoScript(),
+    const resultPromise = validateCapturePath(
+      {
+        preparationManifest: manifest(),
+        preparationWorkspace: hangingLogWorkspaceHandle(),
+        demoScriptCandidate: demoScript(),
+        demoScriptPackage: demoScript(),
+      },
+      {
+        diagnosticsWriteTimeoutMs: 100,
+        async validateProject() {
+          calls.push("project-checks");
+          return {
+            blockedNetworkAttempts: [],
+            browserUrl: "https://preview.example.test/",
+            logs: ["project checks passed"],
+            status: "succeeded",
+            warnings: [],
+          };
         },
-        {
-          async validateProject() {
-            calls.push("project-checks");
+        sceneValidator: {
+          async validateScene() {
+            calls.push("scene-validation");
             return {
-              blockedNetworkAttempts: [],
-              browserUrl: "https://preview.example.test/",
-              logs: ["project checks passed"],
+              logs: [
+                '[makeademo:scene] {"elapsedMs":10,"event":"started","sceneId":"scene_validation"}',
+                '[makeademo:scene] {"elapsedMs":20,"event":"succeeded","sceneId":"scene_validation"}',
+              ],
               status: "succeeded",
-              warnings: [],
             };
           },
-          sceneValidator: {
-            async validateScene() {
-              calls.push("scene-validation");
-              return {
-                logs: [
-                  '[makeademo:scene] {"elapsedMs":10,"event":"started","sceneId":"scene_validation"}',
-                  '[makeademo:scene] {"elapsedMs":20,"event":"succeeded","sceneId":"scene_validation"}',
-                ],
-                status: "succeeded",
-              };
-            },
-          },
         },
-      ),
-      delay(10).then(() => "timed-out" as const),
-    ]);
+      },
+    );
+
+    const result = await resolveAfterCapturePathTimers(resultPromise);
 
     expect(result).toMatchObject({ status: "succeeded" });
     expect(calls).toEqual(["project-checks", "scene-validation"]);
@@ -566,6 +845,95 @@ function hangingLogWorkspaceHandle() {
   };
 }
 
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+function failingLogWorkspaceHandle() {
+  return {
+    async destroy() {},
+    id: "workspace_handle_123",
+    workspace: {
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async getPreviewUrl() {
+        return "https://preview.example.test/";
+      },
+      async setOutboundNetworkAccess() {},
+      async uploadFiles() {},
+      async writeSandboxLog() {
+        throw new Error("disk full");
+      },
+    },
+  };
+}
+
+function controlledVerboseDiagnosticsWorkspaceHandle(
+  logs: Array<Record<string, unknown>>,
+) {
+  let releaseVerboseDiagnostics: (() => void) | undefined;
+  let markVerboseDiagnosticsStarted!: () => void;
+  const verboseDiagnosticsStarted = new Promise<void>((resolve) => {
+    markVerboseDiagnosticsStarted = resolve;
+  });
+  return {
+    get releaseVerboseDiagnostics() {
+      return releaseVerboseDiagnostics;
+    },
+    verboseDiagnosticsStarted,
+    handle: {
+      async destroy() {},
+      id: "workspace_handle_123",
+      workspace: {
+        async execute() {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async getPreviewUrl() {
+          return "https://preview.example.test/";
+        },
+        async setOutboundNetworkAccess() {},
+        async uploadFiles() {},
+        async writeSandboxLog(entry: Record<string, unknown>) {
+          if (
+            entry.event === "capture-path-validation.scene.failed" &&
+            "logs" in entry
+          ) {
+            markVerboseDiagnosticsStarted();
+            await new Promise<void>((resolve) => {
+              releaseVerboseDiagnostics = () => {
+                logs.push(entry);
+                resolve();
+              };
+            });
+            return;
+          }
+
+          logs.push(entry);
+        },
+      },
+    },
+  };
+}
+
+async function flushPromises() {
+  for (let index = 0; index < 20; index += 1) {
+    await Promise.resolve();
+  }
+}
+
+async function resolveAfterCapturePathTimers<T>(resultPromise: Promise<T>) {
+  let settled = false;
+  const observedPromise = resultPromise.finally(() => {
+    settled = true;
+  });
+
+  for (let index = 0; !settled && index < 20; index += 1) {
+    vi.advanceTimersByTime(100);
+    await flushPromises();
+  }
+
+  if (!settled) {
+    throw new Error(
+      "Capture Path Validation did not settle after draining fake timers.",
+    );
+  }
+
+  return await observedPromise;
 }

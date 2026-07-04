@@ -1,3 +1,7 @@
+import {
+  type PipelineEventLogger,
+  createPipelineEventLogger,
+} from "../../shared/logging/pipeline-event-logger";
 import { assertDemoScriptCaptureSdkContract } from "../06-footage-capture/capture-sdk-contract";
 import {
   type SceneDescription,
@@ -10,8 +14,18 @@ import type {
 import type { ProjectValidationInput } from "./project-runtime-preflight/project-validator";
 import type { ProjectValidationResult } from "./project-runtime-preflight/validation-result";
 
-const capturePathDiagnosticsLogPath =
-  "/workspace/.makeademo/capture-path-validation-diagnostics.jsonl";
+const capturePathDiagnosticsLogPath = "/workspace/.makeademo/sandbox-log.jsonl";
+const defaultDiagnosticsWriteTimeoutMs = 5_000;
+const defaultDiagnosticsLogger = createPipelineEventLogger({
+  base: { component: "capture-path-validation" },
+  sinks: [
+    {
+      write(line) {
+        process.stderr.write(line);
+      },
+    },
+  ],
+});
 
 export type CapturePathSceneValidationInput = {
   baseUrl: string;
@@ -65,6 +79,8 @@ export interface CapturePathSceneValidator {
 }
 
 export type CapturePathValidationDependencies = {
+  diagnosticsLogger?: Pick<PipelineEventLogger, "warn">;
+  diagnosticsWriteTimeoutMs?: number;
   sceneValidator: CapturePathSceneValidator;
   sceneValidationTimeoutMs?: number;
   validateProject(
@@ -78,7 +94,7 @@ export async function validateCapturePath(
   input: CapturePathValidationInput,
   dependencies: CapturePathValidationDependencies,
 ): Promise<CapturePathValidationResult> {
-  await writeCapturePathDiagnostics(input, {
+  await writeCapturePathDiagnostics(input, dependencies, {
     event: "capture-path-validation.run.started",
   });
 
@@ -95,6 +111,7 @@ export async function validateCapturePath(
   } catch (error) {
     return await capturePathDemoScriptFailure({
       browserUrl: input.preparationManifest.url,
+      dependencies,
       error,
       input,
       logs: [],
@@ -105,7 +122,7 @@ export async function validateCapturePath(
     diagnosticsLogPath: capturePathDiagnosticsLogPath,
     event: "capture-path-validation.runtime-preflight.started",
   });
-  await writeCapturePathDiagnostics(input, {
+  await writeCapturePathDiagnostics(input, dependencies, {
     event: "capture-path-validation.runtime-preflight.started",
   });
   const projectValidation = await dependencies.validateProject({
@@ -126,7 +143,7 @@ export async function validateCapturePath(
       failureReason: projectValidation.failureReason,
       warningCount: projectValidation.warnings.length,
     });
-    await writeCapturePathDiagnostics(input, {
+    await writeCapturePathDiagnostics(input, dependencies, {
       blockedNetworkAttemptCount:
         projectValidation.blockedNetworkAttempts.length,
       event: "capture-path-validation.runtime-preflight.failed",
@@ -148,7 +165,7 @@ export async function validateCapturePath(
     event: "capture-path-validation.runtime-preflight.succeeded",
     warningCount: projectValidation.warnings.length,
   });
-  await writeCapturePathDiagnostics(input, {
+  await writeCapturePathDiagnostics(input, dependencies, {
     blockedNetworkAttemptCount: projectValidation.blockedNetworkAttempts.length,
     browserUrl: projectValidation.browserUrl,
     event: "capture-path-validation.runtime-preflight.succeeded",
@@ -164,7 +181,7 @@ export async function validateCapturePath(
     event: "capture-path-validation.demo-script.started",
     sceneCount: scriptPackage.scenes.length,
   });
-  await writeCapturePathDiagnostics(input, {
+  await writeCapturePathDiagnostics(input, dependencies, {
     event: "capture-path-validation.demo-script.started",
     scenes: scriptPackage.scenes.map((scene) => ({
       expectedVisibleOutcome: scene.expectedVisibleOutcome,
@@ -205,6 +222,7 @@ export async function validateCapturePath(
   if (sceneResult.status === "failed") {
     return await capturePathSceneFailure({
       browserUrl,
+      dependencies,
       input,
       logs,
       projectValidation,
@@ -220,6 +238,7 @@ export async function validateCapturePath(
   if (markerValidation.status === "failed") {
     return await capturePathSceneFailure({
       browserUrl,
+      dependencies,
       input,
       logs,
       projectValidation,
@@ -243,7 +262,7 @@ export async function validateCapturePath(
       stderrPath: sceneResult.stderrPath,
       stdoutPath: sceneResult.stdoutPath,
     });
-    await writeCapturePathDiagnostics(input, {
+    await writeCapturePathDiagnostics(input, dependencies, {
       event: "capture-path-validation.scene.succeeded",
       logs: sceneResult.logs,
       runDirectory: sceneResult.runDirectory,
@@ -255,7 +274,7 @@ export async function validateCapturePath(
     });
   }
 
-  await writeCapturePathDiagnostics(input, {
+  await writeCapturePathDiagnostics(input, dependencies, {
     event: "capture-path-validation.run.succeeded",
     sceneCount: scriptPackage.scenes.length,
   });
@@ -274,6 +293,7 @@ export async function validateCapturePath(
 
 async function capturePathDemoScriptFailure(input: {
   browserUrl: string;
+  dependencies: CapturePathValidationDependencies;
   error: unknown;
   input: CapturePathValidationInput;
   logs: string[];
@@ -295,7 +315,7 @@ async function capturePathDemoScriptFailure(input: {
     failureReason,
     warningCount: warnings.length,
   });
-  await writeCapturePathDiagnostics(input.input, {
+  await writeCapturePathDiagnostics(input.input, input.dependencies, {
     blockedNetworkAttemptCount: blockedNetworkAttempts.length,
     event: "capture-path-validation.demo-script.failed",
     failedSceneId,
@@ -322,6 +342,7 @@ async function capturePathDemoScriptFailure(input: {
 
 async function capturePathSceneFailure(input: {
   browserUrl: string;
+  dependencies: CapturePathValidationDependencies;
   input: CapturePathValidationInput;
   logs: string[];
   projectValidation: ProjectValidationResult & { warnings: string[] };
@@ -346,7 +367,7 @@ async function capturePathSceneFailure(input: {
     stderrPath: input.sceneResult.stderrPath,
     stdoutPath: input.sceneResult.stdoutPath,
   });
-  await writeCapturePathDiagnostics(input.input, {
+  await writeCapturePathDiagnostics(input.input, input.dependencies, {
     blockedNetworkAttemptCount:
       input.sceneResult.blockedNetworkAttempts?.length ?? 0,
     event: "capture-path-validation.scene.failed",
@@ -521,39 +542,76 @@ function readSceneMarker(line: string): ParsedSceneMarker {
 
 async function writeCapturePathDiagnostics(
   input: CapturePathValidationInput,
+  dependencies: CapturePathValidationDependencies,
   entry: Record<string, unknown>,
 ) {
-  const line = JSON.stringify(
-    removeUndefinedValues({
-      ...entry,
-      repoUrl: input.preparationManifest.repoUrl,
-      scriptId: input.demoScriptPackage.scriptId,
-      stage: "capture-path-validation",
-      workspaceId: input.preparationManifest.workspaceId,
-    }),
-  );
-
-  const write = input.preparationWorkspace?.workspace.execute(
-    `mkdir -p ${shellQuote(dirname(capturePathDiagnosticsLogPath))} && printf '%s\\n' ${shellQuote(line)} >> ${shellQuote(capturePathDiagnosticsLogPath)}`,
-  );
+  const write = input.preparationWorkspace?.workspace.writeSandboxLog?.({
+    diagnosticsLogPath: capturePathDiagnosticsLogPath,
+    diagnosticsSource: "capture-path-validation",
+    ...removeUndefinedValues(entry),
+    repoUrl: input.preparationManifest.repoUrl,
+    scriptId: input.demoScriptPackage.scriptId,
+    stage: "capture-path-validation",
+    workspaceId: input.preparationManifest.workspaceId,
+  });
   if (write === undefined) {
     return;
   }
 
-  void write
-    .then((result) => {
-      if (result.exitCode === 0) {
-        return;
-      }
+  const failedEvent = typeof entry.event === "string" ? entry.event : undefined;
+  try {
+    await withTimeout(
+      write,
+      dependencies.diagnosticsWriteTimeoutMs ??
+        defaultDiagnosticsWriteTimeoutMs,
+      `Capture Path Validation diagnostics log write timed out after ${
+        dependencies.diagnosticsWriteTimeoutMs ??
+        defaultDiagnosticsWriteTimeoutMs
+      }ms.`,
+    );
+  } catch (error) {
+    await writeFallbackDiagnosticsWarning(
+      input,
+      dependencies,
+      error,
+      failedEvent,
+    );
+  }
+}
 
-      writeCapturePathSandboxLog(input, {
-        diagnosticsLogPath: capturePathDiagnosticsLogPath,
-        event: "capture-path-validation.diagnostics.write_failed",
-        stderr: result.stderr,
-        stdout: result.stdout,
-      });
-    })
-    .catch(() => {});
+async function writeFallbackDiagnosticsWarning(
+  input: CapturePathValidationInput,
+  dependencies: CapturePathValidationDependencies,
+  error: unknown,
+  failedEvent: string | undefined,
+) {
+  const timeoutMs =
+    dependencies.diagnosticsWriteTimeoutMs ?? defaultDiagnosticsWriteTimeoutMs;
+
+  try {
+    await withTimeout(
+      Promise.resolve(
+        (dependencies.diagnosticsLogger ?? defaultDiagnosticsLogger).warn(
+          {
+            diagnosticsLogPath: capturePathDiagnosticsLogPath,
+            diagnosticsSource: "capture-path-validation",
+            error: readErrorMessage(error),
+            event: "capture-path-validation.diagnostics-log-write-failed",
+            ...(failedEvent === undefined ? {} : { failedEvent }),
+            repoUrl: input.preparationManifest.repoUrl,
+            scriptId: input.demoScriptPackage.scriptId,
+            stage: "capture-path-validation",
+            workspaceId: input.preparationManifest.workspaceId,
+          },
+          "Capture Path Validation diagnostics log write failed.",
+        ),
+      ),
+      timeoutMs,
+      `Capture Path Validation fallback diagnostics warning timed out after ${timeoutMs}ms.`,
+    );
+  } catch {
+    // Preserve Capture Path Validation progress if the fallback logger fails or hangs.
+  }
 }
 
 async function writeCapturePathSandboxLog(
@@ -590,14 +648,6 @@ function readErrorMessage(error: unknown) {
 
 function readFailedContractSceneId(failureReason: string) {
   return /^Scene ([^ ]+) /.exec(failureReason)?.[1];
-}
-
-function dirname(path: string) {
-  return path.slice(0, path.lastIndexOf("/"));
-}
-
-function shellQuote(value: string) {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 class CapturePathValidationTimeoutError extends Error {}
