@@ -520,6 +520,7 @@ async function runCommand(command: string, args: string[]) {
 }
 
 function extractMarkerLog(stdout: string) {
+  // scene-markers.jsonl is a derived capture protocol artifact, not a server audit log.
   return parseSceneMarkers(stdout)
     .map((marker) => `${JSON.stringify(marker)}\n`)
     .join("");

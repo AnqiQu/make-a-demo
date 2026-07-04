@@ -247,6 +247,10 @@ function readGlobalNodeModules() {
   }
 }
 
+// Cross-process result protocol: the parent validator parses exactly one JSON
+// object from stdout. Keep this generated script on console.log(JSON.stringify)
+// rather than Pino unless tryParseBrowserValidationOutput changes with it.
+
 async function main() {
   const { chromium } = requireSandboxPlaywright();
   try {
