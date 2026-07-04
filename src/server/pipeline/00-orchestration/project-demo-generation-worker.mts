@@ -14,6 +14,7 @@ import { runFullPipelineJob } from "./full-pipeline-runner";
 import { createPreCapturePipelineDependencies } from "./pre-capture-pipeline";
 import { readRepoSecurityInput } from "./pre-capture-repo-security";
 import { processNextProjectDemoGenerationJob } from "./project-demo-generation-queue";
+import { createProjectDemoGenerationWorkerLogger } from "./project-demo-generation-worker-logging";
 
 const pollIntervalMs = Number.parseInt(
   process.env.DEMO_QUEUE_POLL_INTERVAL_MS ?? "5000",
@@ -60,8 +61,9 @@ const scriptGenerationAgent = new DaytonaOpenCodeScriptGeneration({
   modelID,
   providerID,
 });
+const workerLogger = createProjectDemoGenerationWorkerLogger();
 
-process.stdout.write("MakeADemo demo generation worker started\n");
+await workerLogger.workerStarted();
 
 do {
   const result = await processNextProjectDemoGenerationJob(queueStore, {
@@ -97,10 +99,7 @@ do {
               ...(publicAppBaseUrl === undefined ? {} : { publicAppBaseUrl }),
             });
           },
-          onProgress: (event) =>
-            process.stderr.write(
-              `[pipeline] ${event.stage}: ${event.status}\n`,
-            ),
+          onProgress: (event) => workerLogger.pipelineProgress(event),
         },
       );
 
@@ -113,9 +112,7 @@ do {
   });
 
   if (result.status !== "idle") {
-    process.stdout.write(
-      `Project ${result.projectId} demo generation ${result.status}\n`,
-    );
+    await workerLogger.jobProcessed(result);
   }
 
   if (!runOnce && result.status === "idle") {
