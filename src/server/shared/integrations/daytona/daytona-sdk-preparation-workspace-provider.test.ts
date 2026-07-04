@@ -348,7 +348,47 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ).toHaveLength(0);
   });
 
-  it("does not fail sandbox logging when the workspace mirror path is unavailable", async () => {
+  it("does not resolve sandbox logging until the workspace-visible mirror is durable", async () => {
+    const calls: unknown[] = [];
+    const workspaceMirrorStarted = deferred<void>();
+    const workspaceMirror = deferred<void>();
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, {
+        awaitWorkspaceLogMirror: workspaceMirror.promise,
+        onWorkspaceLogMirrorStarted: workspaceMirrorStarted.resolve,
+      }),
+    });
+    const handle = await provider.create();
+
+    let resolved = false;
+    const write = handle.workspace
+      .writeSandboxLog?.({
+        event: "repo-preparation.started",
+        stage: "repo-preparation",
+      })
+      .then(() => {
+        resolved = true;
+      });
+
+    await workspaceMirrorStarted.promise;
+
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        {
+          executeCommand: expect.stringContaining(
+            "cp '/tmp/makeademo/sandbox-log.jsonl' '/workspace/.makeademo/sandbox-log.jsonl'",
+          ),
+        },
+      ]),
+    );
+    expect(resolved).toBe(false);
+
+    workspaceMirror.resolve();
+    await expect(write).resolves.toBeUndefined();
+    expect(resolved).toBe(true);
+  });
+
+  it("surfaces sandbox logging failures when the workspace mirror path is unavailable", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
       client: fakeClient(calls, { failWorkspaceLogMirror: true }),
@@ -360,7 +400,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         event: "repo-preparation.started",
         stage: "repo-preparation",
       }),
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow("Failed to mirror Daytona sandbox audit log.");
 
     expect(calls).toEqual(
       expect.arrayContaining([
@@ -1196,6 +1236,7 @@ function fakeLinkedSandbox(
 function fakeClient(
   calls: unknown[],
   options: {
+    awaitWorkspaceLogMirror?: Promise<void>;
     downloadError?: string;
     executeCommandNeverResolves?: boolean;
     failFirstSubmittedCodeInitialization?: boolean;
@@ -1203,6 +1244,7 @@ function fakeClient(
     failSubmittedCodeNetworkDisable?: boolean;
     missingSubmittedCodeImage?: boolean;
     networkError?: Error;
+    onWorkspaceLogMirrorStarted?: () => void;
     previewNeverResolves?: boolean;
     ptyNeverConnects?: boolean;
     ptyWaitsForDisconnect?: boolean;
@@ -1311,6 +1353,13 @@ function fakeClient(
           };
         }
         if (
+          options.awaitWorkspaceLogMirror !== undefined &&
+          command.includes("/workspace/.makeademo/sandbox-log.jsonl")
+        ) {
+          options.onWorkspaceLogMirrorStarted?.();
+          await options.awaitWorkspaceLogMirror;
+        }
+        if (
           options.failWorkspaceLogMirror === true &&
           command.includes("/workspace/.makeademo/sandbox-log.jsonl")
         ) {
@@ -1394,6 +1443,17 @@ function fakeClient(
       return sandbox;
     },
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+
+  return { promise, reject, resolve };
 }
 
 function countOccurrences(text: string, needle: string): number {

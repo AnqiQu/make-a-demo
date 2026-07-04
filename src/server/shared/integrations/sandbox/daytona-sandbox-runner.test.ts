@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PreparationWorkspaceHandle } from "../../../pipeline/03-repo-preparation/preparation-workspace-runner";
+import type { PipelineEventLogger } from "../../logging/pipeline-event-logger";
 import {
   DaytonaSandboxRunner,
   restartPreparedDemoForFreshCapture,
@@ -135,6 +136,79 @@ describe("DaytonaSandboxRunner", () => {
           stage: "project-validation",
         }),
       ]),
+    );
+  });
+
+  it("continues Project Validation when sandbox progress logging fails", async () => {
+    const workspace = new FakePreparationWorkspaceHandle(new Map(), undefined, {
+      failSandboxLogWrites: true,
+    });
+    const runner = new DaytonaSandboxRunner();
+
+    const result = await runner.runValidation({
+      demoCommand: "npm run demo",
+      preparationManifest: manifest("workspace_123"),
+      preparationWorkspace: workspace,
+      repoUrl: "https://github.com/example/app",
+      url: "http://localhost:3000",
+    });
+
+    expect(result.runtimeExitCode).toBe(0);
+    expect(result.browserUrl).toBe("https://preview.example.test:3000/");
+    expect(workspace.submittedCommands).toEqual(
+      expect.arrayContaining([expect.stringContaining("find /workspace")]),
+    );
+  });
+
+  it("continues Project Validation when sandbox progress logging never settles", async () => {
+    const workspace = new FakePreparationWorkspaceHandle(new Map(), undefined, {
+      neverSettleSandboxLogWrites: true,
+    });
+    const runner = new DaytonaSandboxRunner();
+
+    const result = await Promise.race([
+      runner
+        .runValidation({
+          demoCommand: "npm run demo",
+          preparationManifest: manifest("workspace_123"),
+          preparationWorkspace: workspace,
+          repoUrl: "https://github.com/example/app",
+          url: "http://localhost:3000",
+        })
+        .then((validation) => validation.runtimeExitCode),
+      delay(100).then(() => "timed-out"),
+    ]);
+
+    expect(result).toBe(0);
+    expect(workspace.submittedCommands).toEqual(
+      expect.arrayContaining([expect.stringContaining("find /workspace")]),
+    );
+  });
+
+  it("does not wait on a hanging fallback logger after Project Validation sandbox log writes fail", async () => {
+    const workspace = new FakePreparationWorkspaceHandle(new Map(), undefined, {
+      failSandboxLogWrites: true,
+    });
+    const runner = new DaytonaSandboxRunner({
+      logger: neverSettlingWarnLogger(),
+    });
+
+    const result = await Promise.race([
+      runner
+        .runValidation({
+          demoCommand: "npm run demo",
+          preparationManifest: manifest("workspace_123"),
+          preparationWorkspace: workspace,
+          repoUrl: "https://github.com/example/app",
+          url: "http://localhost:3000",
+        })
+        .then((validation) => validation.runtimeExitCode),
+      delay(100).then(() => "timed-out"),
+    ]);
+
+    expect(result).toBe(0);
+    expect(workspace.submittedCommands).toEqual(
+      expect.arrayContaining([expect.stringContaining("find /workspace")]),
     );
   });
 
@@ -388,6 +462,26 @@ describe("DaytonaSandboxRunner", () => {
     );
   });
 
+  it("continues fresh Footage Capture restart when sandbox progress logging fails", async () => {
+    const workspace = new FakePreparationWorkspaceHandle(new Map(), undefined, {
+      failSandboxLogWrites: true,
+    });
+
+    const result = await restartPreparedDemoForFreshCapture({
+      preparationManifest: manifest("workspace_123"),
+      preparationWorkspace: workspace,
+      readinessPollIntervalMs: 0,
+    });
+
+    expect(result.browserUrl).toBe("https://preview.example.test:3000/");
+    expect(workspace.submittedCommands[0]).toContain("/tmp/makeademo-demo.pid");
+    expect(workspace.submittedCommands).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("fresh-capture-baseline.tgz"),
+      ]),
+    );
+  });
+
   it("fails the fresh capture boundary when the restarted demo never becomes ready", async () => {
     const workspace = new FakePreparationWorkspaceHandle();
     workspace.readinessResults = [1];
@@ -454,7 +548,11 @@ class FakePreparationWorkspaceHandle implements PreparationWorkspaceHandle {
   constructor(
     private readonly exitCodesByCommand = new Map<string, number>(),
     private readonly commandToThrow?: string,
-    private readonly options: { failFreshCaptureRestore?: boolean } = {},
+    private readonly options: {
+      failFreshCaptureRestore?: boolean;
+      failSandboxLogWrites?: boolean;
+      neverSettleSandboxLogWrites?: boolean;
+    } = {},
   ) {}
 
   workspace = {
@@ -484,6 +582,18 @@ class FakePreparationWorkspaceHandle implements PreparationWorkspaceHandle {
       throw new Error("Project Validation should use the retained workspace.");
     },
     writeSandboxLog: async (entry: Record<string, unknown>) => {
+      if (
+        this.options.neverSettleSandboxLogWrites === true &&
+        typeof entry.event === "string" &&
+        entry.event.startsWith("project-validation.")
+      ) {
+        return new Promise<void>(() => undefined);
+      }
+
+      if (this.options.failSandboxLogWrites === true) {
+        throw new Error("sandbox log mirror failed");
+      }
+
       this.sandboxLogs.push(entry);
     },
   };
@@ -549,4 +659,19 @@ function manifest(workspaceId: string) {
     url: "http://localhost:3000",
     workspaceId,
   };
+}
+
+function neverSettlingWarnLogger(): PipelineEventLogger {
+  return {
+    child: () => neverSettlingWarnLogger(),
+    debug: async () => {},
+    error: async () => {},
+    flush: async () => {},
+    info: async () => {},
+    warn: () => new Promise(() => undefined),
+  };
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

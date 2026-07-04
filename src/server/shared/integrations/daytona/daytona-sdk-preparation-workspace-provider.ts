@@ -393,13 +393,17 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
       throw new Error("Failed to write Daytona sandbox audit log.");
     }
 
-    void withTimeout(
+    const mirrorResponse = await withTimeout(
       this.sandbox.process.executeCommand(
         `mkdir -p ${shellQuote(workspaceMakeADemoDirectory)} && cp ${shellQuote(sandboxAuditLogPath)} ${shellQuote(workspaceSandboxAuditLogPath)}`,
       ),
       this.logWriteTimeoutMs,
       `Daytona sandbox log mirror did not finish within ${this.logWriteTimeoutMs}ms.`,
-    ).catch(() => {});
+    );
+
+    if ((mirrorResponse.exitCode ?? 0) !== 0) {
+      throw new Error("Failed to mirror Daytona sandbox audit log.");
+    }
   }
 
   async executeSubmittedCode(
