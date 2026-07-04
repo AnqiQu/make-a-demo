@@ -84,6 +84,24 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     expect(command).not.toContain("--dangerously-skip-permissions");
     expect(command).toContain("--dir /workspace");
     expect(command).toContain("--model 'openai/gpt-5.5'");
+
+    const cloneCommands = events
+      .filter(
+        (event): event is { execute: string } =>
+          typeof event === "object" &&
+          event !== null &&
+          "execute" in event &&
+          typeof event.execute === "string" &&
+          event.execute.includes("git clone"),
+      )
+      .map((event) => event.execute);
+    expect(cloneCommands).toHaveLength(1);
+    expect(cloneCommands[0]).toContain("/etc/ssl/certs/ca-certificates.crt");
+    expect(cloneCommands[0]).toContain("/etc/pki/tls/certs/ca-bundle.crt");
+    expect(cloneCommands[0]).toContain("/etc/openshell-tls/ca-bundle.pem");
+    expect(cloneCommands[0]).toMatch(/export GIT_SSL_CAINFO=.*git clone/s);
+    expect(cloneCommands[0]).not.toContain("GIT_SSL_NO_VERIFY");
+    expect(cloneCommands[0]).not.toContain("sslVerify=false");
   });
 
   it("mirrors streamed OpenCode chunks to the sandbox audit log", async () => {
@@ -804,6 +822,20 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
         },
       ]),
     );
+    const submittedCodeClone = events.find(
+      (event): event is { submittedCodeExecute: string } =>
+        typeof event === "object" &&
+        event !== null &&
+        "submittedCodeExecute" in event &&
+        typeof event.submittedCodeExecute === "string" &&
+        event.submittedCodeExecute.includes("git clone"),
+    )?.submittedCodeExecute;
+    expect(submittedCodeClone).toContain("/etc/ssl/certs/ca-certificates.crt");
+    expect(submittedCodeClone).toContain("/etc/pki/tls/certs/ca-bundle.crt");
+    expect(submittedCodeClone).toContain("/etc/openshell-tls/ca-bundle.pem");
+    expect(submittedCodeClone).toMatch(/export GIT_SSL_CAINFO=.*git clone/s);
+    expect(submittedCodeClone).not.toContain("GIT_SSL_NO_VERIFY");
+    expect(submittedCodeClone).not.toContain("sslVerify=false");
     expect(events).toEqual(
       expect.arrayContaining([
         { submittedCodeNetwork: true },

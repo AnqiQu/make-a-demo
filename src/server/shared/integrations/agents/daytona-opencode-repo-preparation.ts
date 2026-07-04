@@ -1,6 +1,7 @@
 import { posix } from "node:path";
 
 import { runDependencyInstallWithNetworkWindow } from "../../../pipeline/03-repo-preparation/dependency-install-network-window";
+import { createGitCloneCommand } from "../../../pipeline/03-repo-preparation/git-clone-command";
 import { runGitCloneWithTransientRetry } from "../../../pipeline/03-repo-preparation/git-clone-retry";
 import { readPreparationManifest } from "../../../pipeline/03-repo-preparation/preparation-manifest";
 import type {
@@ -628,7 +629,11 @@ function createValidationHandoffFailure(
 }
 
 function createCloneCommand(repoUrl: string): string {
-  return `${createDaytonaWorkspaceResetCommand()} && git clone --depth 1 ${shellQuote(repoUrl)} ${shellQuote(daytonaWorkspaceDirectory)}`;
+  return createGitCloneCommand({
+    destinationPath: daytonaWorkspaceDirectory,
+    repoUrl,
+    resetCommand: createDaytonaWorkspaceResetCommand(),
+  });
 }
 
 function createOpenCodeRunCommand(input: {

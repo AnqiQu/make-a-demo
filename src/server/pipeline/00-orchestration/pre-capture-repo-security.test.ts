@@ -76,6 +76,12 @@ describe("readRepoSecurityInput", () => {
     expect(commands[0]).toContain(
       "git clone --depth 1 'https://github.com/example/app' '/workspace'",
     );
+    expect(commands[0]).toContain("/etc/ssl/certs/ca-certificates.crt");
+    expect(commands[0]).toContain("/etc/pki/tls/certs/ca-bundle.crt");
+    expect(commands[0]).toContain("/etc/openshell-tls/ca-bundle.pem");
+    expect(commands[0]).toMatch(/export GIT_SSL_CAINFO=.*git clone/s);
+    expect(commands[0]).not.toContain("GIT_SSL_NO_VERIFY");
+    expect(commands[0]).not.toContain("sslVerify=false");
     expect(lines.map((line) => JSON.parse(line))).toEqual([
       {
         component: "repo-security-screen",

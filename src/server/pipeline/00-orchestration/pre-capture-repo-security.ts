@@ -4,6 +4,7 @@ import {
 } from "../../shared/integrations/daytona/workspace-command";
 import type { PipelineEventLogger } from "../../shared/logging/pipeline-event-logger";
 import type { RepoSecurityInput } from "../02-repo-security-screen/repo-security-screen";
+import { createGitCloneCommand } from "../03-repo-preparation/git-clone-command";
 import { runGitCloneWithTransientRetry } from "../03-repo-preparation/git-clone-retry";
 import type { PreparationWorkspaceProvider } from "../03-repo-preparation/preparation-workspace-runner";
 import type { PreparationWorkspace } from "../03-repo-preparation/preparation-workspace.interface";
@@ -80,7 +81,11 @@ async function cloneWithNetworkAccess(
     return await runGitCloneWithTransientRetry({
       clone: () =>
         workspace.execute(
-          `${createDaytonaWorkspaceResetCommand()} && git clone --depth 1 ${shellQuote(repoUrl)} ${shellQuote(daytonaWorkspaceDirectory)}`,
+          createGitCloneCommand({
+            destinationPath: daytonaWorkspaceDirectory,
+            repoUrl,
+            resetCommand: createDaytonaWorkspaceResetCommand(),
+          }),
         ),
     });
   } finally {
