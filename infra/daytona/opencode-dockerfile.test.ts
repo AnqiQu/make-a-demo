@@ -11,6 +11,9 @@ describe("Daytona OpenCode prepared image", () => {
     );
 
     expect(dockerfile).toContain("docker.io");
+    expect(dockerfile).toContain("ca-certificates");
+    expect(dockerfile).toContain("git");
+    expect(dockerfile).toContain("update-ca-certificates");
     expect(dockerfile).toContain("submitted-code-node-browser.Dockerfile");
     expect(dockerfile).toContain("makeademo-preload-submitted-code-image");
   });
@@ -22,8 +25,11 @@ describe("Daytona OpenCode prepared image", () => {
     );
 
     expect(dockerfile).toContain("mcr.microsoft.com/playwright");
+    expect(dockerfile).toContain("ca-certificates");
     expect(dockerfile).toContain("ffmpeg");
+    expect(dockerfile).toContain("git");
     expect(dockerfile).toContain("unzip");
+    expect(dockerfile).toContain("update-ca-certificates");
     expect(dockerfile).toContain("bun-v1.2.5");
     expect(dockerfile).toContain("pnpm@10.12.1");
     expect(dockerfile).toContain("yarn@1.22.22");
