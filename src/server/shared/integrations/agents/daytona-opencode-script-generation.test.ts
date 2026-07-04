@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import type { PreparationWorkspace } from "../../../pipeline/03-repo-preparation/preparation-workspace.interface";
+import type { PipelineEventLogger } from "../../logging/pipeline-event-logger";
+import { createPipelineEventLogger } from "../../logging/pipeline-event-logger";
 import { DaytonaOpenCodeScriptGeneration } from "./daytona-opencode-script-generation";
 
 describe("DaytonaOpenCodeScriptGeneration", () => {
@@ -116,6 +118,64 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
     );
   });
 
+  it("continues Script Generation when streamed OpenCode activity log writes fail", async () => {
+    const events: unknown[] = [];
+    const stderr: string[] = [];
+    const stdout: string[] = [];
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      modelID: "gpt-5.5",
+      onStderr: (chunk) => stderr.push(chunk),
+      onStdout: (chunk) => stdout.push(chunk),
+      providerID: "openai",
+    });
+
+    const result = await agent.generateScriptPackage({
+      ...scriptGenerationInput(),
+      opencodeSessionID: "session_prepare_123",
+      preparationWorkspace: workspaceHandle(events, [interactivePackage()], {
+        rejectSandboxLogEvents: ["opencode.output"],
+      }),
+    });
+
+    expect(result.scriptId).toBe("script_conduit");
+    expect(stdout).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("script generation output"),
+      ]),
+    );
+    expect(stderr).toEqual(["script generation warning"]);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          execute: expect.stringContaining("opencode run"),
+        }),
+      ]),
+    );
+  });
+
+  it("continues Script Generation when streamed OpenCode activity log writes never settle", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      modelID: "gpt-5.5",
+      providerID: "openai",
+    });
+
+    const result = await Promise.race([
+      agent.generateScriptPackage({
+        ...scriptGenerationInput(),
+        opencodeSessionID: "session_prepare_123",
+        preparationWorkspace: workspaceHandle(events, [interactivePackage()], {
+          neverSettleSandboxLogEvents: ["opencode.output"],
+        }),
+      }),
+      new Promise<"timed-out">((resolve) =>
+        setTimeout(() => resolve("timed-out"), 50),
+      ),
+    ]);
+
+    expect(result).toMatchObject({ scriptId: "script_conduit" });
+  });
+
   it("repairs static placeholder Demo Scripts in the same OpenCode session", async () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeScriptGeneration({
@@ -201,6 +261,83 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
     );
   });
 
+  it("continues Script Generation when the attempt-start sandbox log mirror fails", async () => {
+    const events: unknown[] = [];
+    const fallbackLogs: Array<Record<string, unknown>> = [];
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      logger: testLogger(fallbackLogs),
+      modelID: "gpt-5.5",
+      providerID: "openai",
+    });
+
+    const result = await agent.generateScriptPackage({
+      ...scriptGenerationInput(),
+      opencodeSessionID: "session_prepare_123",
+      preparationWorkspace: workspaceHandle(events, [interactivePackage()], {
+        rejectSandboxLogEvents: ["script-generation.opencode-attempt.started"],
+      }),
+    });
+
+    expect(result.scriptId).toBe("script_conduit");
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          execute: expect.stringContaining("opencode run"),
+        }),
+      ]),
+    );
+    expect(fallbackLogs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          component: "script-generation-agent",
+          error: "sandbox log mirror failed",
+          event: "sandbox-log-write-failed",
+          failedEvent: "script-generation.opencode-attempt.started",
+          level: "warn",
+          stage: "script-generation",
+          workspaceComponent: "sandbox-log",
+        }),
+      ]),
+    );
+  });
+
+  it("does not wait on a hanging fallback logger after Script Generation sandbox log writes fail", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      logger: neverSettlingWarnLogger(),
+      modelID: "gpt-5.5",
+      providerID: "openai",
+    });
+
+    const result = await Promise.race([
+      agent
+        .generateScriptPackage({
+          ...scriptGenerationInput(),
+          opencodeSessionID: "session_prepare_123",
+          preparationWorkspace: workspaceHandle(
+            events,
+            [interactivePackage()],
+            {
+              rejectSandboxLogEvents: [
+                "script-generation.opencode-attempt.started",
+              ],
+            },
+          ),
+        })
+        .then((script) => script.scriptId),
+      delay(100).then(() => "timed-out"),
+    ]);
+
+    expect(result).toBe("script_conduit");
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          execute: expect.stringContaining("opencode run"),
+        }),
+      ]),
+    );
+  });
+
   it("sends Capture Path Validation failure evidence back to the same OpenCode session for repair", async () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeScriptGeneration({
@@ -212,8 +349,7 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
       attempt: 1,
       failure: {
         blockedNetworkAttempts: [],
-        diagnosticsLogPath:
-          "/workspace/.makeademo/capture-path-validation-diagnostics.jsonl",
+        diagnosticsLogPath: "/workspace/.makeademo/sandbox-log.jsonl",
         failedSceneId: "scene_feed",
         failureReason:
           "Scene scene_feed failed during Capture Path Validation.",
@@ -270,6 +406,73 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
             stage: "capture-path-repair",
           }),
         },
+      ]),
+    );
+  });
+
+  it("continues Capture Path repair when the attempt-start sandbox log mirror fails", async () => {
+    const events: unknown[] = [];
+    const fallbackLogs: Array<Record<string, unknown>> = [];
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      logger: testLogger(fallbackLogs),
+      modelID: "gpt-5.5",
+      providerID: "openai",
+    });
+
+    const result = await agent.repairCapturePathFailure({
+      attempt: 1,
+      failure: {
+        blockedNetworkAttempts: [],
+        failedSceneId: "scene_feed",
+        failureReason:
+          "Scene scene_feed failed during Capture Path Validation.",
+        logs: ["locator failed"],
+        status: "failed",
+        warnings: [],
+      },
+      opencodeSessionID: "session_prepare_123",
+      preparationManifest: scriptGenerationInput().preparationManifest,
+      preparationWorkspace: workspaceHandle(events, [interactivePackage()], {
+        rejectSandboxLogEvents: [
+          "capture-path-repair.opencode-attempt.started",
+        ],
+      }),
+      repoUrl: "https://github.com/example/conduit",
+      demoScriptPackage: {
+        ...interactivePackage(),
+        assumptions: [],
+        demoPlan: {
+          featureOrder: ["article feed"],
+          narrative: "Conduit article feed demo",
+          risks: [],
+        },
+        exploration: {
+          assumptions: [],
+          productSurfaces: [],
+          summary: "Prepared Conduit with local articles.",
+        },
+      },
+    });
+
+    expect(result.demoScriptPackage.scriptId).toBe("script_conduit");
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          execute: expect.stringContaining("opencode run"),
+        }),
+      ]),
+    );
+    expect(fallbackLogs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          component: "script-generation-agent",
+          error: "sandbox log mirror failed",
+          event: "sandbox-log-write-failed",
+          failedEvent: "capture-path-repair.opencode-attempt.started",
+          level: "warn",
+          stage: "capture-path-repair",
+          workspaceComponent: "sandbox-log",
+        }),
       ]),
     );
   });
@@ -497,6 +700,8 @@ function workspaceHandle(
   artifacts: unknown[],
   helperOptions: {
     firstOpenCodeFailure?: { stderr: string; stdout: string };
+    neverSettleSandboxLogEvents?: string[];
+    rejectSandboxLogEvents?: string[];
   } = {},
 ) {
   let latestArtifact: unknown;
@@ -556,6 +761,18 @@ function workspaceHandle(
       events.push({ uploadFiles: files });
     },
     async writeSandboxLog(entry) {
+      if (
+        typeof entry.event === "string" &&
+        helperOptions.neverSettleSandboxLogEvents?.includes(entry.event)
+      ) {
+        await new Promise(() => {});
+      }
+      if (
+        typeof entry.event === "string" &&
+        helperOptions.rejectSandboxLogEvents?.includes(entry.event)
+      ) {
+        throw new Error("sandbox log mirror failed");
+      }
       events.push({ sandboxLog: entry });
     },
   };
@@ -565,6 +782,35 @@ function workspaceHandle(
     id: "daytona_workspace",
     workspace,
   };
+}
+
+function testLogger(logs: Array<Record<string, unknown>>) {
+  return createPipelineEventLogger({
+    base: { component: "script-generation-agent" },
+    sinks: [
+      {
+        write(line) {
+          logs.push(JSON.parse(line) as Record<string, unknown>);
+        },
+      },
+    ],
+    timestamp: () => "2026-01-01T00:00:00.000Z",
+  });
+}
+
+function neverSettlingWarnLogger(): PipelineEventLogger {
+  return {
+    child: () => neverSettlingWarnLogger(),
+    debug: async () => {},
+    error: async () => {},
+    flush: async () => {},
+    info: async () => {},
+    warn: () => new Promise(() => undefined),
+  };
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function scriptGenerationInput() {

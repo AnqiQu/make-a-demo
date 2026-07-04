@@ -18,6 +18,10 @@ import type {
 } from "../../../pipeline/03-repo-preparation/repo-preparation-agent.interface";
 import type { ProjectValidationResult } from "../../../pipeline/05-capture-path-validation/project-runtime-preflight/validation-result";
 import {
+  type PipelineEventLogger,
+  createPipelineEventLogger,
+} from "../../logging/pipeline-event-logger";
+import {
   createDaytonaWorkspaceResetCommand,
   daytonaWorkspaceDirectory,
 } from "../daytona/workspace-command";
@@ -35,6 +39,12 @@ const validationResultPath = `${makeADemoArtifactDirectory}/validation-result.js
 const minimumBackendToolBudgetMs = 100;
 
 export type DaytonaOpenCodeRepoPreparationOptions = {
+  /**
+   * Receives non-fatal Repo Preparation infrastructure events. Implementations
+   * must preserve the agent's ability to continue when best-effort audit
+   * logging fails; this class suppresses logger write failures for that reason.
+   */
+  logger?: PipelineEventLogger;
   modelID: string;
   onStderr?: (chunk: string) => void;
   onStdout?: (chunk: string) => void;
@@ -48,6 +58,7 @@ export type DaytonaOpenCodeRepoPreparationOptions = {
 };
 
 export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
+  private readonly logger: PipelineEventLogger;
   private readonly modelID: string;
   private readonly onStderr: ((chunk: string) => void) | undefined;
   private readonly onStdout: ((chunk: string) => void) | undefined;
@@ -62,6 +73,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
     | undefined;
 
   constructor(options: DaytonaOpenCodeRepoPreparationOptions) {
+    this.logger = options.logger ?? createRepoPreparationLogger();
     this.modelID = options.modelID;
     this.onStderr = options.onStderr;
     this.onStdout = options.onStdout;
@@ -74,7 +86,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
   async prepare(input: RepoPreparationInput) {
     const handle = await this.provider.create();
     const deadlineAt = Date.now() + this.timeoutMs;
-    await writePreparationSandboxLog(handle.workspace, {
+    await this.writeSandboxLog(handle.workspace, {
       event: "workspace-created",
       timeoutMs: this.timeoutMs,
       workspaceId: handle.id,
@@ -86,7 +98,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
         this.timeoutMs,
       );
     } catch (error) {
-      await writePreparationSandboxLog(handle.workspace, {
+      await this.writeSandboxLog(handle.workspace, {
         error: readErrorMessage(error),
         event: "preparation-error",
       });
@@ -102,7 +114,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
     }
 
     if (result.status !== "succeeded") {
-      await writePreparationSandboxLog(handle.workspace, {
+      await this.writeSandboxLog(handle.workspace, {
         event: "preparation-timeout",
         reason: result.reason,
         workspaceId: handle.id,
@@ -132,7 +144,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
     input: RepoPreparationInput,
     deadlineAt: number,
   ): Promise<RawPreparationRunResult> {
-    await writePreparationSandboxLog(handle.workspace, {
+    await this.writeSandboxLog(handle.workspace, {
       event: "clone-started",
     });
     await handle.workspace.setOutboundNetworkAccess(true);
@@ -140,7 +152,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
       handle.workspace,
       input.repoUrl,
     );
-    await writePreparationSandboxLog(handle.workspace, {
+    await this.writeSandboxLog(handle.workspace, {
       event: "clone-finished",
       exitCode: cloneResult.exitCode,
       stderrLength: cloneResult.stderr.length,
@@ -156,7 +168,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
       input.repoUrl,
     );
     if (submittedCodeCloneResult !== undefined) {
-      await writePreparationSandboxLog(handle.workspace, {
+      await this.writeSandboxLog(handle.workspace, {
         event: "submitted-code-clone-finished",
         exitCode: submittedCodeCloneResult.exitCode,
         stderrLength: submittedCodeCloneResult.stderr.length,
@@ -168,7 +180,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
     }
 
     await installMakeADemoOpenCodeConfig(handle.workspace);
-    await writePreparationSandboxLog(handle.workspace, {
+    await this.writeSandboxLog(handle.workspace, {
       event: "opencode-config-installed",
     });
 
@@ -189,7 +201,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
     let prompt = initialPrompt;
     let currentSessionID: string | undefined;
     for (let attempt = 0; attempt < 8; attempt += 1) {
-      await writePreparationSandboxLog(handle.workspace, {
+      await this.writeSandboxLog(handle.workspace, {
         attempt: attempt + 1,
         event: "opencode-started",
         remainingMs: deadlineAt - Date.now(),
@@ -204,7 +216,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
           : { sessionID: currentSessionID }),
       });
       currentSessionID = openCodeResult.sessionID ?? currentSessionID;
-      await writePreparationSandboxLog(handle.workspace, {
+      await this.writeSandboxLog(handle.workspace, {
         attempt: attempt + 1,
         event: "opencode-finished",
         exitCode: openCodeResult.exitCode,
@@ -217,7 +229,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
         handle.workspace,
       );
       if (dependencyInstallRequest !== undefined) {
-        await writePreparationSandboxLog(handle.workspace, {
+        await this.writeSandboxLog(handle.workspace, {
           command: dependencyInstallRequest.command,
           event: "dependency-install-requested",
         });
@@ -229,10 +241,10 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
           workspace: handle.workspace,
         });
         await clearDependencyInstallRequest(handle.workspace);
-        await writePreparationSandboxLog(handle.workspace, {
+        await this.writeSandboxLog(handle.workspace, {
           event: "dependency-install-finished",
         });
-        await writeRepoPreparationRetryLog(handle.workspace, {
+        await writeRepoPreparationRetryLog(this.logger, handle.workspace, {
           nextAttempt: attempt + 2,
           reason: "dependency-install-completed",
         });
@@ -242,7 +254,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
 
       const validationRequest = await readValidationRequest(handle.workspace);
       if (validationRequest !== undefined) {
-        await writePreparationSandboxLog(handle.workspace, {
+        await this.writeSandboxLog(handle.workspace, {
           event: "preparation-preflight.requested",
           remainingMs: deadlineAt - Date.now(),
         });
@@ -268,7 +280,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
         } catch (error) {
           validation = createValidationHandoffFailure(readErrorMessage(error));
         }
-        await writePreparationSandboxLog(handle.workspace, {
+        await this.writeSandboxLog(handle.workspace, {
           failureReason: validation.failureReason,
           event: "preparation-preflight.finished",
           status: validation.status,
@@ -281,7 +293,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
         const nonRetryablePreflightFailure =
           readNonRetryablePreflightFailure(validation);
         if (nonRetryablePreflightFailure !== undefined) {
-          await writePreparationSandboxLog(handle.workspace, {
+          await this.writeSandboxLog(handle.workspace, {
             event: "preparation-preflight.non-retryable-failure",
             failureReason: nonRetryablePreflightFailure,
           });
@@ -295,7 +307,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
           };
         }
         if (validation.status === "succeeded" && manifest !== undefined) {
-          await writePreparationSandboxLog(handle.workspace, {
+          await this.writeSandboxLog(handle.workspace, {
             event: "preparation-auto-succeeded-after-preflight",
             status: validation.status,
           });
@@ -309,7 +321,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
             workspace: handle,
           };
         }
-        await writeRepoPreparationRetryLog(handle.workspace, {
+        await writeRepoPreparationRetryLog(this.logger, handle.workspace, {
           nextAttempt: attempt + 2,
           reason: readRetryReason(validation.failureReason),
         });
@@ -323,7 +335,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
 
       const preparationResult = await readPreparationResult(handle.workspace);
       if (preparationResult !== undefined) {
-        await writePreparationSandboxLog(handle.workspace, {
+        await this.writeSandboxLog(handle.workspace, {
           event: "preparation-result-found",
           status: preparationResult.status,
         });
@@ -404,12 +416,19 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
       createOpenCodeRunCommand(input),
       options,
     );
-    await Promise.all(outputWrites);
+    await Promise.allSettled(outputWrites);
 
     const sessionID = readOpenCodeSessionID(
       `${streamedStdout}\n${result.stdout}`,
     );
     return sessionID === undefined ? result : { ...result, sessionID };
+  }
+
+  private async writeSandboxLog(
+    workspace: PreparationWorkspace,
+    event: Record<string, unknown>,
+  ): Promise<void> {
+    await writePreparationSandboxLog(this.logger, workspace, event);
   }
 }
 
@@ -506,30 +525,74 @@ async function cancelActiveCommandsQuietly(
 }
 
 async function writePreparationSandboxLog(
+  logger: PipelineEventLogger,
   workspace: PreparationWorkspace,
   event: Record<string, unknown>,
 ): Promise<void> {
   const eventName =
     typeof event.event === "string" ? event.event : "repo-preparation.debug";
   try {
-    await workspace.writeSandboxLog?.({
-      ...event,
-      event: eventName,
-      stage: "repo-preparation",
-    });
+    void workspace
+      .writeSandboxLog?.({
+        ...event,
+        event: eventName,
+        stage: "repo-preparation",
+      })
+      ?.catch((error) => {
+        warnPreparationSandboxLogWriteFailed(logger, eventName, error);
+      });
   } catch (error) {
-    console.warn("Repo Preparation sandbox log write failed.", error);
+    warnPreparationSandboxLogWriteFailed(logger, eventName, error);
+  }
+}
+
+function warnPreparationSandboxLogWriteFailed(
+  logger: PipelineEventLogger,
+  eventName: string,
+  error: unknown,
+): void {
+  try {
+    void logger
+      .warn(
+        {
+          error: readErrorMessage(error),
+          event: "sandbox-log-write-failed",
+          failedEvent: eventName,
+          stage: "repo-preparation",
+          workspaceComponent: "sandbox-log",
+        },
+        "Repo Preparation sandbox log write failed.",
+      )
+      .catch(() => {
+        // Preserve Repo Preparation progress if the fallback logger also fails.
+      });
+  } catch {
+    // Preserve Repo Preparation progress if the fallback logger also fails.
   }
 }
 
 async function writeRepoPreparationRetryLog(
+  logger: PipelineEventLogger,
   workspace: PreparationWorkspace,
   input: { nextAttempt: number; reason: string },
 ): Promise<void> {
-  await writePreparationSandboxLog(workspace, {
+  await writePreparationSandboxLog(logger, workspace, {
     event: "repo-preparation.retrying",
     nextAttempt: input.nextAttempt,
     reason: input.reason,
+  });
+}
+
+function createRepoPreparationLogger(): PipelineEventLogger {
+  return createPipelineEventLogger({
+    base: { component: "repo-preparation-agent" },
+    sinks: [
+      {
+        write(line) {
+          process.stderr.write(line);
+        },
+      },
+    ],
   });
 }
 

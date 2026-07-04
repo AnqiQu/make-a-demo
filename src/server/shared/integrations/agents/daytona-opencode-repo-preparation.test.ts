@@ -5,6 +5,7 @@ import type {
   PreparationWorkspace,
   PreparationWorkspaceCommandResult,
 } from "../../../pipeline/03-repo-preparation/preparation-workspace.interface";
+import { createPipelineEventLogger } from "../../logging/pipeline-event-logger";
 import { DaytonaOpenCodeRepoPreparation } from "./daytona-opencode-repo-preparation";
 
 describe("DaytonaOpenCodeRepoPreparation", () => {
@@ -156,10 +157,96 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     );
   });
 
+  it("continues Repo Preparation when streamed OpenCode activity log writes fail", async () => {
+    const events: unknown[] = [];
+    const streamed: string[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      onStderr: (chunk) => streamed.push(`stderr:${chunk}`),
+      onStdout: (chunk) => streamed.push(`stdout:${chunk}`),
+      provider: fakeProvider(events, {
+        commandStderrChunks: ["agent warning"],
+        commandStdout: ["Submitted preparation result."],
+        commandStdoutChunks: ["agent output"],
+        preparationResult: successResult(),
+        sandboxLogFailureEvent: "opencode.output",
+        validationResult: validationArtifact(),
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      manifest: { demoCommand: "npm run demo:makeademo" },
+      status: "succeeded",
+    });
+    expect(streamed).toEqual(["stdout:agent output", "stderr:agent warning"]);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          configDir: "/tmp/makeademo/opencode",
+          execute: expect.stringContaining("opencode run"),
+          streaming: true,
+        },
+      ]),
+    );
+  });
+
+  it("continues Repo Preparation when streamed OpenCode activity log writes never settle", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandStdout: ["Submitted preparation result."],
+        commandStdoutChunks: ["agent output"],
+        preparationResult: successResult(),
+        sandboxLogNeverSettlesEvent: "opencode.output",
+        validationResult: validationArtifact(),
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    const result = await Promise.race([
+      agent.prepare({
+        normalizedSupportingDocuments: [],
+        repoUrl: "https://github.com/example/app",
+        structuredDemoIntent: { keyProductFeatures: ["validation"] },
+        workspaceId: "workspace_123",
+      }),
+      new Promise<"timed-out">((resolve) =>
+        setTimeout(() => resolve("timed-out"), 50),
+      ),
+    ]);
+
+    expect(result).toMatchObject({
+      manifest: { demoCommand: "npm run demo:makeademo" },
+      status: "succeeded",
+    });
+  });
+
   it("continues Repo Preparation when sandbox progress logging fails", async () => {
     const events: unknown[] = [];
+    const pipelineLogs: Array<Record<string, unknown>> = [];
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const agent = new DaytonaOpenCodeRepoPreparation({
+      logger: createPipelineEventLogger({
+        base: { component: "repo-preparation-agent" },
+        sinks: [
+          {
+            write(line) {
+              pipelineLogs.push(JSON.parse(line) as Record<string, unknown>);
+            },
+          },
+        ],
+      }),
       modelID: "gpt-5.5",
       provider: fakeProvider(events, {
         commandStdout: ["Submitted preparation result."],
@@ -183,13 +270,65 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
         manifest: { demoCommand: "npm run demo:makeademo" },
         status: "succeeded",
       });
-      expect(warn).toHaveBeenCalledWith(
-        "Repo Preparation sandbox log write failed.",
-        expect.any(Error),
+      expect(warn).not.toHaveBeenCalled();
+      expect(pipelineLogs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            component: "repo-preparation-agent",
+            error: "sandbox log sink failed",
+            event: "sandbox-log-write-failed",
+            failedEvent: "workspace-created",
+            level: "warn",
+            stage: "repo-preparation",
+            workspaceComponent: "sandbox-log",
+          }),
+        ]),
       );
     } finally {
       warn.mockRestore();
     }
+  });
+
+  it("continues Repo Preparation when sandbox progress logging fails and fallback warning logging hangs", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      logger: {
+        child() {
+          return this;
+        },
+        debug: vi.fn(async () => {}),
+        error: vi.fn(async () => {}),
+        flush: vi.fn(async () => {}),
+        info: vi.fn(async () => {}),
+        warn: vi.fn(() => new Promise<void>(() => {})),
+      },
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandStdout: ["Submitted preparation result."],
+        preparationResult: successResult(),
+        sandboxLogFailureEvent: "workspace-created",
+        validationResult: validationArtifact(),
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    const result = await Promise.race([
+      agent.prepare({
+        normalizedSupportingDocuments: [],
+        repoUrl: "https://github.com/example/app",
+        structuredDemoIntent: { keyProductFeatures: ["validation"] },
+        workspaceId: "workspace_123",
+      }),
+      new Promise<"timed-out">((resolve) =>
+        setTimeout(() => resolve("timed-out"), 50),
+      ),
+    ]);
+
+    expect(result).toMatchObject({
+      manifest: { demoCommand: "npm run demo:makeademo" },
+      status: "succeeded",
+    });
   });
 
   it("retries transient Daytona clone connection failures before starting OpenCode", async () => {
