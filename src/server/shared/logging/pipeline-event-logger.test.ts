@@ -151,6 +151,89 @@ describe("createPipelineEventLogger", () => {
     });
   });
 
+  it("waits for a normal promise-returning sink write before invoking the next write", async () => {
+    const writtenEvents: string[] = [];
+    let settleFirstWrite: (() => void) | undefined;
+    const logger = createPipelineEventLogger({
+      sinks: [
+        {
+          write(line) {
+            writtenEvents.push(String(JSON.parse(line).event));
+
+            if (writtenEvents.length === 1) {
+              return new Promise<void>((resolve) => {
+                settleFirstWrite = resolve;
+              });
+            }
+
+            return Promise.resolve();
+          },
+        },
+      ],
+      timestamp: () => "2026-06-17T00:00:00.000Z",
+    });
+
+    const firstWrite = logger.info({ event: "first-event" });
+    const secondWrite = logger.info({ event: "second-event" });
+    await Promise.resolve();
+
+    expect(writtenEvents).toEqual(["first-event"]);
+
+    settleFirstWrite?.();
+    await firstWrite;
+    await secondWrite;
+
+    expect(writtenEvents).toEqual(["first-event", "second-event"]);
+  });
+
+  it("waits for every sink to settle before recovering from a failed write", async () => {
+    const slowSinkEvents: string[] = [];
+    let settleFirstSlowSinkWrite: (() => void) | undefined;
+    let failingSinkWriteCount = 0;
+    const logger = createPipelineEventLogger({
+      sinks: [
+        {
+          async write() {
+            failingSinkWriteCount += 1;
+            if (failingSinkWriteCount === 1) {
+              throw new Error("temporary sink failure");
+            }
+          },
+        },
+        {
+          write(line) {
+            const event = String(JSON.parse(line).event);
+            slowSinkEvents.push(event);
+
+            if (event === "first-event") {
+              return new Promise<void>((resolve) => {
+                settleFirstSlowSinkWrite = resolve;
+              });
+            }
+
+            return Promise.resolve();
+          },
+        },
+      ],
+      timestamp: () => "2026-06-17T00:00:00.000Z",
+    });
+
+    const firstWrite = logger.info({ event: "first-event" });
+    const secondWrite = logger.info({ event: "second-event" });
+    const firstFailure = firstWrite.catch((error: unknown) => error);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(slowSinkEvents).toEqual(["first-event"]);
+
+    settleFirstSlowSinkWrite?.();
+
+    await expect(firstFailure).resolves.toMatchObject({
+      message: "temporary sink failure",
+    });
+    await expect(secondWrite).resolves.toBeUndefined();
+    expect(slowSinkEvents).toEqual(["first-event", "second-event"]);
+  });
+
   it("propagates async sink write failures", async () => {
     const logger = createPipelineEventLogger({
       sinks: [
@@ -166,6 +249,35 @@ describe("createPipelineEventLogger", () => {
     await expect(logger.info({ event: "first-event" })).rejects.toThrow(
       "temporary sink failure",
     );
+  });
+
+  it("continues writing later log calls after an async sink write fails", async () => {
+    const lines: string[] = [];
+    let writeCount = 0;
+    const logger = createPipelineEventLogger({
+      sinks: [
+        {
+          async write(line) {
+            writeCount += 1;
+            if (writeCount === 1) {
+              throw new Error("temporary sink failure");
+            }
+
+            lines.push(line);
+          },
+        },
+      ],
+      timestamp: () => "2026-06-17T00:00:00.000Z",
+    });
+
+    await expect(logger.info({ event: "first-event" })).rejects.toThrow(
+      "temporary sink failure",
+    );
+    await logger.info({ event: "second-event" });
+
+    expect(lines.map((line) => JSON.parse(line))).toEqual([
+      expect.objectContaining({ event: "second-event" }),
+    ]);
   });
 
   it("formats Pino JSON lines for stdout pretty streaming", async () => {

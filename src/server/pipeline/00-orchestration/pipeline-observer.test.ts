@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createJsonPipelineObserver } from "./pipeline-observer";
 
 describe("createJsonPipelineObserver", () => {
-  it("writes sanitized newline-delimited JSON observability events", () => {
+  it("writes sanitized newline-delimited JSON observability events", async () => {
     const lines: string[] = [];
     const observer = createJsonPipelineObserver({
       now: () => "2026-06-14T00:00:00.000Z",
@@ -21,6 +21,7 @@ describe("createJsonPipelineObserver", () => {
       status: "succeeded",
       workspaceId: "workspace-1",
     });
+    await Promise.resolve();
 
     expect(lines).toHaveLength(1);
     expect(JSON.parse(lines[0] ?? "{}")).toEqual({
