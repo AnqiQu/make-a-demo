@@ -4,6 +4,7 @@
     "ignore": [
       ".demo-capture-runs",
       ".demo-script-runs",
+      ".makeademo-benchmark-runs",
       ".makeademo-capture-path-validation-runs",
       ".makeademo-full-pipeline-runs",
       "artifacts",
