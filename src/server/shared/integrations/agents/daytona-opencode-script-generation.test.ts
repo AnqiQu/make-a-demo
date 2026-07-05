@@ -402,7 +402,228 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
         },
         {
           sandboxLog: expect.objectContaining({
+            artifact: "demo-script.json",
+            event: "capture-path-repair.artifact-read.started",
+            stage: "capture-path-repair",
+          }),
+        },
+        {
+          sandboxLog: expect.objectContaining({
+            artifact: "demo-script.json",
+            durationMs: expect.any(Number),
+            event: "capture-path-repair.artifact-read.succeeded",
+            stage: "capture-path-repair",
+          }),
+        },
+        {
+          sandboxLog: expect.objectContaining({
             event: "capture-path-repair.demo-script.succeeded",
+            stage: "capture-path-repair",
+          }),
+        },
+      ]),
+    );
+  });
+
+  it("reports the exact post-repair artifact read when the Demo Script read times out", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      modelID: "gpt-5.5",
+      postRepairArtifactReadTimeoutMs: 5,
+      providerID: "openai",
+    });
+
+    const repair = agent.repairCapturePathFailure({
+      attempt: 1,
+      failure: {
+        blockedNetworkAttempts: [],
+        failedSceneId: "scene_feed",
+        failureReason:
+          "Scene scene_feed failed during Capture Path Validation.",
+        logs: ["locator failed"],
+        status: "failed",
+        warnings: [],
+      },
+      opencodeSessionID: "session_prepare_123",
+      preparationManifest: scriptGenerationInput().preparationManifest,
+      preparationWorkspace: workspaceHandle(events, [interactivePackage()], {
+        neverSettleArtifactReads: ["demo-script.json"],
+      }),
+      repoUrl: "https://github.com/example/conduit",
+      demoScriptPackage: {
+        ...interactivePackage(),
+        assumptions: [],
+        demoPlan: {
+          featureOrder: ["article feed"],
+          narrative: "Conduit article feed demo",
+          risks: [],
+        },
+        exploration: {
+          assumptions: [],
+          productSurfaces: [],
+          summary: "Prepared Conduit with local articles.",
+        },
+      },
+    });
+
+    await expect(repair).rejects.toThrow(
+      "Post-repair artifact read demo-script.json timed out",
+    );
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            artifact: "demo-script.json",
+            event: "capture-path-repair.artifact-read.started",
+            stage: "capture-path-repair",
+          }),
+        },
+        {
+          sandboxLog: expect.objectContaining({
+            artifact: "demo-script.json",
+            durationMs: expect.any(Number),
+            event: "capture-path-repair.artifact-read.timeout",
+            reason: expect.stringContaining(
+              "Post-repair artifact read demo-script.json timed out",
+            ),
+            stage: "capture-path-repair",
+          }),
+        },
+      ]),
+    );
+  });
+
+  it("wraps post-repair Demo Script read failures with the artifact operation", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      modelID: "gpt-5.5",
+      providerID: "openai",
+    });
+
+    await expect(
+      agent.repairCapturePathFailure({
+        attempt: 1,
+        failure: {
+          blockedNetworkAttempts: [],
+          failedSceneId: "scene_feed",
+          failureReason:
+            "Scene scene_feed failed during Capture Path Validation.",
+          logs: ["locator failed"],
+          status: "failed",
+          warnings: [],
+        },
+        opencodeSessionID: "session_prepare_123",
+        preparationManifest: scriptGenerationInput().preparationManifest,
+        preparationWorkspace: workspaceHandle(events, [interactivePackage()], {
+          rejectArtifactReads: ["demo-script.json"],
+        }),
+        repoUrl: "https://github.com/example/conduit",
+        demoScriptPackage: {
+          ...interactivePackage(),
+          assumptions: [],
+          demoPlan: {
+            featureOrder: ["article feed"],
+            narrative: "Conduit article feed demo",
+            risks: [],
+          },
+          exploration: {
+            assumptions: [],
+            productSurfaces: [],
+            summary: "Prepared Conduit with local articles.",
+          },
+        },
+      }),
+    ).rejects.toThrow(
+      "Post-repair artifact read demo-script.json failed: Daytona command did not finish within 600000ms",
+    );
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            artifact: "demo-script.json",
+            durationMs: expect.any(Number),
+            event: "capture-path-repair.artifact-read.failed",
+            reason: expect.stringContaining(
+              "Post-repair artifact read demo-script.json failed: Daytona command did not finish within 600000ms",
+            ),
+            stage: "capture-path-repair",
+          }),
+        },
+      ]),
+    );
+  });
+
+  it("fails Capture Path repair when the post-repair Preparation Manifest read times out", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      modelID: "gpt-5.5",
+      postRepairArtifactReadTimeoutMs: 5,
+      providerID: "openai",
+    });
+
+    await expect(
+      agent.repairCapturePathFailure(
+        capturePathRepairInput(events, {
+          neverSettleArtifactReads: ["preparation-manifest.json"],
+        }),
+      ),
+    ).rejects.toThrow(
+      "Post-repair artifact read preparation-manifest.json timed out",
+    );
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            artifact: "preparation-manifest.json",
+            event: "capture-path-repair.artifact-read.started",
+            stage: "capture-path-repair",
+          }),
+        },
+        {
+          sandboxLog: expect.objectContaining({
+            artifact: "preparation-manifest.json",
+            durationMs: expect.any(Number),
+            event: "capture-path-repair.artifact-read.timeout",
+            reason: expect.stringContaining(
+              "Post-repair artifact read preparation-manifest.json timed out",
+            ),
+            stage: "capture-path-repair",
+          }),
+        },
+      ]),
+    );
+  });
+
+  it("fails Capture Path repair when the post-repair Preparation Manifest read fails", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      modelID: "gpt-5.5",
+      providerID: "openai",
+    });
+
+    await expect(
+      agent.repairCapturePathFailure(
+        capturePathRepairInput(events, {
+          rejectArtifactReads: ["preparation-manifest.json"],
+        }),
+      ),
+    ).rejects.toThrow(
+      "Post-repair artifact read preparation-manifest.json failed: Daytona command did not finish within 600000ms",
+    );
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            artifact: "preparation-manifest.json",
+            durationMs: expect.any(Number),
+            event: "capture-path-repair.artifact-read.failed",
+            reason: expect.stringContaining(
+              "Post-repair artifact read preparation-manifest.json failed: Daytona command did not finish within 600000ms",
+            ),
             stage: "capture-path-repair",
           }),
         },
@@ -700,7 +921,9 @@ function workspaceHandle(
   artifacts: unknown[],
   helperOptions: {
     firstOpenCodeFailure?: { stderr: string; stdout: string };
+    neverSettleArtifactReads?: string[];
     neverSettleSandboxLogEvents?: string[];
+    rejectArtifactReads?: string[];
     rejectSandboxLogEvents?: string[];
   } = {},
 ) {
@@ -732,6 +955,20 @@ function workspaceHandle(
       }
 
       if (command.includes("preparation-manifest.json")) {
+        if (
+          helperOptions.rejectArtifactReads?.includes(
+            "preparation-manifest.json",
+          )
+        ) {
+          throw new Error("Daytona command did not finish within 600000ms");
+        }
+        if (
+          helperOptions.neverSettleArtifactReads?.includes(
+            "preparation-manifest.json",
+          )
+        ) {
+          await new Promise(() => {});
+        }
         return {
           exitCode: 0,
           stderr: "",
@@ -746,6 +983,18 @@ function workspaceHandle(
       }
 
       if (command.startsWith("if test -f")) {
+        if (
+          command.includes("demo-script.json") &&
+          helperOptions.rejectArtifactReads?.includes("demo-script.json")
+        ) {
+          throw new Error("Daytona command did not finish within 600000ms");
+        }
+        if (
+          command.includes("demo-script.json") &&
+          helperOptions.neverSettleArtifactReads?.includes("demo-script.json")
+        ) {
+          await new Promise(() => {});
+        }
         return latestArtifact === undefined
           ? { exitCode: 1, stderr: "", stdout: "" }
           : { exitCode: 0, stderr: "", stdout: JSON.stringify(latestArtifact) };
@@ -781,6 +1030,45 @@ function workspaceHandle(
     async destroy() {},
     id: "daytona_workspace",
     workspace,
+  };
+}
+
+function capturePathRepairInput(
+  events: unknown[],
+  helperOptions: Parameters<typeof workspaceHandle>[2] = {},
+) {
+  return {
+    attempt: 1,
+    failure: {
+      blockedNetworkAttempts: [],
+      failedSceneId: "scene_feed",
+      failureReason: "Scene scene_feed failed during Capture Path Validation.",
+      logs: ["locator failed"],
+      status: "failed" as const,
+      warnings: [],
+    },
+    opencodeSessionID: "session_prepare_123",
+    preparationManifest: scriptGenerationInput().preparationManifest,
+    preparationWorkspace: workspaceHandle(
+      events,
+      [interactivePackage()],
+      helperOptions,
+    ),
+    repoUrl: "https://github.com/example/conduit",
+    demoScriptPackage: {
+      ...interactivePackage(),
+      assumptions: [],
+      demoPlan: {
+        featureOrder: ["article feed"],
+        narrative: "Conduit article feed demo",
+        risks: [],
+      },
+      exploration: {
+        assumptions: [],
+        productSurfaces: [],
+        summary: "Prepared Conduit with local articles.",
+      },
+    },
   };
 }
 

@@ -33,6 +33,7 @@ const preparationManifestPath = `${makeADemoArtifactDirectory}/preparation-manif
 const demoScriptPath = `${makeADemoArtifactDirectory}/demo-script.json`;
 const draftCompositeReviewPath = `${makeADemoArtifactDirectory}/draft-composite-review.json`;
 const draftReviewDirectory = `${makeADemoArtifactDirectory}/draft-review`;
+const postRepairArtifactReadTimeoutMs = 60_000;
 
 export type DaytonaOpenCodeScriptGenerationOptions = {
   /**
@@ -46,6 +47,7 @@ export type DaytonaOpenCodeScriptGenerationOptions = {
   onStdout?: (chunk: string) => void;
   providerID: string;
   maxAttempts?: number;
+  postRepairArtifactReadTimeoutMs?: number;
 };
 
 export type DraftCompositeReviewDecision =
@@ -143,12 +145,16 @@ export class DaytonaOpenCodeScriptGeneration
   private readonly maxAttempts: number;
   private readonly onStdout: ((chunk: string) => void) | undefined;
   private readonly openCode: DaytonaOpenCodeSessionRunner;
+  private readonly postRepairArtifactReadTimeoutMs: number;
 
   constructor(options: DaytonaOpenCodeScriptGenerationOptions) {
     this.logger = options.logger ?? createScriptGenerationLogger();
     this.maxAttempts = options.maxAttempts ?? 3;
     this.onStdout = options.onStdout;
     this.openCode = new DaytonaOpenCodeSessionRunner(options);
+    this.postRepairArtifactReadTimeoutMs =
+      options.postRepairArtifactReadTimeoutMs ??
+      postRepairArtifactReadTimeoutMs;
   }
 
   async generateScriptPackage(
@@ -291,10 +297,13 @@ export class DaytonaOpenCodeScriptGeneration
       throw new Error(reason);
     }
 
-    const [manifestArtifact, scriptArtifact] = await Promise.all([
-      readPreparationManifestArtifact({ preparationWorkspace }),
-      readScriptPackageArtifact({ preparationWorkspace }),
-    ]);
+    const scriptArtifact = await readPostRepairArtifact({
+      artifactName: "demo-script.json",
+      input,
+      logger: this.logger,
+      read: () => readScriptPackageArtifact({ preparationWorkspace }),
+      timeoutMs: this.postRepairArtifactReadTimeoutMs,
+    });
     if (scriptArtifact.status === "failed") {
       await writeRepairSandboxLog(this.logger, input, {
         attempt: input.attempt,
@@ -302,6 +311,18 @@ export class DaytonaOpenCodeScriptGeneration
         reason: scriptArtifact.reason,
       });
       throw new Error(scriptArtifact.reason);
+    }
+
+    const manifestArtifact = await readPostRepairArtifact({
+      artifactName: "preparation-manifest.json",
+      input,
+      logger: this.logger,
+      read: () => readPreparationManifestArtifact({ preparationWorkspace }),
+      timeoutMs: this.postRepairArtifactReadTimeoutMs,
+    });
+
+    if (manifestArtifact.status === "failed") {
+      throw new Error(manifestArtifact.reason);
     }
 
     const preparationManifest =
@@ -484,6 +505,92 @@ async function writeRepairSandboxLog(
   });
 }
 
+async function readPostRepairArtifact<
+  T extends { reason?: string; status: string },
+>(input: {
+  artifactName: string;
+  input: Parameters<CapturePathRepairer["repairCapturePathFailure"]>[0];
+  logger: PipelineEventLogger;
+  read: () => Promise<T>;
+  timeoutMs: number;
+}): Promise<T> {
+  const start = Date.now();
+  await writeRepairSandboxLog(input.logger, input.input, {
+    artifact: input.artifactName,
+    attempt: input.input.attempt,
+    durationMs: 0,
+    event: "capture-path-repair.artifact-read.started",
+    operation: `post-repair artifact read ${input.artifactName}`,
+    timeoutMs: input.timeoutMs,
+  });
+
+  try {
+    const artifact = await withTimeout(
+      input.read(),
+      input.timeoutMs,
+      `Post-repair artifact read ${input.artifactName} timed out after ${input.timeoutMs}ms.`,
+    );
+    const durationMs = Date.now() - start;
+    if (artifact.status === "failed") {
+      const reason = `Post-repair artifact read ${input.artifactName} failed: ${artifact.reason ?? "unknown artifact read failure"}`;
+      await writeRepairSandboxLog(input.logger, input.input, {
+        artifact: input.artifactName,
+        attempt: input.input.attempt,
+        durationMs,
+        event: "capture-path-repair.artifact-read.failed",
+        operation: `post-repair artifact read ${input.artifactName}`,
+        reason,
+      });
+      return { ...artifact, reason };
+    }
+
+    await writeRepairSandboxLog(input.logger, input.input, {
+      artifact: input.artifactName,
+      attempt: input.input.attempt,
+      durationMs,
+      event: "capture-path-repair.artifact-read.succeeded",
+      operation: `post-repair artifact read ${input.artifactName}`,
+    });
+    return artifact;
+  } catch (error) {
+    const durationMs = Date.now() - start;
+    const errorMessage = readErrorMessage(error);
+    const reason = errorMessage.includes("timed out after")
+      ? errorMessage
+      : `Post-repair artifact read ${input.artifactName} failed: ${errorMessage}`;
+    const event = errorMessage.includes("timed out after")
+      ? "capture-path-repair.artifact-read.timeout"
+      : "capture-path-repair.artifact-read.failed";
+    await writeRepairSandboxLog(input.logger, input.input, {
+      artifact: input.artifactName,
+      attempt: input.input.attempt,
+      durationMs,
+      event,
+      operation: `post-repair artifact read ${input.artifactName}`,
+      reason,
+    });
+    return { reason, status: "failed" } as T;
+  }
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+
+  promise.catch(() => undefined);
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  });
+}
+
 async function writeScriptGenerationSandboxLog(
   logger: PipelineEventLogger,
   input: AgenticScriptGenerationInput,
@@ -614,14 +721,18 @@ async function readPreparationManifestArtifact(input: {
   preparationWorkspace: AgenticScriptGenerationInput["preparationWorkspace"];
 }): Promise<
   | { status: "succeeded"; value: ReturnType<typeof readPreparationManifest> }
+  | { status: "missing" }
   | { reason: string; status: "failed" }
 > {
   const result = await input.preparationWorkspace.workspace.execute(
-    `if test -f ${shellQuote(preparationManifestPath)}; then node -e ${shellQuote(`process.stdout.write(require("node:fs").readFileSync(${JSON.stringify(preparationManifestPath)}, "utf8"))`)}; else exit 1; fi`,
+    `if test -f ${shellQuote(preparationManifestPath)}; then node -e ${shellQuote(`process.stdout.write(require("node:fs").readFileSync(${JSON.stringify(preparationManifestPath)}, "utf8"))`)}; else exit 42; fi`,
   );
+  if (result.exitCode === 42) {
+    return { status: "missing" };
+  }
   if (result.exitCode !== 0) {
     return {
-      reason: `OpenCode did not write ${preparationManifestPath}.`,
+      reason: `Could not read ${preparationManifestPath}: ${result.stderr}`,
       status: "failed",
     };
   }
