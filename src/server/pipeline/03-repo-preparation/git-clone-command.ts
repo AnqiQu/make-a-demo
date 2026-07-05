@@ -1,7 +1,15 @@
+const caBundleEnvCandidates = [
+  "GIT_SSL_CAINFO",
+  "SSL_CERT_FILE",
+  "CURL_CA_BUNDLE",
+  "REQUESTS_CA_BUNDLE",
+];
+
 const caBundleCandidates = [
+  "/etc/daytona/netleash/ca.crt",
+  "/etc/openshell-tls/ca-bundle.pem",
   "/etc/ssl/certs/ca-certificates.crt",
   "/etc/pki/tls/certs/ca-bundle.crt",
-  "/etc/openshell-tls/ca-bundle.pem",
 ];
 
 /**
@@ -22,7 +30,17 @@ export function createGitCloneCommand(input: {
 }
 
 function createCaBundleDiscoveryCommand(): string {
-  return `for makeademo_ca_bundle in ${caBundleCandidates.map(shellQuote).join(" ")}; do if test -f "$makeademo_ca_bundle"; then export GIT_SSL_CAINFO="$makeademo_ca_bundle"; export SSL_CERT_FILE="$makeademo_ca_bundle"; export CURL_CA_BUNDLE="$makeademo_ca_bundle"; break; fi; done`;
+  const envDiscoveryCommand = [
+    `for makeademo_ca_env_name in ${caBundleEnvCandidates.join(" ")}; do`,
+    'eval "makeademo_ca_env_value=\\${${makeademo_ca_env_name}-}";',
+    'case "$makeademo_ca_env_value" in /*) if test -f "$makeademo_ca_env_value" && test -r "$makeademo_ca_env_value"; then makeademo_ca_bundle="$makeademo_ca_env_value"; break; fi ;; esac; done',
+  ].join(" ");
+
+  return [
+    envDiscoveryCommand,
+    `if test -z "\${makeademo_ca_bundle:-}"; then for makeademo_ca_candidate in ${caBundleCandidates.map(shellQuote).join(" ")}; do if test -f "$makeademo_ca_candidate" && test -r "$makeademo_ca_candidate"; then makeademo_ca_bundle="$makeademo_ca_candidate"; break; fi; done; fi`,
+    `if test -n "\${makeademo_ca_bundle:-}"; then export GIT_SSL_CAINFO="$makeademo_ca_bundle"; export SSL_CERT_FILE="$makeademo_ca_bundle"; export CURL_CA_BUNDLE="$makeademo_ca_bundle"; fi`,
+  ].join("; ");
 }
 
 function shellQuote(value: string): string {
