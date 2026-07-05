@@ -123,6 +123,10 @@ describe("runFullPipelineJob", () => {
         },
         status: "succeeded",
       });
+      expect(result.sandboxLogPath).toBeUndefined();
+      await expect(readJsonFile(result.resultPath)).resolves.not.toMatchObject({
+        artifacts: { sandboxLogPath: expect.any(String) },
+      });
       await expect(
         readJsonFile(
           join(outputRoot, "full-run", "script-generation-resume.json"),
@@ -140,6 +144,50 @@ describe("runFullPipelineJob", () => {
       await expect(
         stat(join(outputRoot, "full-run", "demo-script.json")),
       ).resolves.toMatchObject({ isFile: expect.any(Function) });
+    } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("reports the sandbox log artifact only when a local sink path is configured", async () => {
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
+    const sandboxLogPath = join(outputRoot, "full-run", "sandbox-log.jsonl");
+
+    try {
+      const result = await runFullPipelineJob(
+        {
+          demoBrief: { keyProductFeatures: ["article feed"] },
+          normalizedSupportingDocuments: [],
+          repoSecurity: {
+            files: [{ path: "package.json", text: "{}" }],
+            repoStats: { fileCount: 1, sizeBytes: 100 },
+          },
+          repoUrl: "https://github.com/example/app",
+          workspaceId: "workspace_123",
+        },
+        stage1Dependencies([]),
+        {
+          async captureScenes(input) {
+            return captureManifest(outputRoot, input.runId ?? "capture");
+          },
+          async compositeVideo(input) {
+            return compositeManifest(outputRoot, input.runId ?? "composite");
+          },
+          async inspectDraftCompositeEvidence() {
+            return cleanDraftEvidence();
+          },
+          outputRoot,
+          reviewDraftComposite: acceptDraftComposite,
+          runId: "full-run",
+          sandboxLogPath,
+        },
+      );
+
+      expect(result.sandboxLogPath).toBe(sandboxLogPath);
+      await expect(readJsonFile(result.resultPath)).resolves.toMatchObject({
+        artifacts: { sandboxLogPath },
+        status: "succeeded",
+      });
     } finally {
       await rm(outputRoot, { force: true, recursive: true });
     }

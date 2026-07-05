@@ -33,6 +33,7 @@ export type FullPipelineResult = {
   finalVideo: CompositedVideoManifest;
   logPath: string;
   resultPath: string;
+  sandboxLogPath?: string;
   scriptPath?: string;
   stage1: Extract<
     Awaited<ReturnType<typeof runPipelineJob>>,
@@ -89,6 +90,7 @@ type FullPipelineArtifactSummary = {
     renderPlanPath: string;
     scriptGenerationResumePath?: string;
     scriptGenerationRawOpenCodeLogPath?: string;
+    sandboxLogPath?: string;
     viewUrl: string;
   };
   draftCompositeReview: DraftCompositeReviewSummary;
@@ -192,6 +194,7 @@ export type FullPipelineRunnerOptions = PipelineOrchestratorOptions & {
     stage1: SucceededStage1;
   }) => Promise<{ browserUrl?: string }>;
   runId?: string;
+  sandboxLogPath?: string;
   scriptGenerationRawOpenCodeLogPath?: string;
 };
 
@@ -205,6 +208,7 @@ export async function runFullPipelineJob(
   const runDirectory = join(outputRoot, runId);
   await mkdir(runDirectory, { recursive: true });
   const logPath = join(runDirectory, "pipeline-log.jsonl");
+  const sandboxLogPath = options.sandboxLogPath;
   const log = createPipelineLogger(logPath, {
     extraSinks: options.logSinks ?? [],
     onLog: options.onLog,
@@ -255,6 +259,7 @@ export async function runFullPipelineJob(
       rawOpenCodeLogPath: options.rawOpenCodeLogPath,
       runDirectory,
       runId,
+      sandboxLogPath,
       scriptGenerationRawOpenCodeLogPath:
         options.scriptGenerationRawOpenCodeLogPath,
       stage1: initialStage1,
@@ -341,6 +346,7 @@ export async function runFullPipelineJob(
         ? {}
         : { rawOpenCodeLogPath: options.rawOpenCodeLogPath }),
       renderPlanPath: finalVideo.renderPlanPath,
+      ...(sandboxLogPath === undefined ? {} : { sandboxLogPath }),
       ...(scriptGenerationResumePath === undefined
         ? {}
         : { scriptGenerationResumePath }),
@@ -375,6 +381,7 @@ export async function runFullPipelineJob(
     finalVideo,
     logPath,
     resultPath,
+    ...(sandboxLogPath === undefined ? {} : { sandboxLogPath }),
     ...(scriptPersistence.scriptPath === undefined
       ? {}
       : { scriptPath: scriptPersistence.scriptPath }),
@@ -1166,6 +1173,7 @@ function createFailureSummary(input: {
   rawOpenCodeLogPath: string | undefined;
   runDirectory: string;
   runId: string;
+  sandboxLogPath: string | undefined;
   scriptGenerationRawOpenCodeLogPath: string | undefined;
   stage1: Exclude<
     Awaited<ReturnType<typeof runPipelineJob>>,
@@ -1184,6 +1192,9 @@ function createFailureSummary(input: {
             scriptGenerationRawOpenCodeLogPath:
               input.scriptGenerationRawOpenCodeLogPath,
           }),
+      ...(input.sandboxLogPath === undefined
+        ? {}
+        : { sandboxLogPath: input.sandboxLogPath }),
     },
     failure: readStage1Failure(input.stage1),
     runDirectory: input.runDirectory,
