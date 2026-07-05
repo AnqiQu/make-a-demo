@@ -1352,6 +1352,183 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     );
   });
 
+  it("reads validation handoff first after OpenCode calls the validation tool", async () => {
+    const events: unknown[] = [];
+    let validationStarted = false;
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandStdout: ["Tool call: makeademo_validate_preparation"],
+        dependencyInstallRequestReadNeverSettles: true,
+        validationRequest: {
+          manifestPath:
+            "/tmp/makeademo/submitted-code/preparation-manifest.json",
+        },
+      }),
+      providerID: "openai",
+      timeoutMs: 250,
+      validatePreparation: async () => {
+        validationStarted = true;
+        return validationArtifact().validation;
+      },
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      validation: { status: "succeeded" },
+    });
+    expect(validationStarted).toBe(true);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "validation-request-read.started",
+            stage: "repo-preparation",
+          }),
+        },
+      ]),
+    );
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "dependency-install-request-read.timeout",
+          }),
+        },
+      ]),
+    );
+  });
+
+  it("uses mixed stream arrival order when validation is the latest OpenCode tool", async () => {
+    const events: unknown[] = [];
+    let validationStarted = false;
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandOutputChunks: [
+          {
+            channel: "stderr",
+            chunk: "Tool call: makeademo_dependency_request_install",
+          },
+          {
+            channel: "stdout",
+            chunk: "Tool call: makeademo_validate_preparation",
+          },
+        ],
+        dependencyInstallRequestReadNeverSettles: true,
+        validationRequest: {
+          manifestPath:
+            "/tmp/makeademo/submitted-code/preparation-manifest.json",
+        },
+      }),
+      providerID: "openai",
+      timeoutMs: 250,
+      validatePreparation: async () => {
+        validationStarted = true;
+        return validationArtifact().validation;
+      },
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      validation: { status: "succeeded" },
+    });
+    expect(validationStarted).toBe(true);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "validation-request-read.started",
+          }),
+        },
+      ]),
+    );
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "dependency-install-request-read.timeout",
+          }),
+        },
+      ]),
+    );
+  });
+
+  it("uses mixed stream arrival order when dependency install is the latest OpenCode tool", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandOutputChunks: [
+          {
+            channel: "stdout",
+            chunk: "Tool call: makeademo_validate_preparation",
+          },
+          {
+            channel: "stderr",
+            chunk: "Tool call: makeademo_dependency_request_install",
+          },
+        ],
+        dependencyInstallRequest: { command: "bun install" },
+        preparationResult: successResult(),
+      }),
+      providerID: "openai",
+      timeoutMs: 500,
+      validatePreparation: async () => validationArtifact().validation,
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({ status: "succeeded" });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "dependency-install-request-read.started",
+          }),
+        },
+        { submittedCodeExecute: "bun install" },
+      ]),
+    );
+    const dependencyReadIndex = events.findIndex(
+      (event) =>
+        typeof event === "object" &&
+        event !== null &&
+        "sandboxLog" in event &&
+        (event as { sandboxLog?: { event?: unknown } }).sandboxLog?.event ===
+          "dependency-install-request-read.started",
+    );
+    const validationReadIndex = events.findIndex(
+      (event) =>
+        typeof event === "object" &&
+        event !== null &&
+        "sandboxLog" in event &&
+        (event as { sandboxLog?: { event?: unknown } }).sandboxLog?.event ===
+          "validation-request-read.started",
+    );
+    expect(dependencyReadIndex).toBeGreaterThanOrEqual(0);
+    expect(validationReadIndex).toBeGreaterThan(dependencyReadIndex);
+  });
+
   it("fails preparation preflight handoff when reading the validation request artifact times out", async () => {
     const events: unknown[] = [];
     let validationStarted = false;
@@ -1508,6 +1685,45 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     expect(result).toMatchObject({
       opencodeSessionID: "session_streamed_123",
       status: "succeeded",
+    });
+  });
+
+  it("routes the latest MakeADemo tool from noisy streamed output split across chunks", async () => {
+    const noisyChunk = "noise ".repeat(20_000);
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider([], {
+        commandOutputChunks: [
+          { channel: "stdout", chunk: noisyChunk },
+          { channel: "stdout", chunk: "makeademo_validate_" },
+          { channel: "stderr", chunk: `preparation${noisyChunk}` },
+        ],
+        commandStdout: ["Validation requested."],
+        validationRequest: {
+          manifestPath:
+            "/tmp/makeademo/submitted-code/preparation-manifest.json",
+        },
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+      validatePreparation: async () => ({
+        blockedNetworkAttempts: [],
+        logs: ["validated"],
+        status: "succeeded",
+        warnings: [],
+      }),
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      validation: { status: "succeeded" },
     });
   });
 
@@ -1803,6 +2019,10 @@ function fakeProvider(
     | string[]
     | {
         commandStdout?: string[];
+        commandOutputChunks?: Array<{
+          channel: "stderr" | "stdout";
+          chunk: string;
+        }>;
         commandStderrChunks?: string[];
         commandStdoutChunks?: string[];
         commandDelayMs?: number;
@@ -1848,6 +2068,10 @@ function fakeWorkspace(
   events: unknown[],
   input: {
     commandStdout?: string[];
+    commandOutputChunks?: Array<{
+      channel: "stderr" | "stdout";
+      chunk: string;
+    }>;
     commandStderrChunks?: string[];
     commandStdoutChunks?: string[];
     commandDelayMs?: number;
@@ -1909,11 +2133,21 @@ function fakeWorkspace(
       ) {
         throw openCodeStartupErrors.shift();
       }
-      for (const chunk of input.commandStdoutChunks ?? ["opencode output"]) {
-        options?.onStdout?.(chunk);
-      }
-      for (const chunk of input.commandStderrChunks ?? []) {
-        options?.onStderr?.(chunk);
+      if (input.commandOutputChunks !== undefined) {
+        for (const output of input.commandOutputChunks) {
+          if (output.channel === "stdout") {
+            options?.onStdout?.(output.chunk);
+          } else {
+            options?.onStderr?.(output.chunk);
+          }
+        }
+      } else {
+        for (const chunk of input.commandStdoutChunks ?? ["opencode output"]) {
+          options?.onStdout?.(chunk);
+        }
+        for (const chunk of input.commandStderrChunks ?? []) {
+          options?.onStderr?.(chunk);
+        }
       }
       if (
         command.startsWith("if test -f") &&

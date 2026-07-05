@@ -253,6 +253,41 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
         stdoutLength: openCodeResult.stdout.length,
       });
 
+      const shouldReadValidationFirst =
+        openCodeResult.latestMakeADemoTool === "makeademo_validate_preparation";
+      if (shouldReadValidationFirst) {
+        const validationRequestResult =
+          await this.readRequestArtifactWithDeadline({
+            artifactName: "validation request",
+            deadlineAt,
+            eventPrefix: "validation-request-read",
+            read: () => readValidationRequest(handle.workspace),
+            workspace: handle.workspace,
+          });
+        if (validationRequestResult.status !== "succeeded") {
+          return requestArtifactReadTimeoutFailure(
+            "validation request",
+            validationRequestResult.timeoutMs,
+          );
+        }
+        if (validationRequestResult.value !== undefined) {
+          const validationOutcome = await this.processValidationRequest({
+            attempt,
+            currentSessionID,
+            deadlineAt,
+            handle,
+            input,
+            validationRequest: validationRequestResult.value,
+          });
+          if (validationOutcome.status === "retry") {
+            prompt = validationOutcome.prompt;
+            continue;
+          }
+
+          return validationOutcome.result;
+        }
+      }
+
       const dependencyInstallRequestResult =
         await this.readRequestArtifactWithDeadline({
           artifactName: "dependency install request",
@@ -317,84 +352,20 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
       }
       const validationRequest = validationRequestResult.value;
       if (validationRequest !== undefined) {
-        await this.writeSandboxLog(handle.workspace, {
-          event: "preparation-preflight.requested",
-          remainingMs: deadlineAt - Date.now(),
+        const validationOutcome = await this.processValidationRequest({
+          attempt,
+          currentSessionID,
+          deadlineAt,
+          handle,
+          input,
+          validationRequest,
         });
-        if (deadlineAt - Date.now() < minimumBackendToolBudgetMs) {
-          return backendToolDeadlineFailure("preparation preflight");
+        if (validationOutcome.status === "retry") {
+          prompt = validationOutcome.prompt;
+          continue;
         }
-        if (this.validatePreparation === undefined) {
-          throw new Error(
-            "Repo Preparation validation tool is not configured.",
-          );
-        }
-        let manifest: ReturnType<typeof readPreparationManifest> | undefined;
-        let validation: ProjectValidationResult;
-        try {
-          manifest = await readPreparationManifestFile(
-            handle.workspace,
-            validationRequest.manifestPath,
-          );
-          validation = await this.validatePreparation({
-            manifest,
-            workspace: handle,
-          });
-        } catch (error) {
-          validation = createValidationHandoffFailure(readErrorMessage(error));
-        }
-        await this.writeSandboxLog(handle.workspace, {
-          failureReason: validation.failureReason,
-          event: "preparation-preflight.finished",
-          status: validation.status,
-        });
-        await writeValidationResult(handle.workspace, {
-          manifest,
-          validation,
-        });
-        await clearValidationRequest(handle.workspace);
-        const nonRetryablePreflightFailure =
-          readNonRetryablePreflightFailure(validation);
-        if (nonRetryablePreflightFailure !== undefined) {
-          await this.writeSandboxLog(handle.workspace, {
-            event: "preparation-preflight.non-retryable-failure",
-            failureReason: nonRetryablePreflightFailure,
-          });
-          return {
-            assumptions: [],
-            blockers: [nonRetryablePreflightFailure],
-            status: "failed" as const,
-            suggestedChanges: [
-              "Report this MakeADemo infrastructure failure instead of asking the app preparation agent to repair the submitted repo.",
-            ],
-          };
-        }
-        if (validation.status === "succeeded" && manifest !== undefined) {
-          await this.writeSandboxLog(handle.workspace, {
-            event: "preparation-auto-succeeded-after-preflight",
-            status: validation.status,
-          });
-          return {
-            manifest,
-            ...(currentSessionID === undefined
-              ? {}
-              : { opencodeSessionID: currentSessionID }),
-            status: "succeeded" as const,
-            validation,
-            workspace: handle,
-          };
-        }
-        await writeRepoPreparationRetryLog(this.logger, handle.workspace, {
-          nextAttempt: attempt + 2,
-          reason: readRetryReason(validation.failureReason),
-        });
-        prompt = createValidationFeedbackPrompt({
-          manifest,
-          manifestPath: validationRequest.manifestPath,
-          remainingBudgetMs: Math.max(0, deadlineAt - Date.now()),
-          validation,
-        });
-        continue;
+
+        return validationOutcome.result;
       }
 
       const preparationResult = await readPreparationResult(handle.workspace);
@@ -444,11 +415,18 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
       providerID: string;
       sessionID?: string;
     },
-  ): Promise<PreparationWorkspaceCommandResult & { sessionID?: string }> {
+  ): Promise<
+    PreparationWorkspaceCommandResult & {
+      latestMakeADemoTool?: MakeADemoOpenCodeToolName;
+      sessionID?: string;
+    }
+  > {
     const outputWrites: Promise<void>[] = [];
-    let streamedStdout = "";
+    const streamedToolTracker = createLatestMakeADemoToolTracker();
+    const streamedSessionIDTracker = createOpenCodeSessionIDTracker();
     const onStdout = (chunk: string) => {
-      streamedStdout += chunk;
+      streamedToolTracker.write(chunk);
+      streamedSessionIDTracker.write(chunk);
       this.onStdout?.(chunk);
       outputWrites.push(
         writeDaytonaOpenCodeActivityLog(handle.workspace, {
@@ -460,6 +438,8 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
       );
     };
     const onStderr = (chunk: string) => {
+      streamedToolTracker.write(chunk);
+      streamedSessionIDTracker.write(chunk);
       this.onStderr?.(chunk);
       outputWrites.push(
         writeDaytonaOpenCodeActivityLog(handle.workspace, {
@@ -482,10 +462,122 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
     );
     await Promise.allSettled(outputWrites);
 
-    const sessionID = readOpenCodeSessionID(
-      `${streamedStdout}\n${result.stdout}`,
-    );
-    return sessionID === undefined ? result : { ...result, sessionID };
+    const streamedSessionID = streamedSessionIDTracker.read();
+    const sessionID =
+      streamedSessionID ??
+      readOpenCodeSessionID(`${result.stdout}\n${result.stderr}`);
+    const latestStreamedMakeADemoTool = streamedToolTracker.read();
+    const latestMakeADemoTool =
+      latestStreamedMakeADemoTool ??
+      readLatestMakeADemoTool(`${result.stdout}\n${result.stderr}`);
+    return {
+      ...result,
+      ...(latestMakeADemoTool === undefined ? {} : { latestMakeADemoTool }),
+      ...(sessionID === undefined ? {} : { sessionID }),
+    };
+  }
+
+  private async processValidationRequest(input: {
+    attempt: number;
+    currentSessionID: string | undefined;
+    deadlineAt: number;
+    handle: PreparationWorkspaceHandle;
+    input: RepoPreparationInput;
+    validationRequest: ValidationRequest;
+  }): Promise<
+    | { prompt: string; status: "retry" }
+    | {
+        result: Awaited<ReturnType<RepoPreparationAgent["prepare"]>>;
+        status: "done";
+      }
+  > {
+    await this.writeSandboxLog(input.handle.workspace, {
+      event: "preparation-preflight.requested",
+      remainingMs: input.deadlineAt - Date.now(),
+    });
+    if (input.deadlineAt - Date.now() < minimumBackendToolBudgetMs) {
+      return {
+        result: backendToolDeadlineFailure("preparation preflight"),
+        status: "done",
+      };
+    }
+    if (this.validatePreparation === undefined) {
+      throw new Error("Repo Preparation validation tool is not configured.");
+    }
+    let manifest: ReturnType<typeof readPreparationManifest> | undefined;
+    let validation: ProjectValidationResult;
+    try {
+      manifest = await readPreparationManifestFile(
+        input.handle.workspace,
+        input.validationRequest.manifestPath,
+      );
+      validation = await this.validatePreparation({
+        manifest,
+        workspace: input.handle,
+      });
+    } catch (error) {
+      validation = createValidationHandoffFailure(readErrorMessage(error));
+    }
+    await this.writeSandboxLog(input.handle.workspace, {
+      failureReason: validation.failureReason,
+      event: "preparation-preflight.finished",
+      status: validation.status,
+    });
+    await writeValidationResult(input.handle.workspace, {
+      manifest,
+      validation,
+    });
+    await clearValidationRequest(input.handle.workspace);
+    const nonRetryablePreflightFailure =
+      readNonRetryablePreflightFailure(validation);
+    if (nonRetryablePreflightFailure !== undefined) {
+      await this.writeSandboxLog(input.handle.workspace, {
+        event: "preparation-preflight.non-retryable-failure",
+        failureReason: nonRetryablePreflightFailure,
+      });
+      return {
+        result: {
+          assumptions: [],
+          blockers: [nonRetryablePreflightFailure],
+          status: "failed" as const,
+          suggestedChanges: [
+            "Report this MakeADemo infrastructure failure instead of asking the app preparation agent to repair the submitted repo.",
+          ],
+        },
+        status: "done",
+      };
+    }
+    if (validation.status === "succeeded" && manifest !== undefined) {
+      await this.writeSandboxLog(input.handle.workspace, {
+        event: "preparation-auto-succeeded-after-preflight",
+        status: validation.status,
+      });
+      return {
+        result: {
+          manifest,
+          ...(input.currentSessionID === undefined
+            ? {}
+            : { opencodeSessionID: input.currentSessionID }),
+          status: "succeeded" as const,
+          validation,
+          workspace: input.handle,
+        },
+        status: "done",
+      };
+    }
+    await writeRepoPreparationRetryLog(this.logger, input.handle.workspace, {
+      nextAttempt: input.attempt + 2,
+      reason: readRetryReason(validation.failureReason),
+    });
+    return {
+      prompt: createValidationFeedbackPrompt({
+        manifest,
+        manifestPath: input.validationRequest.manifestPath,
+        remainingBudgetMs: Math.max(0, input.deadlineAt - Date.now()),
+        validation,
+      }),
+      status: "retry",
+    };
   }
 
   private async writeSandboxLog(
@@ -599,6 +691,11 @@ type ValidationResultArtifact = {
   status: ProjectValidationResult["status"];
   validation: ProjectValidationResult;
 };
+
+type MakeADemoOpenCodeToolName =
+  | "makeademo_dependency_request_install"
+  | "makeademo_install_dependencies"
+  | "makeademo_validate_preparation";
 
 type TimedRunResult<T> =
   | { status: "succeeded"; value: T }
@@ -1509,6 +1606,70 @@ function readOpenCodeSessionID(stdout: string): string | undefined {
   }
 
   return undefined;
+}
+
+function createOpenCodeSessionIDTracker(): {
+  read: () => string | undefined;
+  write: (chunk: string) => void;
+} {
+  const maximumCarryLength = 8_192;
+  let carry = "";
+  let sessionID: string | undefined;
+
+  return {
+    read() {
+      if (sessionID !== undefined) {
+        return sessionID;
+      }
+
+      sessionID = readOpenCodeSessionID(carry);
+      return sessionID;
+    },
+    write(chunk) {
+      if (sessionID !== undefined) {
+        return;
+      }
+
+      const output = `${carry}${chunk}`;
+      const lines = output.split("\n");
+      carry = lines.pop() ?? "";
+      sessionID = readOpenCodeSessionID(lines.join("\n"));
+      if (carry.length > maximumCarryLength) {
+        carry = carry.slice(-maximumCarryLength);
+      }
+    },
+  };
+}
+
+function readLatestMakeADemoTool(
+  stdout: string,
+): MakeADemoOpenCodeToolName | undefined {
+  let latestTool: MakeADemoOpenCodeToolName | undefined;
+  const toolPattern =
+    /\b(makeademo_(?:dependency_request_install|install_dependencies|validate_preparation))\b/g;
+  for (const match of stdout.matchAll(toolPattern)) {
+    latestTool = match[1] as MakeADemoOpenCodeToolName;
+  }
+
+  return latestTool;
+}
+
+function createLatestMakeADemoToolTracker(): {
+  read: () => MakeADemoOpenCodeToolName | undefined;
+  write: (chunk: string) => void;
+} {
+  const maximumCarryLength = 64;
+  let carry = "";
+  let latestTool: MakeADemoOpenCodeToolName | undefined;
+
+  return {
+    read: () => latestTool,
+    write(chunk) {
+      const output = `${carry}${chunk}`;
+      latestTool = readLatestMakeADemoTool(output) ?? latestTool;
+      carry = output.slice(-maximumCarryLength);
+    },
+  };
 }
 
 function parseOpenCodeJsonPayload(stdout: string): unknown | undefined {
