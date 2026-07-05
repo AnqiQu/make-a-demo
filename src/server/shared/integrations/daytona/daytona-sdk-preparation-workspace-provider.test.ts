@@ -40,6 +40,61 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
   });
 
+  it("uses a bounded Daytona sandbox create timeout", async () => {
+    const calls: unknown[] = [];
+    const sandbox = fakeLinkedSandbox(calls, "sandbox_123", "ok");
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: {
+        async create(input: unknown, options?: unknown) {
+          calls.push({ create: input, options });
+          return sandbox;
+        },
+        async delete(input: { id?: string; name?: string }) {
+          calls.push({ delete: input.id ?? input.name });
+        },
+      } as never,
+      sandboxCreateTimeoutSeconds: 180,
+    });
+
+    await provider.create();
+
+    expect(calls[0]).toEqual({
+      create: { disk: 3 },
+      options: { timeout: 180 },
+    });
+  });
+
+  it("retries transient Daytona connection failures while creating a sandbox", async () => {
+    const calls: unknown[] = [];
+    const sandbox = fakeLinkedSandbox(calls, "sandbox_123", "ok");
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: {
+        async create(input: unknown, options?: unknown) {
+          calls.push({ create: input, options });
+          if (calls.filter((call) => "create" in Object(call)).length === 1) {
+            const error = new Error("ECONNREFUSED");
+            error.name = "DaytonaConnectionError";
+            throw error;
+          }
+
+          return sandbox;
+        },
+        async delete(input: { id?: string; name?: string }) {
+          calls.push({ delete: input.id ?? input.name });
+        },
+      } as never,
+      sandboxCreateTimeoutSeconds: 180,
+    });
+
+    const handle = await provider.create();
+
+    expect(handle.id).toBe("sandbox_123");
+    expect(calls.slice(0, 2)).toEqual([
+      { create: { disk: 3 }, options: { timeout: 180 } },
+      { create: { disk: 3 }, options: { timeout: 180 } },
+    ]);
+  });
+
   it("attaches configured Daytona secrets to the parent sandbox", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -497,6 +552,105 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     );
   });
 
+  it("retries streaming PTY startup before sending the command", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { ptyConnectionFailuresBeforeSuccess: 1 }),
+      ptyConnectionTimeoutMs: 1,
+    });
+    const handle = await provider.create();
+
+    const result = await handle.workspace.execute("opencode run hello", {
+      onStdout: () => {},
+    });
+
+    expect(result).toMatchObject({ exitCode: 7, stdout: "hello\n" });
+    expect(calls.filter((call) => "createPty" in Object(call))).toHaveLength(2);
+    expect(
+      calls.filter((call) => "waitForConnection" in Object(call)),
+    ).toHaveLength(2);
+    expect(calls.filter((call) => "sendInput" in Object(call))).toHaveLength(1);
+  });
+
+  it("retries streaming PTY startup with a fresh id after stale duplicate-id creation", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { ptyStaleDuplicateIdOnFirstCreate: true }),
+    });
+    const handle = await provider.create();
+
+    const result = await handle.workspace.execute("opencode run hello", {
+      onStdout: () => {},
+    });
+
+    const ptyIds = calls
+      .filter(
+        (call): call is { createPty: { id: string } } =>
+          typeof call === "object" &&
+          call !== null &&
+          "createPty" in call &&
+          typeof call.createPty === "object" &&
+          call.createPty !== null &&
+          "id" in call.createPty &&
+          typeof call.createPty.id === "string",
+      )
+      .map((call) => call.createPty.id);
+    expect(result).toMatchObject({ exitCode: 7, stdout: "hello\n" });
+    expect(ptyIds).toHaveLength(2);
+    expect(ptyIds[1]).not.toBe(ptyIds[0]);
+    expect(calls.filter((call) => "sendInput" in Object(call))).toHaveLength(1);
+  });
+
+  it("does not retry streaming PTY failures after sending the command", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { ptyWaitFails: true }),
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.execute("opencode run hello", { onStdout: () => {} }),
+    ).rejects.toThrow("PTY wait failed after command started.");
+
+    expect(calls.filter((call) => "createPty" in Object(call))).toHaveLength(1);
+    expect(calls.filter((call) => "sendInput" in Object(call))).toHaveLength(1);
+  });
+
+  it("does not retry non-PTY command failures", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { executeCommandFails: true }),
+    });
+    const handle = await provider.create();
+
+    await expect(handle.workspace.execute("npm test")).rejects.toThrow(
+      "executeCommand failed",
+    );
+
+    expect(
+      calls.filter(
+        (call) =>
+          typeof call === "object" && call !== null && "executeCommand" in call,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("fails cleanly when streaming PTY startup retries are exhausted", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { ptyConnectionFailuresBeforeSuccess: 99 }),
+      ptyConnectionTimeoutMs: 1,
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.execute("opencode run hello", { onStdout: () => {} }),
+    ).rejects.toThrow("Daytona PTY did not connect within 1ms.");
+
+    expect(calls.filter((call) => "createPty" in Object(call))).toHaveLength(3);
+    expect(calls.filter((call) => "sendInput" in Object(call))).toHaveLength(0);
+  });
+
   it("relays sandbox logs to configured sinks", async () => {
     const calls: unknown[] = [];
     const relayedLogs: string[] = [];
@@ -580,6 +734,40 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         },
       },
     ]);
+  });
+
+  it("deletes the parent sandbox when linked submitted-code sandbox creation fails", async () => {
+    const calls: unknown[] = [];
+    const parentSandbox = fakeLinkedSandbox(
+      calls,
+      "parent_sandbox",
+      "parent ok",
+    );
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: {
+        async create(input: unknown) {
+          calls.push({ create: input });
+          if (
+            typeof input === "object" &&
+            input !== null &&
+            "linkedSandbox" in input
+          ) {
+            throw new Error("linked create timed out");
+          }
+
+          return parentSandbox;
+        },
+        async delete(input: { id?: string; name?: string }) {
+          calls.push({ delete: input.id ?? input.name });
+        },
+      },
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+
+    await expect(provider.create()).rejects.toThrow("linked create timed out");
+    expect(calls).toEqual(
+      expect.arrayContaining([{ delete: "parent_sandbox" }]),
+    );
   });
 
   it("does not attach parent Daytona secrets to the linked submitted-code sandbox", async () => {
@@ -671,6 +859,28 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
             sandbox: "submitted_sandbox",
             ttl: 3600,
           },
+        },
+      ]),
+    );
+  });
+
+  it("fails fast when non-stream submitted-code execution does not finish", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls, { executeCommandNeverResolves: true }),
+      commandTimeoutMs: 1,
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.executeSubmittedCode?.("npm ci"),
+    ).rejects.toThrow("Daytona command did not finish within 1ms.");
+
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        {
+          executeCommand: { command: "npm ci", sandbox: "submitted_sandbox" },
         },
       ]),
     );
@@ -990,6 +1200,7 @@ function fakeLinkedClient(
   calls: unknown[],
   options: {
     downloadFilesNeverResolves?: boolean;
+    executeCommandNeverResolves?: boolean;
     failParentArchive?: boolean;
     failSubmittedRestore?: boolean;
     remoteCleanupNeverResolves?: boolean;
@@ -1150,6 +1361,7 @@ function fakeLinkedSandbox(
   stdout: string,
   options: {
     downloadFilesNeverResolves?: boolean;
+    executeCommandNeverResolves?: boolean;
     failParentArchive?: boolean;
     failSubmittedRestore?: boolean;
     remoteCleanupNeverResolves?: boolean;
@@ -1186,6 +1398,9 @@ function fakeLinkedSandbox(
       async deleteSession() {},
       async executeCommand(command: string) {
         calls.push({ executeCommand: { command, sandbox: id } });
+        if (options.executeCommandNeverResolves === true) {
+          await new Promise(() => {});
+        }
         if (
           options.failParentArchive === true &&
           id === "parent_sandbox" &&
@@ -1238,6 +1453,7 @@ function fakeClient(
   options: {
     awaitWorkspaceLogMirror?: Promise<void>;
     downloadError?: string;
+    executeCommandFails?: boolean;
     executeCommandNeverResolves?: boolean;
     failFirstSubmittedCodeInitialization?: boolean;
     failWorkspaceLogMirror?: boolean;
@@ -1246,11 +1462,16 @@ function fakeClient(
     networkError?: Error;
     onWorkspaceLogMirrorStarted?: () => void;
     previewNeverResolves?: boolean;
+    ptyConnectionFailuresBeforeSuccess?: number;
     ptyNeverConnects?: boolean;
+    ptyStaleDuplicateIdOnFirstCreate?: boolean;
+    ptyWaitFails?: boolean;
     ptyWaitsForDisconnect?: boolean;
   } = {},
 ) {
   let submittedCodeInitializationFailures = 0;
+  let ptyConnectionFailures = 0;
+  const stalePtyIds = new Set<string>();
   const sandbox = {
     fs: {
       async downloadFiles(
@@ -1295,6 +1516,15 @@ function fakeClient(
             rows: ptyOptions.rows,
           },
         });
+        if (options.ptyStaleDuplicateIdOnFirstCreate === true) {
+          if (stalePtyIds.size === 0) {
+            stalePtyIds.add(ptyOptions.id);
+            throw new Error("PTY session with ID already exists.");
+          }
+          if (stalePtyIds.has(ptyOptions.id)) {
+            throw new Error("PTY session with ID already exists.");
+          }
+        }
         let disconnected = false;
         let resolveDisconnect: (() => void) | undefined;
         const disconnectedPromise = new Promise<void>((resolve) => {
@@ -1318,6 +1548,9 @@ function fakeClient(
           },
           async wait() {
             calls.push({ wait: true });
+            if (options.ptyWaitFails === true) {
+              throw new Error("PTY wait failed after command started.");
+            }
             if (options.ptyWaitsForDisconnect === true) {
               await disconnectedPromise;
             }
@@ -1325,6 +1558,13 @@ function fakeClient(
           },
           async waitForConnection() {
             calls.push({ waitForConnection: true });
+            if (
+              ptyConnectionFailures <
+              (options.ptyConnectionFailuresBeforeSuccess ?? 0)
+            ) {
+              ptyConnectionFailures += 1;
+              await new Promise(() => {});
+            }
             if (options.ptyNeverConnects === true) {
               await new Promise(() => {});
             }
@@ -1339,6 +1579,9 @@ function fakeClient(
       },
       async executeCommand(command: string) {
         calls.push({ executeCommand: command });
+        if (options.executeCommandFails === true) {
+          throw new Error("executeCommand failed");
+        }
         if (options.executeCommandNeverResolves === true) {
           await new Promise(() => {});
         }

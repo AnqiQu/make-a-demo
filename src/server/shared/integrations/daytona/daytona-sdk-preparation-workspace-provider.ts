@@ -24,7 +24,10 @@ import {
 } from "../../logging/pipeline-event-logger";
 
 type DaytonaSdkClient = {
-  create(input?: unknown): Promise<DaytonaSdkSandbox>;
+  create(
+    input?: unknown,
+    options?: { timeout?: number },
+  ): Promise<DaytonaSdkSandbox>;
   delete(sandbox: DaytonaSdkSandbox): Promise<void>;
   get?(idOrName: string): Promise<DaytonaSdkSandbox>;
 };
@@ -100,6 +103,9 @@ type DaytonaSdkSandbox = {
 type DaytonaSdkPty = Awaited<
   ReturnType<DaytonaSdkSandbox["process"]["createPty"]>
 >;
+type DaytonaSdkPtyOptions = Parameters<
+  DaytonaSdkSandbox["process"]["createPty"]
+>[0];
 
 export type DaytonaSdkPreparationWorkspaceProviderOptions = {
   apiKey?: string;
@@ -109,6 +115,7 @@ export type DaytonaSdkPreparationWorkspaceProviderOptions = {
   logWriteTimeoutMs?: number;
   previewUrlTimeoutMs?: number;
   ptyConnectionTimeoutMs?: number;
+  sandboxCreateTimeoutSeconds?: number;
   sandboxLogSinks?: PipelineLogSink[];
   secrets?: Record<string, string>;
   snapshot?: string;
@@ -120,6 +127,9 @@ const defaultCommandTimeoutMs = 10 * 60_000;
 const defaultLogWriteTimeoutMs = 5_000;
 const defaultPreviewUrlTimeoutMs = 30_000;
 const defaultPtyConnectionTimeoutMs = 30_000;
+const defaultSandboxCreateTimeoutSeconds = 300;
+const sandboxCreateConnectionRetryLimit = 2;
+const ptyStartupRetryLimit = 2;
 const makeADemoArtifactDirectory = "/tmp/makeademo";
 const workspaceMakeADemoDirectory = "/workspace/.makeademo";
 const sandboxAuditLogPath = `${makeADemoArtifactDirectory}/sandbox-log.jsonl`;
@@ -168,6 +178,7 @@ export class DaytonaSdkPreparationWorkspaceProvider
   private readonly logWriteTimeoutMs: number;
   private readonly previewUrlTimeoutMs: number;
   private readonly ptyConnectionTimeoutMs: number;
+  private readonly sandboxCreateTimeoutSeconds: number;
   private readonly sandboxLogSinks: PipelineLogSink[];
   private readonly secrets: Record<string, string> | undefined;
   private readonly snapshot: string | undefined;
@@ -190,30 +201,45 @@ export class DaytonaSdkPreparationWorkspaceProvider
       options.previewUrlTimeoutMs ?? defaultPreviewUrlTimeoutMs;
     this.ptyConnectionTimeoutMs =
       options.ptyConnectionTimeoutMs ?? defaultPtyConnectionTimeoutMs;
+    this.sandboxCreateTimeoutSeconds =
+      options.sandboxCreateTimeoutSeconds ?? defaultSandboxCreateTimeoutSeconds;
     this.sandboxLogSinks = options.sandboxLogSinks ?? [];
   }
 
   async create(): Promise<PreparationWorkspaceHandle> {
-    const sandbox = await this.client.create({
-      disk: this.diskGB,
-      ...(this.secrets === undefined ? {} : { secrets: this.secrets }),
-      ...(this.snapshot === undefined ? {} : { snapshot: this.snapshot }),
-    });
+    const createOptions = { timeout: this.sandboxCreateTimeoutSeconds };
+    const sandbox = await this.createSandboxWithConnectionRetry(
+      {
+        disk: this.diskGB,
+        ...(this.secrets === undefined ? {} : { secrets: this.secrets }),
+        ...(this.snapshot === undefined ? {} : { snapshot: this.snapshot }),
+      },
+      createOptions,
+    );
     const id = sandbox.id ?? sandbox.name;
     if (id === undefined || id.trim() === "") {
       throw new Error("Daytona did not return a sandbox id.");
     }
 
-    const submittedCodeSandbox =
-      this.submittedCodeSnapshot === undefined
-        ? undefined
-        : await this.client.create({
-            autoDeleteInterval: 0,
-            ephemeral: true,
-            linkedSandbox: id,
-            networkBlockAll: true,
-            snapshot: this.submittedCodeSnapshot,
-          });
+    let submittedCodeSandbox: DaytonaSdkSandbox | undefined;
+    try {
+      submittedCodeSandbox =
+        this.submittedCodeSnapshot === undefined
+          ? undefined
+          : await this.createSandboxWithConnectionRetry(
+              {
+                autoDeleteInterval: 0,
+                ephemeral: true,
+                linkedSandbox: id,
+                networkBlockAll: true,
+                snapshot: this.submittedCodeSnapshot,
+              },
+              createOptions,
+            );
+    } catch (error) {
+      await this.client.delete(sandbox);
+      throw error;
+    }
 
     return createPreparationWorkspaceHandle({
       client: this.client,
@@ -226,6 +252,34 @@ export class DaytonaSdkPreparationWorkspaceProvider
       sandbox,
       ...(submittedCodeSandbox === undefined ? {} : { submittedCodeSandbox }),
     });
+  }
+
+  private async createSandboxWithConnectionRetry(
+    input: unknown,
+    options: { timeout: number },
+  ): Promise<DaytonaSdkSandbox> {
+    let lastError: unknown;
+    for (
+      let attempt = 0;
+      attempt <= sandboxCreateConnectionRetryLimit;
+      attempt += 1
+    ) {
+      try {
+        return await this.client.create(input, options);
+      } catch (error) {
+        lastError = error;
+        if (
+          attempt === sandboxCreateConnectionRetryLimit ||
+          !isDaytonaConnectionError(error)
+        ) {
+          throw error;
+        }
+
+        await wait(250 * (attempt + 1));
+      }
+    }
+
+    throw lastError;
   }
 }
 
@@ -316,7 +370,7 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
   ): Promise<PreparationWorkspaceCommandResult> {
     const output: string[] = [];
     const decoder = new TextDecoder();
-    const rawPty = await this.sandbox.process.createPty({
+    const pty = await this.createConnectedPty(this.sandbox, {
       cols: 120,
       cwd: "/workspace",
       envs: options.env ?? {},
@@ -331,15 +385,8 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
       },
       rows: 30,
     });
-    const pty = new ManagedPty(rawPty);
-    this.activePtys.add(pty);
 
     try {
-      await withTimeout(
-        pty.waitForConnection(),
-        this.ptyConnectionTimeoutMs,
-        `Daytona PTY did not connect within ${this.ptyConnectionTimeoutMs}ms.`,
-      );
       await pty.sendInput(
         `stty -echo\n${command}\nprintf '\\n__MAKEADEMO_EXIT__:%s\\n' $?\nexit\n`,
       );
@@ -422,10 +469,14 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
       );
     }
 
-    const response = await this.submittedCodeSandbox.process.executeCommand(
-      command,
-      undefined,
-      options.env,
+    const response = await withTimeout(
+      this.submittedCodeSandbox.process.executeCommand(
+        command,
+        undefined,
+        options.env,
+      ),
+      this.commandTimeoutMs,
+      `Daytona command did not finish within ${this.commandTimeoutMs}ms.`,
     );
 
     return {
@@ -599,7 +650,7 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
   ): Promise<PreparationWorkspaceCommandResult> {
     const output: string[] = [];
     const decoder = new TextDecoder();
-    const rawPty = await sandbox.process.createPty({
+    const pty = await this.createConnectedPty(sandbox, {
       cols: 120,
       cwd: "/workspace",
       envs: options.env ?? {},
@@ -614,15 +665,8 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
       },
       rows: 30,
     });
-    const pty = new ManagedPty(rawPty);
-    this.activePtys.add(pty);
 
     try {
-      await withTimeout(
-        pty.waitForConnection(),
-        this.ptyConnectionTimeoutMs,
-        `Daytona PTY did not connect within ${this.ptyConnectionTimeoutMs}ms.`,
-      );
       await pty.sendInput(
         `stty -echo\n${command}\nprintf '\n__MAKEADEMO_EXIT__:%s\n' $?\nexit\n`,
       );
@@ -639,6 +683,45 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
       this.activePtys.delete(pty);
       await pty.disconnect();
     }
+  }
+
+  private async createConnectedPty(
+    sandbox: DaytonaSdkSandbox,
+    options: DaytonaSdkPtyOptions,
+  ): Promise<ManagedPty> {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= ptyStartupRetryLimit + 1; attempt += 1) {
+      let pty: ManagedPty | undefined;
+
+      try {
+        const rawPty = await sandbox.process.createPty({
+          ...options,
+          id: attempt === 1 ? options.id : `makeademo-${randomUUID()}`,
+        });
+        pty = new ManagedPty(rawPty);
+        this.activePtys.add(pty);
+        await withTimeout(
+          pty.waitForConnection(),
+          this.ptyConnectionTimeoutMs,
+          `Daytona PTY did not connect within ${this.ptyConnectionTimeoutMs}ms.`,
+        );
+        return pty;
+      } catch (error) {
+        lastError = error;
+        if (pty !== undefined) {
+          this.activePtys.delete(pty);
+          await pty.disconnect();
+        }
+
+        if (attempt > ptyStartupRetryLimit) {
+          throw error;
+        }
+      }
+    }
+
+    throw lastError instanceof Error
+      ? lastError
+      : new Error("Daytona PTY startup failed.");
   }
 }
 
@@ -684,6 +767,23 @@ function withTimeout<T>(
       timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
     }),
   ]);
+}
+
+function wait(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+function isDaytonaConnectionError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return (
+    error.name === "DaytonaConnectionError" ||
+    error.message.includes("ECONNREFUSED") ||
+    error.message.includes("ECONNRESET") ||
+    error.message.includes("ETIMEDOUT")
+  );
 }
 
 function readExitCode(output: string): number | undefined {
