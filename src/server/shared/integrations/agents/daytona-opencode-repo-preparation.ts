@@ -254,8 +254,37 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
       });
 
       const shouldReadValidationFirst =
+        openCodeResult.latestMakeADemoToolPayload?.toolName ===
+          "makeademo_validate_preparation" ||
         openCodeResult.latestMakeADemoTool === "makeademo_validate_preparation";
       if (shouldReadValidationFirst) {
+        if (openCodeResult.latestMakeADemoToolPayloadError !== undefined) {
+          return toolPayloadProtocolFailure(
+            openCodeResult.latestMakeADemoToolPayloadError,
+          );
+        }
+        const validationRequest =
+          openCodeResult.latestMakeADemoToolPayload?.toolName ===
+          "makeademo_validate_preparation"
+            ? openCodeResult.latestMakeADemoToolPayload.input
+            : undefined;
+        if (validationRequest !== undefined) {
+          const validationOutcome = await this.processValidationRequest({
+            attempt,
+            currentSessionID,
+            deadlineAt,
+            handle,
+            input,
+            validationRequest,
+          });
+          if (validationOutcome.status === "retry") {
+            prompt = validationOutcome.prompt;
+            continue;
+          }
+
+          return validationOutcome.result;
+        }
+
         const validationRequestResult =
           await this.readRequestArtifactWithDeadline({
             artifactName: "validation request",
@@ -288,31 +317,46 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
         }
       }
 
-      const dependencyInstallRequestResult =
-        await this.readRequestArtifactWithDeadline({
-          artifactName: "dependency install request",
-          deadlineAt,
-          eventPrefix: "dependency-install-request-read",
-          read: () => readDependencyInstallRequest(handle.workspace),
-          workspace: handle.workspace,
-        });
-      if (dependencyInstallRequestResult.status !== "succeeded") {
-        return requestArtifactReadTimeoutFailure(
-          "dependency install request",
-          dependencyInstallRequestResult.timeoutMs,
+      if (openCodeResult.latestMakeADemoToolPayloadError !== undefined) {
+        return toolPayloadProtocolFailure(
+          openCodeResult.latestMakeADemoToolPayloadError,
         );
       }
-      const dependencyInstallRequest = dependencyInstallRequestResult.value;
-      if (dependencyInstallRequest !== undefined) {
+
+      const dependencyInstallRequest =
+        openCodeResult.latestMakeADemoToolPayload?.toolName ===
+          "makeademo_dependency_request_install" ||
+        openCodeResult.latestMakeADemoToolPayload?.toolName ===
+          "makeademo_install_dependencies"
+          ? openCodeResult.latestMakeADemoToolPayload.input
+          : await this.readDependencyInstallRequestWithDeadline(
+              handle.workspace,
+              deadlineAt,
+            );
+      if (
+        typeof dependencyInstallRequest === "object" &&
+        dependencyInstallRequest !== null &&
+        "status" in dependencyInstallRequest &&
+        dependencyInstallRequest.status === "timed-out"
+      ) {
+        return requestArtifactReadTimeoutFailure(
+          "dependency install request",
+          dependencyInstallRequest.timeoutMs,
+        );
+      }
+      const dependencyRequest = dependencyInstallRequest as
+        | DependencyInstallRequest
+        | undefined;
+      if (dependencyRequest !== undefined) {
         await this.writeSandboxLog(handle.workspace, {
-          command: dependencyInstallRequest.command,
+          command: dependencyRequest.command,
           event: "dependency-install-requested",
         });
         if (deadlineAt - Date.now() < minimumBackendToolBudgetMs) {
           return backendToolDeadlineFailure("dependency installation");
         }
         const installResult = await runDependencyInstallWithNetworkWindow({
-          command: dependencyInstallRequest.command,
+          command: dependencyRequest.command,
           workspace: handle.workspace,
         });
         await clearDependencyInstallRequest(handle.workspace);
@@ -418,14 +462,19 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
   ): Promise<
     PreparationWorkspaceCommandResult & {
       latestMakeADemoTool?: MakeADemoOpenCodeToolName;
+      latestMakeADemoToolPayloadError?: string;
+      latestMakeADemoToolPayload?: MakeADemoOpenCodeToolPayload;
       sessionID?: string;
     }
   > {
     const outputWrites: Promise<void>[] = [];
     const streamedToolTracker = createLatestMakeADemoToolTracker();
+    const streamedToolPayloadTracker =
+      createLatestMakeADemoToolPayloadTracker();
     const streamedSessionIDTracker = createOpenCodeSessionIDTracker();
     const onStdout = (chunk: string) => {
       streamedToolTracker.write(chunk);
+      streamedToolPayloadTracker.write(chunk);
       streamedSessionIDTracker.write(chunk);
       this.onStdout?.(chunk);
       outputWrites.push(
@@ -439,6 +488,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
     };
     const onStderr = (chunk: string) => {
       streamedToolTracker.write(chunk);
+      streamedToolPayloadTracker.write(chunk);
       streamedSessionIDTracker.write(chunk);
       this.onStderr?.(chunk);
       outputWrites.push(
@@ -470,9 +520,21 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
     const latestMakeADemoTool =
       latestStreamedMakeADemoTool ??
       readLatestMakeADemoTool(`${result.stdout}\n${result.stderr}`);
+    const latestMakeADemoToolPayload =
+      streamedToolPayloadTracker.read() ??
+      readLatestMakeADemoToolPayload(`${result.stdout}\n${result.stderr}`);
+    const latestMakeADemoToolPayloadError =
+      streamedToolPayloadTracker.readError() ??
+      readLatestMakeADemoToolPayloadError(`${result.stdout}\n${result.stderr}`);
     return {
       ...result,
       ...(latestMakeADemoTool === undefined ? {} : { latestMakeADemoTool }),
+      ...(latestMakeADemoToolPayloadError === undefined
+        ? {}
+        : { latestMakeADemoToolPayloadError }),
+      ...(latestMakeADemoToolPayload === undefined
+        ? {}
+        : { latestMakeADemoToolPayload }),
       ...(sessionID === undefined ? {} : { sessionID }),
     };
   }
@@ -627,6 +689,32 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
     return { status: "succeeded", value: result.value };
   }
 
+  private async readDependencyInstallRequestWithDeadline(
+    workspace: PreparationWorkspace,
+    deadlineAt: number,
+  ): Promise<
+    | DependencyInstallRequest
+    | undefined
+    | { status: "timed-out"; timeoutMs: number }
+  > {
+    const dependencyInstallRequestResult =
+      await this.readRequestArtifactWithDeadline({
+        artifactName: "dependency install request",
+        deadlineAt,
+        eventPrefix: "dependency-install-request-read",
+        read: () => readDependencyInstallRequest(workspace),
+        workspace,
+      });
+    if (dependencyInstallRequestResult.status !== "succeeded") {
+      return {
+        status: "timed-out",
+        timeoutMs: dependencyInstallRequestResult.timeoutMs,
+      };
+    }
+
+    return dependencyInstallRequestResult.value;
+  }
+
   private async writeCloneFailureDiagnostics(
     workspace: PreparationWorkspace,
     cloneFailureWorkspace: string,
@@ -685,6 +773,22 @@ type CloneFailureDiagnosticsContext = {
 type ValidationRequest = {
   manifestPath: string;
 };
+
+type DependencyInstallRequest = {
+  command: string;
+};
+
+type MakeADemoOpenCodeToolPayload =
+  | {
+      input: DependencyInstallRequest;
+      toolName:
+        | "makeademo_dependency_request_install"
+        | "makeademo_install_dependencies";
+    }
+  | {
+      input: ValidationRequest;
+      toolName: "makeademo_validate_preparation";
+    };
 
 type ValidationResultArtifact = {
   manifest: ReturnType<typeof readPreparationManifest> | undefined;
@@ -1012,6 +1116,19 @@ function requestArtifactReadTimeoutFailure(
     status: "failed" as const,
     suggestedChanges: [
       "Retry Repo Preparation in a fresh Daytona workspace; report this MakeADemo infrastructure failure if it repeats.",
+    ],
+  };
+}
+
+function toolPayloadProtocolFailure(reason: string) {
+  return {
+    assumptions: [],
+    blockers: [
+      `Repo Preparation MakeADemo tool payload protocol error: ${reason}`,
+    ],
+    status: "failed" as const,
+    suggestedChanges: [
+      "Retry Repo Preparation in a fresh Daytona workspace; report this MakeADemo tool protocol failure if it repeats.",
     ],
   };
 }
@@ -1652,6 +1769,234 @@ function readLatestMakeADemoTool(
   }
 
   return latestTool;
+}
+
+function readLatestMakeADemoToolPayload(
+  output: string,
+): MakeADemoOpenCodeToolPayload | undefined {
+  let latestPayload: MakeADemoOpenCodeToolPayload | undefined;
+  for (const line of output.split("\n")) {
+    const event = tryParseJson(line);
+    if (typeof event !== "object" || event === null) {
+      continue;
+    }
+
+    for (const payload of readMakeADemoToolPayloads(event)) {
+      latestPayload = payload;
+    }
+  }
+
+  return latestPayload;
+}
+
+function createLatestMakeADemoToolPayloadTracker(): {
+  read: () => MakeADemoOpenCodeToolPayload | undefined;
+  readError: () => string | undefined;
+  write: (chunk: string) => void;
+} {
+  const maximumCarryLength = 65_536;
+  let carry = "";
+  let latestError: string | undefined;
+  let latestPayload: MakeADemoOpenCodeToolPayload | undefined;
+
+  return {
+    readError() {
+      const carryPayload = readLatestMakeADemoToolPayload(carry);
+      if (carryPayload !== undefined) {
+        return undefined;
+      }
+
+      return readLatestMakeADemoToolPayloadError(carry) ?? latestError;
+    },
+    read() {
+      return latestPayload ?? readLatestMakeADemoToolPayload(carry);
+    },
+    write(chunk) {
+      const output = `${carry}${chunk}`;
+      const lines = output.split("\n");
+      carry = lines.pop() ?? "";
+      for (const line of lines) {
+        const payload = readLatestMakeADemoToolPayload(line);
+        if (payload !== undefined) {
+          latestPayload = payload;
+          latestError = undefined;
+        } else {
+          const error = readLatestMakeADemoToolPayloadError(line);
+          if (error !== undefined) {
+            latestPayload = undefined;
+            latestError = error;
+          }
+        }
+      }
+      if (carry.length > maximumCarryLength) {
+        carry = carry.slice(-maximumCarryLength);
+      }
+    },
+  };
+}
+
+function readLatestMakeADemoToolPayloadError(
+  output: string,
+): string | undefined {
+  let latestError: string | undefined;
+  for (const line of output.split("\n")) {
+    const event = tryParseJson(line);
+    if (event === undefined) {
+      const toolName = readLatestMakeADemoTool(line);
+      if (toolName !== undefined && line.trimStart().startsWith("{")) {
+        latestError = `${toolName} payload is not parseable JSON`;
+      }
+      continue;
+    }
+
+    if (readMakeADemoToolPayloads(event).length > 0) {
+      latestError = undefined;
+    } else {
+      latestError = readMakeADemoToolPayloadError(event) ?? latestError;
+    }
+  }
+
+  return latestError;
+}
+
+function readMakeADemoToolPayloadError(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const toolName = readMakeADemoToolName(record);
+  const input = readToolInput(record);
+  if (toolName !== undefined) {
+    return describeMakeADemoToolPayloadError(toolName, input);
+  }
+
+  let latestError: string | undefined;
+  for (const child of Object.values(record)) {
+    if (typeof child === "object" && child !== null) {
+      latestError = readMakeADemoToolPayloadError(child) ?? latestError;
+    }
+  }
+
+  return latestError;
+}
+
+function describeMakeADemoToolPayloadError(
+  toolName: MakeADemoOpenCodeToolName,
+  input: unknown,
+): string | undefined {
+  if (toolName === "makeademo_validate_preparation") {
+    if (
+      typeof input === "object" &&
+      input !== null &&
+      typeof (input as { manifestPath?: unknown }).manifestPath === "string"
+    ) {
+      return undefined;
+    }
+
+    return `${toolName} payload is missing required field input.manifestPath`;
+  }
+
+  if (
+    typeof input === "object" &&
+    input !== null &&
+    typeof (input as { command?: unknown }).command === "string"
+  ) {
+    return undefined;
+  }
+
+  return `${toolName} payload is missing required field input.command`;
+}
+
+function readMakeADemoToolPayloads(
+  value: unknown,
+): MakeADemoOpenCodeToolPayload[] {
+  if (typeof value !== "object" || value === null) {
+    return [];
+  }
+
+  const payloads: MakeADemoOpenCodeToolPayload[] = [];
+  const record = value as Record<string, unknown>;
+  const toolName = readMakeADemoToolName(record);
+  const input = readToolInput(record);
+  const payload = createMakeADemoToolPayload(toolName, input);
+  if (payload !== undefined) {
+    payloads.push(payload);
+  }
+
+  for (const child of Object.values(record)) {
+    if (typeof child === "object" && child !== null) {
+      payloads.push(...readMakeADemoToolPayloads(child));
+    }
+  }
+
+  return payloads;
+}
+
+function readMakeADemoToolName(
+  record: Record<string, unknown>,
+): MakeADemoOpenCodeToolName | undefined {
+  for (const key of ["toolName", "tool", "name"]) {
+    const value = record[key];
+    if (
+      value === "makeademo_dependency_request_install" ||
+      value === "makeademo_install_dependencies" ||
+      value === "makeademo_validate_preparation"
+    ) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function readToolInput(record: Record<string, unknown>): unknown {
+  const directInput = record.input ?? record.args ?? record.arguments;
+  if (typeof directInput === "string") {
+    return tryParseJson(directInput);
+  }
+  if (directInput !== undefined) {
+    return directInput;
+  }
+
+  const state = record.state;
+  if (typeof state === "object" && state !== null) {
+    return (state as Record<string, unknown>).input;
+  }
+
+  return undefined;
+}
+
+function createMakeADemoToolPayload(
+  toolName: MakeADemoOpenCodeToolName | undefined,
+  input: unknown,
+): MakeADemoOpenCodeToolPayload | undefined {
+  if (typeof input !== "object" || input === null || toolName === undefined) {
+    return undefined;
+  }
+
+  if (
+    toolName === "makeademo_validate_preparation" &&
+    typeof (input as { manifestPath?: unknown }).manifestPath === "string"
+  ) {
+    return {
+      input: { manifestPath: (input as { manifestPath: string }).manifestPath },
+      toolName,
+    };
+  }
+
+  if (
+    (toolName === "makeademo_dependency_request_install" ||
+      toolName === "makeademo_install_dependencies") &&
+    typeof (input as { command?: unknown }).command === "string"
+  ) {
+    return {
+      input: { command: (input as { command: string }).command },
+      toolName,
+    };
+  }
+
+  return undefined;
 }
 
 function createLatestMakeADemoToolTracker(): {

@@ -1406,6 +1406,229 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     );
   });
 
+  it("runs validation from streamed structured tool input when the validation artifact read never settles", async () => {
+    const events: unknown[] = [];
+    let validationStarted = false;
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandOutputChunks: [
+          {
+            channel: "stdout",
+            chunk: `${JSON.stringify({
+              part: {
+                input: {
+                  manifestPath:
+                    "/tmp/makeademo/submitted-code/preparation-manifest.json",
+                },
+                tool: "makeademo_validate_preparation",
+                type: "tool-call",
+              },
+              type: "message.part",
+            })}\n`,
+          },
+        ],
+        validationRequestReadNeverSettles: true,
+      }),
+      providerID: "openai",
+      timeoutMs: 250,
+      validatePreparation: async () => {
+        validationStarted = true;
+        return validationArtifact().validation;
+      },
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      validation: { status: "succeeded" },
+    });
+    expect(validationStarted).toBe(true);
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "validation-request-read.started",
+          }),
+        },
+      ]),
+    );
+  });
+
+  it("runs dependency install from streamed structured tool input when the dependency artifact read never settles", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandOutputChunksByRun: [
+          [
+            {
+              channel: "stderr",
+              chunk: `${JSON.stringify({
+                input: { manifestPath: "/tmp/old-manifest.json" },
+                toolName: "makeademo_validate_preparation",
+                type: "tool-call",
+              })}\n`,
+            },
+            {
+              channel: "stdout",
+              chunk: `${JSON.stringify({
+                args: { command: "bun install" },
+                toolName: "makeademo_dependency_request_install",
+                type: "tool-call",
+              })}\n`,
+            },
+          ],
+          [
+            {
+              channel: "stdout",
+              chunk: `${JSON.stringify({
+                input: {
+                  manifestPath:
+                    "/tmp/makeademo/submitted-code/preparation-manifest.json",
+                },
+                toolName: "makeademo_validate_preparation",
+                type: "tool-call",
+              })}\n`,
+            },
+          ],
+        ],
+        dependencyInstallRequestReadNeverSettles: true,
+      }),
+      providerID: "openai",
+      timeoutMs: 500,
+      validatePreparation: async () => validationArtifact().validation,
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({ status: "succeeded" });
+    expect(events).toEqual(
+      expect.arrayContaining([{ submittedCodeExecute: "bun install" }]),
+    );
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "dependency-install-request-read.started",
+          }),
+        },
+      ]),
+    );
+  });
+
+  it("fails observed dependency tool payloads with missing fields without reading artifacts", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandOutputChunks: [
+          {
+            channel: "stdout",
+            chunk: `${JSON.stringify({
+              input: {},
+              toolName: "makeademo_dependency_request_install",
+              type: "tool-call",
+            })}\n`,
+          },
+        ],
+        dependencyInstallRequestReadNeverSettles: true,
+      }),
+      providerID: "openai",
+      timeoutMs: 250,
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      blockers: [
+        expect.stringContaining(
+          "makeademo_dependency_request_install payload is missing required field input.command",
+        ),
+      ],
+      status: "failed",
+    });
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "dependency-install-request-read.started",
+          }),
+        },
+        { submittedCodeExecute: "bun install" },
+      ]),
+    );
+  });
+
+  it("fails observed validation tool payloads with missing fields without reading artifacts", async () => {
+    const events: unknown[] = [];
+    let validationStarted = false;
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandOutputChunks: [
+          {
+            channel: "stdout",
+            chunk: `${JSON.stringify({
+              input: {},
+              toolName: "makeademo_validate_preparation",
+              type: "tool-call",
+            })}\n`,
+          },
+        ],
+        validationRequestReadNeverSettles: true,
+      }),
+      providerID: "openai",
+      timeoutMs: 250,
+      validatePreparation: async () => {
+        validationStarted = true;
+        return validationArtifact().validation;
+      },
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      blockers: [
+        expect.stringContaining(
+          "makeademo_validate_preparation payload is missing required field input.manifestPath",
+        ),
+      ],
+      status: "failed",
+    });
+    expect(validationStarted).toBe(false);
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "validation-request-read.started",
+          }),
+        },
+      ]),
+    );
+  });
+
   it("uses mixed stream arrival order when validation is the latest OpenCode tool", async () => {
     const events: unknown[] = [];
     let validationStarted = false;
@@ -2023,6 +2246,12 @@ function fakeProvider(
           channel: "stderr" | "stdout";
           chunk: string;
         }>;
+        commandOutputChunksByRun?: Array<
+          Array<{
+            channel: "stderr" | "stdout";
+            chunk: string;
+          }>
+        >;
         commandStderrChunks?: string[];
         commandStdoutChunks?: string[];
         commandDelayMs?: number;
@@ -2072,6 +2301,12 @@ function fakeWorkspace(
       channel: "stderr" | "stdout";
       chunk: string;
     }>;
+    commandOutputChunksByRun?: Array<
+      Array<{
+        channel: "stderr" | "stdout";
+        chunk: string;
+      }>
+    >;
     commandStderrChunks?: string[];
     commandStdoutChunks?: string[];
     commandDelayMs?: number;
@@ -2099,6 +2334,7 @@ function fakeWorkspace(
   const commandStdout = input.commandStdout ?? [
     JSON.stringify(successResult()),
   ];
+  const commandOutputChunksByRun = [...(input.commandOutputChunksByRun ?? [])];
   const cloneResults = [...(input.cloneResults ?? [])];
   const openCodeStartupErrors = [...(input.openCodeStartupErrors ?? [])];
   let dependencyInstallRequest = input.dependencyInstallRequest;
@@ -2133,8 +2369,13 @@ function fakeWorkspace(
       ) {
         throw openCodeStartupErrors.shift();
       }
-      if (input.commandOutputChunks !== undefined) {
-        for (const output of input.commandOutputChunks) {
+      const commandOutputChunks = command.includes("opencode run")
+        ? commandOutputChunksByRun.length > 0
+          ? commandOutputChunksByRun.shift()
+          : input.commandOutputChunks
+        : undefined;
+      if (commandOutputChunks !== undefined) {
+        for (const output of commandOutputChunks) {
           if (output.channel === "stdout") {
             options?.onStdout?.(output.chunk);
           } else {
