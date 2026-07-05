@@ -242,6 +242,27 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ]);
   });
 
+  it("passes the configured command timeout to parent Daytona commands", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeCommandTimeoutClient(calls),
+      commandTimeoutMs: 1_500,
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.execute("npm ci", { env: { CI: "true" } });
+
+    expect(calls).toContainEqual({
+      executeCommand: {
+        command: "npm ci",
+        cwd: undefined,
+        env: { CI: "true" },
+        sandbox: "parent_sandbox",
+        timeout: 2,
+      },
+    });
+  });
+
   it("fails fast when a Daytona command does not finish", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -864,6 +885,30 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     );
   });
 
+  it("passes the configured command timeout to submitted-code Daytona commands", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeCommandTimeoutClient(calls),
+      commandTimeoutMs: 1_500,
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.executeSubmittedCode?.("npm test", {
+      env: { NODE_ENV: "test" },
+    });
+
+    expect(calls).toContainEqual({
+      executeCommand: {
+        command: "npm test",
+        cwd: undefined,
+        env: { NODE_ENV: "test" },
+        sandbox: "submitted_sandbox",
+        timeout: 2,
+      },
+    });
+  });
+
   it("fails fast when non-stream submitted-code execution does not finish", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -1235,6 +1280,74 @@ function fakeLinkedClient(
     async delete(input: { id?: string; name?: string }) {
       calls.push({ delete: input.id ?? input.name });
     },
+  };
+}
+
+function fakeCommandTimeoutClient(calls: unknown[]) {
+  const parentSandbox = fakeCommandTimeoutSandbox(calls, "parent_sandbox");
+  const childSandbox = fakeCommandTimeoutSandbox(calls, "submitted_sandbox");
+
+  return {
+    async create(input: unknown) {
+      calls.push({ create: input });
+      if (
+        typeof input === "object" &&
+        input !== null &&
+        "linkedSandbox" in input
+      ) {
+        return childSandbox;
+      }
+
+      return parentSandbox;
+    },
+    async delete(input: { id?: string; name?: string }) {
+      calls.push({ delete: input.id ?? input.name });
+    },
+  };
+}
+
+function fakeCommandTimeoutSandbox(calls: unknown[], id: string) {
+  return {
+    fs: {
+      async downloadFiles(
+        files: Array<{ destination: string; source: string }>,
+      ) {
+        return files.map((file) => ({ source: file.source }));
+      },
+      async uploadFiles() {},
+    },
+    id,
+    async getSignedPreviewUrl(port: number) {
+      return { url: `https://${id}.example.test:${port}` };
+    },
+    process: {
+      async createPty() {
+        throw new Error("Streaming is not exercised by command timeout tests.");
+      },
+      async createSession() {},
+      async deleteSession() {},
+      async executeCommand(
+        command: string,
+        cwd?: string,
+        env?: Record<string, string>,
+        timeout?: number,
+      ) {
+        calls.push({
+          executeCommand: { command, cwd, env, sandbox: id, timeout },
+        });
+        return { exitCode: 0, result: "ok" };
+      },
+      async executeSessionCommand() {
+        return { cmdId: "cmd_123" };
+      },
+      async getSessionCommand() {
+        return { exitCode: 0 };
+      },
+      async getSessionCommandLogs() {
+        return { stderr: "", stdout: "" };
+      },
+    },
+    async updateNetworkSettings() {},
   };
 }
 

@@ -5,6 +5,7 @@ const defaultCloneRetryDelaysMs = [100, 250];
 export async function runGitCloneWithTransientRetry(input: {
   clone: () => Promise<PreparationWorkspaceCommandResult>;
   retryDelaysMs?: number[];
+  retryThrownErrors?: boolean;
 }): Promise<PreparationWorkspaceCommandResult> {
   const retryDelaysMs = input.retryDelaysMs ?? defaultCloneRetryDelaysMs;
 
@@ -20,6 +21,7 @@ export async function runGitCloneWithTransientRetry(input: {
       }
     } catch (error) {
       if (
+        input.retryThrownErrors === false ||
         attempt >= retryDelaysMs.length ||
         !isTransientGitCloneFailure(readErrorMessage(error))
       ) {

@@ -55,6 +55,77 @@ describe("readRepoSecurityInput", () => {
     expect(workspace.cloneAttempts).toBe(1);
   });
 
+  it("logs thrown Daytona clone timeouts and retries in a fresh workspace", async () => {
+    const lines: string[] = [];
+    const firstWorkspace = new FakePreparationWorkspace({
+      cloneError: new Error("Daytona command did not finish within 600000ms"),
+    });
+    const secondWorkspace = new FakePreparationWorkspace();
+    const provider = new FakePreparationWorkspaceProvider([
+      firstWorkspace,
+      secondWorkspace,
+    ]);
+    const logger = createPipelineEventLogger({
+      base: { component: "repo-security-screen" },
+      sinks: [{ write: (line) => void lines.push(line) }],
+      timestamp: () => "2026-06-17T00:00:00.000Z",
+    });
+
+    const result = await readRepoSecurityInput(
+      provider,
+      "https://github.com/example/app",
+      { logger },
+    );
+
+    expect(result.repoStats).toEqual({ fileCount: 1, sizeBytes: 17 });
+    expect(firstWorkspace.networkAccessChanges).toEqual([true, false]);
+    expect(secondWorkspace.networkAccessChanges).toEqual([true, false]);
+    expect(provider.destroyedWorkspaceIds).toEqual([
+      "workspace-1",
+      "workspace-2",
+    ]);
+    expect(firstWorkspace.cloneAttempts).toBe(1);
+    expect(secondWorkspace.cloneAttempts).toBe(1);
+    expect(lines.map((line) => JSON.parse(line))).toContainEqual(
+      expect.objectContaining({
+        durationMs: expect.any(Number),
+        errorMessage: "Daytona command did not finish within 600000ms",
+        errorType: "Error",
+        event: "repo-security-screen.clone.failed",
+        level: "error",
+        repoUrl: "https://github.com/example/app",
+      }),
+    );
+  });
+
+  it("retries thrown clone ETIMEDOUT errors in a fresh workspace", async () => {
+    const firstWorkspace = new FakePreparationWorkspace({
+      cloneError: new Error(
+        "connect ETIMEDOUT 140.82.112.4:443 while cloning repository",
+      ),
+    });
+    const secondWorkspace = new FakePreparationWorkspace();
+    const provider = new FakePreparationWorkspaceProvider([
+      firstWorkspace,
+      secondWorkspace,
+    ]);
+
+    const result = await readRepoSecurityInput(
+      provider,
+      "https://github.com/example/app",
+    );
+
+    expect(result.repoStats).toEqual({ fileCount: 1, sizeBytes: 17 });
+    expect(firstWorkspace.networkAccessChanges).toEqual([true, false]);
+    expect(secondWorkspace.networkAccessChanges).toEqual([true, false]);
+    expect(provider.destroyedWorkspaceIds).toEqual([
+      "workspace-1",
+      "workspace-2",
+    ]);
+    expect(firstWorkspace.cloneAttempts).toBe(1);
+    expect(secondWorkspace.cloneAttempts).toBe(1);
+  });
+
   it("logs Daytona clone progress through Pino JSON", async () => {
     const lines: string[] = [];
     const commands: string[] = [];
@@ -110,30 +181,62 @@ describe("readRepoSecurityInput", () => {
 });
 
 class FakePreparationWorkspaceProvider implements PreparationWorkspaceProvider {
+  readonly destroyedWorkspaceIds: string[] = [];
+
   constructor(
     private readonly input:
       | PreparationWorkspace
+      | PreparationWorkspace[]
       | string[] = new FakePreparationWorkspace(),
   ) {}
 
+  private createCount = 0;
+
   async create(): Promise<PreparationWorkspaceHandle> {
-    const workspace = Array.isArray(this.input)
-      ? new FakePreparationWorkspace({ commands: this.input })
-      : this.input;
+    const workspace = isWorkspaceList(this.input)
+      ? readWorkspaceAt(this.input, this.createCount)
+      : Array.isArray(this.input)
+        ? new FakePreparationWorkspace({ commands: this.input })
+        : this.input;
+    const id = `workspace-${this.createCount + 1}`;
+    this.createCount += 1;
 
     return {
-      async destroy() {},
-      id: "workspace-1",
+      destroy: async () => void this.destroyedWorkspaceIds.push(id),
+      id,
       workspace,
     };
   }
 }
 
+function isWorkspaceList(
+  input: PreparationWorkspace | PreparationWorkspace[] | string[],
+): input is PreparationWorkspace[] {
+  return (
+    Array.isArray(input) &&
+    input.length > 0 &&
+    input.every((item) => typeof item !== "string")
+  );
+}
+
+function readWorkspaceAt(
+  workspaces: PreparationWorkspace[],
+  index: number,
+): PreparationWorkspace {
+  const workspace = workspaces[index] ?? workspaces[workspaces.length - 1];
+  if (workspace === undefined) {
+    throw new Error("Expected at least one workspace");
+  }
+  return workspace;
+}
+
 class FakePreparationWorkspace implements PreparationWorkspace {
   cloneAttempts = 0;
+  readonly networkAccessChanges: boolean[] = [];
 
   constructor(
     private readonly input: {
+      cloneError?: Error;
       cloneResults?: PreparationWorkspaceCommandResult[];
       commands?: string[];
     } = {},
@@ -142,6 +245,10 @@ class FakePreparationWorkspace implements PreparationWorkspace {
   async execute(command: string): Promise<PreparationWorkspaceCommandResult> {
     this.input.commands?.push(command);
     if (command.includes("git clone")) {
+      if (this.input.cloneError !== undefined) {
+        this.cloneAttempts += 1;
+        throw this.input.cloneError;
+      }
       const result = this.input.cloneResults?.[this.cloneAttempts] ?? {
         exitCode: 0,
         stderr: "",
@@ -166,7 +273,9 @@ class FakePreparationWorkspace implements PreparationWorkspace {
     throw new Error("getPreviewUrl should not be called");
   }
 
-  async setOutboundNetworkAccess(): Promise<void> {}
+  async setOutboundNetworkAccess(enabled: boolean): Promise<void> {
+    this.networkAccessChanges.push(enabled);
+  }
 
   async uploadFiles(): Promise<void> {
     throw new Error("uploadFiles should not be called");

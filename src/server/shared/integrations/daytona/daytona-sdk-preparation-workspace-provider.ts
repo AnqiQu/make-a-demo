@@ -68,6 +68,7 @@ type DaytonaSdkSandbox = {
       command: string,
       cwd?: string,
       env?: Record<string, string>,
+      timeout?: number,
     ): Promise<{
       exitCode?: number;
       result?: string;
@@ -352,7 +353,12 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
     }
 
     const response = await withTimeout(
-      this.sandbox.process.executeCommand(command, undefined, options.env),
+      this.sandbox.process.executeCommand(
+        command,
+        undefined,
+        options.env,
+        toSdkTimeoutSeconds(this.commandTimeoutMs),
+      ),
       this.commandTimeoutMs,
       `Daytona command did not finish within ${this.commandTimeoutMs}ms.`,
     );
@@ -474,6 +480,7 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
         command,
         undefined,
         options.env,
+        toSdkTimeoutSeconds(this.commandTimeoutMs),
       ),
       this.commandTimeoutMs,
       `Daytona command did not finish within ${this.commandTimeoutMs}ms.`,
@@ -514,6 +521,9 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
       const archiveResult = await withTimeout(
         this.sandbox.process.executeCommand(
           createPreparedWorkspaceArchiveCommand(remoteArchivePath),
+          undefined,
+          undefined,
+          toSdkTimeoutSeconds(this.commandTimeoutMs),
         ),
         this.commandTimeoutMs,
         `Daytona prepared workspace archive did not finish within ${this.commandTimeoutMs}ms.`,
@@ -554,6 +564,9 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
       const extractResult = await withTimeout(
         this.submittedCodeSandbox.process.executeCommand(
           createSubmittedCodeWorkspaceExtractCommand(remoteArchivePath),
+          undefined,
+          undefined,
+          toSdkTimeoutSeconds(this.commandTimeoutMs),
         ),
         this.commandTimeoutMs,
         `Daytona submitted-code workspace restore did not finish within ${this.commandTimeoutMs}ms.`,
@@ -571,6 +584,9 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
         withTimeout(
           this.sandbox.process.executeCommand(
             `rm -f ${shellQuote(remoteArchivePath)}`,
+            undefined,
+            undefined,
+            toSdkTimeoutSeconds(this.commandTimeoutMs),
           ),
           this.commandTimeoutMs,
           `Daytona prepared workspace archive cleanup did not finish within ${this.commandTimeoutMs}ms.`,
@@ -578,6 +594,9 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
         withTimeout(
           this.submittedCodeSandbox.process.executeCommand(
             `rm -f ${shellQuote(remoteArchivePath)}`,
+            undefined,
+            undefined,
+            toSdkTimeoutSeconds(this.commandTimeoutMs),
           ),
           this.commandTimeoutMs,
           `Daytona submitted-code workspace archive cleanup did not finish within ${this.commandTimeoutMs}ms.`,
@@ -767,6 +786,10 @@ function withTimeout<T>(
       timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
     }),
   ]);
+}
+
+function toSdkTimeoutSeconds(timeoutMs: number): number {
+  return Math.max(1, Math.ceil(timeoutMs / 1000));
 }
 
 function wait(delayMs: number): Promise<void> {
