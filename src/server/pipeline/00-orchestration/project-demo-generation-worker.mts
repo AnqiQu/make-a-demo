@@ -1,6 +1,9 @@
 import { DaytonaOpenCodeScriptGeneration } from "../../shared/integrations/agents/daytona-opencode-script-generation";
 import { ensureOpenCodeProviderDaytonaSecret } from "../../shared/integrations/agents/opencode-provider-secrets";
-import { createRepoPreparationAgent } from "../../shared/integrations/agents/repo-preparation-agent-factory";
+import {
+  createRepoPreparationAgent,
+  readRepoPreparationTimeoutMsFromEnv,
+} from "../../shared/integrations/agents/repo-preparation-agent-factory";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../../shared/integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import { createResendFinalVideoEmailNotifierFromEnv } from "../../shared/integrations/email/resend-final-video-email-notifier";
 import { DaytonaSandboxRunner } from "../../shared/integrations/sandbox/daytona-sandbox-runner";
@@ -47,6 +50,7 @@ const providerSecretName = await ensureOpenCodeProviderDaytonaSecret({
   daytonaApiKey,
   providerID,
 });
+const repoPreparationTimeoutMs = readRepoPreparationTimeoutMsFromEnv();
 const repoPreparationAgent = createRepoPreparationAgent({
   daytonaApiKey,
   ...(daytonaSnapshot === undefined ? {} : { daytonaSnapshot }),
@@ -56,6 +60,9 @@ const repoPreparationAgent = createRepoPreparationAgent({
   modelID,
   providerID,
   providerSecretName,
+  ...(repoPreparationTimeoutMs === undefined
+    ? {}
+    : { repoPreparationTimeoutMs }),
 });
 const scriptGenerationAgent = new DaytonaOpenCodeScriptGeneration({
   modelID,

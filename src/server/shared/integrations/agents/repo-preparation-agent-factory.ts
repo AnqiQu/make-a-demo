@@ -1,5 +1,6 @@
 import type { RepoPreparationAgent } from "../../../pipeline/03-repo-preparation/repo-preparation-agent.interface";
 import { validateProject } from "../../../pipeline/05-capture-path-validation/project-runtime-preflight/project-validator";
+import type { PipelineLogSink } from "../../logging/pipeline-event-logger";
 import { PlaywrightBrowserValidator } from "../browser/playwright-browser-validator";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../daytona/daytona-sdk-preparation-workspace-provider";
 import { DaytonaSandboxRunner } from "../sandbox/daytona-sandbox-runner";
@@ -15,6 +16,8 @@ export type RepoPreparationAgentFactoryOptions = {
   onStdout?: (chunk: string) => void;
   providerID: string;
   providerSecretName: string;
+  repoPreparationTimeoutMs?: number;
+  sandboxLogSinks?: PipelineLogSink[];
 };
 
 export function createRepoPreparationAgent(
@@ -26,7 +29,20 @@ export function createRepoPreparationAgent(
     );
   }
 
+  const timeoutMs =
+    options.repoPreparationTimeoutMs ?? readRepoPreparationTimeoutMsFromEnv();
+
   return new DaytonaOpenCodeRepoPreparation({
+    cloneFailureDiagnosticsContext: {
+      ...(options.daytonaSnapshot === undefined
+        ? {}
+        : { daytonaSnapshot: options.daytonaSnapshot }),
+      ...(options.daytonaSubmittedCodeSnapshot === undefined
+        ? {}
+        : {
+            daytonaSubmittedCodeSnapshot: options.daytonaSubmittedCodeSnapshot,
+          }),
+    },
     modelID: options.modelID,
     ...(options.onStderr === undefined ? {} : { onStderr: options.onStderr }),
     ...(options.onStdout === undefined ? {} : { onStdout: options.onStdout }),
@@ -42,8 +58,10 @@ export function createRepoPreparationAgent(
       ...(options.daytonaSubmittedCodeSnapshot === undefined
         ? {}
         : { submittedCodeSnapshot: options.daytonaSubmittedCodeSnapshot }),
+      sandboxLogSinks: options.sandboxLogSinks ?? [],
     }),
     providerID: options.providerID,
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
     validatePreparation: ({ manifest, workspace }) =>
       validateProject(
         { preparationManifest: manifest, preparationWorkspace: workspace },
@@ -55,4 +73,27 @@ export function createRepoPreparationAgent(
         },
       ),
   });
+}
+
+export function readRepoPreparationTimeoutMsFromEnv(): number | undefined {
+  const rawValue = process.env.MAKEADEMO_REPO_PREPARATION_TIMEOUT_MS;
+  if (rawValue === undefined || rawValue.trim() === "") {
+    return undefined;
+  }
+
+  const trimmedValue = rawValue.trim();
+  if (!/^[1-9]\d*$/.test(trimmedValue)) {
+    throw new Error(
+      "MAKEADEMO_REPO_PREPARATION_TIMEOUT_MS must be a positive integer millisecond value.",
+    );
+  }
+
+  const timeoutMs = Number(trimmedValue);
+  if (!Number.isSafeInteger(timeoutMs)) {
+    throw new Error(
+      "MAKEADEMO_REPO_PREPARATION_TIMEOUT_MS must be a positive integer millisecond value.",
+    );
+  }
+
+  return timeoutMs;
 }

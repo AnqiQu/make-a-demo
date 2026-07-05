@@ -4,10 +4,14 @@ import { createInterface } from "node:readline/promises";
 
 import { DaytonaOpenCodeScriptGeneration } from "../../shared/integrations/agents/daytona-opencode-script-generation";
 import { ensureOpenCodeProviderDaytonaSecret } from "../../shared/integrations/agents/opencode-provider-secrets";
-import { createRepoPreparationAgent } from "../../shared/integrations/agents/repo-preparation-agent-factory";
+import {
+  createRepoPreparationAgent,
+  readRepoPreparationTimeoutMsFromEnv,
+} from "../../shared/integrations/agents/repo-preparation-agent-factory";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../../shared/integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import { DaytonaSandboxRunner } from "../../shared/integrations/sandbox/daytona-sandbox-runner";
 import {
+  createFilePipelineLogSink,
   createPipelineEventLogger,
   createPrettyPipelineLogSink,
 } from "../../shared/logging/pipeline-event-logger";
@@ -38,6 +42,8 @@ const daytonaSubmittedCodeSnapshot = readOptionalEnv(
 const fullPipelineOutputRoot = outputRoot ?? ".makeademo-full-pipeline-runs";
 const runId = createRunId();
 const runDirectory = join(fullPipelineOutputRoot, runId);
+const sandboxLogPath = join(runDirectory, "sandbox-log.jsonl");
+const localSandboxLogSink = createFilePipelineLogSink(sandboxLogPath);
 const rawOpenCodeLog = createOpenCodeRawOutputLog({
   logPath: join(runDirectory, "opencode-raw-output.jsonl"),
 });
@@ -64,7 +70,7 @@ if (daytonaApiKey === undefined || daytonaApiKey === "") {
 const sandboxProvider = new DaytonaSdkPreparationWorkspaceProvider({
   apiKey: daytonaApiKey,
   ...(daytonaSnapshot === undefined ? {} : { snapshot: daytonaSnapshot }),
-  sandboxLogSinks: [cliLogSink],
+  sandboxLogSinks: [cliLogSink, localSandboxLogSink],
 });
 const cliLogger = createPipelineEventLogger({
   base: { component: "full-pipeline-cli" },
@@ -96,6 +102,7 @@ const providerSecretName = await ensureOpenCodeProviderDaytonaSecret({
   daytonaApiKey,
   providerID: options.providerID,
 });
+const repoPreparationTimeoutMs = readRepoPreparationTimeoutMsFromEnv();
 const repoPreparationAgent = createRepoPreparationAgent({
   daytonaApiKey,
   ...(daytonaSnapshot === undefined ? {} : { daytonaSnapshot }),
@@ -113,6 +120,10 @@ const repoPreparationAgent = createRepoPreparationAgent({
   },
   providerID: options.providerID,
   providerSecretName,
+  ...(repoPreparationTimeoutMs === undefined
+    ? {}
+    : { repoPreparationTimeoutMs }),
+  sandboxLogSinks: [cliLogSink, localSandboxLogSink],
 });
 const scriptGenerationAgent = new DaytonaOpenCodeScriptGeneration({
   modelID: options.modelID,
@@ -152,6 +163,7 @@ const result = await runFullPipelineJob(
       scriptGenerationAgent,
     ),
     runId,
+    sandboxLogPath,
     scriptGenerationRawOpenCodeLogPath: scriptGenerationRawOpenCodeLog.logPath,
   },
 )
@@ -185,6 +197,9 @@ if (result !== undefined) {
     `Composite manifest: ${result.finalVideo.manifestPath}\n`,
   );
   process.stdout.write(`Log: ${result.logPath}\n`);
+  if (result.sandboxLogPath !== undefined) {
+    process.stdout.write(`Sandbox log: ${result.sandboxLogPath}\n`);
+  }
   process.stdout.write(`Raw OpenCode log: ${rawOpenCodeLog.logPath}\n`);
   process.stdout.write(
     `Script Generation raw OpenCode log: ${scriptGenerationRawOpenCodeLog.logPath}\n`,

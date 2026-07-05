@@ -4,7 +4,10 @@ import { createInterface } from "node:readline/promises";
 
 import { DaytonaOpenCodeScriptGeneration } from "../../shared/integrations/agents/daytona-opencode-script-generation";
 import { ensureOpenCodeProviderDaytonaSecret } from "../../shared/integrations/agents/opencode-provider-secrets";
-import { createRepoPreparationAgent } from "../../shared/integrations/agents/repo-preparation-agent-factory";
+import {
+  createRepoPreparationAgent,
+  readRepoPreparationTimeoutMsFromEnv,
+} from "../../shared/integrations/agents/repo-preparation-agent-factory";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../../shared/integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import { DaytonaSandboxRunner } from "../../shared/integrations/sandbox/daytona-sandbox-runner";
 import {
@@ -72,6 +75,7 @@ const providerSecretName = await ensureOpenCodeProviderDaytonaSecret({
   daytonaApiKey,
   providerID: options.providerID,
 });
+const repoPreparationTimeoutMs = readRepoPreparationTimeoutMsFromEnv();
 
 const repoPreparationAgent = createRepoPreparationAgent({
   daytonaApiKey,
@@ -84,6 +88,9 @@ const repoPreparationAgent = createRepoPreparationAgent({
   onStdout: (chunk) => openCodeOutput.write(chunk),
   providerID: options.providerID,
   providerSecretName,
+  ...(repoPreparationTimeoutMs === undefined
+    ? {}
+    : { repoPreparationTimeoutMs }),
 });
 const scriptGenerationAgent = new DaytonaOpenCodeScriptGeneration({
   modelID: options.modelID,

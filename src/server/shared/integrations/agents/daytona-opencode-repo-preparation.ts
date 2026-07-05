@@ -37,8 +37,19 @@ const preparationResultPath = `${makeADemoArtifactDirectory}/repo-preparation-re
 const validationRequestPath = `${makeADemoArtifactDirectory}/validation-request.json`;
 const validationResultPath = `${makeADemoArtifactDirectory}/validation-result.json`;
 const minimumBackendToolBudgetMs = 100;
-
+const cloneFailureOutputMaxLength = 1_500;
+const cloneFailureOutputChannelMaxLength = 750;
+const cloneFailureDiagnosticValueMaxLength = 500;
+const dependencyInstallOutputTailMaxLength = 1_500;
+const requestArtifactReadMaxTimeoutMs = 5_000;
+const requestArtifactReadMinTimeoutMs = 50;
 export type DaytonaOpenCodeRepoPreparationOptions = {
+  /**
+   * Non-secret provider configuration copied into clone-failure diagnostics.
+   * Values must be stable identifiers only; implementations must not include
+   * environment values, API keys, or submitted repository contents here.
+   */
+  cloneFailureDiagnosticsContext?: CloneFailureDiagnosticsContext;
   /**
    * Receives non-fatal Repo Preparation infrastructure events. Implementations
    * must preserve the agent's ability to continue when best-effort audit
@@ -58,6 +69,9 @@ export type DaytonaOpenCodeRepoPreparationOptions = {
 };
 
 export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
+  private readonly cloneFailureDiagnosticsContext:
+    | CloneFailureDiagnosticsContext
+    | undefined;
   private readonly logger: PipelineEventLogger;
   private readonly modelID: string;
   private readonly onStderr: ((chunk: string) => void) | undefined;
@@ -73,6 +87,8 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
     | undefined;
 
   constructor(options: DaytonaOpenCodeRepoPreparationOptions) {
+    this.cloneFailureDiagnosticsContext =
+      options.cloneFailureDiagnosticsContext;
     this.logger = options.logger ?? createRepoPreparationLogger();
     this.modelID = options.modelID;
     this.onStderr = options.onStderr;
@@ -160,7 +176,11 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
     });
 
     if (cloneResult.exitCode !== 0) {
-      return createRepoCloneFailure(cloneResult);
+      await this.writeCloneFailureDiagnostics(
+        handle.workspace,
+        "parent OpenCode workspace",
+      );
+      return createRepoCloneFailure(cloneResult, "parent OpenCode workspace");
     }
 
     const submittedCodeCloneResult = await cloneSubmittedCodeWorkspace(
@@ -175,7 +195,15 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
         stdoutLength: submittedCodeCloneResult.stdout.length,
       });
       if (submittedCodeCloneResult.exitCode !== 0) {
-        return createRepoCloneFailure(submittedCodeCloneResult);
+        await this.writeCloneFailureDiagnostics(
+          handle.workspace,
+          "linked submitted-code workspace",
+          handle.workspace.executeSubmittedCode?.bind(handle.workspace),
+        );
+        return createRepoCloneFailure(
+          submittedCodeCloneResult,
+          "linked submitted-code workspace",
+        );
       }
     }
 
@@ -225,9 +253,21 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
         stdoutLength: openCodeResult.stdout.length,
       });
 
-      const dependencyInstallRequest = await readDependencyInstallRequest(
-        handle.workspace,
-      );
+      const dependencyInstallRequestResult =
+        await this.readRequestArtifactWithDeadline({
+          artifactName: "dependency install request",
+          deadlineAt,
+          eventPrefix: "dependency-install-request-read",
+          read: () => readDependencyInstallRequest(handle.workspace),
+          workspace: handle.workspace,
+        });
+      if (dependencyInstallRequestResult.status !== "succeeded") {
+        return requestArtifactReadTimeoutFailure(
+          "dependency install request",
+          dependencyInstallRequestResult.timeoutMs,
+        );
+      }
+      const dependencyInstallRequest = dependencyInstallRequestResult.value;
       if (dependencyInstallRequest !== undefined) {
         await this.writeSandboxLog(handle.workspace, {
           command: dependencyInstallRequest.command,
@@ -236,23 +276,46 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
         if (deadlineAt - Date.now() < minimumBackendToolBudgetMs) {
           return backendToolDeadlineFailure("dependency installation");
         }
-        await runDependencyInstallWithNetworkWindow({
+        const installResult = await runDependencyInstallWithNetworkWindow({
           command: dependencyInstallRequest.command,
           workspace: handle.workspace,
         });
         await clearDependencyInstallRequest(handle.workspace);
         await this.writeSandboxLog(handle.workspace, {
           event: "dependency-install-finished",
+          exitCode: installResult.exitCode,
+          stderrLength: installResult.stderr.length,
+          stdoutLength: installResult.stdout.length,
         });
         await writeRepoPreparationRetryLog(this.logger, handle.workspace, {
           nextAttempt: attempt + 2,
-          reason: "dependency-install-completed",
+          reason:
+            installResult.exitCode === 0
+              ? "dependency-install-completed"
+              : "dependency-install-failed",
         });
-        prompt = createContinueRepoPreparationPrompt(input);
+        prompt =
+          installResult.exitCode === 0
+            ? createContinueRepoPreparationPrompt(input)
+            : createDependencyInstallFailurePrompt(input, installResult);
         continue;
       }
 
-      const validationRequest = await readValidationRequest(handle.workspace);
+      const validationRequestResult =
+        await this.readRequestArtifactWithDeadline({
+          artifactName: "validation request",
+          deadlineAt,
+          eventPrefix: "validation-request-read",
+          read: () => readValidationRequest(handle.workspace),
+          workspace: handle.workspace,
+        });
+      if (validationRequestResult.status !== "succeeded") {
+        return requestArtifactReadTimeoutFailure(
+          "validation request",
+          validationRequestResult.timeoutMs,
+        );
+      }
+      const validationRequest = validationRequestResult.value;
       if (validationRequest !== undefined) {
         await this.writeSandboxLog(handle.workspace, {
           event: "preparation-preflight.requested",
@@ -328,6 +391,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
         prompt = createValidationFeedbackPrompt({
           manifest,
           manifestPath: validationRequest.manifestPath,
+          remainingBudgetMs: Math.max(0, deadlineAt - Date.now()),
           validation,
         });
         continue;
@@ -430,6 +494,62 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
   ): Promise<void> {
     await writePreparationSandboxLog(this.logger, workspace, event);
   }
+
+  private async readRequestArtifactWithDeadline<T>(input: {
+    artifactName: string;
+    deadlineAt: number;
+    eventPrefix: string;
+    read: () => Promise<T>;
+    workspace: PreparationWorkspace;
+  }): Promise<
+    | { status: "succeeded"; value: T }
+    | { status: "timed-out"; timeoutMs: number }
+  > {
+    const timeoutMs = deriveRequestArtifactReadTimeoutMs(input.deadlineAt);
+    await this.writeSandboxLog(input.workspace, {
+      artifactName: input.artifactName,
+      event: `${input.eventPrefix}.started`,
+      remainingMs: input.deadlineAt - Date.now(),
+      timeoutMs,
+    });
+
+    const result = await raceWithTimeout(input.read(), timeoutMs);
+    if (result.status !== "succeeded") {
+      await this.writeSandboxLog(input.workspace, {
+        artifactName: input.artifactName,
+        event: `${input.eventPrefix}.timeout`,
+        reason: result.reason,
+        remainingMs: input.deadlineAt - Date.now(),
+        timeoutMs,
+      });
+      return { status: "timed-out", timeoutMs };
+    }
+
+    await this.writeSandboxLog(input.workspace, {
+      artifactName: input.artifactName,
+      event: `${input.eventPrefix}.finished`,
+      found: result.value !== undefined,
+      remainingMs: input.deadlineAt - Date.now(),
+      timeoutMs,
+    });
+    return { status: "succeeded", value: result.value };
+  }
+
+  private async writeCloneFailureDiagnostics(
+    workspace: PreparationWorkspace,
+    cloneFailureWorkspace: string,
+    execute: PreparationWorkspace["execute"] = workspace.execute.bind(
+      workspace,
+    ),
+  ): Promise<void> {
+    await writeCloneFailureDiagnostics(
+      this.logger,
+      workspace,
+      this.cloneFailureDiagnosticsContext,
+      cloneFailureWorkspace,
+      execute,
+    );
+  }
 }
 
 function parseCommandResult(
@@ -464,6 +584,11 @@ function parseCommandResult(
 type RawPreparationRunResult =
   | PreparationWorkspaceCommandResult
   | Awaited<ReturnType<RepoPreparationAgent["prepare"]>>;
+
+type CloneFailureDiagnosticsContext = {
+  daytonaSnapshot?: string;
+  daytonaSubmittedCodeSnapshot?: string;
+};
 
 type ValidationRequest = {
   manifestPath: string;
@@ -546,6 +671,24 @@ async function writePreparationSandboxLog(
   }
 }
 
+async function writePreparationSandboxLogDurable(
+  logger: PipelineEventLogger,
+  workspace: PreparationWorkspace,
+  event: Record<string, unknown>,
+): Promise<void> {
+  const eventName =
+    typeof event.event === "string" ? event.event : "repo-preparation.debug";
+  try {
+    await workspace.writeSandboxLog?.({
+      ...event,
+      event: eventName,
+      stage: "repo-preparation",
+    });
+  } catch (error) {
+    warnPreparationSandboxLogWriteFailed(logger, eventName, error);
+  }
+}
+
 function warnPreparationSandboxLogWriteFailed(
   logger: PipelineEventLogger,
   eventName: string,
@@ -581,6 +724,108 @@ async function writeRepoPreparationRetryLog(
     nextAttempt: input.nextAttempt,
     reason: input.reason,
   });
+}
+
+async function writeCloneFailureDiagnostics(
+  logger: PipelineEventLogger,
+  workspace: PreparationWorkspace,
+  context: CloneFailureDiagnosticsContext | undefined,
+  cloneFailureWorkspace: string,
+  execute: PreparationWorkspace["execute"] | undefined,
+): Promise<void> {
+  if (execute === undefined) {
+    return;
+  }
+
+  try {
+    const result = await raceWithTimeout(
+      execute(createCloneFailureDiagnosticsCommand()),
+      7_000,
+    );
+    if (result.status !== "succeeded") {
+      await writePreparationSandboxLogDurable(logger, workspace, {
+        event: "clone-failure-diagnostics-failed",
+        reason: result.reason,
+      });
+      return;
+    }
+
+    await writePreparationSandboxLogDurable(logger, workspace, {
+      ...parseCloneFailureDiagnostics(result.value.stdout),
+      ...(context?.daytonaSnapshot === undefined
+        ? {}
+        : { daytonaSnapshot: context.daytonaSnapshot }),
+      ...(context?.daytonaSubmittedCodeSnapshot === undefined
+        ? {}
+        : {
+            daytonaSubmittedCodeSnapshot: context.daytonaSubmittedCodeSnapshot,
+          }),
+      cloneFailureWorkspace,
+      diagnosticsExitCode: result.value.exitCode,
+      event: "clone-failure-diagnostics",
+    });
+  } catch (error) {
+    await writePreparationSandboxLogDurable(logger, workspace, {
+      event: "clone-failure-diagnostics-failed",
+      reason: readErrorMessage(error),
+    });
+  }
+}
+
+function parseCloneFailureDiagnostics(
+  stdout: string,
+): Record<string, string | boolean> {
+  const diagnostics: Record<string, string | boolean> = {};
+  for (const line of stdout.split("\n")) {
+    const separator = line.indexOf("=");
+    if (separator <= 0) {
+      continue;
+    }
+    const key = line.slice(0, separator);
+    const value = line.slice(separator + 1).trim();
+    if (
+      key === "caCertificatesCrtExists" ||
+      key === "openshellCaBundleExists" ||
+      key === "openshellCaBundleReadable" ||
+      key === "openshellCaCertExists" ||
+      key === "openshellCaCertReadable"
+    ) {
+      diagnostics[key] = value === "true";
+      continue;
+    }
+    if (
+      key === "gitVersion" ||
+      key === "opensslVersion" ||
+      key === "openshellCaBundlePath" ||
+      key === "openshellCaCertPath" ||
+      key === "gitSslCAInfo" ||
+      key.startsWith("caEnvPath_") ||
+      key.startsWith("caEnvName_")
+    ) {
+      diagnostics[key] = limitText(value, cloneFailureDiagnosticValueMaxLength);
+    }
+  }
+
+  return diagnostics;
+}
+
+function createCloneFailureDiagnosticsCommand(): string {
+  return `timeout 5s sh -lc ${shellQuote(
+    [
+      "makeademo_clone_diagnostics=1",
+      "if test -f /etc/ssl/certs/ca-certificates.crt; then printf 'caCertificatesCrtExists=true\\n'; else printf 'caCertificatesCrtExists=false\\n'; fi",
+      "if test -e /etc/openshell-tls/ca-bundle.pem; then printf 'openshellCaBundleExists=true\\n'; else printf 'openshellCaBundleExists=false\\n'; fi",
+      "if test -r /etc/openshell-tls/ca-bundle.pem; then printf 'openshellCaBundleReadable=true\\n'; else printf 'openshellCaBundleReadable=false\\n'; fi",
+      "if test -e /etc/openshell-tls/ca-bundle.pem; then printf 'openshellCaBundlePath='; readlink -f /etc/openshell-tls/ca-bundle.pem 2>/dev/null | cut -c 1-500 || true; fi",
+      "if test -e /etc/openshell-tls/openshell-ca.pem; then printf 'openshellCaCertExists=true\\n'; else printf 'openshellCaCertExists=false\\n'; fi",
+      "if test -r /etc/openshell-tls/openshell-ca.pem; then printf 'openshellCaCertReadable=true\\n'; else printf 'openshellCaCertReadable=false\\n'; fi",
+      "if test -e /etc/openshell-tls/openshell-ca.pem; then printf 'openshellCaCertPath='; readlink -f /etc/openshell-tls/openshell-ca.pem 2>/dev/null | cut -c 1-500 || true; fi",
+      'for makeademo_ca_env_name in GIT_SSL_CAINFO SSL_CERT_FILE CURL_CA_BUNDLE REQUESTS_CA_BUNDLE NODE_EXTRA_CA_CERTS; do eval "makeademo_ca_env_value=\\${$makeademo_ca_env_name-}"; if test -n "$makeademo_ca_env_value"; then case "$makeademo_ca_env_value" in /*) printf \'caEnvPath_%s=\' "$makeademo_ca_env_name"; printf \'%s\\n\' "$makeademo_ca_env_value" | cut -c 1-500 ;; *) printf \'caEnvName_%s=set\\n\' "$makeademo_ca_env_name" ;; esac; fi; done',
+      "printf 'gitSslCAInfo='; git config --show-origin --get http.sslCAInfo 2>&1 | cut -c 1-500 || true; printf '\\n'",
+      "printf 'gitVersion='; git --version 2>&1 || true",
+      "printf 'opensslVersion='; openssl version 2>&1 || true",
+    ].join("\n"),
+  )}`;
 }
 
 function createRepoPreparationLogger(): PipelineEventLogger {
@@ -658,21 +903,95 @@ function backendToolDeadlineFailure(toolName: string) {
   };
 }
 
-function createRepoCloneFailure(result: PreparationWorkspaceCommandResult) {
-  const output = [result.stderr, result.stdout]
-    .filter((line) => line.length > 0)
-    .join("\n");
+function requestArtifactReadTimeoutFailure(
+  artifactName: string,
+  timeoutMs: number,
+) {
+  return {
+    assumptions: [],
+    blockers: [
+      `Repo Preparation timed out reading the ${artifactName} artifact after ${timeoutMs}ms.`,
+    ],
+    status: "failed" as const,
+    suggestedChanges: [
+      "Retry Repo Preparation in a fresh Daytona workspace; report this MakeADemo infrastructure failure if it repeats.",
+    ],
+  };
+}
+
+function deriveRequestArtifactReadTimeoutMs(deadlineAt: number): number {
+  const remainingMs = deadlineAt - Date.now();
+  if (remainingMs <= minimumBackendToolBudgetMs) {
+    return Math.max(1, remainingMs);
+  }
+
+  return Math.min(
+    requestArtifactReadMaxTimeoutMs,
+    Math.max(
+      requestArtifactReadMinTimeoutMs,
+      remainingMs - minimumBackendToolBudgetMs,
+    ),
+  );
+}
+
+function createRepoCloneFailure(
+  result: PreparationWorkspaceCommandResult,
+  workspaceContext: string,
+) {
+  const output = formatCloneFailureOutput(result);
 
   return {
     assumptions: [],
     blockers: [
-      `Repo Preparation could not clone the submitted repository (git exited with ${result.exitCode}): ${output}`,
+      `Repo Preparation could not clone the submitted repository in the ${workspaceContext} (git exited with ${result.exitCode}): ${output}`,
     ],
     status: "failed" as const,
     suggestedChanges: [
       "Retry Repo Preparation after the submitted repository can be cloned from the Daytona workspace.",
     ],
   };
+}
+
+function formatCloneFailureOutput(
+  result: PreparationWorkspaceCommandResult,
+): string {
+  return limitText(
+    [result.stderr, result.stdout]
+      .map((line) =>
+        limitText(
+          redactCredentialsFromUrls(line),
+          cloneFailureOutputChannelMaxLength,
+        ),
+      )
+      .filter((line) => line.length > 0)
+      .join("\n"),
+    cloneFailureOutputMaxLength,
+  );
+}
+
+function redactCredentialsFromUrls(value: string): string {
+  return value
+    .replace(/\b(https?:\/\/)([^\s/@'"<>]+@)/gi, "$1***@")
+    .replace(
+      /([?&](?:access_token|api[_-]?key|auth[_-]?token|client[_-]?secret|key|oauth[_-]?token|password|private[_-]?key|secret|token)=)([^\s&'"<>]+)/gi,
+      "$1***",
+    );
+}
+
+function limitText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  return `${value.slice(0, maxLength)}… [truncated ${value.length - maxLength} chars]`;
+}
+
+function limitTextTail(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  return `[truncated ${value.length - maxLength} chars] …${value.slice(-maxLength)}`;
 }
 
 function createValidationHandoffFailure(
@@ -801,7 +1120,9 @@ function createContinueRepoPreparationPrompt(
     "# Continue MakeADemo Repo Preparation",
     "",
     "## Current State",
-    "Backend-controlled dependency installation has completed. Outbound runtime network access is blocked again.",
+    "Dependency install ran in the submitted-code sandbox and completed successfully. Outbound runtime network access is blocked again.",
+    "The parent OpenCode `/workspace` may not contain `node_modules`; do not fail solely because parent `/workspace/node_modules` is absent.",
+    "Validate readiness by writing the Preparation Manifest and calling MakeADemo preparation preflight.",
     "",
     "## Goal",
     "Finish preparing `/workspace` for MakeADemo preparation preflight with a deterministic browser-accessible demo that does not require runtime network access or secrets.",
@@ -824,6 +1145,53 @@ function createContinueRepoPreparationPrompt(
     "When preparation preflight has passed, call `makeademo_submit_preparation_result` exactly once. Do not print final JSON in plain text.",
     `If validation has not passed yet, write ${preparationManifestPath}, call makeademo_validate_preparation with that path, and stop for feedback.`,
     'For success, pass only `status: "succeeded"`. The backend will submit the latest validated manifest file. For failure, pass `status: "failed"`, `blockers`, `assumptions`, and `suggestedChanges`.',
+    "",
+    ...createPreparationManifestGuidance(input),
+    "",
+    "## Submission Context",
+    "```json",
+    JSON.stringify(
+      {
+        repoUrl: input.repoUrl,
+        workspaceId: input.workspaceId,
+      },
+      null,
+      2,
+    ),
+    "```",
+  ].join("\n");
+}
+
+function createDependencyInstallFailurePrompt(
+  input: RepoPreparationInput,
+  result: PreparationWorkspaceCommandResult,
+): string {
+  return [
+    "# Continue MakeADemo Repo Preparation",
+    "",
+    "## Current State",
+    `Dependency installation failed in the submitted-code sandbox with exit code ${result.exitCode}. Outbound runtime network access is blocked again.`,
+    "Use the bounded stdout/stderr tails below to decide whether to request another allowlisted install or submit a clear preparation blocker.",
+    "",
+    "## Dependency Install stdout Tail",
+    "```text",
+    limitTextTail(result.stdout, dependencyInstallOutputTailMaxLength),
+    "```",
+    "",
+    "## Dependency Install stderr Tail",
+    "```text",
+    limitTextTail(result.stderr, dependencyInstallOutputTailMaxLength),
+    "```",
+    "",
+    "## Dependency Installation",
+    "- Do not request network unless another dependency install is strictly required.",
+    "- If another install is required, call `makeademo_dependency_request_install` with one allowlisted package-manager install command, then stop.",
+    "- Do not include package names, shell operators, redirects, build commands, start commands, `curl`, or `wget` in dependency install requests.",
+    "",
+    "## Final Response Contract",
+    "When preparation preflight has passed, call `makeademo_submit_preparation_result` exactly once. Do not print final JSON in plain text.",
+    `If validation has not passed yet, write ${preparationManifestPath}, call makeademo_validate_preparation with that path, and stop for feedback.`,
+    'For failure, pass `status: "failed"`, `blockers`, `assumptions`, and `suggestedChanges`.',
     "",
     ...createPreparationManifestGuidance(input),
     "",
@@ -1052,6 +1420,7 @@ async function clearValidationRequest(
 function createValidationFeedbackPrompt(input: {
   manifest: ReturnType<typeof readPreparationManifest> | undefined;
   manifestPath: string;
+  remainingBudgetMs: number;
   validation: ProjectValidationResult;
 }): string {
   return [
@@ -1080,10 +1449,31 @@ function createValidationFeedbackPrompt(input: {
     "",
     "## Debugging Guidance",
     "- If `blockedNetworkAttempts` is non-empty, remove or replace every listed external runtime request with local mocks, bundled assets, or system defaults.",
+    ...(input.validation.blockedNetworkAttempts.length === 0
+      ? []
+      : [
+          `- Remaining Repo Preparation budget: about ${formatDuration(input.remainingBudgetMs)}. Patch those listed runtime requests first, then rerun preflight before spending time on broader investigation.`,
+          "- Network feedback is scoped: repair only the observed runtime network requests listed in `blockedNetworkAttempts`.",
+          "- Ignore package metadata URLs, lockfile URLs, and ordinary external anchor links unless the demo actually clicks or navigates to those links.",
+          "- After removing or replacing the listed runtime requests, rerun `makeademo_validate_preparation` promptly; do not broad-search unrelated URLs first.",
+        ]),
     "- If the page is not interactable, inspect the validation logs and demo server logs, then fix the route, demo command, or browser runtime error.",
     "- If the demo URL did not become ready, make the submitted `demoCommand` start a long-running local server on the manifest `url` port.",
     "- Do not request dependency installation unless a new dependency install is strictly required and the command is allowlisted.",
   ].join("\n");
+}
+
+function formatDuration(milliseconds: number): string {
+  const seconds = Math.max(0, Math.ceil(milliseconds / 1_000));
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return remainingSeconds === 0
+    ? `${minutes}m`
+    : `${minutes}m ${remainingSeconds}s`;
 }
 
 function readOpenCodeSessionID(stdout: string): string | undefined {
