@@ -38,6 +38,32 @@ describe("OpenCode provider Daytona secrets", () => {
     ]);
   });
 
+  it("retries when listing Daytona secrets hits a transient connection failure", async () => {
+    const calls: unknown[] = [];
+
+    const secretName = await ensureOpenCodeProviderDaytonaSecret({
+      client: fakeSecretClient(calls, [], {
+        listErrors: [connectionRefusedError()],
+      }),
+      env: { OPENAI_API_KEY: "sk-local" },
+      providerID: "openai",
+    });
+
+    expect(secretName).toBe("makeademo-openai");
+    expect(calls).toEqual([
+      { list: true },
+      { list: true },
+      {
+        create: {
+          description: "MakeADemo OpenCode provider credential.",
+          hosts: ["api.openai.com"],
+          name: "makeademo-openai",
+          value: "sk-local",
+        },
+      },
+    ]);
+  });
+
   it("updates the existing Daytona secret when it already exists", async () => {
     const calls: unknown[] = [];
 
@@ -52,6 +78,45 @@ describe("OpenCode provider Daytona secrets", () => {
     expect(secretName).toBe("makeademo-openai");
     expect(calls).toEqual([
       { list: true },
+      {
+        update: {
+          id: "secret_123",
+          input: {
+            description: "MakeADemo OpenCode provider credential.",
+            hosts: ["api.openai.com"],
+            value: "sk-rotated",
+          },
+        },
+      },
+    ]);
+  });
+
+  it("retries when updating a Daytona secret hits a transient connection failure", async () => {
+    const calls: unknown[] = [];
+
+    const secretName = await ensureOpenCodeProviderDaytonaSecret({
+      client: fakeSecretClient(
+        calls,
+        [{ id: "secret_123", name: "makeademo-openai" }],
+        { updateErrors: [connectionRefusedError()] },
+      ),
+      env: { OPENAI_API_KEY: "sk-rotated" },
+      providerID: "openai",
+    });
+
+    expect(secretName).toBe("makeademo-openai");
+    expect(calls).toEqual([
+      { list: true },
+      {
+        update: {
+          id: "secret_123",
+          input: {
+            description: "MakeADemo OpenCode provider credential.",
+            hosts: ["api.openai.com"],
+            value: "sk-rotated",
+          },
+        },
+      },
       {
         update: {
           id: "secret_123",
@@ -143,7 +208,9 @@ function fakeSecretClient(
   secrets: Array<{ id: string; name: string }>,
   options: {
     createError?: unknown;
+    listErrors?: unknown[];
     secretsAfterCreateError?: Array<{ id: string; name: string }>;
+    updateErrors?: unknown[];
   } = {},
 ) {
   let listCount = 0;
@@ -164,6 +231,10 @@ function fakeSecretClient(
       async list() {
         calls.push({ list: true });
         listCount += 1;
+        const listError = options.listErrors?.shift();
+        if (listError !== undefined) {
+          throw listError;
+        }
         if (listCount > 1 && options.secretsAfterCreateError !== undefined) {
           return options.secretsAfterCreateError;
         }
@@ -174,6 +245,10 @@ function fakeSecretClient(
         input: { description?: string; hosts?: string[]; value?: string },
       ) {
         calls.push({ update: { id, input } });
+        const updateError = options.updateErrors?.shift();
+        if (updateError !== undefined) {
+          throw updateError;
+        }
         return {
           id,
           name: secrets.find((secret) => secret.id === id)?.name ?? id,
@@ -181,4 +256,10 @@ function fakeSecretClient(
       },
     },
   };
+}
+
+function connectionRefusedError() {
+  return Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:443"), {
+    code: "ECONNREFUSED",
+  });
 }

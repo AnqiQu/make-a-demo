@@ -65,9 +65,9 @@ export async function ensureOpenCodeProviderDaytonaSecret(input: {
         : { apiKey: input.daytonaApiKey },
     ) as DaytonaSecretClient);
 
-  const existingSecret = (await client.secret.list()).find(
-    (secret) => secret.name === secretName,
-  );
+  const existingSecret = (
+    await withDaytonaSecretConnectionRetry(() => client.secret.list())
+  ).find((secret) => secret.name === secretName);
   const secretInput = {
     description: "MakeADemo OpenCode provider credential.",
     hosts: provider.hosts,
@@ -76,29 +76,86 @@ export async function ensureOpenCodeProviderDaytonaSecret(input: {
 
   if (existingSecret === undefined) {
     try {
-      await client.secret.create({
-        ...secretInput,
-        name: secretName,
-      });
+      await withDaytonaSecretConnectionRetry(() =>
+        client.secret.create({
+          ...secretInput,
+          name: secretName,
+        }),
+      );
     } catch (error) {
       if (!isDaytonaSecretConflictError(error)) {
         throw error;
       }
 
-      const racedSecret = (await client.secret.list()).find(
-        (secret) => secret.name === secretName,
-      );
+      const racedSecret = (
+        await withDaytonaSecretConnectionRetry(() => client.secret.list())
+      ).find((secret) => secret.name === secretName);
       if (racedSecret === undefined) {
         throw error;
       }
 
-      await client.secret.update(racedSecret.id, secretInput);
+      await withDaytonaSecretConnectionRetry(() =>
+        client.secret.update(racedSecret.id, secretInput),
+      );
     }
     return secretName;
   }
 
-  await client.secret.update(existingSecret.id, secretInput);
+  await withDaytonaSecretConnectionRetry(() =>
+    client.secret.update(existingSecret.id, secretInput),
+  );
   return secretName;
+}
+
+async function withDaytonaSecretConnectionRetry<T>(
+  operation: () => Promise<T>,
+): Promise<T> {
+  const maxAttempts = 3;
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (
+        attempt === maxAttempts ||
+        !isTransientDaytonaConnectionError(error)
+      ) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError;
+}
+
+function isTransientDaytonaConnectionError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+
+  if ("code" in error && error.code === "ECONNREFUSED") {
+    return true;
+  }
+
+  if ("name" in error && error.name === "DaytonaConnectionError") {
+    return true;
+  }
+
+  if (
+    "message" in error &&
+    typeof error.message === "string" &&
+    error.message.includes("ECONNREFUSED")
+  ) {
+    return true;
+  }
+
+  if ("cause" in error) {
+    return isTransientDaytonaConnectionError(error.cause);
+  }
+
+  return false;
 }
 
 function isDaytonaSecretConflictError(error: unknown): boolean {
