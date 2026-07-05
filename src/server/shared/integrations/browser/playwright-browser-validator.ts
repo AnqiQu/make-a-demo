@@ -6,7 +6,11 @@ import type {
   BrowserValidationOutput,
   BrowserValidator,
 } from "../../../pipeline/05-capture-path-validation/project-runtime-preflight/browser-validator.interface";
-import type { NetworkAttempt } from "../../../pipeline/05-capture-path-validation/project-runtime-preflight/network-isolation-policy";
+import {
+  type NetworkAttempt,
+  sanitizeNetworkAttemptUrl,
+  sanitizeNetworkAttempts,
+} from "../../../pipeline/05-capture-path-validation/project-runtime-preflight/network-isolation-policy";
 
 type BrowserValidationPage = {
   close(): Promise<void>;
@@ -132,7 +136,15 @@ export class PlaywrightBrowserValidator implements BrowserValidator {
       };
     }
 
-    return parsed;
+    return {
+      ...parsed,
+      ...(parsed.blockedNetworkAttempts === undefined
+        ? {}
+        : {
+            blockedNetworkAttempts:
+              sanitizeNetworkAttempts(parsed.blockedNetworkAttempts) ?? [],
+          }),
+    };
   }
 
   private async validatePage(
@@ -161,6 +173,10 @@ export class PlaywrightBrowserValidator implements BrowserValidator {
         waitUntil: "domcontentloaded",
       });
     } catch (error) {
+      if (blockedRequests.length > 0) {
+        return formatBlockedNetworkResult(blockedRequests);
+      }
+
       return {
         interactable: false,
         logs: [`Failed to load ${input.url}: ${formatError(error)}`],
@@ -168,14 +184,7 @@ export class PlaywrightBrowserValidator implements BrowserValidator {
       };
     }
     if (blockedRequests.length > 0) {
-      return {
-        blockedNetworkAttempts: dedupeNetworkAttempts(blockedRequests),
-        interactable: false,
-        logs: dedupeNetworkAttempts(blockedRequests).map(
-          (request) => `Blocked forbidden browser request to ${request.host}`,
-        ),
-        screenshotArtifactId: "",
-      };
+      return formatBlockedNetworkResult(blockedRequests);
     }
     const bodyText = (await page.textContent("body")) ?? "";
     const screenshotArtifactId = await page.screenshot();
@@ -247,6 +256,17 @@ function readGlobalNodeModules() {
   }
 }
 
+function redactNetworkAttemptUrl(requestedUrl) {
+  const url = new URL(requestedUrl);
+  url.username = "";
+  url.password = "";
+  url.hash = "";
+  for (const key of Array.from(url.searchParams.keys())) {
+    url.searchParams.set(key, "[redacted]");
+  }
+  return url.toString();
+}
+
 // Cross-process result protocol: the parent validator parses exactly one JSON
 // object from stdout. Keep this generated script on console.log(JSON.stringify)
 // rather than Pino unless tryParseBrowserValidationOutput changes with it.
@@ -260,7 +280,7 @@ async function main() {
     const requestUrl = route.request().url();
     const host = new URL(requestUrl).hostname;
     if (host !== localHost && host !== "localhost" && host !== "127.0.0.1" && host !== "::1") {
-      blockedRequests.push({ direction: "outbound", host, phase: "runtime" });
+      blockedRequests.push({ direction: "outbound", host, phase: "runtime", url: redactNetworkAttemptUrl(requestUrl) });
       await route.abort("blockedbyclient");
       return;
     }
@@ -286,6 +306,15 @@ async function main() {
     screenshotArtifactId,
   }));
 } catch (error) {
+  if (blockedRequests.length > 0) {
+    console.log(JSON.stringify({
+      blockedNetworkAttempts: blockedRequests,
+      interactable: false,
+      logs: blockedRequests.map((request) => "Blocked forbidden browser request to " + request.host),
+      screenshotArtifactId: "",
+    }));
+    process.exit(0);
+  }
   console.log(JSON.stringify({
     interactable: false,
     logs: ["Failed to load " + targetUrl + ": " + (error instanceof Error ? error.message : String(error))],
@@ -437,16 +466,37 @@ function readForbiddenBrowserRequest(
       direction: "outbound",
       host: url.hostname,
       phase: "runtime",
+      url: redactNetworkAttemptUrl(requestedUrl),
     };
   } catch {
     return undefined;
   }
 }
 
+function redactNetworkAttemptUrl(requestedUrl: string): string {
+  return sanitizeNetworkAttemptUrl(requestedUrl);
+}
+
+function formatBlockedNetworkResult(
+  attempts: NetworkAttempt[],
+): BrowserValidationOutput {
+  const blockedNetworkAttempts = dedupeNetworkAttempts(
+    sanitizeNetworkAttempts(attempts) ?? [],
+  );
+  return {
+    blockedNetworkAttempts,
+    interactable: false,
+    logs: blockedNetworkAttempts.map(
+      (request) => `Blocked forbidden browser request to ${request.host}`,
+    ),
+    screenshotArtifactId: "",
+  };
+}
+
 function dedupeNetworkAttempts(attempts: NetworkAttempt[]): NetworkAttempt[] {
   const seen = new Set<string>();
   return attempts.filter((attempt) => {
-    const key = `${attempt.direction}:${attempt.phase}:${attempt.host}`;
+    const key = `${attempt.direction}:${attempt.phase}:${attempt.host}:${attempt.url ?? ""}`;
     if (seen.has(key)) {
       return false;
     }

@@ -80,6 +80,7 @@ describe("PlaywrightBrowserValidator", () => {
           direction: "outbound",
           host: "api.realworld.io",
           phase: "runtime",
+          url: "https://api.realworld.io/articles",
         },
       ],
       interactable: false,
@@ -113,11 +114,13 @@ describe("PlaywrightBrowserValidator", () => {
           direction: "outbound",
           host: "fonts.googleapis.com",
           phase: "runtime",
+          url: "https://fonts.googleapis.com/css?family=%5Bredacted%5D",
         },
         {
           direction: "outbound",
           host: "code.ionicframework.com",
           phase: "runtime",
+          url: "https://code.ionicframework.com/ionicons/2.0.1/css/ionicons.min.css",
         },
       ],
       interactable: false,
@@ -132,6 +135,60 @@ describe("PlaywrightBrowserValidator", () => {
       "https://fonts.googleapis.com/css?family=Inter",
       "https://code.ionicframework.com/ionicons/2.0.1/css/ionicons.min.css",
     ]);
+  });
+
+  it("redacts credentials and query values from blocked browser request URLs", async () => {
+    const validator = new PlaywrightBrowserValidator({
+      pageFactory: async () =>
+        fakePage({
+          bodyText: "Demo app loaded",
+          requestedUrls: [
+            "https://user:secret@cdn.example.com/assets/theme.css?api_key=shh&token=hidden&key=plain&AWSAccessKeyId=aws&Key-Pair-Id=pair&code=oauth&state=csrf&family=Inter#fragment",
+          ],
+        }),
+    });
+
+    await expect(
+      validator.validate({ url: "http://localhost:3000" }),
+    ).resolves.toMatchObject({
+      blockedNetworkAttempts: [
+        {
+          direction: "outbound",
+          host: "cdn.example.com",
+          phase: "runtime",
+          url: "https://cdn.example.com/assets/theme.css?api_key=%5Bredacted%5D&token=%5Bredacted%5D&key=%5Bredacted%5D&AWSAccessKeyId=%5Bredacted%5D&Key-Pair-Id=%5Bredacted%5D&code=%5Bredacted%5D&state=%5Bredacted%5D&family=%5Bredacted%5D",
+        },
+      ],
+    });
+  });
+
+  it("returns blocked network evidence when navigation fails after blocked requests", async () => {
+    const validator = new PlaywrightBrowserValidator({
+      pageFactory: async () =>
+        fakePage({
+          bodyText: "",
+          gotoError: new Error("net::ERR_BLOCKED_BY_CLIENT"),
+          requestedUrls: [
+            "https://api.example.com/user?access_key=secret&code=oauth-code",
+          ],
+        }),
+    });
+
+    await expect(
+      validator.validate({ url: "http://localhost:3000" }),
+    ).resolves.toEqual({
+      blockedNetworkAttempts: [
+        {
+          direction: "outbound",
+          host: "api.example.com",
+          phase: "runtime",
+          url: "https://api.example.com/user?access_key=%5Bredacted%5D&code=%5Bredacted%5D",
+        },
+      ],
+      interactable: false,
+      logs: ["Blocked forbidden browser request to api.example.com"],
+      screenshotArtifactId: "",
+    });
   });
 
   it("fails browser validation when page operations stop completing", async () => {
@@ -271,6 +328,82 @@ describe("PlaywrightBrowserValidator", () => {
           "Captured screenshot screenshot:ZmFrZQ==",
         ],
         screenshotArtifactId: "screenshot:ZmFrZQ==",
+      });
+    } finally {
+      await rm(workspacePath, { force: true, recursive: true });
+    }
+  });
+
+  it("returns submitted-code blocked network evidence when navigation fails after blocked requests", async () => {
+    const workspacePath = await createFakeSubmittedCodeWorkspace({
+      gotoErrorMessage: "net::ERR_BLOCKED_BY_CLIENT",
+      routedUrls: [
+        "https://oauth.example.com/callback?code=oauth-code&state=csrf",
+      ],
+    });
+    const validator = new PlaywrightBrowserValidator();
+
+    try {
+      await expect(
+        validator.validate({
+          preparationWorkspace: {
+            async destroy() {},
+            id: "workspace_123",
+            workspace: {
+              async execute() {
+                throw new Error(
+                  "outer workspace execution must not validate browser",
+                );
+              },
+              async executeSubmittedCode(command) {
+                try {
+                  const result = await execAsync(command, {
+                    cwd: workspacePath,
+                    env: {
+                      ...process.env,
+                      PATH: `${join(workspacePath, "bin")}:${process.env.PATH ?? ""}`,
+                    },
+                  });
+                  return {
+                    exitCode: 0,
+                    stderr: result.stderr,
+                    stdout: result.stdout,
+                  };
+                } catch (error) {
+                  const failed = error as {
+                    code?: number;
+                    stderr?: string;
+                    stdout?: string;
+                  };
+                  return {
+                    exitCode: failed.code ?? 1,
+                    stderr: failed.stderr ?? String(error),
+                    stdout: failed.stdout ?? "",
+                  };
+                }
+              },
+              async getPreviewUrl() {
+                return "https://preview.example.test";
+              },
+              async setOutboundNetworkAccess() {},
+              async setSubmittedCodeNetworkAccess() {},
+              async uploadFiles() {},
+            },
+          },
+          url: "http://localhost:3000",
+        }),
+      ).resolves.toEqual({
+        blockedNetworkAttempts: [
+          {
+            direction: "outbound",
+            host: "oauth.example.com",
+            phase: "runtime",
+            url: "https://oauth.example.com/callback?code=%5Bredacted%5D&state=%5Bredacted%5D",
+          },
+        ],
+        interactable: false,
+        logs: ["Blocked forbidden browser request to oauth.example.com"],
+        screenshotArtifactId: "",
       });
     } finally {
       await rm(workspacePath, { force: true, recursive: true });
@@ -426,6 +559,63 @@ describe("PlaywrightBrowserValidator", () => {
       screenshotArtifactId: "",
     });
   });
+
+  it("redacts submitted-code blocked request URLs before returning browser validation evidence", async () => {
+    const validator = new PlaywrightBrowserValidator();
+
+    await expect(
+      validator.validate({
+        preparationWorkspace: {
+          async destroy() {},
+          id: "workspace_123",
+          workspace: {
+            async execute() {
+              throw new Error(
+                "outer workspace execution must not validate browser",
+              );
+            },
+            async executeSubmittedCode() {
+              return {
+                exitCode: 0,
+                stderr: "",
+                stdout: JSON.stringify({
+                  blockedNetworkAttempts: [
+                    {
+                      direction: "outbound",
+                      host: "oauth.example.com",
+                      phase: "runtime",
+                      url: "https://oauth.example.com/callback?key=plain&AWSAccessKeyId=aws&Key-Pair-Id=pair&code=oauth-code&state=csrf&redirect_uri=http://localhost:3000/callback",
+                    },
+                  ],
+                  interactable: false,
+                  logs: [
+                    "Blocked forbidden browser request to oauth.example.com",
+                  ],
+                  screenshotArtifactId: "",
+                }),
+              };
+            },
+            async getPreviewUrl() {
+              return "https://preview.example.test";
+            },
+            async setOutboundNetworkAccess() {},
+            async setSubmittedCodeNetworkAccess() {},
+            async uploadFiles() {},
+          },
+        },
+        url: "http://localhost:3000",
+      }),
+    ).resolves.toMatchObject({
+      blockedNetworkAttempts: [
+        {
+          direction: "outbound",
+          host: "oauth.example.com",
+          phase: "runtime",
+          url: "https://oauth.example.com/callback?key=%5Bredacted%5D&AWSAccessKeyId=%5Bredacted%5D&Key-Pair-Id=%5Bredacted%5D&code=%5Bredacted%5D&state=%5Bredacted%5D&redirect_uri=%5Bredacted%5D",
+        },
+      ],
+    });
+  });
 });
 
 function fakePage(input: {
@@ -447,9 +637,6 @@ function fakePage(input: {
   return {
     async close() {},
     async goto() {
-      if (input.gotoError !== undefined) {
-        throw input.gotoError;
-      }
       for (const url of input.requestedUrls ?? []) {
         await routeHandler?.({
           async abort() {
@@ -462,6 +649,9 @@ function fakePage(input: {
             return { url: () => url };
           },
         });
+      }
+      if (input.gotoError !== undefined) {
+        throw input.gotoError;
       }
     },
     async requestedUrls() {
@@ -482,7 +672,9 @@ function fakePage(input: {
   };
 }
 
-async function createFakeSubmittedCodeWorkspace() {
+async function createFakeSubmittedCodeWorkspace(
+  options: { gotoErrorMessage?: string; routedUrls?: string[] } = {},
+) {
   const workspacePath = await mkdtemp(join(tmpdir(), "makeademo-browser-"));
   await mkdir(join(workspacePath, "bin"), { recursive: true });
   await mkdir(join(workspacePath, "node_modules", "playwright"), {
@@ -507,8 +699,18 @@ async function createFakeSubmittedCodeWorkspace() {
         async close() {},
         async newPage() {
           return {
-            async goto() {},
-            async route() {},
+            async goto() {
+              ${options.gotoErrorMessage === undefined ? "" : `throw new Error(${JSON.stringify(options.gotoErrorMessage)});`}
+            },
+            async route(_pattern, handler) {
+              for (const url of ${JSON.stringify(options.routedUrls ?? [])}) {
+                await handler({
+                  async abort() {},
+                  async continue() {},
+                  request() { return { url: () => url }; },
+                });
+              }
+            },
             async screenshot() {
               return Buffer.from("fake");
             },

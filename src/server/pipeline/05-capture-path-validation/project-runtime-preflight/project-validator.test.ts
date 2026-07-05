@@ -270,7 +270,7 @@ describe("validateProject", () => {
 
     expect(result.status).toBe("failed");
     expect(result.failureReason).toBe(
-      "Runtime network communication across the sandbox boundary is not allowed.",
+      "Runtime network communication across the sandbox boundary is not allowed. Blocked runtime network attempts: api.example.com.",
     );
     expect(result.blockedNetworkAttempts).toHaveLength(1);
     expect(result.warnings).toEqual([
@@ -420,6 +420,7 @@ describe("validateProject", () => {
   });
 
   it("fails validation when browser runtime requests leave the local boundary", async () => {
+    const sandboxLogs: Array<Record<string, unknown>> = [];
     const sandboxRunner: SandboxRunner = {
       async runValidation() {
         return {
@@ -438,6 +439,7 @@ describe("validateProject", () => {
               direction: "outbound",
               host: "api.realworld.io",
               phase: "runtime",
+              url: "https://api.realworld.io/articles",
             },
           ],
           interactable: true,
@@ -453,6 +455,7 @@ describe("validateProject", () => {
           demoCommand: "npm run demo",
           url: "http://localhost:5173",
         }),
+        preparationWorkspace: workspaceHandle(sandboxLogs),
       },
       { browserValidator, sandboxRunner },
     );
@@ -463,12 +466,86 @@ describe("validateProject", () => {
           direction: "outbound",
           host: "api.realworld.io",
           phase: "runtime",
+          url: "https://api.realworld.io/articles",
         },
       ],
       failureReason:
-        "Runtime network communication across the sandbox boundary is not allowed.",
+        "Runtime network communication across the sandbox boundary is not allowed. Blocked runtime network attempts: https://api.realworld.io/articles.",
       status: "failed",
     });
+    expect(sandboxLogs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          blockedNetworkAttemptCount: 1,
+          blockedNetworkAttempts: [
+            {
+              direction: "outbound",
+              host: "api.realworld.io",
+              phase: "runtime",
+              url: "https://api.realworld.io/articles",
+            },
+          ],
+          event: "project-validation.browser-validation.failed",
+          failureReason:
+            "Runtime network communication across the sandbox boundary is not allowed. Blocked runtime network attempts: https://api.realworld.io/articles.",
+        }),
+      ]),
+    );
+  });
+
+  it("redacts blocked network URLs before validation diagnostics are formatted or logged", async () => {
+    const sandboxLogs: Array<Record<string, unknown>> = [];
+    const sandboxRunner: SandboxRunner = {
+      async runValidation() {
+        return {
+          blockedNetworkAttempts: [
+            {
+              direction: "outbound",
+              host: "api.example.com",
+              phase: "runtime",
+              url: "https://api.example.com/data?access_key=secret&state=csrf&page=1",
+            },
+          ],
+          logs: ["started demo"],
+          repoFiles: ["package.json"],
+          runtimeExitCode: 0,
+        };
+      },
+    };
+    const browserValidator: BrowserValidator = {
+      async validate() {
+        throw new Error(
+          "browser validation should not run after network failure",
+        );
+      },
+    };
+
+    const result = await validateProject(
+      {
+        preparationManifest: manifest({
+          demoCommand: "npm run demo",
+          url: "http://localhost:5173",
+        }),
+        preparationWorkspace: workspaceHandle(sandboxLogs),
+      },
+      { browserValidator, sandboxRunner },
+    );
+
+    expect(result).toMatchObject({
+      blockedNetworkAttempts: [
+        {
+          direction: "outbound",
+          host: "api.example.com",
+          phase: "runtime",
+          url: "https://api.example.com/data?access_key=%5Bredacted%5D&state=%5Bredacted%5D&page=%5Bredacted%5D",
+        },
+      ],
+      failureReason:
+        "Runtime network communication across the sandbox boundary is not allowed. Blocked runtime network attempts: https://api.example.com/data?access_key=%5Bredacted%5D&state=%5Bredacted%5D&page=%5Bredacted%5D.",
+      status: "failed",
+    });
+    expect(JSON.stringify(result)).not.toContain("secret");
+    expect(JSON.stringify(result)).not.toContain("csrf");
   });
 
   it("preserves MakeADemo validator dependency failures from browser validation", async () => {

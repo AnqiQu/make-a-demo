@@ -3,7 +3,10 @@ import type { PreparationWorkspaceHandle } from "../../03-repo-preparation/prepa
 import { SubmittedCodeWorkspaceSyncError } from "../../03-repo-preparation/submitted-code-execution";
 import type { BrowserValidator } from "./browser-validator.interface";
 import { inferInstallPlan } from "./install-plan";
-import { findRuntimeBoundaryViolations } from "./network-isolation-policy";
+import {
+  type NetworkAttempt,
+  findRuntimeBoundaryViolations,
+} from "./network-isolation-policy";
 import type { SandboxRunner } from "./sandbox-runner.interface";
 import type { ProjectValidationResult } from "./validation-result";
 
@@ -59,10 +62,12 @@ export async function validateProject(
 
   try {
     if (blockedNetworkAttempts.length > 0) {
+      const failureReason = formatRuntimeNetworkFailureReason(
+        blockedNetworkAttempts,
+      );
       return {
         blockedNetworkAttempts,
-        failureReason:
-          "Runtime network communication across the sandbox boundary is not allowed.",
+        failureReason,
         logs: sandboxResult.logs,
         status: "failed",
         warnings: installPlan.warnings,
@@ -133,19 +138,21 @@ export async function validateProject(
     );
 
     if (browserNetworkAttempts.length > 0) {
+      const failureReason = formatRuntimeNetworkFailureReason(
+        browserNetworkAttempts,
+      );
       await writeProjectValidationSandboxLog(input, {
         blockedNetworkAttemptCount: browserNetworkAttempts.length,
+        blockedNetworkAttempts: browserNetworkAttempts,
         browserUrl,
         event: "project-validation.browser-validation.failed",
-        failureReason:
-          "Runtime network communication across the sandbox boundary is not allowed.",
+        failureReason,
         screenshotArtifactId: browserResult.screenshotArtifactId,
       });
       return {
         blockedNetworkAttempts: browserNetworkAttempts,
         browserUrl,
-        failureReason:
-          "Runtime network communication across the sandbox boundary is not allowed.",
+        failureReason,
         logs: [...sandboxResult.logs, ...browserResult.logs],
         screenshotArtifactId: browserResult.screenshotArtifactId,
         status: "failed",
@@ -232,6 +239,17 @@ function readMakeADemoValidatorDependencyFailure(logs: string[]) {
   }
 
   return undefined;
+}
+
+function formatRuntimeNetworkFailureReason(attempts: NetworkAttempt[]): string {
+  const baseReason =
+    "Runtime network communication across the sandbox boundary is not allowed.";
+  const locations = attempts.map((attempt) => attempt.url ?? attempt.host);
+  if (locations.length === 0) {
+    return baseReason;
+  }
+
+  return `${baseReason} Blocked runtime network attempts: ${locations.join(", ")}.`;
 }
 
 function withTimeout<T>(
