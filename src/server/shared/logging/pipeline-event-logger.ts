@@ -29,13 +29,17 @@ export type PipelineEventLogger = {
 };
 
 type SharedLoggerState = {
+  lastWrite: Promise<void> | undefined;
   writeChain: Promise<void>;
 };
 
 export function createPipelineEventLogger(
   options: PipelineEventLoggerOptions,
 ): PipelineEventLogger {
-  const state: SharedLoggerState = { writeChain: Promise.resolve() };
+  const state: SharedLoggerState = {
+    lastWrite: undefined,
+    writeChain: Promise.resolve(),
+  };
   const logger = createPinoLogger(options, state);
 
   return wrapPinoLogger(logger, state);
@@ -108,42 +112,22 @@ function createPinoLogger(
     },
     {
       write(line) {
-        const asyncWrites: Array<() => Promise<void>> = [];
-        for (const sink of sinks) {
-          if (isAsyncFunction(sink.write)) {
-            asyncWrites.push(() => Promise.resolve(sink.write(line)));
-            continue;
-          }
+        const write = state.writeChain.then(async () => {
+          const results = await Promise.allSettled(
+            sinks.map(async (sink) => sink.write(line)),
+          );
+          const failedResult = results.find(
+            (result) => result.status === "rejected",
+          );
 
-          try {
-            const result = sink.write(line);
-            if (isPromiseLike(result)) {
-              asyncWrites.push(() => Promise.resolve(result));
-            }
-          } catch (error) {
-            asyncWrites.push(() => Promise.reject(error));
+          if (failedResult !== undefined) {
+            throw failedResult.reason;
           }
-        }
-        state.writeChain = state.writeChain.then(async () => {
-          await Promise.all(asyncWrites.map((write) => write()));
         });
+        state.lastWrite = write;
+        state.writeChain = write.catch(() => undefined);
       },
     },
-  );
-}
-
-function isAsyncFunction(value: unknown): boolean {
-  return (
-    typeof value === "function" && value.constructor.name === "AsyncFunction"
-  );
-}
-
-function isPromiseLike(value: unknown): value is PromiseLike<void> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "then" in value &&
-    typeof value.then === "function"
   );
 }
 
@@ -193,8 +177,11 @@ function wrapPinoLogger(
     const { message: entryMessage, ...fields } = entry;
     const resolvedMessage =
       message ?? (typeof entryMessage === "string" ? entryMessage : undefined);
+    const previousWrite = state.lastWrite;
     logger[level](fields, resolvedMessage);
-    return state.writeChain;
+    return state.lastWrite !== previousWrite && state.lastWrite !== undefined
+      ? state.lastWrite
+      : state.writeChain;
   };
 
   return {

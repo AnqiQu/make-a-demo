@@ -33,6 +33,7 @@ export type FullPipelineResult = {
   finalVideo: CompositedVideoManifest;
   logPath: string;
   resultPath: string;
+  sandboxLogPath?: string;
   scriptPath?: string;
   stage1: Extract<
     Awaited<ReturnType<typeof runPipelineJob>>,
@@ -40,6 +41,38 @@ export type FullPipelineResult = {
   >;
   status: "succeeded";
 };
+
+export type FullPipelineFailureContext = {
+  failure: ReturnType<typeof readStage1Failure>;
+  logPath: string;
+  rawOpenCodeLogPath: string | undefined;
+  resultPath: string;
+  stage: "stage-1";
+  status: Exclude<
+    Awaited<ReturnType<typeof runPipelineJob>>,
+    { status: "succeeded" }
+  >["status"];
+};
+
+export class FullPipelineStageFailure extends Error {
+  readonly failure: FullPipelineFailureContext["failure"];
+  readonly logPath: string;
+  readonly rawOpenCodeLogPath: string | undefined;
+  readonly resultPath: string;
+  readonly stage: "stage-1";
+  readonly status: FullPipelineFailureContext["status"];
+
+  constructor(context: FullPipelineFailureContext) {
+    super(`Stage 1 failed with status ${context.status}`);
+    this.name = "FullPipelineStageFailure";
+    this.failure = context.failure;
+    this.logPath = context.logPath;
+    this.rawOpenCodeLogPath = context.rawOpenCodeLogPath;
+    this.resultPath = context.resultPath;
+    this.stage = context.stage;
+    this.status = context.status;
+  }
+}
 
 type SucceededStage1 = Extract<
   Awaited<ReturnType<typeof runPipelineJob>>,
@@ -57,6 +90,7 @@ type FullPipelineArtifactSummary = {
     renderPlanPath: string;
     scriptGenerationResumePath?: string;
     scriptGenerationRawOpenCodeLogPath?: string;
+    sandboxLogPath?: string;
     viewUrl: string;
   };
   draftCompositeReview: DraftCompositeReviewSummary;
@@ -160,6 +194,7 @@ export type FullPipelineRunnerOptions = PipelineOrchestratorOptions & {
     stage1: SucceededStage1;
   }) => Promise<{ browserUrl?: string }>;
   runId?: string;
+  sandboxLogPath?: string;
   scriptGenerationRawOpenCodeLogPath?: string;
 };
 
@@ -173,6 +208,7 @@ export async function runFullPipelineJob(
   const runDirectory = join(outputRoot, runId);
   await mkdir(runDirectory, { recursive: true });
   const logPath = join(runDirectory, "pipeline-log.jsonl");
+  const sandboxLogPath = options.sandboxLogPath;
   const log = createPipelineLogger(logPath, {
     extraSinks: options.logSinks ?? [],
     onLog: options.onLog,
@@ -218,33 +254,35 @@ export async function runFullPipelineJob(
   });
   if (initialStage1.status !== "succeeded") {
     const resultPath = join(runDirectory, "full-pipeline-result.json");
+    const failureSummary = createFailureSummary({
+      logPath,
+      rawOpenCodeLogPath: options.rawOpenCodeLogPath,
+      runDirectory,
+      runId,
+      sandboxLogPath,
+      scriptGenerationRawOpenCodeLogPath:
+        options.scriptGenerationRawOpenCodeLogPath,
+      stage1: initialStage1,
+    });
     await log({
       event: "pipeline-failed",
       message: `Stage 1 failed with status ${initialStage1.status}.`,
       status: initialStage1.status,
     });
-    await writeFile(
-      resultPath,
-      `${JSON.stringify(
-        createFailureSummary({
-          logPath,
-          rawOpenCodeLogPath: options.rawOpenCodeLogPath,
-          runDirectory,
-          runId,
-          scriptGenerationRawOpenCodeLogPath:
-            options.scriptGenerationRawOpenCodeLogPath,
-          stage1: initialStage1,
-        }),
-        null,
-        2,
-      )}\n`,
-    );
+    await writeFile(resultPath, `${JSON.stringify(failureSummary, null, 2)}\n`);
     await log({
       event: "result-written",
       message: "Full pipeline failure result written.",
       resultPath,
     });
-    throw new Error(`Stage 1 failed with status ${initialStage1.status}`);
+    throw new FullPipelineStageFailure({
+      failure: failureSummary.failure,
+      logPath,
+      rawOpenCodeLogPath: options.rawOpenCodeLogPath,
+      resultPath,
+      stage: "stage-1",
+      status: initialStage1.status,
+    });
   }
 
   let stage1: SucceededStage1 = initialStage1;
@@ -308,6 +346,7 @@ export async function runFullPipelineJob(
         ? {}
         : { rawOpenCodeLogPath: options.rawOpenCodeLogPath }),
       renderPlanPath: finalVideo.renderPlanPath,
+      ...(sandboxLogPath === undefined ? {} : { sandboxLogPath }),
       ...(scriptGenerationResumePath === undefined
         ? {}
         : { scriptGenerationResumePath }),
@@ -342,6 +381,7 @@ export async function runFullPipelineJob(
     finalVideo,
     logPath,
     resultPath,
+    ...(sandboxLogPath === undefined ? {} : { sandboxLogPath }),
     ...(scriptPersistence.scriptPath === undefined
       ? {}
       : { scriptPath: scriptPersistence.scriptPath }),
@@ -1133,6 +1173,7 @@ function createFailureSummary(input: {
   rawOpenCodeLogPath: string | undefined;
   runDirectory: string;
   runId: string;
+  sandboxLogPath: string | undefined;
   scriptGenerationRawOpenCodeLogPath: string | undefined;
   stage1: Exclude<
     Awaited<ReturnType<typeof runPipelineJob>>,
@@ -1151,6 +1192,9 @@ function createFailureSummary(input: {
             scriptGenerationRawOpenCodeLogPath:
               input.scriptGenerationRawOpenCodeLogPath,
           }),
+      ...(input.sandboxLogPath === undefined
+        ? {}
+        : { sandboxLogPath: input.sandboxLogPath }),
     },
     failure: readStage1Failure(input.stage1),
     runDirectory: input.runDirectory,

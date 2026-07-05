@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { Daytona } from "@daytona/sdk";
 
@@ -21,7 +24,10 @@ import {
 } from "../../logging/pipeline-event-logger";
 
 type DaytonaSdkClient = {
-  create(input?: unknown): Promise<DaytonaSdkSandbox>;
+  create(
+    input?: unknown,
+    options?: { timeout?: number },
+  ): Promise<DaytonaSdkSandbox>;
   delete(sandbox: DaytonaSdkSandbox): Promise<void>;
   get?(idOrName: string): Promise<DaytonaSdkSandbox>;
 };
@@ -62,6 +68,7 @@ type DaytonaSdkSandbox = {
       command: string,
       cwd?: string,
       env?: Record<string, string>,
+      timeout?: number,
     ): Promise<{
       exitCode?: number;
       result?: string;
@@ -97,6 +104,9 @@ type DaytonaSdkSandbox = {
 type DaytonaSdkPty = Awaited<
   ReturnType<DaytonaSdkSandbox["process"]["createPty"]>
 >;
+type DaytonaSdkPtyOptions = Parameters<
+  DaytonaSdkSandbox["process"]["createPty"]
+>[0];
 
 export type DaytonaSdkPreparationWorkspaceProviderOptions = {
   apiKey?: string;
@@ -106,7 +116,9 @@ export type DaytonaSdkPreparationWorkspaceProviderOptions = {
   logWriteTimeoutMs?: number;
   previewUrlTimeoutMs?: number;
   ptyConnectionTimeoutMs?: number;
+  sandboxCreateTimeoutSeconds?: number;
   sandboxLogSinks?: PipelineLogSink[];
+  secrets?: Record<string, string>;
   snapshot?: string;
   submittedCodeSnapshot?: string;
 };
@@ -116,6 +128,9 @@ const defaultCommandTimeoutMs = 10 * 60_000;
 const defaultLogWriteTimeoutMs = 5_000;
 const defaultPreviewUrlTimeoutMs = 30_000;
 const defaultPtyConnectionTimeoutMs = 30_000;
+const defaultSandboxCreateTimeoutSeconds = 300;
+const sandboxCreateConnectionRetryLimit = 2;
+const ptyStartupRetryLimit = 2;
 const makeADemoArtifactDirectory = "/tmp/makeademo";
 const workspaceMakeADemoDirectory = "/workspace/.makeademo";
 const sandboxAuditLogPath = `${makeADemoArtifactDirectory}/sandbox-log.jsonl`;
@@ -164,7 +179,9 @@ export class DaytonaSdkPreparationWorkspaceProvider
   private readonly logWriteTimeoutMs: number;
   private readonly previewUrlTimeoutMs: number;
   private readonly ptyConnectionTimeoutMs: number;
+  private readonly sandboxCreateTimeoutSeconds: number;
   private readonly sandboxLogSinks: PipelineLogSink[];
+  private readonly secrets: Record<string, string> | undefined;
   private readonly snapshot: string | undefined;
   private readonly submittedCodeSnapshot: string | undefined;
 
@@ -175,6 +192,7 @@ export class DaytonaSdkPreparationWorkspaceProvider
         options.apiKey === undefined ? undefined : { apiKey: options.apiKey },
       ) as DaytonaSdkClient);
     this.commandTimeoutMs = options.commandTimeoutMs ?? defaultCommandTimeoutMs;
+    this.secrets = options.secrets;
     this.snapshot = options.snapshot;
     this.submittedCodeSnapshot = options.submittedCodeSnapshot;
     this.diskGB = options.diskGB ?? defaultSandboxDiskGB;
@@ -184,29 +202,45 @@ export class DaytonaSdkPreparationWorkspaceProvider
       options.previewUrlTimeoutMs ?? defaultPreviewUrlTimeoutMs;
     this.ptyConnectionTimeoutMs =
       options.ptyConnectionTimeoutMs ?? defaultPtyConnectionTimeoutMs;
+    this.sandboxCreateTimeoutSeconds =
+      options.sandboxCreateTimeoutSeconds ?? defaultSandboxCreateTimeoutSeconds;
     this.sandboxLogSinks = options.sandboxLogSinks ?? [];
   }
 
   async create(): Promise<PreparationWorkspaceHandle> {
-    const sandbox = await this.client.create({
-      disk: this.diskGB,
-      ...(this.snapshot === undefined ? {} : { snapshot: this.snapshot }),
-    });
+    const createOptions = { timeout: this.sandboxCreateTimeoutSeconds };
+    const sandbox = await this.createSandboxWithConnectionRetry(
+      {
+        disk: this.diskGB,
+        ...(this.secrets === undefined ? {} : { secrets: this.secrets }),
+        ...(this.snapshot === undefined ? {} : { snapshot: this.snapshot }),
+      },
+      createOptions,
+    );
     const id = sandbox.id ?? sandbox.name;
     if (id === undefined || id.trim() === "") {
       throw new Error("Daytona did not return a sandbox id.");
     }
 
-    const submittedCodeSandbox =
-      this.submittedCodeSnapshot === undefined
-        ? undefined
-        : await this.client.create({
-            autoDeleteInterval: 0,
-            ephemeral: true,
-            linkedSandbox: id,
-            networkBlockAll: true,
-            snapshot: this.submittedCodeSnapshot,
-          });
+    let submittedCodeSandbox: DaytonaSdkSandbox | undefined;
+    try {
+      submittedCodeSandbox =
+        this.submittedCodeSnapshot === undefined
+          ? undefined
+          : await this.createSandboxWithConnectionRetry(
+              {
+                autoDeleteInterval: 0,
+                ephemeral: true,
+                linkedSandbox: id,
+                networkBlockAll: true,
+                snapshot: this.submittedCodeSnapshot,
+              },
+              createOptions,
+            );
+    } catch (error) {
+      await this.client.delete(sandbox);
+      throw error;
+    }
 
     return createPreparationWorkspaceHandle({
       client: this.client,
@@ -219,6 +253,34 @@ export class DaytonaSdkPreparationWorkspaceProvider
       sandbox,
       ...(submittedCodeSandbox === undefined ? {} : { submittedCodeSandbox }),
     });
+  }
+
+  private async createSandboxWithConnectionRetry(
+    input: unknown,
+    options: { timeout: number },
+  ): Promise<DaytonaSdkSandbox> {
+    let lastError: unknown;
+    for (
+      let attempt = 0;
+      attempt <= sandboxCreateConnectionRetryLimit;
+      attempt += 1
+    ) {
+      try {
+        return await this.client.create(input, options);
+      } catch (error) {
+        lastError = error;
+        if (
+          attempt === sandboxCreateConnectionRetryLimit ||
+          !isDaytonaConnectionError(error)
+        ) {
+          throw error;
+        }
+
+        await wait(250 * (attempt + 1));
+      }
+    }
+
+    throw lastError;
   }
 }
 
@@ -291,7 +353,12 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
     }
 
     const response = await withTimeout(
-      this.sandbox.process.executeCommand(command, undefined, options.env),
+      this.sandbox.process.executeCommand(
+        command,
+        undefined,
+        options.env,
+        toSdkTimeoutSeconds(this.commandTimeoutMs),
+      ),
       this.commandTimeoutMs,
       `Daytona command did not finish within ${this.commandTimeoutMs}ms.`,
     );
@@ -309,7 +376,7 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
   ): Promise<PreparationWorkspaceCommandResult> {
     const output: string[] = [];
     const decoder = new TextDecoder();
-    const rawPty = await this.sandbox.process.createPty({
+    const pty = await this.createConnectedPty(this.sandbox, {
       cols: 120,
       cwd: "/workspace",
       envs: options.env ?? {},
@@ -324,15 +391,8 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
       },
       rows: 30,
     });
-    const pty = new ManagedPty(rawPty);
-    this.activePtys.add(pty);
 
     try {
-      await withTimeout(
-        pty.waitForConnection(),
-        this.ptyConnectionTimeoutMs,
-        `Daytona PTY did not connect within ${this.ptyConnectionTimeoutMs}ms.`,
-      );
       await pty.sendInput(
         `stty -echo\n${command}\nprintf '\\n__MAKEADEMO_EXIT__:%s\\n' $?\nexit\n`,
       );
@@ -386,13 +446,17 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
       throw new Error("Failed to write Daytona sandbox audit log.");
     }
 
-    void withTimeout(
+    const mirrorResponse = await withTimeout(
       this.sandbox.process.executeCommand(
         `mkdir -p ${shellQuote(workspaceMakeADemoDirectory)} && cp ${shellQuote(sandboxAuditLogPath)} ${shellQuote(workspaceSandboxAuditLogPath)}`,
       ),
       this.logWriteTimeoutMs,
       `Daytona sandbox log mirror did not finish within ${this.logWriteTimeoutMs}ms.`,
-    ).catch(() => {});
+    );
+
+    if ((mirrorResponse.exitCode ?? 0) !== 0) {
+      throw new Error("Failed to mirror Daytona sandbox audit log.");
+    }
   }
 
   async executeSubmittedCode(
@@ -411,10 +475,15 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
       );
     }
 
-    const response = await this.submittedCodeSandbox.process.executeCommand(
-      command,
-      undefined,
-      options.env,
+    const response = await withTimeout(
+      this.submittedCodeSandbox.process.executeCommand(
+        command,
+        undefined,
+        options.env,
+        toSdkTimeoutSeconds(this.commandTimeoutMs),
+      ),
+      this.commandTimeoutMs,
+      `Daytona command did not finish within ${this.commandTimeoutMs}ms.`,
     );
 
     return {
@@ -434,6 +503,107 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
     }
 
     await this.setSandboxNetworkAccess(this.submittedCodeSandbox, enabled);
+  }
+
+  async syncSubmittedCodeWorkspace(): Promise<void> {
+    if (this.submittedCodeSandbox === undefined) {
+      throw new Error("Submitted-code Daytona sandbox is not configured.");
+    }
+
+    const archiveName = `prepared-workspace-${randomUUID()}.tgz`;
+    const remoteArchivePath = `${makeADemoArtifactDirectory}/${archiveName}`;
+    const localDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-daytona-sync-"),
+    );
+    const localArchivePath = join(localDirectory, archiveName);
+
+    try {
+      const archiveResult = await withTimeout(
+        this.sandbox.process.executeCommand(
+          createPreparedWorkspaceArchiveCommand(remoteArchivePath),
+          undefined,
+          undefined,
+          toSdkTimeoutSeconds(this.commandTimeoutMs),
+        ),
+        this.commandTimeoutMs,
+        `Daytona prepared workspace archive did not finish within ${this.commandTimeoutMs}ms.`,
+      );
+      if ((archiveResult.exitCode ?? 0) !== 0) {
+        throw new Error(
+          formatCommandFailure(
+            "Failed to archive prepared Daytona workspace",
+            archiveResult,
+          ),
+        );
+      }
+
+      const downloadResults = await withTimeout(
+        this.sandbox.fs.downloadFiles(
+          [{ destination: localArchivePath, source: remoteArchivePath }],
+          0,
+        ),
+        this.commandTimeoutMs,
+        `Daytona prepared workspace archive download did not finish within ${this.commandTimeoutMs}ms.`,
+      );
+      const failedDownload = downloadResults.find(
+        (result) => result.error !== undefined,
+      );
+      if (failedDownload !== undefined) {
+        throw new Error(
+          `Failed to download prepared Daytona workspace archive ${failedDownload.source}: ${failedDownload.error}`,
+        );
+      }
+
+      await withTimeout(
+        this.submittedCodeSandbox.fs.uploadFiles([
+          { destination: remoteArchivePath, source: localArchivePath },
+        ]),
+        this.commandTimeoutMs,
+        `Daytona prepared workspace archive upload did not finish within ${this.commandTimeoutMs}ms.`,
+      );
+      const extractResult = await withTimeout(
+        this.submittedCodeSandbox.process.executeCommand(
+          createSubmittedCodeWorkspaceExtractCommand(remoteArchivePath),
+          undefined,
+          undefined,
+          toSdkTimeoutSeconds(this.commandTimeoutMs),
+        ),
+        this.commandTimeoutMs,
+        `Daytona submitted-code workspace restore did not finish within ${this.commandTimeoutMs}ms.`,
+      );
+      if ((extractResult.exitCode ?? 0) !== 0) {
+        throw new Error(
+          formatCommandFailure(
+            "Failed to restore prepared files in submitted-code sandbox",
+            extractResult,
+          ),
+        );
+      }
+    } finally {
+      await Promise.allSettled([
+        withTimeout(
+          this.sandbox.process.executeCommand(
+            `rm -f ${shellQuote(remoteArchivePath)}`,
+            undefined,
+            undefined,
+            toSdkTimeoutSeconds(this.commandTimeoutMs),
+          ),
+          this.commandTimeoutMs,
+          `Daytona prepared workspace archive cleanup did not finish within ${this.commandTimeoutMs}ms.`,
+        ),
+        withTimeout(
+          this.submittedCodeSandbox.process.executeCommand(
+            `rm -f ${shellQuote(remoteArchivePath)}`,
+            undefined,
+            undefined,
+            toSdkTimeoutSeconds(this.commandTimeoutMs),
+          ),
+          this.commandTimeoutMs,
+          `Daytona submitted-code workspace archive cleanup did not finish within ${this.commandTimeoutMs}ms.`,
+        ),
+        rm(localDirectory, { force: true, recursive: true }),
+      ]);
+    }
   }
 
   private async setSandboxNetworkAccess(
@@ -499,7 +669,7 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
   ): Promise<PreparationWorkspaceCommandResult> {
     const output: string[] = [];
     const decoder = new TextDecoder();
-    const rawPty = await sandbox.process.createPty({
+    const pty = await this.createConnectedPty(sandbox, {
       cols: 120,
       cwd: "/workspace",
       envs: options.env ?? {},
@@ -514,15 +684,8 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
       },
       rows: 30,
     });
-    const pty = new ManagedPty(rawPty);
-    this.activePtys.add(pty);
 
     try {
-      await withTimeout(
-        pty.waitForConnection(),
-        this.ptyConnectionTimeoutMs,
-        `Daytona PTY did not connect within ${this.ptyConnectionTimeoutMs}ms.`,
-      );
       await pty.sendInput(
         `stty -echo\n${command}\nprintf '\n__MAKEADEMO_EXIT__:%s\n' $?\nexit\n`,
       );
@@ -539,6 +702,45 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
       this.activePtys.delete(pty);
       await pty.disconnect();
     }
+  }
+
+  private async createConnectedPty(
+    sandbox: DaytonaSdkSandbox,
+    options: DaytonaSdkPtyOptions,
+  ): Promise<ManagedPty> {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= ptyStartupRetryLimit + 1; attempt += 1) {
+      let pty: ManagedPty | undefined;
+
+      try {
+        const rawPty = await sandbox.process.createPty({
+          ...options,
+          id: attempt === 1 ? options.id : `makeademo-${randomUUID()}`,
+        });
+        pty = new ManagedPty(rawPty);
+        this.activePtys.add(pty);
+        await withTimeout(
+          pty.waitForConnection(),
+          this.ptyConnectionTimeoutMs,
+          `Daytona PTY did not connect within ${this.ptyConnectionTimeoutMs}ms.`,
+        );
+        return pty;
+      } catch (error) {
+        lastError = error;
+        if (pty !== undefined) {
+          this.activePtys.delete(pty);
+          await pty.disconnect();
+        }
+
+        if (attempt > ptyStartupRetryLimit) {
+          throw error;
+        }
+      }
+    }
+
+    throw lastError instanceof Error
+      ? lastError
+      : new Error("Daytona PTY startup failed.");
   }
 }
 
@@ -586,6 +788,27 @@ function withTimeout<T>(
   ]);
 }
 
+function toSdkTimeoutSeconds(timeoutMs: number): number {
+  return Math.max(1, Math.ceil(timeoutMs / 1000));
+}
+
+function wait(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+function isDaytonaConnectionError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return (
+    error.name === "DaytonaConnectionError" ||
+    error.message.includes("ECONNREFUSED") ||
+    error.message.includes("ECONNRESET") ||
+    error.message.includes("ETIMEDOUT")
+  );
+}
+
 function readExitCode(output: string): number | undefined {
   const match = output.match(/__MAKEADEMO_EXIT__:(\d+)/);
   if (match?.[1] === undefined) {
@@ -624,6 +847,109 @@ function readSandboxLogMessage(entry: PreparationWorkspaceLogEntry): string {
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function createPreparedWorkspaceArchiveCommand(archivePath: string): string {
+  const excludedArchivePaths = [
+    "./.git",
+    "./.git/*",
+    "./*/.git",
+    "./*/.git/*",
+    "./.makeademo",
+    "./.makeademo/*",
+    "./node_modules",
+    "./node_modules/*",
+    "./*/node_modules",
+    "./*/node_modules/*",
+    "./.vite",
+    "./.vite/*",
+    "./*/.vite",
+    "./*/.vite/*",
+    "./.turbo",
+    "./.turbo/*",
+    "./*/.turbo",
+    "./*/.turbo/*",
+    "./.npm",
+    "./.npm/*",
+    "./*/.npm",
+    "./*/.npm/*",
+    "./.pnpm-store",
+    "./.pnpm-store/*",
+    "./*/.pnpm-store",
+    "./*/.pnpm-store/*",
+    "./.yarn/cache",
+    "./.yarn/cache/*",
+    "./*/.yarn/cache",
+    "./*/.yarn/cache/*",
+    "./.next/cache",
+    "./.next/cache/*",
+    "./*/.next/cache",
+    "./*/.next/cache/*",
+    "./.bun",
+    "./.bun/*",
+    "./*/.bun",
+    "./*/.bun/*",
+    "./.cache",
+    "./.cache/*",
+    "./*/.cache",
+    "./*/.cache/*",
+  ];
+  const excludeFlags = excludedArchivePaths
+    .map((path) => `--exclude=${shellQuote(path)}`)
+    .join(" ");
+
+  return `sh -lc ${shellQuote(
+    [
+      `mkdir -p ${shellQuote(makeADemoArtifactDirectory)}`,
+      `tar ${excludeFlags} -czf ${shellQuote(archivePath)} -C /workspace .`,
+    ].join(" && "),
+  )}`;
+}
+
+function createSubmittedCodeWorkspaceExtractCommand(
+  archivePath: string,
+): string {
+  const preservedWorkspacePaths = [
+    "-name node_modules",
+    "-name .vite",
+    "-name .turbo",
+    "-name .npm",
+    "-name .pnpm-store",
+    "-path '*/.yarn/cache'",
+    "-path '*/.next/cache'",
+    "-name .bun",
+    "-name .cache",
+  ].join(" -o ");
+
+  return `sh -lc ${shellQuote(
+    [
+      "preserved=$(mktemp -d)",
+      "preserved_paths=$(mktemp)",
+      'cleanup() { rm -f -- "$preserved_paths"; rm -rf -- "$preserved"; }',
+      "trap cleanup EXIT",
+      `find /workspace -mindepth 1 \\( ${preservedWorkspacePaths} \\) -prune -print > "$preserved_paths"`,
+      `while IFS= read -r path; do relative="\${path#/workspace/}"; mkdir -p -- "\$preserved/\$(dirname -- "\$relative")" || exit 1; mv -- "\$path" "\$preserved/\$relative" || exit 1; done < "$preserved_paths"`,
+      "rm -rf -- /workspace/* /workspace/.[!.]* /workspace/..?*",
+      '{ cp -a "$preserved"/. /workspace/ 2>/dev/null || true; }',
+      `tar -xzf ${shellQuote(archivePath)} -C /workspace`,
+    ].join(" && "),
+  )}`;
+}
+
+function formatCommandFailure(
+  message: string,
+  result: {
+    exitCode?: number;
+    result?: string;
+    stderr?: string;
+    stdout?: string;
+  },
+): string {
+  const exitCode = result.exitCode ?? 0;
+  const stderr = result.stderr ?? "";
+  const stdout = result.stdout ?? result.result ?? "";
+
+  return `${message} (exit code ${exitCode}). stderr: ${stderr} stdout: ${stdout}`;
 }
 
 function isRestrictedNetworkPolicyError(error: unknown): boolean {

@@ -6,16 +6,25 @@ export type DaytonaOpenCodeActivityStage =
   | "draft-composite-review"
   | "script-generation";
 
-export async function writeDaytonaOpenCodeActivityLog(
+export function writeDaytonaOpenCodeActivityLog(
   workspace: PreparationWorkspace,
   entry: Record<string, unknown> & { stage: DaytonaOpenCodeActivityStage },
 ): Promise<void> {
   const payload = createOpenCodeActivityLogEntry(entry);
   if (payload === undefined) {
-    return;
+    return Promise.resolve();
   }
 
-  await workspace.writeSandboxLog?.(payload);
+  try {
+    void workspace.writeSandboxLog?.(payload)?.catch(() => {
+      // Streamed OpenCode activity mirroring is best-effort; sandbox log sink
+      // failures must not fail the pipeline after the agent command succeeds.
+    });
+  } catch {
+    // Preserve agent progress if the sandbox log sink throws synchronously.
+  }
+
+  return Promise.resolve();
 }
 
 function createOpenCodeActivityLogEntry(

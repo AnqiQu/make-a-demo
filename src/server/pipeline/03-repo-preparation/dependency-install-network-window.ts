@@ -25,31 +25,46 @@ export async function runDependencyInstallWithNetworkWindow(
   });
   assertNetworkAllowed(decision);
 
-  await input.workspace.writeSandboxLog?.({
+  writeSandboxLogBestEffort(input.workspace, {
     command: input.command,
     event: "submitted-code-network.opening",
     reason: "dependency-install",
   });
   await setSubmittedCodeNetworkAccess(input.workspace, true);
-  await input.workspace.writeSandboxLog?.({
-    command: input.command,
-    event: "submitted-code-network.opened",
-    reason: "dependency-install",
-  });
   try {
+    writeSandboxLogBestEffort(input.workspace, {
+      command: input.command,
+      event: "submitted-code-network.opened",
+      reason: "dependency-install",
+    });
     return await executeSubmittedCode(input.workspace, input.command);
   } finally {
-    await input.workspace.writeSandboxLog?.({
+    writeSandboxLogBestEffort(input.workspace, {
       command: input.command,
       event: "submitted-code-network.closing",
       reason: "dependency-install",
     });
     await setSubmittedCodeNetworkAccess(input.workspace, false);
-    await input.workspace.writeSandboxLog?.({
+    writeSandboxLogBestEffort(input.workspace, {
       command: input.command,
       event: "submitted-code-network.closed",
       reason: "dependency-install",
     });
+  }
+}
+
+function writeSandboxLogBestEffort(
+  workspace: PreparationWorkspace,
+  entry: Record<string, unknown>,
+): void {
+  try {
+    void workspace.writeSandboxLog?.(entry)?.catch(() => {
+      // Sandbox audit logging is best-effort for this network window; never let
+      // log transport failures gate product flow or network resealing.
+    });
+  } catch {
+    // Sandbox audit logging is best-effort for this network window; never let
+    // log transport failures gate product flow or network resealing.
   }
 }
 

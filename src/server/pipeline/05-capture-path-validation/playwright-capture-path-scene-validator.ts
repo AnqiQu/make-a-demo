@@ -15,6 +15,9 @@ import type {
   CapturePathSceneValidator,
 } from "./capture-path-validator";
 
+const missingSandboxPlaywrightFailureReason =
+  "MakeADemo validator dependency failure: Playwright is not available inside the submitted-code sandbox.";
+
 export class DefaultCapturePathSceneValidator
   implements CapturePathSceneValidator
 {
@@ -83,6 +86,18 @@ export class DefaultCapturePathSceneValidator
     }
 
     if (result.exitCode !== 0) {
+      if (isMissingSandboxPlaywrightError(logs)) {
+        return {
+          failureReason: missingSandboxPlaywrightFailureReason,
+          logs,
+          runDirectory,
+          scriptPath: scenePath,
+          stderrPath,
+          status: "failed",
+          stdoutPath,
+        };
+      }
+
       const failedAction = readFailedAction(logs);
       const errorMessage = readValidationFailureMessage(logs);
       const screenshotArtifactId = readValidationFailureScreenshotPath(
@@ -200,6 +215,7 @@ export class DefaultCapturePathSceneValidator
         preparationWorkspace.workspace,
         [
           `cd ${shellQuote(remoteRunDirectory)}`,
+          createExposeGlobalPlaywrightCommand(),
           `timeout -s TERM 120 bun ${shellQuote(remoteScenePath)} > ${shellQuote(remoteStdoutPath)} 2> ${shellQuote(remoteStderrPath)}`,
           "code=$?",
           `cat ${shellQuote(remoteStdoutPath)}`,
@@ -226,6 +242,18 @@ export class DefaultCapturePathSceneValidator
       }
 
       if (result.exitCode !== 0) {
+        if (isMissingSandboxPlaywrightError(logs)) {
+          return {
+            failureReason: missingSandboxPlaywrightFailureReason,
+            logs,
+            runDirectory: remoteRunDirectory,
+            scriptPath: remoteScenePath,
+            stderrPath: remoteStderrPath,
+            status: "failed",
+            stdoutPath: remoteStdoutPath,
+          };
+        }
+
         const failedAction = readFailedAction(logs);
         const errorMessage = readValidationFailureMessage(logs);
         const screenshotArtifactId = readValidationFailureScreenshotPath(
@@ -430,10 +458,26 @@ function readValidationFailure(logs: string[]) {
   return undefined;
 }
 
+function isMissingSandboxPlaywrightError(logs: string[]) {
+  return /Cannot find module ['"](?:playwright|@playwright\/test)['"]/.test(
+    logs.join("\n"),
+  );
+}
+
 function createRunId() {
   return `capture-path-${new Date().toISOString().replaceAll(/[:.]/g, "-")}`;
 }
 
 function shellQuote(value: string) {
   return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function createExposeGlobalPlaywrightCommand() {
+  return [
+    "global_node_modules=$(npm root -g 2>/dev/null || true)",
+    'if [ -n "$global_node_modules" ]; then mkdir -p node_modules; fi',
+    'if [ -e "$global_node_modules/@playwright" ]; then ln -sfn "$global_node_modules/@playwright" node_modules/@playwright; fi',
+    'if [ -e "$global_node_modules/playwright" ]; then ln -sfn "$global_node_modules/playwright" node_modules/playwright; fi',
+    'if [ -e "$global_node_modules/playwright-core" ]; then ln -sfn "$global_node_modules/playwright-core" node_modules/playwright-core; fi',
+  ].join("; ");
 }

@@ -11,8 +11,19 @@ describe("Daytona OpenCode prepared image", () => {
     );
 
     expect(dockerfile).toContain("docker.io");
+    expect(dockerfile).toContain("ca-certificates");
+    expect(dockerfile).toContain("git");
+    expect(dockerfile).toContain("update-ca-certificates");
     expect(dockerfile).toContain("submitted-code-node-browser.Dockerfile");
     expect(dockerfile).toContain("makeademo-preload-submitted-code-image");
+    expect(dockerfile).toContain(
+      "GIT_SSL_CAINFO=/etc/openshell-tls/ca-bundle.pem",
+    );
+    expect(dockerfile).toContain("ln -s /etc/ssl/certs/ca-certificates.crt");
+    expect(dockerfile).toContain("test -f /etc/openshell-tls/ca-bundle.pem");
+    expect(dockerfile).toContain(
+      "git config --system http.sslCAInfo /etc/openshell-tls/ca-bundle.pem",
+    );
   });
 
   it("defines the generic Node/browser submitted-code runtime image", async () => {
@@ -22,8 +33,11 @@ describe("Daytona OpenCode prepared image", () => {
     );
 
     expect(dockerfile).toContain("mcr.microsoft.com/playwright");
+    expect(dockerfile).toContain("ca-certificates");
     expect(dockerfile).toContain("ffmpeg");
+    expect(dockerfile).toContain("git");
     expect(dockerfile).toContain("unzip");
+    expect(dockerfile).toContain("update-ca-certificates");
     expect(dockerfile).toContain("bun-v1.2.5");
     expect(dockerfile).toContain("pnpm@10.12.1");
     expect(dockerfile).toContain("yarn@1.22.22");

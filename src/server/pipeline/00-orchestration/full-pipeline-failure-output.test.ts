@@ -1,0 +1,80 @@
+import { describe, expect, it } from "vitest";
+
+import { formatFullPipelineFailure } from "./full-pipeline-failure-output";
+import { FullPipelineStageFailure } from "./full-pipeline-runner";
+
+describe("formatFullPipelineFailure", () => {
+  it("prints Stage 1 failure context for the terminal", () => {
+    const output = formatFullPipelineFailure(
+      new FullPipelineStageFailure({
+        failure: {
+          blockers: ["Repo Preparation agent timed out."],
+          suggestedChanges: [],
+        },
+        logPath: "/runs/failed/pipeline-log.jsonl",
+        rawOpenCodeLogPath: "/runs/failed/opencode-raw-output.jsonl",
+        resultPath: "/runs/failed/full-pipeline-result.json",
+        stage: "stage-1",
+        status: "preparation-failed",
+      }),
+    );
+
+    expect(output).toBe(
+      [
+        "Pipeline failed",
+        "Stage: stage-1",
+        "Status: preparation-failed",
+        "Reason: Repo Preparation agent timed out.",
+        "Result JSON: /runs/failed/full-pipeline-result.json",
+        "Pipeline log: /runs/failed/pipeline-log.jsonl",
+        "Raw OpenCode log: /runs/failed/opencode-raw-output.jsonl",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("prints the specific Capture Path Validation reason when the first blocker is generic", () => {
+    const output = formatFullPipelineFailure(
+      new FullPipelineStageFailure({
+        failure: {
+          blockers: [
+            "Capture Path Validation failed. Please report this issue to MakeADemo.",
+            "Capture Path Validation reason: Generated selector did not match.",
+          ],
+          suggestedChanges: [],
+        },
+        logPath: "/runs/failed/pipeline-log.jsonl",
+        rawOpenCodeLogPath: "/runs/failed/opencode-raw-output.jsonl",
+        resultPath: "/runs/failed/full-pipeline-result.json",
+        stage: "stage-1",
+        status: "capture-path-validation-failed",
+      }),
+    );
+
+    expect(output).toContain(
+      "Reason: Capture Path Validation reason: Generated selector did not match.",
+    );
+  });
+
+  it("returns undefined for non-structured errors", () => {
+    expect(formatFullPipelineFailure(new Error("boom"))).toBeUndefined();
+  });
+
+  it("omits the Raw OpenCode log line when no raw log path is available", () => {
+    const output = formatFullPipelineFailure(
+      new FullPipelineStageFailure({
+        failure: {
+          blockers: ["Repo Preparation agent timed out."],
+          suggestedChanges: [],
+        },
+        logPath: "/runs/failed/pipeline-log.jsonl",
+        rawOpenCodeLogPath: undefined,
+        resultPath: "/runs/failed/full-pipeline-result.json",
+        stage: "stage-1",
+        status: "preparation-failed",
+      }),
+    );
+
+    expect(output).not.toContain("Raw OpenCode log:");
+  });
+});

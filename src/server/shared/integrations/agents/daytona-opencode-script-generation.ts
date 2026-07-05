@@ -21,22 +21,33 @@ import {
   parseDemoScript,
 } from "../../../pipeline/06-footage-capture/demo-script.schema";
 import type { CompositedVideoManifest } from "../../../pipeline/07-compositing/composite-video";
+import {
+  type PipelineEventLogger,
+  createPipelineEventLogger,
+} from "../../logging/pipeline-event-logger";
 import { writeDaytonaOpenCodeActivityLog } from "./daytona-opencode-activity-log";
 
 const makeADemoArtifactDirectory = "/workspace/.makeademo";
-const makeADemoOpenCodeConfigDirectory = `${makeADemoArtifactDirectory}/opencode`;
+const makeADemoOpenCodeConfigDirectory = "/tmp/makeademo/opencode";
 const preparationManifestPath = `${makeADemoArtifactDirectory}/preparation-manifest.json`;
 const demoScriptPath = `${makeADemoArtifactDirectory}/demo-script.json`;
 const draftCompositeReviewPath = `${makeADemoArtifactDirectory}/draft-composite-review.json`;
 const draftReviewDirectory = `${makeADemoArtifactDirectory}/draft-review`;
+const postRepairArtifactReadTimeoutMs = 60_000;
 
 export type DaytonaOpenCodeScriptGenerationOptions = {
+  /**
+   * Receives non-fatal Script Generation and Capture Path Repair infrastructure
+   * events. Implementations must not turn best-effort sandbox audit-log mirror
+   * failures into pipeline failures.
+   */
+  logger?: PipelineEventLogger;
   modelID: string;
   onStderr?: (chunk: string) => void;
   onStdout?: (chunk: string) => void;
-  providerApiKey: string;
   providerID: string;
   maxAttempts?: number;
+  postRepairArtifactReadTimeoutMs?: number;
 };
 
 export type DraftCompositeReviewDecision =
@@ -70,14 +81,12 @@ class DaytonaOpenCodeSessionRunner {
   private readonly modelID: string;
   private readonly onStderr: ((chunk: string) => void) | undefined;
   private readonly onStdout: ((chunk: string) => void) | undefined;
-  private readonly providerApiKey: string;
   private readonly providerID: string;
 
   constructor(options: DaytonaOpenCodeScriptGenerationOptions) {
     this.modelID = options.modelID;
     this.onStderr = options.onStderr;
     this.onStdout = options.onStdout;
-    this.providerApiKey = options.providerApiKey;
     this.providerID = options.providerID;
   }
 
@@ -99,10 +108,7 @@ class DaytonaOpenCodeSessionRunner {
         sessionID: input.sessionID,
       }),
       removeUndefinedOptions({
-        env: createOpenCodeEnv({
-          providerApiKey: this.providerApiKey,
-          providerID: this.providerID,
-        }),
+        env: createOpenCodeEnv(),
         onStderr: (chunk) => {
           this.onStderr?.(chunk);
           outputWrites.push(
@@ -127,7 +133,7 @@ class DaytonaOpenCodeSessionRunner {
         },
       }),
     );
-    await Promise.all(outputWrites);
+    await Promise.allSettled(outputWrites);
     return result;
   }
 }
@@ -135,14 +141,20 @@ class DaytonaOpenCodeSessionRunner {
 export class DaytonaOpenCodeScriptGeneration
   implements CapturePathRepairer, ScriptGenerationAgent
 {
+  private readonly logger: PipelineEventLogger;
   private readonly maxAttempts: number;
   private readonly onStdout: ((chunk: string) => void) | undefined;
   private readonly openCode: DaytonaOpenCodeSessionRunner;
+  private readonly postRepairArtifactReadTimeoutMs: number;
 
   constructor(options: DaytonaOpenCodeScriptGenerationOptions) {
+    this.logger = options.logger ?? createScriptGenerationLogger();
     this.maxAttempts = options.maxAttempts ?? 3;
     this.onStdout = options.onStdout;
     this.openCode = new DaytonaOpenCodeSessionRunner(options);
+    this.postRepairArtifactReadTimeoutMs =
+      options.postRepairArtifactReadTimeoutMs ??
+      postRepairArtifactReadTimeoutMs;
   }
 
   async generateScriptPackage(
@@ -153,7 +165,7 @@ export class DaytonaOpenCodeScriptGeneration
       "Script Generation did not produce a valid script package.";
 
     for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
-      await writeScriptGenerationSandboxLog(input, {
+      await writeScriptGenerationSandboxLog(this.logger, input, {
         attempt,
         event: "script-generation.opencode-attempt.started",
         opencodeSessionID: input.opencodeSessionID,
@@ -173,7 +185,7 @@ export class DaytonaOpenCodeScriptGeneration
       if (result.exitCode !== 0) {
         const retryReason = `OpenCode Script Generation exited with ${result.exitCode}.`;
         lastFailure = `OpenCode Script Generation exited with ${result.exitCode}: ${[result.stderr, result.stdout].filter((line) => line.length > 0).join("\n")}`;
-        await writeScriptGenerationSandboxLog(input, {
+        await writeScriptGenerationSandboxLog(this.logger, input, {
           attempt,
           event: "script-generation.opencode-attempt.failed",
           exitCode: result.exitCode,
@@ -183,7 +195,7 @@ export class DaytonaOpenCodeScriptGeneration
           `Script Generation OpenCode attempt ${attempt} failed before artifact validation.`,
         );
         prompt = createScriptGenerationRepairPrompt(lastFailure);
-        await writeScriptGenerationRetryLog(input, {
+        await writeScriptGenerationRetryLog(this.logger, input, {
           attempt,
           maxAttempts: this.maxAttempts,
           reason: retryReason,
@@ -194,7 +206,7 @@ export class DaytonaOpenCodeScriptGeneration
       const artifact = await readScriptPackageArtifact(input);
       if (artifact.status === "failed") {
         lastFailure = artifact.reason;
-        await writeScriptGenerationSandboxLog(input, {
+        await writeScriptGenerationSandboxLog(this.logger, input, {
           attempt,
           event: "script-generation.artifact.missing",
           reason: lastFailure,
@@ -203,7 +215,7 @@ export class DaytonaOpenCodeScriptGeneration
           `Script Generation OpenCode attempt ${attempt} did not produce a readable artifact: ${artifact.reason}`,
         );
         prompt = createScriptGenerationRepairPrompt(lastFailure);
-        await writeScriptGenerationRetryLog(input, {
+        await writeScriptGenerationRetryLog(this.logger, input, {
           attempt,
           maxAttempts: this.maxAttempts,
           reason: lastFailure,
@@ -214,7 +226,7 @@ export class DaytonaOpenCodeScriptGeneration
       try {
         const demoScript = parseDemoScript(artifact.value);
         assertCaptureReadyScriptQuality(demoScript);
-        await writeScriptGenerationSandboxLog(input, {
+        await writeScriptGenerationSandboxLog(this.logger, input, {
           attempt,
           event: "script-generation.demo-script-candidate.succeeded",
           scriptId: demoScript.scriptId,
@@ -225,7 +237,7 @@ export class DaytonaOpenCodeScriptGeneration
         return attachPipelineMetadata(demoScript, input);
       } catch (error) {
         lastFailure = readErrorMessage(error);
-        await writeScriptGenerationSandboxLog(input, {
+        await writeScriptGenerationSandboxLog(this.logger, input, {
           attempt,
           event: "script-generation.script-package.invalid",
           reason: lastFailure,
@@ -234,7 +246,7 @@ export class DaytonaOpenCodeScriptGeneration
           `Script Generation OpenCode attempt ${attempt} produced an invalid artifact: ${lastFailure}`,
         );
         prompt = createScriptGenerationRepairPrompt(lastFailure);
-        await writeScriptGenerationRetryLog(input, {
+        await writeScriptGenerationRetryLog(this.logger, input, {
           attempt,
           maxAttempts: this.maxAttempts,
           reason: lastFailure,
@@ -256,7 +268,7 @@ export class DaytonaOpenCodeScriptGeneration
     }
     const preparationWorkspace = input.preparationWorkspace;
 
-    await writeRepairSandboxLog(input, {
+    await writeRepairSandboxLog(this.logger, input, {
       attempt: input.attempt,
       event: "capture-path-repair.opencode-attempt.started",
       failedSceneId: input.failure.failedSceneId,
@@ -276,7 +288,7 @@ export class DaytonaOpenCodeScriptGeneration
 
     if (result.exitCode !== 0) {
       const reason = `OpenCode Capture Path repair exited with ${result.exitCode}: ${[result.stderr, result.stdout].filter((line) => line.length > 0).join("\n")}`;
-      await writeRepairSandboxLog(input, {
+      await writeRepairSandboxLog(this.logger, input, {
         attempt: input.attempt,
         event: "capture-path-repair.opencode-attempt.failed",
         exitCode: result.exitCode,
@@ -285,17 +297,32 @@ export class DaytonaOpenCodeScriptGeneration
       throw new Error(reason);
     }
 
-    const [manifestArtifact, scriptArtifact] = await Promise.all([
-      readPreparationManifestArtifact({ preparationWorkspace }),
-      readScriptPackageArtifact({ preparationWorkspace }),
-    ]);
+    const scriptArtifact = await readPostRepairArtifact({
+      artifactName: "demo-script.json",
+      input,
+      logger: this.logger,
+      read: () => readScriptPackageArtifact({ preparationWorkspace }),
+      timeoutMs: this.postRepairArtifactReadTimeoutMs,
+    });
     if (scriptArtifact.status === "failed") {
-      await writeRepairSandboxLog(input, {
+      await writeRepairSandboxLog(this.logger, input, {
         attempt: input.attempt,
         event: "capture-path-repair.artifact.missing",
         reason: scriptArtifact.reason,
       });
       throw new Error(scriptArtifact.reason);
+    }
+
+    const manifestArtifact = await readPostRepairArtifact({
+      artifactName: "preparation-manifest.json",
+      input,
+      logger: this.logger,
+      read: () => readPreparationManifestArtifact({ preparationWorkspace }),
+      timeoutMs: this.postRepairArtifactReadTimeoutMs,
+    });
+
+    if (manifestArtifact.status === "failed") {
+      throw new Error(manifestArtifact.reason);
     }
 
     const preparationManifest =
@@ -309,7 +336,7 @@ export class DaytonaOpenCodeScriptGeneration
       assertCaptureReadyScriptQuality(demoScript);
     } catch (error) {
       const reason = readErrorMessage(error);
-      await writeRepairSandboxLog(input, {
+      await writeRepairSandboxLog(this.logger, input, {
         attempt: input.attempt,
         event: "capture-path-repair.script-package.invalid",
         reason,
@@ -317,7 +344,7 @@ export class DaytonaOpenCodeScriptGeneration
       throw new Error(reason);
     }
 
-    await writeRepairSandboxLog(input, {
+    await writeRepairSandboxLog(this.logger, input, {
       attempt: input.attempt,
       event: "capture-path-repair.demo-script.succeeded",
       scriptId: parseDemoScript(scriptArtifact.value).scriptId,
@@ -460,30 +487,188 @@ function parseDraftCompositeReviewDecision(
 }
 
 async function writeRepairSandboxLog(
+  logger: PipelineEventLogger,
   input: Parameters<CapturePathRepairer["repairCapturePathFailure"]>[0],
   entry: Record<string, unknown>,
 ): Promise<void> {
-  await input.preparationWorkspace?.workspace.writeSandboxLog?.({
-    ...entry,
-    repoUrl: input.repoUrl,
+  await writeSandboxLogBestEffort({
+    entry: {
+      ...entry,
+      repoUrl: input.repoUrl,
+      stage: "capture-path-repair",
+      workspaceId: input.preparationManifest.workspaceId,
+    },
+    logger,
     stage: "capture-path-repair",
-    workspaceId: input.preparationManifest.workspaceId,
+    write: (logEntry: Record<string, unknown>) =>
+      input.preparationWorkspace?.workspace.writeSandboxLog?.(logEntry),
+  });
+}
+
+async function readPostRepairArtifact<
+  T extends { reason?: string; status: string },
+>(input: {
+  artifactName: string;
+  input: Parameters<CapturePathRepairer["repairCapturePathFailure"]>[0];
+  logger: PipelineEventLogger;
+  read: () => Promise<T>;
+  timeoutMs: number;
+}): Promise<T> {
+  const start = Date.now();
+  await writeRepairSandboxLog(input.logger, input.input, {
+    artifact: input.artifactName,
+    attempt: input.input.attempt,
+    durationMs: 0,
+    event: "capture-path-repair.artifact-read.started",
+    operation: `post-repair artifact read ${input.artifactName}`,
+    timeoutMs: input.timeoutMs,
+  });
+
+  try {
+    const artifact = await withTimeout(
+      input.read(),
+      input.timeoutMs,
+      `Post-repair artifact read ${input.artifactName} timed out after ${input.timeoutMs}ms.`,
+    );
+    const durationMs = Date.now() - start;
+    if (artifact.status === "failed") {
+      const reason = `Post-repair artifact read ${input.artifactName} failed: ${artifact.reason ?? "unknown artifact read failure"}`;
+      await writeRepairSandboxLog(input.logger, input.input, {
+        artifact: input.artifactName,
+        attempt: input.input.attempt,
+        durationMs,
+        event: "capture-path-repair.artifact-read.failed",
+        operation: `post-repair artifact read ${input.artifactName}`,
+        reason,
+      });
+      return { ...artifact, reason };
+    }
+
+    await writeRepairSandboxLog(input.logger, input.input, {
+      artifact: input.artifactName,
+      attempt: input.input.attempt,
+      durationMs,
+      event: "capture-path-repair.artifact-read.succeeded",
+      operation: `post-repair artifact read ${input.artifactName}`,
+    });
+    return artifact;
+  } catch (error) {
+    const durationMs = Date.now() - start;
+    const errorMessage = readErrorMessage(error);
+    const reason = errorMessage.includes("timed out after")
+      ? errorMessage
+      : `Post-repair artifact read ${input.artifactName} failed: ${errorMessage}`;
+    const event = errorMessage.includes("timed out after")
+      ? "capture-path-repair.artifact-read.timeout"
+      : "capture-path-repair.artifact-read.failed";
+    await writeRepairSandboxLog(input.logger, input.input, {
+      artifact: input.artifactName,
+      attempt: input.input.attempt,
+      durationMs,
+      event,
+      operation: `post-repair artifact read ${input.artifactName}`,
+      reason,
+    });
+    return { reason, status: "failed" } as T;
+  }
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+
+  promise.catch(() => undefined);
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
   });
 }
 
 async function writeScriptGenerationSandboxLog(
+  logger: PipelineEventLogger,
   input: AgenticScriptGenerationInput,
   entry: Record<string, unknown>,
 ): Promise<void> {
-  await input.preparationWorkspace.workspace.writeSandboxLog?.({
-    ...entry,
-    repoUrl: input.repoUrl,
+  await writeSandboxLogBestEffort({
+    entry: {
+      ...entry,
+      repoUrl: input.repoUrl,
+      stage: "script-generation",
+      workspaceId: input.preparationManifest.workspaceId,
+    },
+    logger,
     stage: "script-generation",
-    workspaceId: input.preparationManifest.workspaceId,
+    write: (logEntry: Record<string, unknown>) =>
+      input.preparationWorkspace.workspace.writeSandboxLog?.(logEntry),
+  });
+}
+
+async function writeSandboxLogBestEffort(input: {
+  entry: Record<string, unknown>;
+  logger: PipelineEventLogger;
+  stage: string;
+  write: (entry: Record<string, unknown>) => Promise<void> | undefined;
+}): Promise<void> {
+  try {
+    void input.write(input.entry)?.catch((error) => {
+      warnSandboxLogWriteFailed(input, error);
+    });
+  } catch (error) {
+    warnSandboxLogWriteFailed(input, error);
+  }
+}
+
+function warnSandboxLogWriteFailed(
+  input: {
+    entry: Record<string, unknown>;
+    logger: PipelineEventLogger;
+    stage: string;
+  },
+  error: unknown,
+): void {
+  try {
+    void input.logger
+      .warn(
+        {
+          error: readErrorMessage(error),
+          event: "sandbox-log-write-failed",
+          failedEvent:
+            typeof input.entry.event === "string"
+              ? input.entry.event
+              : undefined,
+          stage: input.stage,
+          workspaceComponent: "sandbox-log",
+        },
+        "Sandbox progress log write failed.",
+      )
+      .catch(() => undefined);
+  } catch {
+    // Preserve Script Generation and Capture Path Repair progress if fallback logging fails.
+  }
+}
+
+function createScriptGenerationLogger(): PipelineEventLogger {
+  return createPipelineEventLogger({
+    base: { component: "script-generation-agent" },
+    sinks: [
+      {
+        write(line) {
+          process.stderr.write(line);
+        },
+      },
+    ],
   });
 }
 
 async function writeScriptGenerationRetryLog(
+  logger: PipelineEventLogger,
   input: AgenticScriptGenerationInput,
   retry: { attempt: number; maxAttempts: number; reason: string },
 ): Promise<void> {
@@ -491,7 +676,7 @@ async function writeScriptGenerationRetryLog(
     return;
   }
 
-  await writeScriptGenerationSandboxLog(input, {
+  await writeScriptGenerationSandboxLog(logger, input, {
     attempt: retry.attempt,
     event: "script-generation.retrying",
     nextAttempt: retry.attempt + 1,
@@ -536,14 +721,18 @@ async function readPreparationManifestArtifact(input: {
   preparationWorkspace: AgenticScriptGenerationInput["preparationWorkspace"];
 }): Promise<
   | { status: "succeeded"; value: ReturnType<typeof readPreparationManifest> }
+  | { status: "missing" }
   | { reason: string; status: "failed" }
 > {
   const result = await input.preparationWorkspace.workspace.execute(
-    `if test -f ${shellQuote(preparationManifestPath)}; then node -e ${shellQuote(`process.stdout.write(require("node:fs").readFileSync(${JSON.stringify(preparationManifestPath)}, "utf8"))`)}; else exit 1; fi`,
+    `if test -f ${shellQuote(preparationManifestPath)}; then node -e ${shellQuote(`process.stdout.write(require("node:fs").readFileSync(${JSON.stringify(preparationManifestPath)}, "utf8"))`)}; else exit 42; fi`,
   );
+  if (result.exitCode === 42) {
+    return { status: "missing" };
+  }
   if (result.exitCode !== 0) {
     return {
-      reason: `OpenCode did not write ${preparationManifestPath}.`,
+      reason: `Could not read ${preparationManifestPath}: ${result.stderr}`,
       status: "failed",
     };
   }
@@ -612,23 +801,11 @@ function removeUndefinedOptions(input: {
   };
 }
 
-function createOpenCodeEnv(input: {
-  providerApiKey: string;
-  providerID: string;
-}): Record<string, string> {
+function createOpenCodeEnv(): Record<string, string> {
   return {
-    [readProviderApiKeyEnvName(input.providerID)]: input.providerApiKey,
     OPENCODE_CONFIG_DIR: makeADemoOpenCodeConfigDirectory,
     OPENCODE_ENABLE_EXA: "1",
   };
-}
-
-function readProviderApiKeyEnvName(providerID: string): string {
-  if (providerID === "openai") {
-    return "OPENAI_API_KEY";
-  }
-
-  throw new Error(`Unsupported Script Generation provider: ${providerID}`);
 }
 
 function createScriptGenerationPrompt(

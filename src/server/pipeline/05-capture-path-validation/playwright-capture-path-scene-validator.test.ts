@@ -186,6 +186,113 @@ describe("DefaultCapturePathSceneValidator", () => {
     );
   }, 20_000);
 
+  it("makes validator-owned Playwright available to prepared-workspace dry-run scripts", async () => {
+    const validator = new DefaultCapturePathSceneValidator();
+    const preparationWorkspace: PreparationWorkspaceHandle = {
+      async destroy() {},
+      id: "workspace_123",
+      workspace: {
+        async execute() {
+          throw new Error("outer workspace execution must not validate scenes");
+        },
+        async executeSubmittedCode(command) {
+          if (command.includes("bun '/workspace/.makeademo/")) {
+            if (!command.includes("npm root -g")) {
+              return {
+                exitCode: 1,
+                stderr: "Cannot find module '@playwright/test'",
+                stdout: "",
+              };
+            }
+
+            return {
+              exitCode: 0,
+              stderr: "",
+              stdout:
+                '[makeademo:scene] {"elapsedMs":20,"event":"succeeded","sceneId":"scene_playwright_dependency"}',
+            };
+          }
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async getPreviewUrl() {
+          return "https://preview.example.test/";
+        },
+        async setOutboundNetworkAccess() {},
+        async uploadFiles() {},
+      },
+    };
+
+    const result = await validator.validateScene({
+      baseUrl: "https://preview.example.test/",
+      demoPlaywrightScript: [
+        "import { setup, scene } from './makeademo-capture-sdk';",
+        "await setup(async () => {});",
+        "await scene('scene_playwright_dependency', async () => {});",
+      ].join("\n"),
+      preparationWorkspace,
+      scene: {
+        expectedVisibleOutcome: "The page is visible.",
+        humanReadableDescription: "Show the page.",
+        id: "scene_playwright_dependency",
+      },
+      sectionId: "section_playwright_dependency",
+    });
+
+    expect(result.status).toBe("succeeded");
+  }, 20_000);
+
+  it("reports missing prepared-workspace Playwright as a MakeADemo validator dependency failure", async () => {
+    const validator = new DefaultCapturePathSceneValidator();
+    const preparationWorkspace: PreparationWorkspaceHandle = {
+      async destroy() {},
+      id: "workspace_123",
+      workspace: {
+        async execute() {
+          throw new Error("outer workspace execution must not validate scenes");
+        },
+        async executeSubmittedCode(command) {
+          if (command.includes("bun '/workspace/.makeademo/")) {
+            return {
+              exitCode: 1,
+              stderr:
+                "Error: Cannot find module '@playwright/test'\nRequire stack:\n- /workspace/.makeademo/capture-path-validation-runs/run/scene/demo-script.ts",
+              stdout: "",
+            };
+          }
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async getPreviewUrl() {
+          return "https://preview.example.test/";
+        },
+        async setOutboundNetworkAccess() {},
+        async uploadFiles() {},
+      },
+    };
+
+    const result = await validator.validateScene({
+      baseUrl: "https://preview.example.test/",
+      demoPlaywrightScript: [
+        "import { setup, scene } from './makeademo-capture-sdk';",
+        "await setup(async () => {});",
+        "await scene('scene_missing_playwright', async () => {});",
+      ].join("\n"),
+      preparationWorkspace,
+      scene: {
+        expectedVisibleOutcome: "The page is visible.",
+        humanReadableDescription: "Show the page.",
+        id: "scene_missing_playwright",
+      },
+      sectionId: "section_missing_playwright",
+    });
+
+    expect(result).toMatchObject({
+      failureReason:
+        "MakeADemo validator dependency failure: Playwright is not available inside the submitted-code sandbox.",
+      status: "failed",
+    });
+    expect(result.logs.join("\n")).toContain("Cannot find module");
+  }, 20_000);
+
   it("reports the active SDK action and screenshot path when a prepared workspace dry-run scene fails", async () => {
     const validator = new DefaultCapturePathSceneValidator();
     const preparationWorkspace: PreparationWorkspaceHandle = {
@@ -241,6 +348,12 @@ describe("DefaultCapturePathSceneValidator", () => {
       sectionId: "section_action_timeout",
     });
 
+    expect(result.status).toBe("failed");
+    if (result.status !== "failed") {
+      throw new Error("Expected dry-run scene validation to fail.");
+    }
+    const { screenshotArtifactId } = result;
+
     expect(result).toMatchObject({
       failedAction: "locator.click(#save)",
       failureReason:
@@ -252,13 +365,7 @@ describe("DefaultCapturePathSceneValidator", () => {
       stderrPath: expect.stringContaining("scene_action_timeout.stderr.log"),
       stdoutPath: expect.stringContaining("scene_action_timeout.stdout.log"),
     });
-    expect(result.status).toBe("failed");
-    if (result.status !== "failed") {
-      throw new Error("Expected dry-run scene validation to fail.");
-    }
-    expect(result.screenshotArtifactId).toContain(
-      "makeademo-validation-failure.png",
-    );
+    expect(screenshotArtifactId).toContain("makeademo-validation-failure.png");
   }, 20_000);
 
   it("reports blocked runtime network from prepared-workspace dry-runs", async () => {

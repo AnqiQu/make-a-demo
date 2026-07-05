@@ -53,5 +53,12 @@ export interface PreparationWorkspace {
   setOutboundNetworkAccess(enabled: boolean): Promise<void>;
   /** Controls outbound network for submitted-code execution only. */
   setSubmittedCodeNetworkAccess?(enabled: boolean): Promise<void>;
+  /**
+   * Replaces the submitted-code workspace contents with the prepared parent
+   * workspace snapshot before validation or capture commands run. Implementations
+   * must include hidden and untracked prepared files while excluding VCS metadata
+   * and dependency caches so submitted-code execution starts from source state.
+   */
+  syncSubmittedCodeWorkspace?(): Promise<void>;
   uploadFiles(files: PreparationWorkspaceUploadFile[]): Promise<void>;
 }

@@ -1,27 +1,34 @@
 import { runDependencyInstallWithNetworkWindow } from "../../../pipeline/03-repo-preparation/dependency-install-network-window";
 import type { PreparationManifest } from "../../../pipeline/03-repo-preparation/preparation-manifest";
 import type { PreparationWorkspaceHandle } from "../../../pipeline/03-repo-preparation/preparation-workspace-runner";
-import { executeSubmittedCode } from "../../../pipeline/03-repo-preparation/submitted-code-execution";
+import {
+  executeSubmittedCode,
+  syncSubmittedCodeWorkspace,
+} from "../../../pipeline/03-repo-preparation/submitted-code-execution";
 import { inferInstallPlan } from "../../../pipeline/05-capture-path-validation/project-runtime-preflight/install-plan";
 import type {
   SandboxRunner,
   SandboxValidationInput,
   SandboxValidationOutput,
 } from "../../../pipeline/05-capture-path-validation/project-runtime-preflight/sandbox-runner.interface";
+import type { PipelineEventLogger } from "../../logging/pipeline-event-logger";
 
 export class DaytonaSandboxRunner implements SandboxRunner {
   private readonly destroyWorkspaceOnCleanup: boolean;
+  private readonly logger: PipelineEventLogger | undefined;
   private readonly readinessPollIntervalMs: number;
   private readonly readinessTimeoutMs: number;
 
   constructor(
     options: {
       destroyWorkspaceOnCleanup?: boolean;
+      logger?: PipelineEventLogger;
       readinessPollIntervalMs?: number;
       readinessTimeoutMs?: number;
     } = {},
   ) {
     this.destroyWorkspaceOnCleanup = options.destroyWorkspaceOnCleanup ?? false;
+    this.logger = options.logger;
     this.readinessPollIntervalMs = options.readinessPollIntervalMs ?? 1_000;
     this.readinessTimeoutMs = options.readinessTimeoutMs ?? 30_000;
   }
@@ -38,15 +45,21 @@ export class DaytonaSandboxRunner implements SandboxRunner {
 
     const handle = input.preparationWorkspace;
     const writeSandboxLog = (entry: Record<string, unknown>) =>
-      handle.workspace.writeSandboxLog?.({
-        ...entry,
-        repoUrl: input.repoUrl,
+      writeSandboxLogBestEffort({
+        entry: {
+          ...entry,
+          repoUrl: input.repoUrl,
+          stage: "project-validation",
+          workspaceId: input.preparationManifest.workspaceId,
+        },
+        logger: this.logger,
         stage: "project-validation",
-        workspaceId: input.preparationManifest.workspaceId,
+        write: (logEntry) => handle.workspace.writeSandboxLog?.(logEntry),
       });
 
     try {
       await writeSandboxLog({ event: "project-validation.started" });
+      await syncSubmittedCodeWorkspace(handle.workspace);
       await writeSandboxLog({ event: "project-validation.repo-files.started" });
       const repoFilesResult = await executeSubmittedCode(
         handle.workspace,
@@ -237,11 +250,16 @@ export async function restartPreparedDemoForFreshCapture(input: {
   readinessTimeoutMs?: number;
 }): Promise<{ browserUrl: string }> {
   const writeSandboxLog = (entry: Record<string, unknown>) =>
-    input.preparationWorkspace.workspace.writeSandboxLog?.({
-      ...entry,
-      repoUrl: input.preparationManifest.repoUrl,
+    writeSandboxLogBestEffort({
+      entry: {
+        ...entry,
+        repoUrl: input.preparationManifest.repoUrl,
+        stage: "footage-capture",
+        workspaceId: input.preparationManifest.workspaceId,
+      },
       stage: "footage-capture",
-      workspaceId: input.preparationManifest.workspaceId,
+      write: (logEntry) =>
+        input.preparationWorkspace.workspace.writeSandboxLog?.(logEntry),
     });
 
   await writeSandboxLog({
@@ -308,9 +326,7 @@ export async function restartPreparedDemoForFreshCapture(input: {
 }
 
 async function writeDemoServerLog(
-  writeSandboxLog: (
-    entry: Record<string, unknown>,
-  ) => Promise<void> | undefined,
+  writeSandboxLog: (entry: Record<string, unknown>) => Promise<void>,
   output: string,
 ): Promise<void> {
   if (output.length === 0) {
@@ -321,6 +337,54 @@ async function writeDemoServerLog(
     event: "project-validation.demo-server-log",
     log: output,
   });
+}
+
+async function writeSandboxLogBestEffort(input: {
+  entry: Record<string, unknown>;
+  logger?: PipelineEventLogger | undefined;
+  stage: string;
+  write: (entry: Record<string, unknown>) => Promise<void> | undefined;
+}): Promise<void> {
+  try {
+    void input.write(input.entry)?.catch((error) => {
+      warnSandboxLogWriteFailed(input, error);
+    });
+  } catch (error) {
+    warnSandboxLogWriteFailed(input, error);
+  }
+}
+
+function warnSandboxLogWriteFailed(
+  input: {
+    entry: Record<string, unknown>;
+    logger?: PipelineEventLogger | undefined;
+    stage: string;
+  },
+  error: unknown,
+): void {
+  try {
+    void input.logger
+      ?.warn(
+        {
+          error: readErrorMessage(error),
+          event: "sandbox-log-write-failed",
+          failedEvent:
+            typeof input.entry.event === "string"
+              ? input.entry.event
+              : undefined,
+          stage: input.stage,
+          workspaceComponent: "sandbox-log",
+        },
+        "Sandbox progress log write failed.",
+      )
+      .catch(() => undefined);
+  } catch {
+    // Preserve validation and capture behavior if the fallback logger also fails.
+  }
+}
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function collectLogs(result: { stderr: string; stdout: string }): string[] {
@@ -361,11 +425,68 @@ function createStopDemoCommand(demoCommand: string): string {
 }
 
 function createFreshCaptureBaselineCommand(): string {
-  return `sh -lc ${shellQuote("mkdir -p /workspace/.makeademo && tar --exclude='./.makeademo' --exclude='./node_modules' -czf /workspace/.makeademo/fresh-capture-baseline.tgz -C /workspace .")}`;
+  const excludeArguments = freshCapturePreservedPathPatterns
+    .map((pattern) => `--exclude=${shellQuote(pattern)}`)
+    .join(" ");
+
+  return `sh -lc ${shellQuote(`mkdir -p /workspace/.makeademo && tar ${excludeArguments} -czf /workspace/.makeademo/fresh-capture-baseline.tgz -C /workspace .`)}`;
 }
 
 function createFreshCaptureRestoreCommand(): string {
-  return `sh -lc ${shellQuote("test -f /workspace/.makeademo/fresh-capture-baseline.tgz && find /workspace -mindepth 1 ! -path '/workspace/.makeademo' ! -path '/workspace/.makeademo/*' ! -path '/workspace/node_modules' ! -path '/workspace/node_modules/*' -exec rm -rf {} + && tar -xzf /workspace/.makeademo/fresh-capture-baseline.tgz -C /workspace")}`;
+  const preservedPathPredicates = freshCapturePreservedPathPatterns
+    .map((pattern) => `! -path ${shellQuote(toWorkspacePathPattern(pattern))}`)
+    .join(" ");
+  const findWorkspace = `find /workspace -mindepth 1 ${preservedPathPredicates}`;
+
+  return `sh -lc ${shellQuote(
+    [
+      "test -f /workspace/.makeademo/fresh-capture-baseline.tgz",
+      `${findWorkspace} ! -type d -exec rm -f {} +`,
+      `${findWorkspace} -depth -type d -empty -exec rmdir {} +`,
+      "tar -xzf /workspace/.makeademo/fresh-capture-baseline.tgz -C /workspace",
+    ].join(" && "),
+  )}`;
+}
+
+const freshCapturePreservedPathPatterns = [
+  "./.makeademo",
+  "./.makeademo/*",
+  "./node_modules",
+  "./node_modules/*",
+  "./*/node_modules",
+  "./*/node_modules/*",
+  "./.npm",
+  "./.npm/*",
+  "./*/.npm",
+  "./*/.npm/*",
+  "./.pnpm-store",
+  "./.pnpm-store/*",
+  "./*/.pnpm-store",
+  "./*/.pnpm-store/*",
+  "./.yarn/cache",
+  "./.yarn/cache/*",
+  "./*/.yarn/cache",
+  "./*/.yarn/cache/*",
+  "./.cache",
+  "./.cache/*",
+  "./*/.cache",
+  "./*/.cache/*",
+  "./.vite",
+  "./.vite/*",
+  "./*/.vite",
+  "./*/.vite/*",
+  "./.turbo",
+  "./.turbo/*",
+  "./*/.turbo",
+  "./*/.turbo/*",
+  "./.next/cache",
+  "./.next/cache/*",
+  "./*/.next/cache",
+  "./*/.next/cache/*",
+];
+
+function toWorkspacePathPattern(tarPattern: string): string {
+  return `/workspace/${tarPattern.slice(2)}`;
 }
 
 async function waitForDemoReadiness(input: {

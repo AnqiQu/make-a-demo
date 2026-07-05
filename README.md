@@ -110,6 +110,12 @@ DAYTONA_API_KEY=...
 OPENAI_API_KEY=sk-...
 ```
 
+MakeADemo creates or updates a Daytona secret from `OPENAI_API_KEY` before
+creating Repo Preparation sandboxes. The sandbox receives that secret as the
+`OPENAI_API_KEY` placeholder, so OpenCode can call OpenAI without receiving the
+plaintext key in its process env. Set `MAKEADEMO_OPENAI_DAYTONA_SECRET_NAME` only
+if you need to override the default Daytona secret name, `makeademo-openai`.
+
 Optional email settings:
 
 ```bash
@@ -202,7 +208,7 @@ Optional flags:
 --doc ./optional-notes.md
 ```
 
-Full pipeline runs require `DAYTONA_API_KEY` and `OPENAI_API_KEY`. Repo Security Screen, Repo Preparation, Project Validation, and Script Generation run through Daytona-backed sandboxes using the backend Daytona seam. Repo Preparation runs OpenCode inside Daytona and streams concise progress to the terminal. After backend validation passes, Script Generation resumes the same OpenCode session with a new read-only prompt so the agent keeps the repo context it discovered during preparation while emitting only the capture-ready script artifact.
+Full pipeline runs require `DAYTONA_API_KEY` and `OPENAI_API_KEY`. Repo Security Screen, Repo Preparation, Project Validation, and Script Generation run through Daytona-backed sandboxes using the backend Daytona seam. Repo Preparation runs OpenCode inside Daytona with provider credentials supplied by Daytona sandbox secrets and streams concise progress to the terminal. After backend validation passes, Script Generation resumes the same OpenCode session with a new read-only prompt so the agent keeps the repo context it discovered during preparation while emitting only the capture-ready script artifact.
 
 Each full run writes a local run directory under `--output-root`:
 

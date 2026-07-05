@@ -15,6 +15,7 @@ import {
   type DraftCompositeReviewDecision,
   type DraftCompositeReviewInput,
 } from "./daytona-opencode-script-generation";
+import { createOpenCodeProviderSandboxSecrets } from "./opencode-provider-secrets";
 
 export type DaytonaOpenCodeAgentOptions = {
   daytonaApiKey?: string;
@@ -23,8 +24,8 @@ export type DaytonaOpenCodeAgentOptions = {
   modelID: string;
   onStderr?: (chunk: string) => void;
   onStdout?: (chunk: string) => void;
-  providerApiKey: string;
   providerID: string;
+  providerSecretName: string;
 };
 
 export class DaytonaOpenCodeAgent
@@ -46,11 +47,14 @@ export class DaytonaOpenCodeAgent
       ...(options.onStdout === undefined ? {} : { onStdout: options.onStdout }),
       provider: new DaytonaSdkPreparationWorkspaceProvider({
         apiKey: options.daytonaApiKey,
+        secrets: createOpenCodeProviderSandboxSecrets({
+          providerID: options.providerID,
+          providerSecretName: options.providerSecretName,
+        }),
         ...(options.daytonaSnapshot === undefined
           ? {}
           : { snapshot: options.daytonaSnapshot }),
       }),
-      providerApiKey: options.providerApiKey,
       providerID: options.providerID,
       validatePreparation: ({ manifest, workspace }) =>
         validateProject(
@@ -70,7 +74,6 @@ export class DaytonaOpenCodeAgent
       modelID: options.modelID,
       ...(options.onStderr === undefined ? {} : { onStderr: options.onStderr }),
       ...(options.onStdout === undefined ? {} : { onStdout: options.onStdout }),
-      providerApiKey: options.providerApiKey,
       providerID: options.providerID,
     });
   }

@@ -2,7 +2,14 @@ FROM node:22-bookworm-slim
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl docker.io git openssh-client unzip \
+  && update-ca-certificates \
   && rm -rf /var/lib/apt/lists/*
+
+ENV GIT_SSL_CAINFO=/etc/openshell-tls/ca-bundle.pem
+
+RUN mkdir -p /etc/openshell-tls \
+  && if ! test -f /etc/openshell-tls/ca-bundle.pem; then ln -s /etc/ssl/certs/ca-certificates.crt /etc/openshell-tls/ca-bundle.pem; fi \
+  && if test -f /etc/openshell-tls/ca-bundle.pem; then git config --system http.sslCAInfo /etc/openshell-tls/ca-bundle.pem; fi
 
 RUN mkdir -p /opt/makeademo
 

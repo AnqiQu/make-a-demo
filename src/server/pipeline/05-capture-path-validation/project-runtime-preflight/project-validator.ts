@@ -1,8 +1,12 @@
 import type { PreparationManifest } from "../../03-repo-preparation/preparation-manifest";
 import type { PreparationWorkspaceHandle } from "../../03-repo-preparation/preparation-workspace-runner";
+import { SubmittedCodeWorkspaceSyncError } from "../../03-repo-preparation/submitted-code-execution";
 import type { BrowserValidator } from "./browser-validator.interface";
 import { inferInstallPlan } from "./install-plan";
-import { findRuntimeBoundaryViolations } from "./network-isolation-policy";
+import {
+  type NetworkAttempt,
+  findRuntimeBoundaryViolations,
+} from "./network-isolation-policy";
 import type { SandboxRunner } from "./sandbox-runner.interface";
 import type { ProjectValidationResult } from "./validation-result";
 
@@ -42,6 +46,9 @@ export async function validateProject(
     });
     return {
       blockedNetworkAttempts: [],
+      ...(error instanceof SubmittedCodeWorkspaceSyncError
+        ? { failureKind: error.failureKind }
+        : {}),
       failureReason,
       logs: [failureReason],
       status: "failed",
@@ -55,10 +62,12 @@ export async function validateProject(
 
   try {
     if (blockedNetworkAttempts.length > 0) {
+      const failureReason = formatRuntimeNetworkFailureReason(
+        blockedNetworkAttempts,
+      );
       return {
         blockedNetworkAttempts,
-        failureReason:
-          "Runtime network communication across the sandbox boundary is not allowed.",
+        failureReason,
         logs: sandboxResult.logs,
         status: "failed",
         warnings: installPlan.warnings,
@@ -84,6 +93,10 @@ export async function validateProject(
     const browserValidationTimeoutMs =
       dependencies.browserValidationTimeoutMs ??
       defaultBrowserValidationTimeoutMs;
+    const browserValidationUrl =
+      input.preparationWorkspace === undefined
+        ? browserUrl
+        : input.preparationManifest.url;
     let browserResult: Awaited<ReturnType<BrowserValidator["validate"]>>;
     try {
       browserResult = await withTimeout(
@@ -91,7 +104,7 @@ export async function validateProject(
           ...(input.preparationWorkspace === undefined
             ? {}
             : { preparationWorkspace: input.preparationWorkspace }),
-          url: browserUrl,
+          url: browserValidationUrl,
         }),
         browserValidationTimeoutMs,
         `Browser validation timed out after ${browserValidationTimeoutMs}ms.`,
@@ -125,19 +138,21 @@ export async function validateProject(
     );
 
     if (browserNetworkAttempts.length > 0) {
+      const failureReason = formatRuntimeNetworkFailureReason(
+        browserNetworkAttempts,
+      );
       await writeProjectValidationSandboxLog(input, {
         blockedNetworkAttemptCount: browserNetworkAttempts.length,
+        blockedNetworkAttempts: browserNetworkAttempts,
         browserUrl,
         event: "project-validation.browser-validation.failed",
-        failureReason:
-          "Runtime network communication across the sandbox boundary is not allowed.",
+        failureReason,
         screenshotArtifactId: browserResult.screenshotArtifactId,
       });
       return {
         blockedNetworkAttempts: browserNetworkAttempts,
         browserUrl,
-        failureReason:
-          "Runtime network communication across the sandbox boundary is not allowed.",
+        failureReason,
         logs: [...sandboxResult.logs, ...browserResult.logs],
         screenshotArtifactId: browserResult.screenshotArtifactId,
         status: "failed",
@@ -146,16 +161,19 @@ export async function validateProject(
     }
 
     if (!browserResult.interactable) {
+      const failureReason =
+        readMakeADemoValidatorDependencyFailure(browserResult.logs) ??
+        "Configured URL loaded but was not interactable.";
       await writeProjectValidationSandboxLog(input, {
         browserUrl,
         event: "project-validation.browser-validation.failed",
-        failureReason: "Configured URL loaded but was not interactable.",
+        failureReason,
         screenshotArtifactId: browserResult.screenshotArtifactId,
       });
       return {
         blockedNetworkAttempts: [],
         browserUrl,
-        failureReason: "Configured URL loaded but was not interactable.",
+        failureReason,
         logs: [...sandboxResult.logs, ...browserResult.logs],
         screenshotArtifactId: browserResult.screenshotArtifactId,
         status: "failed",
@@ -210,6 +228,28 @@ class ProjectValidationTimeoutError extends Error {}
 
 function readErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function readMakeADemoValidatorDependencyFailure(logs: string[]) {
+  for (const log of logs) {
+    const match = /MakeADemo validator dependency failure:[^\n]*/.exec(log);
+    if (match !== null) {
+      return match[0];
+    }
+  }
+
+  return undefined;
+}
+
+function formatRuntimeNetworkFailureReason(attempts: NetworkAttempt[]): string {
+  const baseReason =
+    "Runtime network communication across the sandbox boundary is not allowed.";
+  const locations = attempts.map((attempt) => attempt.url ?? attempt.host);
+  if (locations.length === 0) {
+    return baseReason;
+  }
+
+  return `${baseReason} Blocked runtime network attempts: ${locations.join(", ")}.`;
 }
 
 function withTimeout<T>(

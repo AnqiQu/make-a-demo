@@ -1,5 +1,9 @@
 import { DaytonaOpenCodeScriptGeneration } from "../../shared/integrations/agents/daytona-opencode-script-generation";
-import { createRepoPreparationAgent } from "../../shared/integrations/agents/repo-preparation-agent-factory";
+import { ensureOpenCodeProviderDaytonaSecret } from "../../shared/integrations/agents/opencode-provider-secrets";
+import {
+  createRepoPreparationAgent,
+  readRepoPreparationTimeoutMsFromEnv,
+} from "../../shared/integrations/agents/repo-preparation-agent-factory";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../../shared/integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import { createResendFinalVideoEmailNotifierFromEnv } from "../../shared/integrations/email/resend-final-video-email-notifier";
 import { DaytonaSandboxRunner } from "../../shared/integrations/sandbox/daytona-sandbox-runner";
@@ -13,6 +17,7 @@ import { runFullPipelineJob } from "./full-pipeline-runner";
 import { createPreCapturePipelineDependencies } from "./pre-capture-pipeline";
 import { readRepoSecurityInput } from "./pre-capture-repo-security";
 import { processNextProjectDemoGenerationJob } from "./project-demo-generation-queue";
+import { createProjectDemoGenerationWorkerLogger } from "./project-demo-generation-worker-logging";
 
 const pollIntervalMs = Number.parseInt(
   process.env.DEMO_QUEUE_POLL_INTERVAL_MS ?? "5000",
@@ -37,13 +42,17 @@ const finalVideoStorage = new R2FinalVideoStorage(r2);
 const finalVideoEmailNotifier = shouldSendFinalVideoEmail
   ? createResendFinalVideoEmailNotifierFromEnv()
   : undefined;
+const workerLogger = createProjectDemoGenerationWorkerLogger();
 const sandboxProvider = new DaytonaSdkPreparationWorkspaceProvider({
   apiKey: daytonaApiKey,
   ...(daytonaSnapshot === undefined ? {} : { snapshot: daytonaSnapshot }),
-  ...(daytonaSubmittedCodeSnapshot === undefined
-    ? {}
-    : { submittedCodeSnapshot: daytonaSubmittedCodeSnapshot }),
 });
+const providerSecretName = await ensureOpenCodeProviderDaytonaSecret({
+  daytonaApiKey,
+  logger: workerLogger.child({ component: "opencode-provider-secrets" }),
+  providerID,
+});
+const repoPreparationTimeoutMs = readRepoPreparationTimeoutMsFromEnv();
 const repoPreparationAgent = createRepoPreparationAgent({
   daytonaApiKey,
   ...(daytonaSnapshot === undefined ? {} : { daytonaSnapshot }),
@@ -51,16 +60,18 @@ const repoPreparationAgent = createRepoPreparationAgent({
     ? {}
     : { daytonaSubmittedCodeSnapshot }),
   modelID,
-  providerApiKey: readProviderApiKey(providerID),
   providerID,
+  providerSecretName,
+  ...(repoPreparationTimeoutMs === undefined
+    ? {}
+    : { repoPreparationTimeoutMs }),
 });
 const scriptGenerationAgent = new DaytonaOpenCodeScriptGeneration({
   modelID,
-  providerApiKey: readProviderApiKey(providerID),
   providerID,
 });
 
-process.stdout.write("MakeADemo demo generation worker started\n");
+await workerLogger.workerStarted();
 
 do {
   const result = await processNextProjectDemoGenerationJob(queueStore, {
@@ -68,6 +79,9 @@ do {
       const repoSecurity = await readRepoSecurityInput(
         sandboxProvider,
         job.repoUrl,
+        {
+          logger: workerLogger.child({ component: "repo-security-screen" }),
+        },
       );
 
       const pipelineResult = await runFullPipelineJob(
@@ -96,10 +110,7 @@ do {
               ...(publicAppBaseUrl === undefined ? {} : { publicAppBaseUrl }),
             });
           },
-          onProgress: (event) =>
-            process.stderr.write(
-              `[pipeline] ${event.stage}: ${event.status}\n`,
-            ),
+          onProgress: (event) => workerLogger.pipelineProgress(event),
         },
       );
 
@@ -112,9 +123,7 @@ do {
   });
 
   if (result.status !== "idle") {
-    process.stdout.write(
-      `Project ${result.projectId} demo generation ${result.status}\n`,
-    );
+    await workerLogger.jobProcessed(result);
   }
 
   if (!runOnce && result.status === "idle") {
@@ -124,14 +133,6 @@ do {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function readProviderApiKey(provider: string): string {
-  if (provider !== "openai") {
-    throw new Error(`Unsupported Repo Preparation provider: ${provider}`);
-  }
-
-  return readRequiredEnv("OPENAI_API_KEY");
 }
 
 function readRequiredEnv(name: string) {

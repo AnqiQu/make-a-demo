@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { PreparationWorkspaceProvider } from "../../../pipeline/03-repo-preparation/preparation-workspace-runner";
-import type { PreparationWorkspace } from "../../../pipeline/03-repo-preparation/preparation-workspace.interface";
+import type {
+  PreparationWorkspace,
+  PreparationWorkspaceCommandResult,
+} from "../../../pipeline/03-repo-preparation/preparation-workspace.interface";
+import { createPipelineEventLogger } from "../../logging/pipeline-event-logger";
 import { DaytonaOpenCodeRepoPreparation } from "./daytona-opencode-repo-preparation";
 
 describe("DaytonaOpenCodeRepoPreparation", () => {
@@ -17,7 +21,6 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
         preparationResult: successResult(),
         validationResult: validationArtifact(),
       }),
-      providerApiKey: "openai_key",
       providerID: "openai",
       timeoutMs: 1_000,
     });
@@ -82,13 +85,694 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     expect(command).not.toContain("--dangerously-skip-permissions");
     expect(command).toContain("--dir /workspace");
     expect(command).toContain("--model 'openai/gpt-5.5'");
+
+    const cloneCommands = events
+      .filter(
+        (event): event is { execute: string } =>
+          typeof event === "object" &&
+          event !== null &&
+          "execute" in event &&
+          typeof event.execute === "string" &&
+          event.execute.includes("git clone"),
+      )
+      .map((event) => event.execute);
+    expect(cloneCommands).toHaveLength(1);
+    expect(cloneCommands[0]).toContain("/etc/ssl/certs/ca-certificates.crt");
+    expect(cloneCommands[0]).toContain("/etc/pki/tls/certs/ca-bundle.crt");
+    expect(cloneCommands[0]).toContain("/etc/openshell-tls/ca-bundle.pem");
+    expect(cloneCommands[0]).toMatch(/export GIT_SSL_CAINFO=.*git clone/s);
+    expect(cloneCommands[0]).not.toContain("GIT_SSL_NO_VERIFY");
+    expect(cloneCommands[0]).not.toContain("sslVerify=false");
+  });
+
+  it("mirrors streamed OpenCode chunks to the sandbox audit log", async () => {
+    const events: unknown[] = [];
+    const streamed: string[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      onStderr: (chunk) => streamed.push(`stderr:${chunk}`),
+      onStdout: (chunk) => streamed.push(`stdout:${chunk}`),
+      provider: fakeProvider(events, {
+        commandStderrChunks: ["agent warning"],
+        commandStdout: ["Submitted preparation result."],
+        commandStdoutChunks: ["agent output"],
+        preparationResult: successResult(),
+        validationResult: validationArtifact(),
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      manifest: { demoCommand: "npm run demo:makeademo" },
+      status: "succeeded",
+    });
+    expect(streamed).toEqual(["stdout:agent output", "stderr:agent warning"]);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            channel: "stdout",
+            event: "opencode.output",
+            raw: "agent output",
+            stage: "repo-preparation",
+          }),
+        },
+        {
+          sandboxLog: expect.objectContaining({
+            channel: "stderr",
+            event: "opencode.output",
+            raw: "agent warning",
+            stage: "repo-preparation",
+          }),
+        },
+      ]),
+    );
+  });
+
+  it("continues Repo Preparation when streamed OpenCode activity log writes fail", async () => {
+    const events: unknown[] = [];
+    const streamed: string[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      onStderr: (chunk) => streamed.push(`stderr:${chunk}`),
+      onStdout: (chunk) => streamed.push(`stdout:${chunk}`),
+      provider: fakeProvider(events, {
+        commandStderrChunks: ["agent warning"],
+        commandStdout: ["Submitted preparation result."],
+        commandStdoutChunks: ["agent output"],
+        preparationResult: successResult(),
+        sandboxLogFailureEvent: "opencode.output",
+        validationResult: validationArtifact(),
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      manifest: { demoCommand: "npm run demo:makeademo" },
+      status: "succeeded",
+    });
+    expect(streamed).toEqual(["stdout:agent output", "stderr:agent warning"]);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          configDir: "/tmp/makeademo/opencode",
+          execute: expect.stringContaining("opencode run"),
+          streaming: true,
+        },
+      ]),
+    );
+  });
+
+  it("continues Repo Preparation when streamed OpenCode activity log writes never settle", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandStdout: ["Submitted preparation result."],
+        commandStdoutChunks: ["agent output"],
+        preparationResult: successResult(),
+        sandboxLogNeverSettlesEvent: "opencode.output",
+        validationResult: validationArtifact(),
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    const result = await Promise.race([
+      agent.prepare({
+        normalizedSupportingDocuments: [],
+        repoUrl: "https://github.com/example/app",
+        structuredDemoIntent: { keyProductFeatures: ["validation"] },
+        workspaceId: "workspace_123",
+      }),
+      new Promise<"timed-out">((resolve) =>
+        setTimeout(() => resolve("timed-out"), 50),
+      ),
+    ]);
+
+    expect(result).toMatchObject({
+      manifest: { demoCommand: "npm run demo:makeademo" },
+      status: "succeeded",
+    });
+  });
+
+  it("continues Repo Preparation when sandbox progress logging fails", async () => {
+    const events: unknown[] = [];
+    const pipelineLogs: Array<Record<string, unknown>> = [];
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      logger: createPipelineEventLogger({
+        base: { component: "repo-preparation-agent" },
+        sinks: [
+          {
+            write(line) {
+              pipelineLogs.push(JSON.parse(line) as Record<string, unknown>);
+            },
+          },
+        ],
+      }),
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandStdout: ["Submitted preparation result."],
+        preparationResult: successResult(),
+        sandboxLogFailureEvent: "workspace-created",
+        validationResult: validationArtifact(),
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    try {
+      const result = await agent.prepare({
+        normalizedSupportingDocuments: [],
+        repoUrl: "https://github.com/example/app",
+        structuredDemoIntent: { keyProductFeatures: ["validation"] },
+        workspaceId: "workspace_123",
+      });
+
+      expect(result).toMatchObject({
+        manifest: { demoCommand: "npm run demo:makeademo" },
+        status: "succeeded",
+      });
+      expect(warn).not.toHaveBeenCalled();
+      expect(pipelineLogs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            component: "repo-preparation-agent",
+            error: "sandbox log sink failed",
+            event: "sandbox-log-write-failed",
+            failedEvent: "workspace-created",
+            level: "warn",
+            stage: "repo-preparation",
+            workspaceComponent: "sandbox-log",
+          }),
+        ]),
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("continues Repo Preparation when sandbox progress logging fails and fallback warning logging hangs", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      logger: {
+        child() {
+          return this;
+        },
+        debug: vi.fn(async () => {}),
+        error: vi.fn(async () => {}),
+        flush: vi.fn(async () => {}),
+        info: vi.fn(async () => {}),
+        warn: vi.fn(() => new Promise<void>(() => {})),
+      },
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandStdout: ["Submitted preparation result."],
+        preparationResult: successResult(),
+        sandboxLogFailureEvent: "workspace-created",
+        validationResult: validationArtifact(),
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    const result = await Promise.race([
+      agent.prepare({
+        normalizedSupportingDocuments: [],
+        repoUrl: "https://github.com/example/app",
+        structuredDemoIntent: { keyProductFeatures: ["validation"] },
+        workspaceId: "workspace_123",
+      }),
+      new Promise<"timed-out">((resolve) =>
+        setTimeout(() => resolve("timed-out"), 50),
+      ),
+    ]);
+
+    expect(result).toMatchObject({
+      manifest: { demoCommand: "npm run demo:makeademo" },
+      status: "succeeded",
+    });
+  });
+
+  it("retries transient Daytona clone connection failures before starting OpenCode", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        cloneResults: [
+          new Error(
+            "DaytonaConnectionError: connect ECONNREFUSED 127.0.0.1:443",
+          ),
+          { exitCode: 0, stderr: "", stdout: "cloned" },
+        ],
+        commandStdout: ["Submitted preparation result."],
+        preparationResult: successResult(),
+        validationResult: validationArtifact(),
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({ status: "succeeded" });
+    expect(
+      events.filter(
+        (event): event is { execute: string } =>
+          typeof event === "object" &&
+          event !== null &&
+          "execute" in event &&
+          typeof event.execute === "string" &&
+          event.execute.includes("git clone"),
+      ),
+    ).toHaveLength(2);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        { network: true },
+        { network: false },
+        {
+          configDir: "/tmp/makeademo/opencode",
+          execute: expect.stringContaining("opencode run"),
+          streaming: true,
+        },
+      ]),
+    );
+  });
+
+  it("does not retry OpenCode execution errors from the Repo Preparation agent", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandStdout: ["Submitted preparation result."],
+        openCodeStartupErrors: [new Error("PTY connection timeout")],
+        preparationResult: successResult(),
+        validationResult: validationArtifact(),
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      blockers: ["PTY connection timeout"],
+      status: "failed",
+    });
+    expect(
+      events.filter(
+        (event): event is { execute: string } =>
+          typeof event === "object" &&
+          event !== null &&
+          "execute" in event &&
+          typeof event.execute === "string" &&
+          event.execute.includes("opencode run"),
+      ),
+    ).toHaveLength(1);
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "opencode-pty-connection-retrying",
+          }),
+        },
+      ]),
+    );
+  });
+
+  it("reports pre-OpenCode git clone failures as Repo Preparation clone blockers", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        cloneResults: [
+          {
+            exitCode: 128,
+            stderr:
+              "fatal: unable to access 'https://github.com/example/app/': server certificate verification failed. CAfile: none CRLfile: none",
+            stdout: "",
+          },
+        ],
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      blockers: [
+        expect.stringMatching(
+          /^(?!.*OpenCode exited)[\s\S]*Repo Preparation could not clone the submitted repository in the parent OpenCode workspace[\s\S]*server certificate verification failed/,
+        ),
+      ],
+      status: "failed",
+      suggestedChanges: [
+        "Retry Repo Preparation after the submitted repository can be cloned from the Daytona workspace.",
+      ],
+    });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        { network: true },
+        { network: false },
+        { destroy: "daytona_workspace" },
+      ]),
+    );
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        {
+          configDir: "/tmp/makeademo/opencode",
+          execute: expect.stringContaining("opencode run"),
+          streaming: true,
+        },
+      ]),
+    );
+  });
+
+  it("writes bounded CA and tool diagnostics when the pre-OpenCode clone fails", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      cloneFailureDiagnosticsContext: {
+        daytonaSnapshot: "makeademo-opencode",
+        daytonaSubmittedCodeSnapshot: "makeademo-submitted-code-browser",
+      },
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        cloneDiagnosticsStdout: [
+          "caCertificatesCrtExists=true",
+          "openshellCaBundleExists=true",
+          "openshellCaBundleReadable=true",
+          "openshellCaBundlePath=/etc/openshell-tls/ca-bundle.pem",
+          "openshellCaCertExists=true",
+          "openshellCaCertReadable=true",
+          "openshellCaCertPath=/etc/openshell-tls/openshell-ca.pem",
+          "caEnvPath_GIT_SSL_CAINFO=/etc/openshell-tls/ca-bundle.pem",
+          "gitSslCAInfo=file:/root/.gitconfig\t/etc/openshell-tls/ca-bundle.pem",
+          "gitVersion=git version 2.45.2",
+          "opensslVersion=OpenSSL 3.3.1 4 Jun 2024",
+        ].join("\n"),
+        cloneResults: [
+          {
+            exitCode: 128,
+            stderr: "server certificate verification failed. CAfile: none",
+            stdout: "",
+          },
+        ],
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          execute: expect.stringContaining("makeademo_clone_diagnostics"),
+        },
+        {
+          sandboxLog: expect.objectContaining({
+            caCertificatesCrtExists: true,
+            daytonaSnapshot: "makeademo-opencode",
+            daytonaSubmittedCodeSnapshot: "makeademo-submitted-code-browser",
+            event: "clone-failure-diagnostics",
+            caEnvPath_GIT_SSL_CAINFO: "/etc/openshell-tls/ca-bundle.pem",
+            gitVersion: "git version 2.45.2",
+            gitSslCAInfo:
+              "file:/root/.gitconfig\t/etc/openshell-tls/ca-bundle.pem",
+            openshellCaBundleExists: true,
+            openshellCaBundlePath: "/etc/openshell-tls/ca-bundle.pem",
+            openshellCaBundleReadable: true,
+            openshellCaCertExists: true,
+            openshellCaCertPath: "/etc/openshell-tls/openshell-ca.pem",
+            openshellCaCertReadable: true,
+            opensslVersion: "OpenSSL 3.3.1 4 Jun 2024",
+            stage: "repo-preparation",
+          }),
+        },
+      ]),
+    );
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        {
+          configDir: "/tmp/makeademo/opencode",
+          execute: expect.stringContaining("opencode run"),
+          streaming: true,
+        },
+      ]),
+    );
+  });
+
+  it("reports linked submitted-code clone failures with workspace context", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        submittedCodeCloneResult: {
+          exitCode: 128,
+          stderr:
+            "fatal: unable to access 'https://github.com/example/app/': server certificate verification failed. CAfile: none CRLfile: none",
+          stdout: "",
+        },
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      blockers: [
+        expect.stringMatching(
+          /^(?!.*OpenCode exited)[\s\S]*Repo Preparation could not clone the submitted repository in the linked submitted-code workspace[\s\S]*server certificate verification failed/,
+        ),
+      ],
+      status: "failed",
+      suggestedChanges: [
+        "Retry Repo Preparation after the submitted repository can be cloned from the Daytona workspace.",
+      ],
+    });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        { network: true },
+        { network: false },
+        { submittedCodeNetwork: true },
+        { submittedCodeNetwork: false },
+        { destroy: "daytona_workspace" },
+      ]),
+    );
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        {
+          configDir: "/tmp/makeademo/opencode",
+          execute: expect.stringContaining("opencode run"),
+          streaming: true,
+        },
+      ]),
+    );
+  });
+
+  it("writes linked submitted-code clone diagnostics before skipping OpenCode", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      cloneFailureDiagnosticsContext: {
+        daytonaSnapshot: "makeademo-opencode",
+        daytonaSubmittedCodeSnapshot: "makeademo-submitted-code-browser",
+      },
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        cloneDiagnosticsStdout: [
+          "caCertificatesCrtExists=true",
+          "openshellCaBundleExists=false",
+          "openshellCaBundleReadable=false",
+          "openshellCaCertExists=true",
+          "openshellCaCertReadable=false",
+          `caEnvPath_SSL_CERT_FILE=/etc/openshell-tls/${"x".repeat(1_000)}`,
+          "gitVersion=git version 2.45.2",
+          `opensslVersion=OpenSSL 3.3.1 ${"x".repeat(1_000)}`,
+        ].join("\n"),
+        submittedCodeCloneResult: {
+          exitCode: 128,
+          stderr: "server certificate verification failed. CAfile: none",
+          stdout: "",
+        },
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          submittedCodeExecute: expect.stringContaining(
+            "makeademo_clone_diagnostics",
+          ),
+        },
+        {
+          sandboxLog: expect.objectContaining({
+            caCertificatesCrtExists: true,
+            caEnvPath_SSL_CERT_FILE: expect.stringContaining("truncated"),
+            cloneFailureWorkspace: "linked submitted-code workspace",
+            daytonaSubmittedCodeSnapshot: "makeademo-submitted-code-browser",
+            event: "clone-failure-diagnostics",
+            gitVersion: "git version 2.45.2",
+            openshellCaBundleExists: false,
+            openshellCaBundleReadable: false,
+            openshellCaCertExists: true,
+            openshellCaCertReadable: false,
+            opensslVersion: expect.stringContaining("truncated"),
+            stage: "repo-preparation",
+          }),
+        },
+      ]),
+    );
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        {
+          configDir: "/tmp/makeademo/opencode",
+          execute: expect.stringContaining("opencode run"),
+          streaming: true,
+        },
+      ]),
+    );
+  });
+
+  it("waits for clone-failure diagnostics to reach sandbox log sinks before destroying the workspace", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        cloneDiagnosticsStdout: "gitVersion=git version 2.45.2",
+        cloneResults: [{ exitCode: 128, stderr: "clone failed", stdout: "" }],
+        sandboxLogDelayMs: 10,
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    const diagnosticLogIndex = events.findIndex(
+      (event) =>
+        typeof event === "object" &&
+        event !== null &&
+        "sandboxLog" in event &&
+        (event as { sandboxLog?: { event?: unknown } }).sandboxLog?.event ===
+          "clone-failure-diagnostics",
+    );
+    const destroyIndex = events.findIndex(
+      (event) =>
+        typeof event === "object" && event !== null && "destroy" in event,
+    );
+
+    expect(diagnosticLogIndex).toBeGreaterThanOrEqual(0);
+    expect(destroyIndex).toBeGreaterThan(diagnosticLogIndex);
+  });
+
+  it("redacts credentials and bounds clone failure output in blockers", async () => {
+    const noisyOutput = "x".repeat(8_000);
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        cloneResults: [
+          {
+            exitCode: 128,
+            stderr: `fatal: unable to access 'https://token:secret@github.com/example/app/?access_token=query-secret&password=pw-secret': authentication failed ${noisyOutput}`,
+            stdout: `remote: https://oauth2:another-secret@gitlab.com/example/app?api_key=key-secret&client_secret=client-secret&safe=visible ${noisyOutput}`,
+          },
+        ],
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://token:secret@github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result.status).toBe("failed");
+    if (result.status !== "failed") {
+      throw new Error("expected clone failure");
+    }
+    const blocker = result.blockers[0] ?? "";
+    expect(blocker).toContain(
+      "https://***@github.com/example/app/?access_token=***&password=***",
+    );
+    expect(blocker).toContain(
+      "https://***@gitlab.com/example/app?api_key=***&client_secret=***&safe=visible",
+    );
+    expect(blocker).not.toContain("token:secret");
+    expect(blocker).not.toContain("another-secret");
+    expect(blocker).not.toContain("query-secret");
+    expect(blocker).not.toContain("pw-secret");
+    expect(blocker).not.toContain("key-secret");
+    expect(blocker).not.toContain("client-secret");
+    expect(blocker.length).toBeLessThan(2_500);
+    expect(blocker).toContain("truncated");
   });
 
   it("handles custom tool dependency install requests in the retained Daytona workspace", async () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
-      providerApiKey: "openai_key",
       provider: fakeProvider(events, {
         commandStdout: [
           JSON.stringify({ sessionID: "session_123", type: "session" }),
@@ -175,11 +859,141 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     expect(openCodeCommands[1]).toContain("--session 'session_123'");
   });
 
+  it("tells OpenCode successful dependency installs ran in submitted-code before retrying preparation", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandStdout: [
+          JSON.stringify({ sessionID: "session_123", type: "session" }),
+          "Submitted preparation result.",
+        ],
+        dependencyInstallRequest: { command: "bun install" },
+        preparationResult: successResult(),
+        validationResult: validationArtifact(),
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({ status: "succeeded" });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "dependency-install-finished",
+            exitCode: 0,
+            stderrLength: 0,
+            stdoutLength: 9,
+            stage: "repo-preparation",
+          }),
+        },
+      ]),
+    );
+
+    const resumedOpenCodeCommand = events
+      .filter(
+        (event): event is { execute: string } =>
+          typeof event === "object" &&
+          event !== null &&
+          "execute" in event &&
+          typeof event.execute === "string" &&
+          event.execute.includes("opencode run"),
+      )
+      .map((event) => event.execute)[1];
+    expect(resumedOpenCodeCommand).toContain(
+      "Dependency install ran in the submitted-code sandbox",
+    );
+    expect(resumedOpenCodeCommand).toContain(
+      "parent OpenCode `/workspace` may not contain `node_modules`",
+    );
+    expect(resumedOpenCodeCommand).toContain(
+      "Validate readiness by writing the Preparation Manifest and calling MakeADemo preparation preflight",
+    );
+  });
+
+  it("returns failed dependency installation output to OpenCode before retrying preparation", async () => {
+    const events: unknown[] = [];
+    const installStderr = `${"stderr-start ".repeat(200)}missing package left-pad`;
+    const installStdout = `${"stdout-start ".repeat(200)}resolved 9 packages`;
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandStdout: [
+          JSON.stringify({ sessionID: "session_123", type: "session" }),
+          JSON.stringify({
+            assumptions: [],
+            blockers: ["Agent received dependency failure feedback."],
+            status: "failed",
+            suggestedChanges: [],
+          }),
+        ],
+        dependencyInstallRequest: { command: "bun install" },
+        submittedCodeInstallResult: {
+          exitCode: 42,
+          stderr: installStderr,
+          stdout: installStdout,
+        },
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      blockers: ["Agent received dependency failure feedback."],
+      status: "failed",
+    });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "dependency-install-finished",
+            exitCode: 42,
+            stderrLength: installStderr.length,
+            stdoutLength: installStdout.length,
+            stage: "repo-preparation",
+          }),
+        },
+      ]),
+    );
+
+    const resumedOpenCodeCommand = events
+      .filter(
+        (event): event is { execute: string } =>
+          typeof event === "object" &&
+          event !== null &&
+          "execute" in event &&
+          typeof event.execute === "string" &&
+          event.execute.includes("opencode run"),
+      )
+      .map((event) => event.execute)[1];
+    expect(resumedOpenCodeCommand).toContain("Dependency installation failed");
+    expect(resumedOpenCodeCommand).toContain("exit code 42");
+    expect(resumedOpenCodeCommand).toContain("resolved 9 packages");
+    expect(resumedOpenCodeCommand).toContain("missing package left-pad");
+    expect(resumedOpenCodeCommand).not.toContain(
+      "Backend-controlled dependency installation has completed",
+    );
+  });
+
   it("logs Repo Preparation retries with the reason before resuming OpenCode", async () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
-      providerApiKey: "openai_key",
       provider: fakeProvider(events, {
         commandStdout: [
           JSON.stringify({ sessionID: "session_123", type: "session" }),
@@ -237,11 +1051,224 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     );
   });
 
+  it("tells OpenCode to repair only observed runtime network requests before rerunning preflight", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandStdout: [
+          "Validation requested.",
+          JSON.stringify({
+            assumptions: [],
+            blockers: ["Agent received validation feedback."],
+            status: "failed",
+            suggestedChanges: [],
+          }),
+        ],
+        validationRequest: {
+          manifestPath:
+            "/tmp/makeademo/submitted-code/preparation-manifest.json",
+        },
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+      validatePreparation: async () => ({
+        blockedNetworkAttempts: [
+          {
+            direction: "outbound",
+            host: "code.ionicframework.com",
+            phase: "runtime",
+            url: "https://code.ionicframework.com/ionicons/ionicons.esm.js",
+          },
+          {
+            direction: "outbound",
+            host: "fonts.googleapis.com",
+            phase: "runtime",
+            url: "https://fonts.googleapis.com/css?family=Inter",
+          },
+        ],
+        failureReason: "Runtime network requests were blocked.",
+        logs: ["external runtime request blocked"],
+        status: "failed",
+        warnings: [],
+      }),
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({ status: "failed" });
+    const validationFeedbackCommand = events
+      .filter(
+        (event): event is { execute: string } =>
+          typeof event === "object" &&
+          event !== null &&
+          "execute" in event &&
+          typeof event.execute === "string" &&
+          event.execute.includes("opencode run"),
+      )
+      .map((event) => event.execute)[1];
+    expect(validationFeedbackCommand).toContain(
+      "repair only the observed runtime network requests listed in `blockedNetworkAttempts`",
+    );
+    expect(validationFeedbackCommand).toContain(
+      "Remaining Repo Preparation budget:",
+    );
+    expect(validationFeedbackCommand).toContain(
+      "Patch those listed runtime requests first",
+    );
+    expect(validationFeedbackCommand).toContain(
+      "Ignore package metadata URLs, lockfile URLs, and ordinary external anchor links unless the demo actually clicks or navigates to those links",
+    );
+    expect(validationFeedbackCommand).toContain(
+      "After removing or replacing the listed runtime requests, rerun `makeademo_validate_preparation` promptly",
+    );
+  });
+
+  it("fails fast when preparation preflight cannot restore submitted-code files", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandStdout: ["Validation requested."],
+        validationRequest: {
+          manifestPath:
+            "/tmp/makeademo/submitted-code/preparation-manifest.json",
+        },
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+      validatePreparation: async () => ({
+        blockedNetworkAttempts: [],
+        failureKind: "submitted-code-workspace-sync-failed",
+        failureReason:
+          "Failed to sync prepared files to submitted-code workspace.",
+        logs: ["Failed to sync prepared files to submitted-code workspace."],
+        status: "failed",
+        warnings: [],
+      }),
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      blockers: [
+        expect.stringContaining(
+          "non-retryable MakeADemo infrastructure failure",
+        ),
+      ],
+      status: "failed",
+    });
+    expect(
+      events.filter(
+        (event): event is { execute: string } =>
+          typeof event === "object" &&
+          event !== null &&
+          "execute" in event &&
+          typeof event.execute === "string" &&
+          event.execute.includes("opencode run"),
+      ),
+    ).toHaveLength(1);
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "repo-preparation.retrying",
+          }),
+        },
+      ]),
+    );
+  });
+
+  it("retries preparation preflight feedback when restore-looking text has no failure kind", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandStdout: [
+          "Validation requested.",
+          JSON.stringify({
+            assumptions: [],
+            blockers: ["Agent received validation feedback."],
+            status: "failed",
+            suggestedChanges: [],
+          }),
+        ],
+        validationRequest: {
+          manifestPath:
+            "/tmp/makeademo/submitted-code/preparation-manifest.json",
+        },
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+      validatePreparation: async () => ({
+        blockedNetworkAttempts: [],
+        failureReason:
+          'Failed to restore prepared files in submitted-code sandbox (exit code 2). stderr: sh: 1: Syntax error: "(" unexpected',
+        logs: [
+          'Failed to restore prepared files in submitted-code sandbox (exit code 2). stderr: sh: 1: Syntax error: "(" unexpected',
+        ],
+        status: "failed",
+        warnings: [],
+      }),
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      blockers: ["Agent received validation feedback."],
+      status: "failed",
+    });
+    expect(
+      events.filter(
+        (event): event is { execute: string } =>
+          typeof event === "object" &&
+          event !== null &&
+          "execute" in event &&
+          typeof event.execute === "string" &&
+          event.execute.includes("opencode run"),
+      ),
+    ).toHaveLength(2);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "repo-preparation.retrying",
+            reason:
+              'Failed to restore prepared files in submitted-code sandbox (exit code 2). stderr: sh: 1: Syntax error: "(" unexpected',
+          }),
+        },
+      ]),
+    );
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "preparation-preflight.non-retryable-failure",
+          }),
+        },
+      ]),
+    );
+  });
+
   it("reseals submitted-code network when dependency installation times out", async () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
-      providerApiKey: "openai_key",
       provider: fakeProvider(events, {
         commandStdout: [
           JSON.stringify({ sessionID: "session_123", type: "session" }),
@@ -274,12 +1301,514 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     );
   });
 
+  it("fails dependency install handoff when reading the request artifact times out", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandStdout: [
+          JSON.stringify({ sessionID: "session_123", type: "session" }),
+        ],
+        dependencyInstallRequestReadNeverSettles: true,
+      }),
+      providerID: "openai",
+      timeoutMs: 250,
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      blockers: [
+        expect.stringContaining(
+          "Repo Preparation timed out reading the dependency install request artifact",
+        ),
+      ],
+      status: "failed",
+    });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "dependency-install-request-read.started",
+            stage: "repo-preparation",
+          }),
+        },
+        {
+          sandboxLog: expect.objectContaining({
+            event: "dependency-install-request-read.timeout",
+            stage: "repo-preparation",
+          }),
+        },
+        { destroy: "daytona_workspace" },
+      ]),
+    );
+    expect(events).not.toEqual(
+      expect.arrayContaining([{ submittedCodeExecute: "bun install" }]),
+    );
+  });
+
+  it("reads validation handoff first after OpenCode calls the validation tool", async () => {
+    const events: unknown[] = [];
+    let validationStarted = false;
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandStdout: ["Tool call: makeademo_validate_preparation"],
+        dependencyInstallRequestReadNeverSettles: true,
+        validationRequest: {
+          manifestPath:
+            "/tmp/makeademo/submitted-code/preparation-manifest.json",
+        },
+      }),
+      providerID: "openai",
+      timeoutMs: 250,
+      validatePreparation: async () => {
+        validationStarted = true;
+        return validationArtifact().validation;
+      },
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      validation: { status: "succeeded" },
+    });
+    expect(validationStarted).toBe(true);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "validation-request-read.started",
+            stage: "repo-preparation",
+          }),
+        },
+      ]),
+    );
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "dependency-install-request-read.timeout",
+          }),
+        },
+      ]),
+    );
+  });
+
+  it("runs validation from streamed structured tool input when the validation artifact read never settles", async () => {
+    const events: unknown[] = [];
+    let validationStarted = false;
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandOutputChunks: [
+          {
+            channel: "stdout",
+            chunk: `${JSON.stringify({
+              part: {
+                input: {
+                  manifestPath:
+                    "/tmp/makeademo/submitted-code/preparation-manifest.json",
+                },
+                tool: "makeademo_validate_preparation",
+                type: "tool-call",
+              },
+              type: "message.part",
+            })}\n`,
+          },
+        ],
+        validationRequestReadNeverSettles: true,
+      }),
+      providerID: "openai",
+      timeoutMs: 250,
+      validatePreparation: async () => {
+        validationStarted = true;
+        return validationArtifact().validation;
+      },
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      validation: { status: "succeeded" },
+    });
+    expect(validationStarted).toBe(true);
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "validation-request-read.started",
+          }),
+        },
+      ]),
+    );
+  });
+
+  it("runs dependency install from streamed structured tool input when the dependency artifact read never settles", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandOutputChunksByRun: [
+          [
+            {
+              channel: "stderr",
+              chunk: `${JSON.stringify({
+                input: { manifestPath: "/tmp/old-manifest.json" },
+                toolName: "makeademo_validate_preparation",
+                type: "tool-call",
+              })}\n`,
+            },
+            {
+              channel: "stdout",
+              chunk: `${JSON.stringify({
+                args: { command: "bun install" },
+                toolName: "makeademo_dependency_request_install",
+                type: "tool-call",
+              })}\n`,
+            },
+          ],
+          [
+            {
+              channel: "stdout",
+              chunk: `${JSON.stringify({
+                input: {
+                  manifestPath:
+                    "/tmp/makeademo/submitted-code/preparation-manifest.json",
+                },
+                toolName: "makeademo_validate_preparation",
+                type: "tool-call",
+              })}\n`,
+            },
+          ],
+        ],
+        dependencyInstallRequestReadNeverSettles: true,
+      }),
+      providerID: "openai",
+      timeoutMs: 500,
+      validatePreparation: async () => validationArtifact().validation,
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({ status: "succeeded" });
+    expect(events).toEqual(
+      expect.arrayContaining([{ submittedCodeExecute: "bun install" }]),
+    );
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "dependency-install-request-read.started",
+          }),
+        },
+      ]),
+    );
+  });
+
+  it("fails observed dependency tool payloads with missing fields without reading artifacts", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandOutputChunks: [
+          {
+            channel: "stdout",
+            chunk: `${JSON.stringify({
+              input: {},
+              toolName: "makeademo_dependency_request_install",
+              type: "tool-call",
+            })}\n`,
+          },
+        ],
+        dependencyInstallRequestReadNeverSettles: true,
+      }),
+      providerID: "openai",
+      timeoutMs: 250,
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      blockers: [
+        expect.stringContaining(
+          "makeademo_dependency_request_install payload is missing required field input.command",
+        ),
+      ],
+      status: "failed",
+    });
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "dependency-install-request-read.started",
+          }),
+        },
+        { submittedCodeExecute: "bun install" },
+      ]),
+    );
+  });
+
+  it("fails observed validation tool payloads with missing fields without reading artifacts", async () => {
+    const events: unknown[] = [];
+    let validationStarted = false;
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandOutputChunks: [
+          {
+            channel: "stdout",
+            chunk: `${JSON.stringify({
+              input: {},
+              toolName: "makeademo_validate_preparation",
+              type: "tool-call",
+            })}\n`,
+          },
+        ],
+        validationRequestReadNeverSettles: true,
+      }),
+      providerID: "openai",
+      timeoutMs: 250,
+      validatePreparation: async () => {
+        validationStarted = true;
+        return validationArtifact().validation;
+      },
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      blockers: [
+        expect.stringContaining(
+          "makeademo_validate_preparation payload is missing required field input.manifestPath",
+        ),
+      ],
+      status: "failed",
+    });
+    expect(validationStarted).toBe(false);
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "validation-request-read.started",
+          }),
+        },
+      ]),
+    );
+  });
+
+  it("uses mixed stream arrival order when validation is the latest OpenCode tool", async () => {
+    const events: unknown[] = [];
+    let validationStarted = false;
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandOutputChunks: [
+          {
+            channel: "stderr",
+            chunk: "Tool call: makeademo_dependency_request_install",
+          },
+          {
+            channel: "stdout",
+            chunk: "Tool call: makeademo_validate_preparation",
+          },
+        ],
+        dependencyInstallRequestReadNeverSettles: true,
+        validationRequest: {
+          manifestPath:
+            "/tmp/makeademo/submitted-code/preparation-manifest.json",
+        },
+      }),
+      providerID: "openai",
+      timeoutMs: 250,
+      validatePreparation: async () => {
+        validationStarted = true;
+        return validationArtifact().validation;
+      },
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      validation: { status: "succeeded" },
+    });
+    expect(validationStarted).toBe(true);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "validation-request-read.started",
+          }),
+        },
+      ]),
+    );
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "dependency-install-request-read.timeout",
+          }),
+        },
+      ]),
+    );
+  });
+
+  it("uses mixed stream arrival order when dependency install is the latest OpenCode tool", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandOutputChunks: [
+          {
+            channel: "stdout",
+            chunk: "Tool call: makeademo_validate_preparation",
+          },
+          {
+            channel: "stderr",
+            chunk: "Tool call: makeademo_dependency_request_install",
+          },
+        ],
+        dependencyInstallRequest: { command: "bun install" },
+        preparationResult: successResult(),
+      }),
+      providerID: "openai",
+      timeoutMs: 500,
+      validatePreparation: async () => validationArtifact().validation,
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({ status: "succeeded" });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "dependency-install-request-read.started",
+          }),
+        },
+        { submittedCodeExecute: "bun install" },
+      ]),
+    );
+    const dependencyReadIndex = events.findIndex(
+      (event) =>
+        typeof event === "object" &&
+        event !== null &&
+        "sandboxLog" in event &&
+        (event as { sandboxLog?: { event?: unknown } }).sandboxLog?.event ===
+          "dependency-install-request-read.started",
+    );
+    const validationReadIndex = events.findIndex(
+      (event) =>
+        typeof event === "object" &&
+        event !== null &&
+        "sandboxLog" in event &&
+        (event as { sandboxLog?: { event?: unknown } }).sandboxLog?.event ===
+          "validation-request-read.started",
+    );
+    expect(dependencyReadIndex).toBeGreaterThanOrEqual(0);
+    expect(validationReadIndex).toBeGreaterThan(dependencyReadIndex);
+  });
+
+  it("fails preparation preflight handoff when reading the validation request artifact times out", async () => {
+    const events: unknown[] = [];
+    let validationStarted = false;
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandStdout: ["Validation requested."],
+        validationRequestReadNeverSettles: true,
+      }),
+      providerID: "openai",
+      timeoutMs: 250,
+      validatePreparation: async () => {
+        validationStarted = true;
+        return validationArtifact().validation;
+      },
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      blockers: [
+        expect.stringContaining(
+          "Repo Preparation timed out reading the validation request artifact",
+        ),
+      ],
+      status: "failed",
+    });
+    expect(validationStarted).toBe(false);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "validation-request-read.started",
+            stage: "repo-preparation",
+          }),
+        },
+        {
+          sandboxLog: expect.objectContaining({
+            event: "validation-request-read.timeout",
+            stage: "repo-preparation",
+          }),
+        },
+        { destroy: "daytona_workspace" },
+      ]),
+    );
+  });
+
   it("returns a successful preparation result as soon as preparation preflight passes", async () => {
     const events: unknown[] = [];
     const validations: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
-      providerApiKey: "openai_key",
       provider: fakeProvider(events, {
         commandStdout: ["Validation requested."],
         validationRequest: {
@@ -349,7 +1878,6 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
   it("preserves the OpenCode session ID from streamed output when validation passes", async () => {
     const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
-      providerApiKey: "openai_key",
       provider: fakeProvider([], {
         commandStdout: ["Validation requested."],
         commandStdoutChunks: [
@@ -383,12 +1911,50 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     });
   });
 
+  it("routes the latest MakeADemo tool from noisy streamed output split across chunks", async () => {
+    const noisyChunk = "noise ".repeat(20_000);
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider([], {
+        commandOutputChunks: [
+          { channel: "stdout", chunk: noisyChunk },
+          { channel: "stdout", chunk: "makeademo_validate_" },
+          { channel: "stderr", chunk: `preparation${noisyChunk}` },
+        ],
+        commandStdout: ["Validation requested."],
+        validationRequest: {
+          manifestPath:
+            "/tmp/makeademo/submitted-code/preparation-manifest.json",
+        },
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+      validatePreparation: async () => ({
+        blockedNetworkAttempts: [],
+        logs: ["validated"],
+        status: "succeeded",
+        warnings: [],
+      }),
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      validation: { status: "succeeded" },
+    });
+  });
+
   it("returns malformed manifest handoff failures to the agent as preparation preflight feedback", async () => {
     const events: unknown[] = [];
     let validationStarted = false;
     const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
-      providerApiKey: "openai_key",
       provider: fakeProvider(events, {
         commandStdout: [
           "Validation requested.",
@@ -454,7 +2020,6 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
-      providerApiKey: "openai_key",
       provider: fakeProvider(events, [JSON.stringify(successResult())]),
       providerID: "openai",
       timeoutMs: 1_000,
@@ -481,6 +2046,20 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
         },
       ]),
     );
+    const submittedCodeClone = events.find(
+      (event): event is { submittedCodeExecute: string } =>
+        typeof event === "object" &&
+        event !== null &&
+        "submittedCodeExecute" in event &&
+        typeof event.submittedCodeExecute === "string" &&
+        event.submittedCodeExecute.includes("git clone"),
+    )?.submittedCodeExecute;
+    expect(submittedCodeClone).toContain("/etc/ssl/certs/ca-certificates.crt");
+    expect(submittedCodeClone).toContain("/etc/pki/tls/certs/ca-bundle.crt");
+    expect(submittedCodeClone).toContain("/etc/openshell-tls/ca-bundle.pem");
+    expect(submittedCodeClone).toMatch(/export GIT_SSL_CAINFO=.*git clone/s);
+    expect(submittedCodeClone).not.toContain("GIT_SSL_NO_VERIFY");
+    expect(submittedCodeClone).not.toContain("sslVerify=false");
     expect(events).toEqual(
       expect.arrayContaining([
         { submittedCodeNetwork: true },
@@ -498,7 +2077,6 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
         preparationResult: successResult(),
         validationResult: validationArtifact(),
       }),
-      providerApiKey: "openai_key",
       providerID: "openai",
       timeoutMs: 1_000,
     });
@@ -547,7 +2125,6 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
         preparationResult: successResult(),
         validationResult: validationArtifact(),
       }),
-      providerApiKey: "openai_key",
       providerID: "openai",
       timeoutMs: 1_000,
     });
@@ -600,7 +2177,6 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
         preparationResult: successResult(),
         validationResult: validationArtifact(),
       }),
-      providerApiKey: "openai_key",
       providerID: "openai",
       timeoutMs: 1_000,
     });
@@ -627,7 +2203,6 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     let validationStarted = false;
     const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
-      providerApiKey: "openai_key",
       provider: fakeProvider(events, {
         commandDelayMs: 920,
         commandStdout: ["Validation requested."],
@@ -667,16 +2242,37 @@ function fakeProvider(
     | string[]
     | {
         commandStdout?: string[];
+        commandOutputChunks?: Array<{
+          channel: "stderr" | "stdout";
+          chunk: string;
+        }>;
+        commandOutputChunksByRun?: Array<
+          Array<{
+            channel: "stderr" | "stdout";
+            chunk: string;
+          }>
+        >;
         commandStderrChunks?: string[];
         commandStdoutChunks?: string[];
         commandDelayMs?: number;
+        dependencyInstallRequestReadNeverSettles?: boolean;
+        cloneDiagnosticsStdout?: string;
+        cloneResults?: Array<PreparationWorkspaceCommandResult | Error>;
         dependencyInstallRequest?: { command: string };
         manifestPayload?: unknown;
+        openCodeStartupErrors?: Error[];
         preparationResult?: ReturnType<typeof successResult>;
+        queuedSandboxLogWrites?: boolean;
+        sandboxLogFailureEvent?: string;
+        sandboxLogDelayMs?: number;
+        sandboxLogNeverSettlesEvent?: string;
+        submittedCodeCloneResult?: PreparationWorkspaceCommandResult;
+        submittedCodeInstallResult?: PreparationWorkspaceCommandResult;
         submittedCodeNeverSettles?: boolean;
         validationRequest?: {
           manifestPath: string;
         };
+        validationRequestReadNeverSettles?: boolean;
         validationResult?: ReturnType<typeof validationArtifact>;
       } = [JSON.stringify(successResult())],
 ): PreparationWorkspaceProvider {
@@ -701,23 +2297,48 @@ function fakeWorkspace(
   events: unknown[],
   input: {
     commandStdout?: string[];
+    commandOutputChunks?: Array<{
+      channel: "stderr" | "stdout";
+      chunk: string;
+    }>;
+    commandOutputChunksByRun?: Array<
+      Array<{
+        channel: "stderr" | "stdout";
+        chunk: string;
+      }>
+    >;
     commandStderrChunks?: string[];
     commandStdoutChunks?: string[];
     commandDelayMs?: number;
+    dependencyInstallRequestReadNeverSettles?: boolean;
+    cloneDiagnosticsStdout?: string;
+    cloneResults?: Array<PreparationWorkspaceCommandResult | Error>;
     dependencyInstallRequest?: { command: string };
     manifestPayload?: unknown;
+    openCodeStartupErrors?: Error[];
     preparationResult?: ReturnType<typeof successResult>;
+    queuedSandboxLogWrites?: boolean;
+    sandboxLogFailureEvent?: string;
+    sandboxLogDelayMs?: number;
+    sandboxLogNeverSettlesEvent?: string;
+    submittedCodeCloneResult?: PreparationWorkspaceCommandResult;
+    submittedCodeInstallResult?: PreparationWorkspaceCommandResult;
     submittedCodeNeverSettles?: boolean;
     validationRequest?: {
       manifestPath: string;
     };
+    validationRequestReadNeverSettles?: boolean;
     validationResult?: ReturnType<typeof validationArtifact>;
   },
 ): PreparationWorkspace {
   const commandStdout = input.commandStdout ?? [
     JSON.stringify(successResult()),
   ];
+  const commandOutputChunksByRun = [...(input.commandOutputChunksByRun ?? [])];
+  const cloneResults = [...(input.cloneResults ?? [])];
+  const openCodeStartupErrors = [...(input.openCodeStartupErrors ?? [])];
   let dependencyInstallRequest = input.dependencyInstallRequest;
+  let sandboxLogChain = Promise.resolve();
   let validationRequest = input.validationRequest;
   let validationResult = input.validationResult;
 
@@ -742,16 +2363,40 @@ function fakeWorkspace(
             }
           : {}),
       });
-      for (const chunk of input.commandStdoutChunks ?? ["opencode output"]) {
-        options?.onStdout?.(chunk);
+      if (
+        command.includes("opencode run") &&
+        openCodeStartupErrors.length > 0
+      ) {
+        throw openCodeStartupErrors.shift();
       }
-      for (const chunk of input.commandStderrChunks ?? []) {
-        options?.onStderr?.(chunk);
+      const commandOutputChunks = command.includes("opencode run")
+        ? commandOutputChunksByRun.length > 0
+          ? commandOutputChunksByRun.shift()
+          : input.commandOutputChunks
+        : undefined;
+      if (commandOutputChunks !== undefined) {
+        for (const output of commandOutputChunks) {
+          if (output.channel === "stdout") {
+            options?.onStdout?.(output.chunk);
+          } else {
+            options?.onStderr?.(output.chunk);
+          }
+        }
+      } else {
+        for (const chunk of input.commandStdoutChunks ?? ["opencode output"]) {
+          options?.onStdout?.(chunk);
+        }
+        for (const chunk of input.commandStderrChunks ?? []) {
+          options?.onStderr?.(chunk);
+        }
       }
       if (
         command.startsWith("if test -f") &&
         command.includes("dependency-install-request.json")
       ) {
+        if (input.dependencyInstallRequestReadNeverSettles === true) {
+          await new Promise(() => {});
+        }
         return {
           exitCode: dependencyInstallRequest === undefined ? 1 : 0,
           stderr: "",
@@ -765,6 +2410,9 @@ function fakeWorkspace(
         command.startsWith("if test -f") &&
         command.includes("validation-request.json")
       ) {
+        if (input.validationRequestReadNeverSettles === true) {
+          await new Promise(() => {});
+        }
         return {
           exitCode: validationRequest === undefined ? 1 : 0,
           stderr: "",
@@ -842,6 +2490,20 @@ function fakeWorkspace(
           "outer workspace execution must not install dependencies",
         );
       }
+      if (command.includes("makeademo_clone_diagnostics")) {
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout: input.cloneDiagnosticsStdout ?? "",
+        };
+      }
+      if (command.includes("git clone") && cloneResults.length > 0) {
+        const cloneResult = cloneResults.shift();
+        if (cloneResult instanceof Error) {
+          throw cloneResult;
+        }
+        return cloneResult ?? { exitCode: 0, stderr: "", stdout: "cloned" };
+      }
       return {
         exitCode: 0,
         stderr: "",
@@ -856,11 +2518,24 @@ function fakeWorkspace(
     async executeSubmittedCode(command) {
       events.push({ submittedCodeExecute: command });
       if (command.includes("git clone")) {
+        if (input.submittedCodeCloneResult !== undefined) {
+          return input.submittedCodeCloneResult;
+        }
         return { exitCode: 0, stderr: "", stdout: "cloned submitted" };
+      }
+      if (command.includes("makeademo_clone_diagnostics")) {
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout: input.cloneDiagnosticsStdout ?? "",
+        };
       }
       if (command === "bun install") {
         if (input.submittedCodeNeverSettles === true) {
           await new Promise(() => {});
+        }
+        if (input.submittedCodeInstallResult !== undefined) {
+          return input.submittedCodeInstallResult;
         }
         return { exitCode: 0, stderr: "", stdout: "installed" };
       }
@@ -879,8 +2554,27 @@ function fakeWorkspace(
     async uploadFiles() {
       throw new Error("Repo Preparation should clone inside Daytona.");
     },
-    async writeSandboxLog(entry) {
-      events.push({ sandboxLog: entry });
+    writeSandboxLog(entry) {
+      const write = async () => {
+        if (input.sandboxLogDelayMs !== undefined) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, input.sandboxLogDelayMs),
+          );
+        }
+        events.push({ sandboxLog: entry });
+        if (entry.event === input.sandboxLogNeverSettlesEvent) {
+          await new Promise(() => {});
+        }
+        if (entry.event === input.sandboxLogFailureEvent) {
+          throw new Error("sandbox log sink failed");
+        }
+      };
+      if (input.queuedSandboxLogWrites !== true) {
+        return write();
+      }
+
+      sandboxLogChain = sandboxLogChain.then(write, write);
+      return sandboxLogChain;
     },
   };
 }

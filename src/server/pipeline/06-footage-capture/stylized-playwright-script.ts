@@ -124,6 +124,7 @@ const makeADemoFailureScreenshotPath = new URL(
 ).pathname;
 
 try {
+  // Generated protocol: parent validation parses these stdout/stderr markers; keep non-Pino.
   console.log("[makeademo:validation] script started", JSON.stringify({ baseUrl }));
 ${indentScriptBody(script)}
   console.log("[makeademo:validation] script succeeded", JSON.stringify({ title: await page.title(), url: page.url() }));
@@ -159,6 +160,7 @@ if (makeADemoOriginalFetch !== undefined) {
       ? new URL(resource, baseUrl).toString()
       : new URL(resource.url, baseUrl).toString();
     if (!isMakeADemoAllowedRuntimeRequest(requestUrl)) {
+      // Generated protocol: parent validation/capture parses blocked-network markers from stderr.
       console.error("[makeademo:network-blocked]", JSON.stringify({
         direction: "outbound",
         host: new URL(requestUrl).host,
@@ -181,6 +183,7 @@ await context.route("**/*", async (route) => {
     return;
   }
 
+  // Generated protocol: parent validation/capture parses blocked-network markers from stderr.
   console.error("[makeademo:network-blocked]", JSON.stringify({
     direction: "outbound",
     host: new URL(requestUrl).host,

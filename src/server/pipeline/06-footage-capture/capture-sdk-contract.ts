@@ -262,6 +262,7 @@ export async function scene() {
   const sdk = readMakeADemoCaptureSdk();
   const id = arguments[0];
   const callback = arguments[1];
+  // Generated protocol: parent validators/recorders parse these stdout markers for Scene timing.
   console.log('[makeademo:scene]', JSON.stringify({ elapsedMs: elapsedMs(sdk), event: 'started', sceneId: id }));
   try {
     await callback(createInstrumentedContext(sdk, id));
@@ -486,6 +487,7 @@ function instrumentExpect(playwrightExpect, sdk, sceneId, timeoutMs) {
 }
 
 async function runInstrumentedStep(input) {
+  // Generated protocol: parent validators parse these stdout markers for Browser Action failures.
   console.log('[makeademo:action]', JSON.stringify(removeUndefinedValues({
     elapsedMs: elapsedMs(input.sdk),
     event: 'started',

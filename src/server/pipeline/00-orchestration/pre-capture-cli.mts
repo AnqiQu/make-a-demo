@@ -1,12 +1,17 @@
 import { readFile, stat } from "node:fs/promises";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 
 import { DaytonaOpenCodeScriptGeneration } from "../../shared/integrations/agents/daytona-opencode-script-generation";
-import { createRepoPreparationAgent } from "../../shared/integrations/agents/repo-preparation-agent-factory";
+import { ensureOpenCodeProviderDaytonaSecret } from "../../shared/integrations/agents/opencode-provider-secrets";
+import {
+  createRepoPreparationAgent,
+  readRepoPreparationTimeoutMsFromEnv,
+} from "../../shared/integrations/agents/repo-preparation-agent-factory";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../../shared/integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import { DaytonaSandboxRunner } from "../../shared/integrations/sandbox/daytona-sandbox-runner";
 import {
+  createFilePipelineLogSink,
   createPipelineEventLogger,
   createPrettyPipelineLogSink,
 } from "../../shared/logging/pipeline-event-logger";
@@ -27,6 +32,13 @@ const daytonaApiKey = process.env.DAYTONA_API_KEY;
 const cliLogSink = createPrettyPipelineLogSink({
   write: (text) => process.stderr.write(text),
 });
+const preCaptureRunDirectory = join(
+  ".makeademo-pre-capture-runs",
+  createRunId(),
+);
+const localPipelineLogSink = createFilePipelineLogSink(
+  join(preCaptureRunDirectory, "pipeline-log.jsonl"),
+);
 const daytonaSnapshot = readOptionalEnv("MAKEADEMO_DAYTONA_SNAPSHOT");
 const daytonaSubmittedCodeSnapshot = readOptionalEnv(
   "MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT",
@@ -39,14 +51,11 @@ if (daytonaApiKey === undefined || daytonaApiKey === "") {
 const sandboxProvider = new DaytonaSdkPreparationWorkspaceProvider({
   apiKey: daytonaApiKey,
   ...(daytonaSnapshot === undefined ? {} : { snapshot: daytonaSnapshot }),
-  ...(daytonaSubmittedCodeSnapshot === undefined
-    ? {}
-    : { submittedCodeSnapshot: daytonaSubmittedCodeSnapshot }),
   sandboxLogSinks: [cliLogSink],
 });
 const cliLogger = createPipelineEventLogger({
   base: { component: "pre-capture-cli" },
-  sinks: [cliLogSink],
+  sinks: [cliLogSink, localPipelineLogSink],
 });
 const repoSecurity = await readRepoSecurityInput(
   sandboxProvider,
@@ -70,6 +79,12 @@ const normalizedSupportingDocuments = await Promise.all(
 const openCodeOutput = createOpenCodeOutputStream({
   write: (text) => process.stdout.write(text),
 });
+const providerSecretName = await ensureOpenCodeProviderDaytonaSecret({
+  daytonaApiKey,
+  logger: cliLogger.child({ component: "opencode-provider-secrets" }),
+  providerID: options.providerID,
+});
+const repoPreparationTimeoutMs = readRepoPreparationTimeoutMsFromEnv();
 
 const repoPreparationAgent = createRepoPreparationAgent({
   daytonaApiKey,
@@ -80,14 +95,16 @@ const repoPreparationAgent = createRepoPreparationAgent({
   modelID: options.modelID,
   onStderr: (chunk) => process.stderr.write(chunk),
   onStdout: (chunk) => openCodeOutput.write(chunk),
-  providerApiKey: readProviderApiKey(options.providerID),
   providerID: options.providerID,
+  providerSecretName,
+  ...(repoPreparationTimeoutMs === undefined
+    ? {}
+    : { repoPreparationTimeoutMs }),
 });
 const scriptGenerationAgent = new DaytonaOpenCodeScriptGeneration({
   modelID: options.modelID,
   onStderr: (chunk) => process.stderr.write(chunk),
   onStdout: (chunk) => openCodeOutput.write(chunk),
-  providerApiKey: readProviderApiKey(options.providerID),
   providerID: options.providerID,
 });
 
@@ -167,15 +184,6 @@ function readOptionalEnv(name: string): string | undefined {
   return value === undefined || value.trim().length === 0 ? undefined : value;
 }
 
-function readProviderApiKey(providerID: string): string {
-  if (providerID !== "openai") {
-    throw new Error(`Unsupported Repo Preparation provider: ${providerID}`);
-  }
-
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (apiKey === undefined || apiKey === "") {
-    throw new Error("OPENAI_API_KEY is required for OpenAI Repo Preparation.");
-  }
-
-  return apiKey;
+function createRunId() {
+  return `pre-capture-${new Date().toISOString().replaceAll(/[:.]/g, "-")}`;
 }

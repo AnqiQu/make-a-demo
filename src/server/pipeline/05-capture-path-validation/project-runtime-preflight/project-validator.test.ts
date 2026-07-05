@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { PreparationWorkspaceHandle } from "../../03-repo-preparation/preparation-workspace-runner";
+import { SubmittedCodeWorkspaceSyncError } from "../../03-repo-preparation/submitted-code-execution";
 import type { BrowserValidator } from "./browser-validator.interface";
 import { validateProject } from "./project-validator";
 import type { SandboxRunner } from "./sandbox-runner.interface";
@@ -143,7 +144,7 @@ describe("validateProject", () => {
     ]);
 
     expect(result).toMatchObject({ status: "succeeded" });
-    expect(browserUrls).toEqual(["https://preview.example.test"]);
+    expect(browserUrls).toEqual(["http://127.0.0.1:3000"]);
   });
 
   it("passes the retained preparation workspace to browser validation", async () => {
@@ -184,6 +185,48 @@ describe("validateProject", () => {
 
     expect(result.status).toBe("succeeded");
     expect(browserWorkspaceId).toBe("workspace_123");
+  });
+
+  it("validates the manifest local URL inside a preparation workspace while preserving the preview URL", async () => {
+    const browserUrls: string[] = [];
+    const sandboxRunner: SandboxRunner = {
+      async runValidation() {
+        return {
+          browserUrl: "https://preview.example.test/",
+          blockedNetworkAttempts: [],
+          logs: ["started demo"],
+          repoFiles: ["package.json", "bun.lock"],
+          runtimeExitCode: 0,
+        };
+      },
+    };
+    const browserValidator: BrowserValidator = {
+      async validate(input) {
+        browserUrls.push(input.url);
+        return {
+          interactable: true,
+          logs: ["loaded app inside submitted-code container"],
+          screenshotArtifactId: "artifact_screenshot",
+        };
+      },
+    };
+
+    const result = await validateProject(
+      {
+        preparationManifest: manifest({
+          demoCommand: "npm run demo",
+          url: "http://localhost:4173/",
+        }),
+        preparationWorkspace: workspaceHandle([]),
+      },
+      { browserValidator, sandboxRunner },
+    );
+
+    expect(browserUrls).toEqual(["http://localhost:4173/"]);
+    expect(result).toMatchObject({
+      browserUrl: "https://preview.example.test/",
+      status: "succeeded",
+    });
   });
 
   it("fails validation when runtime network attempts cross the sandbox boundary", async () => {
@@ -227,7 +270,7 @@ describe("validateProject", () => {
 
     expect(result.status).toBe("failed");
     expect(result.failureReason).toBe(
-      "Runtime network communication across the sandbox boundary is not allowed.",
+      "Runtime network communication across the sandbox boundary is not allowed. Blocked runtime network attempts: api.example.com.",
     );
     expect(result.blockedNetworkAttempts).toHaveLength(1);
     expect(result.warnings).toEqual([
@@ -266,6 +309,40 @@ describe("validateProject", () => {
       logs: ["Daytona command did not finish within 600000ms."],
       status: "failed",
       warnings: [],
+    });
+  });
+
+  it("classifies submitted-code workspace sync failures in validation metadata", async () => {
+    const sandboxRunner: SandboxRunner = {
+      async runValidation() {
+        throw new SubmittedCodeWorkspaceSyncError(
+          new Error("restore archive failed"),
+        );
+      },
+    };
+    const browserValidator: BrowserValidator = {
+      async validate() {
+        throw new Error(
+          "browser validation should not run after sandbox failure",
+        );
+      },
+    };
+
+    const result = await validateProject(
+      {
+        preparationManifest: manifest({
+          demoCommand: "npm run demo",
+          url: "http://localhost:5173",
+        }),
+      },
+      { browserValidator, sandboxRunner },
+    );
+
+    expect(result).toMatchObject({
+      failureKind: "submitted-code-workspace-sync-failed",
+      failureReason: "restore archive failed",
+      logs: ["restore archive failed"],
+      status: "failed",
     });
   });
 
@@ -343,6 +420,7 @@ describe("validateProject", () => {
   });
 
   it("fails validation when browser runtime requests leave the local boundary", async () => {
+    const sandboxLogs: Array<Record<string, unknown>> = [];
     const sandboxRunner: SandboxRunner = {
       async runValidation() {
         return {
@@ -361,6 +439,7 @@ describe("validateProject", () => {
               direction: "outbound",
               host: "api.realworld.io",
               phase: "runtime",
+              url: "https://api.realworld.io/articles",
             },
           ],
           interactable: true,
@@ -376,6 +455,7 @@ describe("validateProject", () => {
           demoCommand: "npm run demo",
           url: "http://localhost:5173",
         }),
+        preparationWorkspace: workspaceHandle(sandboxLogs),
       },
       { browserValidator, sandboxRunner },
     );
@@ -386,10 +466,131 @@ describe("validateProject", () => {
           direction: "outbound",
           host: "api.realworld.io",
           phase: "runtime",
+          url: "https://api.realworld.io/articles",
         },
       ],
       failureReason:
-        "Runtime network communication across the sandbox boundary is not allowed.",
+        "Runtime network communication across the sandbox boundary is not allowed. Blocked runtime network attempts: https://api.realworld.io/articles.",
+      status: "failed",
+    });
+    expect(sandboxLogs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          blockedNetworkAttemptCount: 1,
+          blockedNetworkAttempts: [
+            {
+              direction: "outbound",
+              host: "api.realworld.io",
+              phase: "runtime",
+              url: "https://api.realworld.io/articles",
+            },
+          ],
+          event: "project-validation.browser-validation.failed",
+          failureReason:
+            "Runtime network communication across the sandbox boundary is not allowed. Blocked runtime network attempts: https://api.realworld.io/articles.",
+        }),
+      ]),
+    );
+  });
+
+  it("redacts blocked network URLs before validation diagnostics are formatted or logged", async () => {
+    const sandboxLogs: Array<Record<string, unknown>> = [];
+    const sandboxRunner: SandboxRunner = {
+      async runValidation() {
+        return {
+          blockedNetworkAttempts: [
+            {
+              direction: "outbound",
+              host: "api.example.com",
+              phase: "runtime",
+              url: "https://api.example.com/data?access_key=secret&state=csrf&page=1",
+            },
+          ],
+          logs: ["started demo"],
+          repoFiles: ["package.json"],
+          runtimeExitCode: 0,
+        };
+      },
+    };
+    const browserValidator: BrowserValidator = {
+      async validate() {
+        throw new Error(
+          "browser validation should not run after network failure",
+        );
+      },
+    };
+
+    const result = await validateProject(
+      {
+        preparationManifest: manifest({
+          demoCommand: "npm run demo",
+          url: "http://localhost:5173",
+        }),
+        preparationWorkspace: workspaceHandle(sandboxLogs),
+      },
+      { browserValidator, sandboxRunner },
+    );
+
+    expect(result).toMatchObject({
+      blockedNetworkAttempts: [
+        {
+          direction: "outbound",
+          host: "api.example.com",
+          phase: "runtime",
+          url: "https://api.example.com/data?access_key=%5Bredacted%5D&state=%5Bredacted%5D&page=%5Bredacted%5D",
+        },
+      ],
+      failureReason:
+        "Runtime network communication across the sandbox boundary is not allowed. Blocked runtime network attempts: https://api.example.com/data?access_key=%5Bredacted%5D&state=%5Bredacted%5D&page=%5Bredacted%5D.",
+      status: "failed",
+    });
+    expect(JSON.stringify(result)).not.toContain("secret");
+    expect(JSON.stringify(result)).not.toContain("csrf");
+  });
+
+  it("preserves MakeADemo validator dependency failures from browser validation", async () => {
+    const sandboxRunner: SandboxRunner = {
+      async runValidation() {
+        return {
+          blockedNetworkAttempts: [],
+          browserUrl: "https://preview.example.test",
+          logs: ["started demo"],
+          repoFiles: ["package.json", "bun.lock"],
+          runtimeExitCode: 0,
+        };
+      },
+    };
+    const browserValidator: BrowserValidator = {
+      async validate() {
+        return {
+          interactable: false,
+          logs: [
+            "MakeADemo validator dependency failure: Playwright is not available inside the submitted-code sandbox.",
+            "Cannot find module 'playwright'",
+          ],
+          screenshotArtifactId: "",
+        };
+      },
+    };
+
+    const result = await validateProject(
+      {
+        preparationManifest: manifest({
+          demoCommand: "npm run demo",
+          url: "http://localhost:5173",
+        }),
+      },
+      { browserValidator, sandboxRunner },
+    );
+
+    expect(result).toMatchObject({
+      failureReason:
+        "MakeADemo validator dependency failure: Playwright is not available inside the submitted-code sandbox.",
+      logs: [
+        "started demo",
+        "MakeADemo validator dependency failure: Playwright is not available inside the submitted-code sandbox.",
+        "Cannot find module 'playwright'",
+      ],
       status: "failed",
     });
   });

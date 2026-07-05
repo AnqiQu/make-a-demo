@@ -7,6 +7,29 @@ import { describe, expect, it } from "vitest";
 import { createOpenCodeRawOutputLog } from "./opencode-raw-output-log";
 
 describe("createOpenCodeRawOutputLog", () => {
+  it("creates an initialized artifact even when OpenCode emits no chunks", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "makeademo-opencode-log-"));
+    const logPath = join(directory, "opencode-raw-output.jsonl");
+    const logger = createOpenCodeRawOutputLog({ logPath });
+
+    try {
+      await logger.close();
+
+      const entries = (await readFile(logPath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(entries).toEqual([
+        expect.objectContaining({
+          raw: expect.stringContaining("raw log initialized"),
+          source: "makeademo",
+        }),
+      ]);
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
   it("writes timestamped raw OpenCode lines and preserves parsed tool events", async () => {
     const directory = await mkdtemp(join(tmpdir(), "makeademo-opencode-log-"));
     const logPath = join(directory, "opencode-raw-output.jsonl");
@@ -38,6 +61,10 @@ describe("createOpenCodeRawOutputLog", () => {
 
       expect(entries).toEqual([
         expect.objectContaining({
+          raw: expect.stringContaining("raw log initialized"),
+          source: "makeademo",
+        }),
+        expect.objectContaining({
           channel: "stdout",
           eventType: "tool_use",
           raw: expect.stringContaining('"tool":"read"'),
@@ -54,7 +81,7 @@ describe("createOpenCodeRawOutputLog", () => {
           raw: "partial line",
         }),
       ]);
-      expect(entries[0]?.parsed.part.state.output).toBe(
+      expect(entries[1]?.parsed.part.state.output).toBe(
         "package.json contents",
       );
       expect(entries).toEqual(
