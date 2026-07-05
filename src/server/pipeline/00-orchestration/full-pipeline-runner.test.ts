@@ -305,8 +305,9 @@ describe("runFullPipelineJob", () => {
     const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
 
     try {
-      await expect(
-        runFullPipelineJob(
+      let thrown: unknown;
+      try {
+        await runFullPipelineJob(
           {
             demoBrief: { keyProductFeatures: ["article feed"] },
             normalizedSupportingDocuments: [],
@@ -344,8 +345,28 @@ describe("runFullPipelineJob", () => {
             ),
             runId: "failed-run",
           },
+        );
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toMatchObject({
+        failure: {
+          blockers: [
+            "Repo Preparation agent timed out after 600000ms. Inspect the retained Daytona workspace debug log.",
+          ],
+          suggestedChanges: [],
+        },
+        logPath: join(outputRoot, "failed-run", "pipeline-log.jsonl"),
+        rawOpenCodeLogPath: join(
+          outputRoot,
+          "failed-run",
+          "opencode-raw-output.jsonl",
         ),
-      ).rejects.toThrow("Stage 1 failed with status preparation-failed");
+        resultPath: join(outputRoot, "failed-run", "full-pipeline-result.json"),
+        stage: "stage-1",
+        status: "preparation-failed",
+      });
 
       await expect(
         readJsonFile(

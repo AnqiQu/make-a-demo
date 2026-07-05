@@ -41,6 +41,38 @@ export type FullPipelineResult = {
   status: "succeeded";
 };
 
+export type FullPipelineFailureContext = {
+  failure: ReturnType<typeof readStage1Failure>;
+  logPath: string;
+  rawOpenCodeLogPath: string | undefined;
+  resultPath: string;
+  stage: "stage-1";
+  status: Exclude<
+    Awaited<ReturnType<typeof runPipelineJob>>,
+    { status: "succeeded" }
+  >["status"];
+};
+
+export class FullPipelineStageFailure extends Error {
+  readonly failure: FullPipelineFailureContext["failure"];
+  readonly logPath: string;
+  readonly rawOpenCodeLogPath: string | undefined;
+  readonly resultPath: string;
+  readonly stage: "stage-1";
+  readonly status: FullPipelineFailureContext["status"];
+
+  constructor(context: FullPipelineFailureContext) {
+    super(`Stage 1 failed with status ${context.status}`);
+    this.name = "FullPipelineStageFailure";
+    this.failure = context.failure;
+    this.logPath = context.logPath;
+    this.rawOpenCodeLogPath = context.rawOpenCodeLogPath;
+    this.resultPath = context.resultPath;
+    this.stage = context.stage;
+    this.status = context.status;
+  }
+}
+
 type SucceededStage1 = Extract<
   Awaited<ReturnType<typeof runPipelineJob>>,
   { status: "succeeded" }
@@ -218,33 +250,34 @@ export async function runFullPipelineJob(
   });
   if (initialStage1.status !== "succeeded") {
     const resultPath = join(runDirectory, "full-pipeline-result.json");
+    const failureSummary = createFailureSummary({
+      logPath,
+      rawOpenCodeLogPath: options.rawOpenCodeLogPath,
+      runDirectory,
+      runId,
+      scriptGenerationRawOpenCodeLogPath:
+        options.scriptGenerationRawOpenCodeLogPath,
+      stage1: initialStage1,
+    });
     await log({
       event: "pipeline-failed",
       message: `Stage 1 failed with status ${initialStage1.status}.`,
       status: initialStage1.status,
     });
-    await writeFile(
-      resultPath,
-      `${JSON.stringify(
-        createFailureSummary({
-          logPath,
-          rawOpenCodeLogPath: options.rawOpenCodeLogPath,
-          runDirectory,
-          runId,
-          scriptGenerationRawOpenCodeLogPath:
-            options.scriptGenerationRawOpenCodeLogPath,
-          stage1: initialStage1,
-        }),
-        null,
-        2,
-      )}\n`,
-    );
+    await writeFile(resultPath, `${JSON.stringify(failureSummary, null, 2)}\n`);
     await log({
       event: "result-written",
       message: "Full pipeline failure result written.",
       resultPath,
     });
-    throw new Error(`Stage 1 failed with status ${initialStage1.status}`);
+    throw new FullPipelineStageFailure({
+      failure: failureSummary.failure,
+      logPath,
+      rawOpenCodeLogPath: options.rawOpenCodeLogPath,
+      resultPath,
+      stage: "stage-1",
+      status: initialStage1.status,
+    });
   }
 
   let stage1: SucceededStage1 = initialStage1;

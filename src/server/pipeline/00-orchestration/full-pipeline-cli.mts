@@ -17,6 +17,7 @@ import {
   readSupportingDocumentUpload,
 } from "../01-context-gathering/supporting-documents";
 import { createDaytonaFreshCaptureStatePreparer } from "./fresh-capture-state";
+import { formatFullPipelineFailure } from "./full-pipeline-failure-output";
 import { runFullPipelineJob } from "./full-pipeline-runner";
 import { createOpenCodeOutputStream } from "./opencode-output-stream";
 import { createOpenCodeRawOutputLog } from "./opencode-raw-output-log";
@@ -153,28 +154,43 @@ const result = await runFullPipelineJob(
     runId,
     scriptGenerationRawOpenCodeLogPath: scriptGenerationRawOpenCodeLog.logPath,
   },
-).finally(async () => {
-  await Promise.all([
-    rawOpenCodeLog.close(),
-    scriptGenerationRawOpenCodeLog.close(),
-  ]);
-});
+)
+  .catch((error: unknown) => {
+    const formattedFailure = formatFullPipelineFailure(error);
+    if (formattedFailure === undefined) {
+      throw error;
+    }
 
-process.stdout.write("\nFull pipeline complete.\n");
-process.stdout.write(
-  `Final video: ${result.finalVideo.outputVideoPath ?? result.finalVideo.viewUrl}\n`,
-);
-process.stdout.write(`Generated script: ${result.scriptPath}\n`);
-process.stdout.write(
-  `Capture manifest: ${result.captureManifest.manifestPath}\n`,
-);
-process.stdout.write(`Composite manifest: ${result.finalVideo.manifestPath}\n`);
-process.stdout.write(`Log: ${result.logPath}\n`);
-process.stdout.write(`Raw OpenCode log: ${rawOpenCodeLog.logPath}\n`);
-process.stdout.write(
-  `Script Generation raw OpenCode log: ${scriptGenerationRawOpenCodeLog.logPath}\n`,
-);
-process.stdout.write(`Result JSON: ${result.resultPath}\n`);
+    process.stderr.write(`\n${formattedFailure}`);
+    process.exitCode = 1;
+    return undefined;
+  })
+  .finally(async () => {
+    await Promise.all([
+      rawOpenCodeLog.close(),
+      scriptGenerationRawOpenCodeLog.close(),
+    ]);
+  });
+
+if (result !== undefined) {
+  process.stdout.write("\nFull pipeline complete.\n");
+  process.stdout.write(
+    `Final video: ${result.finalVideo.outputVideoPath ?? result.finalVideo.viewUrl}\n`,
+  );
+  process.stdout.write(`Generated script: ${result.scriptPath}\n`);
+  process.stdout.write(
+    `Capture manifest: ${result.captureManifest.manifestPath}\n`,
+  );
+  process.stdout.write(
+    `Composite manifest: ${result.finalVideo.manifestPath}\n`,
+  );
+  process.stdout.write(`Log: ${result.logPath}\n`);
+  process.stdout.write(`Raw OpenCode log: ${rawOpenCodeLog.logPath}\n`);
+  process.stdout.write(
+    `Script Generation raw OpenCode log: ${scriptGenerationRawOpenCodeLog.logPath}\n`,
+  );
+  process.stdout.write(`Result JSON: ${result.resultPath}\n`);
+}
 
 function readFullPipelineArgs(args: string[]) {
   const preCaptureArgs: string[] = [];
