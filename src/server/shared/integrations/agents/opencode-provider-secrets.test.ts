@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   createOpenCodeProviderSandboxSecrets,
@@ -6,6 +6,10 @@ import {
 } from "./opencode-provider-secrets";
 
 describe("OpenCode provider Daytona secrets", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("maps OpenAI to the Daytona sandbox secret environment variable", () => {
     expect(
       createOpenCodeProviderSandboxSecrets({
@@ -192,6 +196,29 @@ describe("OpenCode provider Daytona secrets", () => {
     ]);
   });
 
+  it("logs the OpenCode provider secret ensure phase without leaking secret values", async () => {
+    const logger = fakePipelineEventLogger();
+
+    await ensureOpenCodeProviderDaytonaSecret({
+      client: fakeSecretClient([], []),
+      env: { OPENAI_API_KEY: "sk-success-should-not-leak" },
+      logger,
+      providerID: "openai",
+    });
+
+    expect(logger.entries.map((entry) => entry.event)).toEqual([
+      "opencode-provider-secret.ensure.started",
+      "opencode-provider-secret.ensure.succeeded",
+    ]);
+    expect(logger.entries.map((entry) => entry.stage)).toEqual([
+      "repo-preparation",
+      "repo-preparation",
+    ]);
+    expect(JSON.stringify(logger.entries)).not.toContain(
+      "sk-success-should-not-leak",
+    );
+  });
+
   it("requires the local OpenAI API key before provisioning Daytona secrets", async () => {
     await expect(
       ensureOpenCodeProviderDaytonaSecret({
@@ -200,6 +227,46 @@ describe("OpenCode provider Daytona secrets", () => {
         providerID: "openai",
       }),
     ).rejects.toThrow("OPENAI_API_KEY is required for OpenAI OpenCode runs.");
+  });
+
+  it("times out and logs without leaking the provider secret when listing Daytona secrets hangs", async () => {
+    vi.useFakeTimers();
+    const logger = fakePipelineEventLogger();
+    const promise = ensureOpenCodeProviderDaytonaSecret({
+      client: {
+        secret: {
+          async create() {
+            throw new Error("create should not run");
+          },
+          async list() {
+            return await new Promise<never>(() => undefined);
+          },
+          async update() {
+            throw new Error("update should not run");
+          },
+        },
+      },
+      env: { OPENAI_API_KEY: "sk-should-not-leak" },
+      logger,
+      providerID: "openai",
+      timeoutMs: 25,
+    });
+
+    await Promise.resolve();
+    vi.advanceTimersByTime(25);
+
+    await expect(promise).rejects.toThrow(
+      "Timed out ensuring OpenCode provider Daytona secret",
+    );
+    expect(logger.entries.map((entry) => entry.event)).toEqual([
+      "opencode-provider-secret.ensure.started",
+      "opencode-provider-secret.ensure.timeout",
+    ]);
+    expect(logger.entries.map((entry) => entry.stage)).toEqual([
+      "repo-preparation",
+      "repo-preparation",
+    ]);
+    expect(JSON.stringify(logger.entries)).not.toContain("sk-should-not-leak");
   });
 });
 
@@ -262,4 +329,29 @@ function connectionRefusedError() {
   return Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:443"), {
     code: "ECONNREFUSED",
   });
+}
+
+function fakePipelineEventLogger() {
+  const entries: Array<Record<string, unknown>> = [];
+  return {
+    entries,
+    child() {
+      return this;
+    },
+    async debug(entry: Record<string, unknown>) {
+      entries.push(entry);
+    },
+    async error(entry: Record<string, unknown>) {
+      entries.push(entry);
+    },
+    async flush() {
+      return undefined;
+    },
+    async info(entry: Record<string, unknown>) {
+      entries.push(entry);
+    },
+    async warn(entry: Record<string, unknown>) {
+      entries.push(entry);
+    },
+  };
 }

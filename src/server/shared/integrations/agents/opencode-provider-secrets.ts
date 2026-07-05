@@ -1,6 +1,9 @@
 import { Daytona, DaytonaConflictError } from "@daytona/sdk";
 
+import type { PipelineEventLogger } from "../../logging/pipeline-event-logger";
+
 const defaultOpenAiDaytonaSecretName = "makeademo-openai";
+const defaultEnsureOpenCodeProviderSecretTimeoutMs = 30_000;
 const openAiSecretHosts = ["api.openai.com"];
 
 type DaytonaSecret = {
@@ -50,7 +53,9 @@ export async function ensureOpenCodeProviderDaytonaSecret(input: {
   client?: DaytonaSecretClient;
   daytonaApiKey?: string;
   env?: Record<string, string | undefined>;
+  logger?: PipelineEventLogger;
   providerID: string;
+  timeoutMs?: number;
 }): Promise<string> {
   const provider = readOpenCodeProviderSecret(input.providerID, input.env);
   const secretName = readOpenCodeProviderDaytonaSecretName(
@@ -64,23 +69,100 @@ export async function ensureOpenCodeProviderDaytonaSecret(input: {
         ? undefined
         : { apiKey: input.daytonaApiKey },
     ) as DaytonaSecretClient);
+  const timeoutMs =
+    input.timeoutMs ?? defaultEnsureOpenCodeProviderSecretTimeoutMs;
 
+  await input.logger?.info(
+    {
+      component: "opencode-provider-secrets",
+      event: "opencode-provider-secret.ensure.started",
+      providerID: input.providerID,
+      secretName,
+      stage: "repo-preparation",
+      timeoutMs,
+    },
+    "Ensuring OpenCode provider Daytona secret.",
+  );
+
+  try {
+    await ensureOpenCodeProviderDaytonaSecretValue({
+      client,
+      providerApiKey: provider.apiKey,
+      providerHosts: provider.hosts,
+      secretName,
+      timeoutMs,
+    });
+  } catch (error) {
+    if (isOpenCodeProviderSecretTimeoutError(error)) {
+      await input.logger?.warn(
+        {
+          component: "opencode-provider-secrets",
+          event: "opencode-provider-secret.ensure.timeout",
+          providerID: input.providerID,
+          secretName,
+          stage: "repo-preparation",
+          timeoutMs,
+        },
+        "Timed out ensuring OpenCode provider Daytona secret.",
+      );
+    } else {
+      await input.logger?.error(
+        {
+          component: "opencode-provider-secrets",
+          event: "opencode-provider-secret.ensure.failed",
+          providerID: input.providerID,
+          secretName,
+          stage: "repo-preparation",
+        },
+        "Failed to ensure OpenCode provider Daytona secret.",
+      );
+    }
+
+    throw error;
+  }
+
+  await input.logger?.info(
+    {
+      component: "opencode-provider-secrets",
+      event: "opencode-provider-secret.ensure.succeeded",
+      providerID: input.providerID,
+      secretName,
+      stage: "repo-preparation",
+    },
+    "Ensured OpenCode provider Daytona secret.",
+  );
+
+  return secretName;
+}
+
+async function ensureOpenCodeProviderDaytonaSecretValue(input: {
+  client: DaytonaSecretClient;
+  providerApiKey: string;
+  providerHosts: string[];
+  secretName: string;
+  timeoutMs: number;
+}): Promise<void> {
   const existingSecret = (
-    await withDaytonaSecretConnectionRetry(() => client.secret.list())
-  ).find((secret) => secret.name === secretName);
+    await withDaytonaSecretConnectionRetry(
+      () => input.client.secret.list(),
+      input.timeoutMs,
+    )
+  ).find((secret) => secret.name === input.secretName);
   const secretInput = {
     description: "MakeADemo OpenCode provider credential.",
-    hosts: provider.hosts,
-    value: provider.apiKey,
+    hosts: input.providerHosts,
+    value: input.providerApiKey,
   };
 
   if (existingSecret === undefined) {
     try {
-      await withDaytonaSecretConnectionRetry(() =>
-        client.secret.create({
-          ...secretInput,
-          name: secretName,
-        }),
+      await withDaytonaSecretConnectionRetry(
+        () =>
+          input.client.secret.create({
+            ...secretInput,
+            name: input.secretName,
+          }),
+        input.timeoutMs,
       );
     } catch (error) {
       if (!isDaytonaSecretConflictError(error)) {
@@ -88,34 +170,39 @@ export async function ensureOpenCodeProviderDaytonaSecret(input: {
       }
 
       const racedSecret = (
-        await withDaytonaSecretConnectionRetry(() => client.secret.list())
-      ).find((secret) => secret.name === secretName);
+        await withDaytonaSecretConnectionRetry(
+          () => input.client.secret.list(),
+          input.timeoutMs,
+        )
+      ).find((secret) => secret.name === input.secretName);
       if (racedSecret === undefined) {
         throw error;
       }
 
-      await withDaytonaSecretConnectionRetry(() =>
-        client.secret.update(racedSecret.id, secretInput),
+      await withDaytonaSecretConnectionRetry(
+        () => input.client.secret.update(racedSecret.id, secretInput),
+        input.timeoutMs,
       );
     }
-    return secretName;
+    return;
   }
 
-  await withDaytonaSecretConnectionRetry(() =>
-    client.secret.update(existingSecret.id, secretInput),
+  await withDaytonaSecretConnectionRetry(
+    () => input.client.secret.update(existingSecret.id, secretInput),
+    input.timeoutMs,
   );
-  return secretName;
 }
 
 async function withDaytonaSecretConnectionRetry<T>(
   operation: () => Promise<T>,
+  timeoutMs: number,
 ): Promise<T> {
   const maxAttempts = 3;
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      return await operation();
+      return await withTimeout(operation(), timeoutMs);
     } catch (error) {
       lastError = error;
       if (
@@ -128,6 +215,42 @@ async function withDaytonaSecretConnectionRetry<T>(
   }
 
   throw lastError;
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new OpenCodeProviderSecretTimeoutError(timeoutMs));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+class OpenCodeProviderSecretTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(
+      `Timed out ensuring OpenCode provider Daytona secret after ${timeoutMs}ms.`,
+    );
+    this.name = "OpenCodeProviderSecretTimeoutError";
+  }
+}
+
+function isOpenCodeProviderSecretTimeoutError(
+  error: unknown,
+): error is OpenCodeProviderSecretTimeoutError {
+  return error instanceof OpenCodeProviderSecretTimeoutError;
 }
 
 function isTransientDaytonaConnectionError(error: unknown): boolean {

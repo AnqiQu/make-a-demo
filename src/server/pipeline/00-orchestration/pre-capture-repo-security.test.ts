@@ -153,7 +153,11 @@ describe("readRepoSecurityInput", () => {
     expect(commands[0]).toMatch(/export GIT_SSL_CAINFO=.*git clone/s);
     expect(commands[0]).not.toContain("GIT_SSL_NO_VERIFY");
     expect(commands[0]).not.toContain("sslVerify=false");
-    expect(lines.map((line) => JSON.parse(line))).toEqual([
+    expect(
+      lines
+        .map((line) => JSON.parse(line))
+        .filter((entry) => entry.externalCall === "daytona.git_clone"),
+    ).toEqual([
       {
         component: "repo-security-screen",
         event: "repo-security-screen.clone.started",
@@ -178,6 +182,85 @@ describe("readRepoSecurityInput", () => {
       },
     ]);
   });
+
+  it("logs repo stats progress with file counts and duration", async () => {
+    const lines: string[] = [];
+    const logger = createPipelineEventLogger({
+      base: { component: "repo-security-screen" },
+      sinks: [{ write: (line) => void lines.push(line) }],
+      timestamp: () => "2026-06-17T00:00:00.000Z",
+    });
+
+    const result = await readRepoSecurityInput(
+      new FakePreparationWorkspaceProvider(),
+      "https://github.com/example/app",
+      { logger },
+    );
+
+    expect(result.repoStats).toEqual({ fileCount: 1, sizeBytes: 17 });
+    expect(lines.map((line) => JSON.parse(line))).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "repo-security-screen.stats.started",
+          externalCall: "daytona.repo_stats",
+          level: "info",
+          message: "Daytona repo stats started.",
+          stage: "repo-security-screen",
+        }),
+        expect.objectContaining({
+          durationMs: expect.any(Number),
+          event: "repo-security-screen.stats.succeeded",
+          externalCall: "daytona.repo_stats",
+          fileCount: 1,
+          level: "info",
+          message: "Daytona repo stats succeeded.",
+          sizeBytes: 17,
+          stage: "repo-security-screen",
+        }),
+      ]),
+    );
+  });
+
+  it("logs and bounds workspace destroy timeouts after repo stats succeed", async () => {
+    const lines: string[] = [];
+    const logger = createPipelineEventLogger({
+      base: { component: "repo-security-screen" },
+      sinks: [{ write: (line) => void lines.push(line) }],
+      timestamp: () => "2026-06-17T00:00:00.000Z",
+    });
+
+    const result = await readRepoSecurityInput(
+      new FakePreparationWorkspaceProvider(new FakePreparationWorkspace(), {
+        destroy: () => new Promise(() => undefined),
+      }),
+      "https://github.com/example/app",
+      { destroyTimeoutMs: 1, logger },
+    );
+
+    expect(result.repoStats).toEqual({ fileCount: 1, sizeBytes: 17 });
+    expect(lines.map((line) => JSON.parse(line))).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "repo-security-screen.workspace_destroy.started",
+          externalCall: "daytona.workspace_destroy",
+          level: "info",
+          message: "Daytona workspace destroy started.",
+          stage: "repo-security-screen",
+          workspaceId: "workspace-1",
+        }),
+        expect.objectContaining({
+          durationMs: expect.any(Number),
+          event: "repo-security-screen.workspace_destroy.timeout",
+          externalCall: "daytona.workspace_destroy",
+          level: "warn",
+          message: "Daytona workspace destroy timeout.",
+          stage: "repo-security-screen",
+          timeoutMs: 1,
+          workspaceId: "workspace-1",
+        }),
+      ]),
+    );
+  });
 });
 
 class FakePreparationWorkspaceProvider implements PreparationWorkspaceProvider {
@@ -188,6 +271,9 @@ class FakePreparationWorkspaceProvider implements PreparationWorkspaceProvider {
       | PreparationWorkspace
       | PreparationWorkspace[]
       | string[] = new FakePreparationWorkspace(),
+    private readonly options: {
+      destroy?: () => Promise<void>;
+    } = {},
   ) {}
 
   private createCount = 0;
@@ -202,7 +288,10 @@ class FakePreparationWorkspaceProvider implements PreparationWorkspaceProvider {
     this.createCount += 1;
 
     return {
-      destroy: async () => void this.destroyedWorkspaceIds.push(id),
+      destroy: async () => {
+        this.destroyedWorkspaceIds.push(id);
+        await this.options.destroy?.();
+      },
       id,
       workspace,
     };

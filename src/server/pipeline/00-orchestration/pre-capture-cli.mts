@@ -1,5 +1,5 @@
 import { readFile, stat } from "node:fs/promises";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 
 import { DaytonaOpenCodeScriptGeneration } from "../../shared/integrations/agents/daytona-opencode-script-generation";
@@ -11,6 +11,7 @@ import {
 import { DaytonaSdkPreparationWorkspaceProvider } from "../../shared/integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import { DaytonaSandboxRunner } from "../../shared/integrations/sandbox/daytona-sandbox-runner";
 import {
+  createFilePipelineLogSink,
   createPipelineEventLogger,
   createPrettyPipelineLogSink,
 } from "../../shared/logging/pipeline-event-logger";
@@ -31,6 +32,13 @@ const daytonaApiKey = process.env.DAYTONA_API_KEY;
 const cliLogSink = createPrettyPipelineLogSink({
   write: (text) => process.stderr.write(text),
 });
+const preCaptureRunDirectory = join(
+  ".makeademo-pre-capture-runs",
+  createRunId(),
+);
+const localPipelineLogSink = createFilePipelineLogSink(
+  join(preCaptureRunDirectory, "pipeline-log.jsonl"),
+);
 const daytonaSnapshot = readOptionalEnv("MAKEADEMO_DAYTONA_SNAPSHOT");
 const daytonaSubmittedCodeSnapshot = readOptionalEnv(
   "MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT",
@@ -47,7 +55,7 @@ const sandboxProvider = new DaytonaSdkPreparationWorkspaceProvider({
 });
 const cliLogger = createPipelineEventLogger({
   base: { component: "pre-capture-cli" },
-  sinks: [cliLogSink],
+  sinks: [cliLogSink, localPipelineLogSink],
 });
 const repoSecurity = await readRepoSecurityInput(
   sandboxProvider,
@@ -73,6 +81,7 @@ const openCodeOutput = createOpenCodeOutputStream({
 });
 const providerSecretName = await ensureOpenCodeProviderDaytonaSecret({
   daytonaApiKey,
+  logger: cliLogger.child({ component: "opencode-provider-secrets" }),
   providerID: options.providerID,
 });
 const repoPreparationTimeoutMs = readRepoPreparationTimeoutMsFromEnv();
@@ -173,4 +182,8 @@ function inferTextMimeType(path: string): string {
 function readOptionalEnv(name: string): string | undefined {
   const value = process.env[name];
   return value === undefined || value.trim().length === 0 ? undefined : value;
+}
+
+function createRunId() {
+  return `pre-capture-${new Date().toISOString().replaceAll(/[:.]/g, "-")}`;
 }

@@ -110,4 +110,32 @@ describe("createProjectDemoGenerationWorkerLogger", () => {
       status: "failed",
     });
   });
+
+  it("creates child pipeline loggers for worker integration seams", async () => {
+    const lines: string[] = [];
+    const logger = createProjectDemoGenerationWorkerLogger({
+      sinks: [
+        {
+          write(line) {
+            lines.push(line);
+          },
+        },
+      ],
+      timestamp: () => "2026-07-04T00:00:00.000Z",
+    });
+
+    await logger
+      .child({ component: "repo-security-screen" })
+      .info(
+        { event: "repo-security-screen.clone.started" },
+        "Daytona clone started.",
+      );
+
+    expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
+      component: "repo-security-screen",
+      event: "repo-security-screen.clone.started",
+      level: "info",
+      message: "Daytona clone started.",
+    });
+  });
 });

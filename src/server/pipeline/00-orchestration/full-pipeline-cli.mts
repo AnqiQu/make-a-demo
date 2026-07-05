@@ -42,7 +42,9 @@ const daytonaSubmittedCodeSnapshot = readOptionalEnv(
 const fullPipelineOutputRoot = outputRoot ?? ".makeademo-full-pipeline-runs";
 const runId = createRunId();
 const runDirectory = join(fullPipelineOutputRoot, runId);
+const pipelineLogPath = join(runDirectory, "pipeline-log.jsonl");
 const sandboxLogPath = join(runDirectory, "sandbox-log.jsonl");
+const localPipelineLogSink = createFilePipelineLogSink(pipelineLogPath);
 const localSandboxLogSink = createFilePipelineLogSink(sandboxLogPath);
 const rawOpenCodeLog = createOpenCodeRawOutputLog({
   logPath: join(runDirectory, "opencode-raw-output.jsonl"),
@@ -74,7 +76,7 @@ const sandboxProvider = new DaytonaSdkPreparationWorkspaceProvider({
 });
 const cliLogger = createPipelineEventLogger({
   base: { component: "full-pipeline-cli" },
-  sinks: [cliLogSink],
+  sinks: [cliLogSink, localPipelineLogSink],
 });
 const repoSecurity = await readRepoSecurityInput(
   sandboxProvider,
@@ -100,6 +102,7 @@ const openCodeOutput = createOpenCodeOutputStream({
 });
 const providerSecretName = await ensureOpenCodeProviderDaytonaSecret({
   daytonaApiKey,
+  logger: cliLogger.child({ component: "opencode-provider-secrets" }),
   providerID: options.providerID,
 });
 const repoPreparationTimeoutMs = readRepoPreparationTimeoutMsFromEnv();

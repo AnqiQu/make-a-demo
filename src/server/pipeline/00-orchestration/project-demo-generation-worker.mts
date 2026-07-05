@@ -42,12 +42,14 @@ const finalVideoStorage = new R2FinalVideoStorage(r2);
 const finalVideoEmailNotifier = shouldSendFinalVideoEmail
   ? createResendFinalVideoEmailNotifierFromEnv()
   : undefined;
+const workerLogger = createProjectDemoGenerationWorkerLogger();
 const sandboxProvider = new DaytonaSdkPreparationWorkspaceProvider({
   apiKey: daytonaApiKey,
   ...(daytonaSnapshot === undefined ? {} : { snapshot: daytonaSnapshot }),
 });
 const providerSecretName = await ensureOpenCodeProviderDaytonaSecret({
   daytonaApiKey,
+  logger: workerLogger.child({ component: "opencode-provider-secrets" }),
   providerID,
 });
 const repoPreparationTimeoutMs = readRepoPreparationTimeoutMsFromEnv();
@@ -68,7 +70,6 @@ const scriptGenerationAgent = new DaytonaOpenCodeScriptGeneration({
   modelID,
   providerID,
 });
-const workerLogger = createProjectDemoGenerationWorkerLogger();
 
 await workerLogger.workerStarted();
 
@@ -78,6 +79,9 @@ do {
       const repoSecurity = await readRepoSecurityInput(
         sandboxProvider,
         job.repoUrl,
+        {
+          logger: workerLogger.child({ component: "repo-security-screen" }),
+        },
       );
 
       const pipelineResult = await runFullPipelineJob(

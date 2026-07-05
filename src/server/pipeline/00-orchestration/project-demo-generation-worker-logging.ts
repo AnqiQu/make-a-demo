@@ -1,4 +1,5 @@
 import {
+  type PipelineEventLogger,
   type PipelineEventLoggerOptions,
   type PipelineLogSink,
   createPipelineEventLogger,
@@ -25,6 +26,7 @@ type ProjectDemoGenerationWorkerLoggerOptions = {
  * entries structured so runtime workers do not write ad-hoc stdout/stderr lines.
  */
 export type ProjectDemoGenerationWorkerLogger = {
+  child(bindings: Record<string, unknown>): PipelineEventLogger;
   flush(): Promise<void>;
   jobProcessed(event: WorkerJobProcessed): Promise<void>;
   pipelineProgress(event: WorkerPipelineProgress): Promise<void>;
@@ -43,6 +45,9 @@ export function createProjectDemoGenerationWorkerLogger(
   });
 
   return {
+    child(bindings) {
+      return logger.child(bindings);
+    },
     flush() {
       return logger.flush();
     },
