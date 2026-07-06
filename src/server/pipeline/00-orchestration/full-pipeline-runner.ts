@@ -877,49 +877,49 @@ async function generateDraftCompositeEvidence(input: {
   const findings: string[] = [];
   const sampledFramePattern = join(evidenceDirectory, "sample-%03d.jpg");
   const contactSheetPath = join(evidenceDirectory, "contact-sheet.jpg");
-  const sampledFrames = await runEvidenceCommand("ffmpeg", [
-    "-y",
-    "-i",
-    finalVideo.outputVideoPath,
-    "-vf",
-    "fps=1/5",
-    "-frames:v",
-    "4",
-    sampledFramePattern,
+  const [sampledFrames, contactSheet, audioProbe] = await Promise.all([
+    runEvidenceCommand("ffmpeg", [
+      "-y",
+      "-i",
+      finalVideo.outputVideoPath,
+      "-vf",
+      "fps=1/5",
+      "-frames:v",
+      "4",
+      sampledFramePattern,
+    ]),
+    runEvidenceCommand("ffmpeg", [
+      "-y",
+      "-i",
+      finalVideo.outputVideoPath,
+      "-vf",
+      "fps=1/5,scale=320:-1,tile=2x2",
+      "-frames:v",
+      "1",
+      contactSheetPath,
+    ]),
+    runEvidenceCommand("ffprobe", [
+      "-v",
+      "error",
+      "-select_streams",
+      "a",
+      "-show_entries",
+      "stream=index",
+      "-of",
+      "csv=p=0",
+      finalVideo.outputVideoPath,
+    ]),
   ]);
   if (sampledFrames.exitCode !== 0) {
     findings.push(
       `ffmpeg sampled-frame extraction failed: ${formatCommandOutput(sampledFrames)}`,
     );
   }
-
-  const contactSheet = await runEvidenceCommand("ffmpeg", [
-    "-y",
-    "-i",
-    finalVideo.outputVideoPath,
-    "-vf",
-    "fps=1/5,scale=320:-1,tile=2x2",
-    "-frames:v",
-    "1",
-    contactSheetPath,
-  ]);
   if (contactSheet.exitCode !== 0) {
     findings.push(
       `ffmpeg contact-sheet generation failed: ${formatCommandOutput(contactSheet)}`,
     );
   }
-
-  const audioProbe = await runEvidenceCommand("ffprobe", [
-    "-v",
-    "error",
-    "-select_streams",
-    "a",
-    "-show_entries",
-    "stream=index",
-    "-of",
-    "csv=p=0",
-    finalVideo.outputVideoPath,
-  ]);
   if (audioProbe.exitCode !== 0) {
     findings.push(
       `ffprobe audio probe failed: ${formatCommandOutput(audioProbe)}`,
@@ -1034,7 +1034,7 @@ async function exists(path: string) {
 }
 
 async function runEvidenceCommand(command: string, args: string[]) {
-  return await new Promise<{
+  return new Promise<{
     exitCode: number | null;
     stderr: string;
     stdout: string;

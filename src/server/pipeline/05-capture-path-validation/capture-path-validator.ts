@@ -420,6 +420,7 @@ async function capturePathSceneFailure(input: {
 
 function validateSceneMarkers(logs: string[], sceneIds: string[]) {
   const markers = readSceneMarkers(logs);
+  const declaredSceneIds = new Set(sceneIds);
   const completed = new Set<string>();
   const open = new Set<string>();
 
@@ -433,7 +434,7 @@ function validateSceneMarkers(logs: string[], sceneIds: string[]) {
 
     const validMarker = marker;
 
-    if (!sceneIds.includes(validMarker.sceneId)) {
+    if (!declaredSceneIds.has(validMarker.sceneId)) {
       return {
         reason: `Capture Path emitted undeclared Scene marker ${validMarker.sceneId}.`,
         sceneId: validMarker.sceneId,

@@ -1,11 +1,4 @@
-import {
-  copyFile,
-  mkdir,
-  readFile,
-  stat,
-  unlink,
-  writeFile,
-} from "node:fs/promises";
+import { copyFile, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -125,16 +118,18 @@ export async function compositeVideoFromScript(
     scriptDirectory,
     scriptPackage,
   });
-  const fontAssets = await stageFontAssets({
-    projectRoot,
-    publicDir,
-    scenes,
-  });
-  const music = await stageMusicAsset({
-    projectRoot,
-    publicDir,
-    scriptPackage,
-  });
+  const [fontAssets, music] = await Promise.all([
+    stageFontAssets({
+      projectRoot,
+      publicDir,
+      scenes,
+    }),
+    stageMusicAsset({
+      projectRoot,
+      publicDir,
+      scriptPackage,
+    }),
+  ]);
   const durationInFrames = scenes.reduce(
     (total, scene) => total + scene.durationFrames,
     0,
@@ -325,35 +320,33 @@ async function stageScenes(input: {
       } satisfies CompositingTransition,
     ]),
   );
-  const scenes: CompositingScene[] = [];
+  return Promise.all(
+    input.scriptPackage.scenes.map(async (scene): Promise<CompositingScene> => {
+      const capturedScene = capturedScenesById.get(scene.id);
+      if (!capturedScene) {
+        throw new Error(
+          `missing captured Scene for Demo Script Scene ${scene.id}`,
+        );
+      }
 
-  for (const scene of input.scriptPackage.scenes) {
-    const capturedScene = capturedScenesById.get(scene.id);
-    if (!capturedScene) {
-      throw new Error(
-        `missing captured Scene for Demo Script Scene ${scene.id}`,
+      const extension = extname(capturedScene.videoPath) || ".webm";
+      const sourcePublicPath = `scenes/${scene.id}${extension}`;
+      await copyAsset(
+        capturedScene.videoPath,
+        join(input.publicDir, sourcePublicPath),
       );
-    }
-
-    const extension = extname(capturedScene.videoPath) || ".webm";
-    const sourcePublicPath = `scenes/${scene.id}${extension}`;
-    await copyAsset(
-      capturedScene.videoPath,
-      join(input.publicDir, sourcePublicPath),
-    );
-    const text = textOverlaysBySceneId.get(scene.id);
-    const transition = transitionsBySceneId.get(scene.id);
-    scenes.push({
-      durationFrames: secondsToFrames(capturedScene.durationSeconds),
-      sceneId: scene.id,
-      sourcePublicPath,
-      ...(text ? { text } : {}),
-      ...(transition ? { transition } : {}),
-      type: "playwright-recording",
-    });
-  }
-
-  return scenes;
+      const text = textOverlaysBySceneId.get(scene.id);
+      const transition = transitionsBySceneId.get(scene.id);
+      return {
+        durationFrames: secondsToFrames(capturedScene.durationSeconds),
+        sceneId: scene.id,
+        sourcePublicPath,
+        ...(text ? { text } : {}),
+        ...(transition ? { transition } : {}),
+        type: "playwright-recording",
+      };
+    }),
+  );
 }
 
 async function stageFontAssets(input: {
@@ -368,18 +361,24 @@ async function stageFontAssets(input: {
     ),
   );
 
-  for (const fontFamily of fontFamilies) {
-    if (!isApprovedFontFamily(fontFamily)) {
-      throw new Error(`unsupported Compositing font ${fontFamily}`);
-    }
+  const stagedFonts = await Promise.all(
+    Array.from(fontFamilies).map(async (fontFamily) => {
+      if (!isApprovedFontFamily(fontFamily)) {
+        throw new Error(`unsupported Compositing font ${fontFamily}`);
+      }
 
-    const filename = fontAssetFiles[fontFamily];
-    const publicPath = `fonts/${filename}`;
-    await copyAsset(
-      join(input.projectRoot, "assets", "fonts", filename),
-      join(input.publicDir, publicPath),
-    );
-    fontAssets[fontFamily] = { family: fontFamily, publicPath };
+      const filename = fontAssetFiles[fontFamily];
+      const publicPath = `fonts/${filename}`;
+      await copyAsset(
+        join(input.projectRoot, "assets", "fonts", filename),
+        join(input.publicDir, publicPath),
+      );
+      return [fontFamily, { family: fontFamily, publicPath }] as const;
+    }),
+  );
+
+  for (const [fontFamily, asset] of stagedFonts) {
+    fontAssets[fontFamily] = asset;
   }
 
   return fontAssets;
@@ -407,35 +406,9 @@ async function stageMusicAsset(input: {
   return { id: musicId, publicPath } satisfies CompositingMusicAsset;
 }
 
-async function resolveAssetPath(input: {
-  assetPath: string;
-  projectRoot: string;
-  scriptDirectory: string;
-}) {
-  if (input.assetPath.startsWith("/")) {
-    return input.assetPath;
-  }
-
-  const scriptRelativePath = join(input.scriptDirectory, input.assetPath);
-  if (await exists(scriptRelativePath)) {
-    return scriptRelativePath;
-  }
-
-  return join(input.projectRoot, input.assetPath);
-}
-
 async function copyAsset(sourcePath: string, destinationPath: string) {
   await mkdir(dirname(destinationPath), { recursive: true });
   await copyFile(sourcePath, destinationPath);
-}
-
-async function exists(path: string) {
-  try {
-    await stat(path);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function parseCompositingDemoScript(value: unknown): DemoScript {
