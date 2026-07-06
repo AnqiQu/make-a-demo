@@ -467,7 +467,6 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
       sessionID?: string;
     }
   > {
-    const outputWrites: Promise<void>[] = [];
     const streamedToolTracker = createLatestMakeADemoToolTracker();
     const streamedToolPayloadTracker =
       createLatestMakeADemoToolPayloadTracker();
@@ -477,28 +476,24 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
       streamedToolPayloadTracker.write(chunk);
       streamedSessionIDTracker.write(chunk);
       this.onStdout?.(chunk);
-      outputWrites.push(
-        writeDaytonaOpenCodeActivityLog(handle.workspace, {
-          attempt: input.attempt,
-          channel: "stdout",
-          raw: chunk,
-          stage: "repo-preparation",
-        }),
-      );
+      void writeDaytonaOpenCodeActivityLog(handle.workspace, {
+        attempt: input.attempt,
+        channel: "stdout",
+        raw: chunk,
+        stage: "repo-preparation",
+      });
     };
     const onStderr = (chunk: string) => {
       streamedToolTracker.write(chunk);
       streamedToolPayloadTracker.write(chunk);
       streamedSessionIDTracker.write(chunk);
       this.onStderr?.(chunk);
-      outputWrites.push(
-        writeDaytonaOpenCodeActivityLog(handle.workspace, {
-          attempt: input.attempt,
-          channel: "stderr",
-          raw: chunk,
-          stage: "repo-preparation",
-        }),
-      );
+      void writeDaytonaOpenCodeActivityLog(handle.workspace, {
+        attempt: input.attempt,
+        channel: "stderr",
+        raw: chunk,
+        stage: "repo-preparation",
+      });
     };
     const options = {
       env: createOpenCodeEnv(input),
@@ -510,7 +505,6 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
       createOpenCodeRunCommand(input),
       options,
     );
-    await Promise.allSettled(outputWrites);
 
     const streamedSessionID = streamedSessionIDTracker.read();
     const sessionID =

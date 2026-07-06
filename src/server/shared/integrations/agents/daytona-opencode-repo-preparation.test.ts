@@ -105,58 +105,6 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     expect(cloneCommands[0]).not.toContain("sslVerify=false");
   });
 
-  it("mirrors streamed OpenCode chunks to the sandbox audit log", async () => {
-    const events: unknown[] = [];
-    const streamed: string[] = [];
-    const agent = new DaytonaOpenCodeRepoPreparation({
-      modelID: "gpt-5.5",
-      onStderr: (chunk) => streamed.push(`stderr:${chunk}`),
-      onStdout: (chunk) => streamed.push(`stdout:${chunk}`),
-      provider: fakeProvider(events, {
-        commandStderrChunks: ["agent warning"],
-        commandStdout: ["Submitted preparation result."],
-        commandStdoutChunks: ["agent output"],
-        preparationResult: successResult(),
-        validationResult: validationArtifact(),
-      }),
-      providerID: "openai",
-      timeoutMs: 1_000,
-    });
-
-    const result = await agent.prepare({
-      normalizedSupportingDocuments: [],
-      repoUrl: "https://github.com/example/app",
-      structuredDemoIntent: { keyProductFeatures: ["validation"] },
-      workspaceId: "workspace_123",
-    });
-
-    expect(result).toMatchObject({
-      manifest: { demoCommand: "npm run demo:makeademo" },
-      status: "succeeded",
-    });
-    expect(streamed).toEqual(["stdout:agent output", "stderr:agent warning"]);
-    expect(events).toEqual(
-      expect.arrayContaining([
-        {
-          sandboxLog: expect.objectContaining({
-            channel: "stdout",
-            event: "opencode.output",
-            raw: "agent output",
-            stage: "repo-preparation",
-          }),
-        },
-        {
-          sandboxLog: expect.objectContaining({
-            channel: "stderr",
-            event: "opencode.output",
-            raw: "agent warning",
-            stage: "repo-preparation",
-          }),
-        },
-      ]),
-    );
-  });
-
   it("continues Repo Preparation when streamed OpenCode activity log writes fail", async () => {
     const events: unknown[] = [];
     const streamed: string[] = [];
@@ -2166,7 +2114,7 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     );
   });
 
-  it("filters terminal-control-only OpenCode chunks out of the sandbox audit log", async () => {
+  it("filters terminal-control-only OpenCode chunks out of the sandbox Pino log seam", async () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
