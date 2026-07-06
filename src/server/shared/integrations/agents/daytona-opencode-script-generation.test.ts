@@ -155,8 +155,10 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
 
   it("continues Script Generation when streamed OpenCode activity log writes never settle", async () => {
     const events: unknown[] = [];
+    const stdout: string[] = [];
     const agent = new DaytonaOpenCodeScriptGeneration({
       modelID: "gpt-5.5",
+      onStdout: (chunk) => stdout.push(chunk),
       providerID: "openai",
     });
 
@@ -174,6 +176,11 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
     ]);
 
     expect(result).toMatchObject({ scriptId: "script_conduit" });
+    expect(stdout).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("script generation output"),
+      ]),
+    );
   });
 
   it("repairs static placeholder Demo Scripts in the same OpenCode session", async () => {
@@ -218,6 +225,78 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
         },
       ]),
     );
+  });
+
+  it("repairs Demo Scripts that violate the Capture SDK contract before returning a candidate", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      maxAttempts: 2,
+      modelID: "gpt-5.5",
+      providerID: "openai",
+    });
+
+    const result = await agent.generateScriptPackage({
+      ...scriptGenerationInput(),
+      opencodeSessionID: "session_prepare_123",
+      preparationWorkspace: workspaceHandle(events, [
+        missingSdkImportPackage(),
+        interactivePackage(),
+      ]),
+    });
+
+    expect(result.scriptId).toBe("script_conduit");
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "script-generation.script-package.invalid",
+            reason: expect.stringContaining("must import { setup, scene }"),
+            stage: "script-generation",
+          }),
+        },
+        {
+          sandboxLog: expect.objectContaining({
+            event: "script-generation.retrying",
+            nextAttempt: 2,
+            reason: expect.stringContaining("must import { setup, scene }"),
+            stage: "script-generation",
+          }),
+        },
+      ]),
+    );
+  });
+
+  it("bounds oversized Script Generation context before sending the OpenCode prompt", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      modelID: "gpt-5.5",
+      providerID: "openai",
+    });
+
+    await agent.generateScriptPackage({
+      ...scriptGenerationInput(),
+      normalizedSupportingDocuments: [
+        {
+          normalizedText: `docs:${"x".repeat(50_000)}`,
+          sourceArtifactId: "artifact_long_doc",
+          sourceFileName: "long-context.md",
+        },
+      ],
+      opencodeSessionID: "session_prepare_123",
+      preparationWorkspace: workspaceHandle(events, [interactivePackage()]),
+    });
+
+    const openCodeCommand = events.find(
+      (event): event is { execute: string } =>
+        typeof event === "object" &&
+        event !== null &&
+        "execute" in event &&
+        typeof event.execute === "string" &&
+        event.execute.includes("opencode run"),
+    )?.execute;
+    expect(openCodeCommand).toContain("long-context.md");
+    expect(openCodeCommand).toContain("truncated");
+    expect(openCodeCommand?.length).toBeLessThan(35_000);
   });
 
   it("keeps Script Generation retry reasons concise after OpenCode failures", async () => {
@@ -1160,7 +1239,26 @@ function interactivePackage() {
 function staticPlaceholderPackage() {
   return {
     ...interactivePackage(),
-    demoPlaywrightScript:
-      "await page.goto(baseUrl);\nawait expect(page.locator('body')).toContainText(/\\S/);\nawait page.locator('body').evaluate(() => document.body.setAttribute('data-makeademo-feature', 'feed'));\nawait page.waitForTimeout(2500);",
+    demoPlaywrightScript: [
+      "import { setup, scene } from './makeademo-capture-sdk';",
+      "await setup(async ({ page, baseUrl }) => { await page.goto(baseUrl); });",
+      "await scene('scene_feed', async ({ page, expect }) => {",
+      "  await expect(page.locator('body')).toBeVisible();",
+      "  await page.waitForTimeout(2500);",
+      "});",
+    ].join("\n"),
+  };
+}
+
+function missingSdkImportPackage() {
+  return {
+    ...interactivePackage(),
+    demoPlaywrightScript: [
+      "await setup(async ({ page, baseUrl }) => { await page.goto(baseUrl + '#/'); });",
+      "await scene('scene_feed', async ({ page, expect }) => {",
+      "  await page.getByText('Global Feed').click();",
+      "  await expect(page.getByText('demo')).toBeVisible();",
+      "});",
+    ].join("\n"),
   };
 }

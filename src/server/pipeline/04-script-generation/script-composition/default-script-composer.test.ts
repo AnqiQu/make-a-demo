@@ -67,4 +67,31 @@ describe("DefaultScriptComposer", () => {
       version: 1,
     });
   });
+
+  it("keeps scene identifiers unique when requested features normalize to the same slug", async () => {
+    const composer = new DefaultScriptComposer();
+
+    const script = await composer.composeScript({
+      demoBrief: { keyProductFeatures: ["Admin dashboard", "Admin-dashboard"] },
+      demoPlan: {
+        featureOrder: ["Admin dashboard", "Admin-dashboard"],
+        narrative: "Show admin flows.",
+        risks: [],
+      },
+      exploration: {
+        assumptions: [],
+        productSurfaces: [],
+        summary: "Prepared app context.",
+      },
+    });
+
+    expect(script.scenes.map((scene) => scene.id)).toEqual([
+      "scene-admin-dashboard",
+      "scene-admin-dashboard-2",
+    ]);
+    expect(script.demoPlaywrightScript).toContain("scene-admin-dashboard-2");
+    expect(
+      script.presentation.textOverlays.map((overlay) => overlay.sceneId),
+    ).toEqual(["scene-admin-dashboard", "scene-admin-dashboard-2"]);
+  });
 });

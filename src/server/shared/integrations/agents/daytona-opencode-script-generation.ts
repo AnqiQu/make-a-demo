@@ -100,7 +100,6 @@ class DaytonaOpenCodeSessionRunner {
       | "script-generation";
     workspace: PreparationWorkspace;
   }) {
-    const outputWrites: Promise<void>[] = [];
     const result = await input.workspace.execute(
       createOpenCodeRunCommand({
         model: `${this.providerID}/${this.modelID}`,
@@ -111,29 +110,24 @@ class DaytonaOpenCodeSessionRunner {
         env: createOpenCodeEnv(),
         onStderr: (chunk) => {
           this.onStderr?.(chunk);
-          outputWrites.push(
-            writeDaytonaOpenCodeActivityLog(input.workspace, {
-              attempt: input.attempt,
-              channel: "stderr",
-              raw: chunk,
-              stage: input.stage,
-            }),
-          );
+          void writeDaytonaOpenCodeActivityLog(input.workspace, {
+            attempt: input.attempt,
+            channel: "stderr",
+            raw: chunk,
+            stage: input.stage,
+          });
         },
         onStdout: (chunk) => {
           this.onStdout?.(chunk);
-          outputWrites.push(
-            writeDaytonaOpenCodeActivityLog(input.workspace, {
-              attempt: input.attempt,
-              channel: "stdout",
-              raw: chunk,
-              stage: input.stage,
-            }),
-          );
+          void writeDaytonaOpenCodeActivityLog(input.workspace, {
+            attempt: input.attempt,
+            channel: "stdout",
+            raw: chunk,
+            stage: input.stage,
+          });
         },
       }),
     );
-    await Promise.allSettled(outputWrites);
     return result;
   }
 }
@@ -225,6 +219,7 @@ export class DaytonaOpenCodeScriptGeneration
 
       try {
         const demoScript = parseDemoScript(artifact.value);
+        assertDemoScriptCaptureSdkContract(demoScript);
         assertCaptureReadyScriptQuality(demoScript);
         await writeScriptGenerationSandboxLog(this.logger, input, {
           attempt,
@@ -330,8 +325,9 @@ export class DaytonaOpenCodeScriptGeneration
         ? manifestArtifact.value
         : input.preparationManifest;
 
+    let demoScript: DemoScript;
     try {
-      const demoScript = parseDemoScript(scriptArtifact.value);
+      demoScript = parseDemoScript(scriptArtifact.value);
       assertDemoScriptCaptureSdkContract(demoScript);
       assertCaptureReadyScriptQuality(demoScript);
     } catch (error) {
@@ -347,7 +343,7 @@ export class DaytonaOpenCodeScriptGeneration
     await writeRepairSandboxLog(this.logger, input, {
       attempt: input.attempt,
       event: "capture-path-repair.demo-script.succeeded",
-      scriptId: parseDemoScript(scriptArtifact.value).scriptId,
+      scriptId: demoScript.scriptId,
     });
     this.writeStatus(
       `Capture Path repair attempt ${input.attempt} produced a Demo Script for revalidation.`,
@@ -355,19 +351,16 @@ export class DaytonaOpenCodeScriptGeneration
 
     return {
       preparationManifest,
-      demoScriptPackage: attachPipelineMetadata(
-        parseDemoScript(scriptArtifact.value),
-        {
-          demoBrief: {
-            keyProductFeatures: input.demoScriptPackage.demoPlan.featureOrder,
-          },
-          normalizedSupportingDocuments: [],
-          opencodeSessionID: input.opencodeSessionID,
-          preparationManifest,
-          preparationWorkspace,
-          repoUrl: input.repoUrl,
+      demoScriptPackage: attachPipelineMetadata(demoScript, {
+        demoBrief: {
+          keyProductFeatures: input.demoScriptPackage.demoPlan.featureOrder,
         },
-      ),
+        normalizedSupportingDocuments: [],
+        opencodeSessionID: input.opencodeSessionID,
+        preparationManifest,
+        preparationWorkspace,
+        repoUrl: input.repoUrl,
+      }),
     };
   }
 
@@ -698,7 +691,7 @@ async function readScriptPackageArtifact(
   { status: "succeeded"; value: unknown } | { reason: string; status: "failed" }
 > {
   const result = await input.preparationWorkspace.workspace.execute(
-    `if test -f ${shellQuote(demoScriptPath)}; then node -e ${shellQuote(`process.stdout.write(require("node:fs").readFileSync(${JSON.stringify(demoScriptPath)}, "utf8"))`)}; else exit 1; fi`,
+    `if test -f ${shellQuote(demoScriptPath)}; then cat ${shellQuote(demoScriptPath)}; else exit 1; fi`,
   );
   if (result.exitCode !== 0) {
     return {
@@ -725,7 +718,7 @@ async function readPreparationManifestArtifact(input: {
   | { reason: string; status: "failed" }
 > {
   const result = await input.preparationWorkspace.workspace.execute(
-    `if test -f ${shellQuote(preparationManifestPath)}; then node -e ${shellQuote(`process.stdout.write(require("node:fs").readFileSync(${JSON.stringify(preparationManifestPath)}, "utf8"))`)}; else exit 42; fi`,
+    `if test -f ${shellQuote(preparationManifestPath)}; then cat ${shellQuote(preparationManifestPath)}; else exit 42; fi`,
   );
   if (result.exitCode === 42) {
     return { status: "missing" };
@@ -843,18 +836,26 @@ function createScriptGenerationPrompt(
     "",
     "## Pipeline Context",
     "```json",
-    JSON.stringify(
-      {
-        demoBrief: input.demoBrief,
-        normalizedSupportingDocuments: input.normalizedSupportingDocuments,
-        preparationManifest: input.preparationManifest,
-        repoUrl: input.repoUrl,
-      },
-      null,
-      2,
+    truncateForPrompt(
+      JSON.stringify(createScriptGenerationContext(input), null, 2),
     ),
     "```",
   ].join("\n");
+}
+
+function createScriptGenerationContext(input: AgenticScriptGenerationInput) {
+  return {
+    demoBrief: input.demoBrief,
+    normalizedSupportingDocuments: input.normalizedSupportingDocuments.map(
+      (document) => ({
+        sourceArtifactId: document.sourceArtifactId,
+        sourceFileName: document.sourceFileName,
+        normalizedText: truncateForPrompt(document.normalizedText, 6_000),
+      }),
+    ),
+    preparationManifest: input.preparationManifest,
+    repoUrl: input.repoUrl,
+  };
 }
 
 function createScriptGenerationRepairPrompt(reason: string): string {
@@ -1039,8 +1040,7 @@ function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function truncateForPrompt(value: string): string {
-  const maxLength = 20_000;
+function truncateForPrompt(value: string, maxLength = 20_000): string {
   return value.length <= maxLength
     ? value
     : `${value.slice(0, maxLength)}\n...[truncated ${value.length - maxLength} chars]`;

@@ -3,6 +3,7 @@ import type { NormalizedSupportingDocument } from "../01-context-gathering/suppo
 import type { PreparationManifest } from "../03-repo-preparation/preparation-manifest";
 import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
 import type { ProjectValidationResult } from "../05-capture-path-validation/project-runtime-preflight/validation-result";
+import { assertDemoScriptCaptureSdkContract } from "../06-footage-capture/capture-sdk-contract";
 import type { DemoPlanner } from "./demo-planning/demo-planner.interface";
 import {
   type DemoScriptCandidate,
@@ -61,6 +62,7 @@ export async function generateDemoScriptPackage(
     demoPlan,
     exploration,
   });
+  assertDemoScriptCaptureSdkContract(demoScript);
   assertCaptureReadyScriptQuality(demoScript);
 
   return buildDemoScriptPackage({

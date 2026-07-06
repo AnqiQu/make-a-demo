@@ -32,6 +32,13 @@ export function assertCaptureReadyScriptQuality(demoScript: DemoScript): void {
   ) {
     throw new Error("demoPlaywrightScript contains placeholder actions");
   }
+
+  for (const scene of demoScript.scenes) {
+    const sceneBody = readSceneCallbackSource(script, scene.id);
+    if (sceneBody !== undefined && isPlaceholderSceneBody(sceneBody)) {
+      throw new Error(`Scene ${scene.id} contains placeholder actions`);
+    }
+  }
 }
 
 function hasFeatureSpecificSceneBehavior(script: string): boolean {
@@ -66,4 +73,49 @@ function isBodyOnlySmokeCheck(script: string): boolean {
       ),
     )
   );
+}
+
+function isPlaceholderSceneBody(script: string): boolean {
+  if (isBodyOnlySmokeCheck(script)) {
+    return true;
+  }
+
+  return (
+    placeholderPatterns.some((pattern) => pattern.test(script)) &&
+    !hasMeaningfulSceneBehavior(script)
+  );
+}
+
+function hasMeaningfulSceneBehavior(script: string): boolean {
+  return (
+    meaningfulInteractionPatterns.some((pattern) => pattern.test(script)) &&
+    !isBodyOnlySmokeCheck(script)
+  );
+}
+
+function readSceneCallbackSource(
+  script: string,
+  sceneId: string,
+): string | undefined {
+  const marker = new RegExp(`scene\\(\\s*['"]${escapeRegExp(sceneId)}['"]`);
+  const match = marker.exec(script);
+  if (match === null) {
+    return undefined;
+  }
+
+  const nextSceneIndex = script
+    .slice(match.index + match[0].length)
+    .search(/\bscene\s*\(/);
+  if (nextSceneIndex === -1) {
+    return script.slice(match.index);
+  }
+
+  return script.slice(
+    match.index,
+    match.index + match[0].length + nextSceneIndex,
+  );
+}
+
+function escapeRegExp(value: string): string {
+  return value.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

@@ -42,10 +42,42 @@ describe("assertCaptureReadyScriptQuality", () => {
       ),
     ).toThrow("demoPlaywrightScript contains placeholder actions");
   });
+
+  it("rejects Demo Scripts that leave any declared Scene as a body-only placeholder", () => {
+    expect(() =>
+      assertCaptureReadyScriptQuality(
+        demoScript({
+          demoPlaywrightScript: [
+            "import { setup, scene } from './makeademo-capture-sdk';",
+            "await setup(async ({ page, baseUrl }) => { await page.goto(baseUrl); });",
+            "await scene('scene_time', async ({ page, expect }) => {",
+            "  await page.getByRole('button', { name: 'Log 30m' }).click();",
+            "  await expect(page.locator('#billableHours')).toContainText('0.5');",
+            "});",
+            "await scene('scene_placeholder', async ({ page, expect }) => {",
+            "  await expect(page.locator('body')).toBeVisible();",
+            "});",
+          ].join("\n"),
+          scenes: [
+            {
+              expectedVisibleOutcome: "Billable time is visible.",
+              humanReadableDescription: "Log billable time.",
+              id: "scene_time",
+            },
+            {
+              expectedVisibleOutcome: "Placeholder is visible.",
+              humanReadableDescription: "Show placeholder.",
+              id: "scene_placeholder",
+            },
+          ],
+        }),
+      ),
+    ).toThrow("Scene scene_placeholder contains placeholder actions");
+  });
 });
 
 function demoScript(
-  overrides: Pick<DemoScript, "demoPlaywrightScript">,
+  overrides: Pick<DemoScript, "demoPlaywrightScript"> & Partial<DemoScript>,
 ): DemoScript {
   return {
     format: "16:9",

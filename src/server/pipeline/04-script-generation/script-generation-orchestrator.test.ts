@@ -142,6 +142,72 @@ describe("generateDemoScriptPackage", () => {
       ),
     ).rejects.toThrow("demoPlaywrightScript contains placeholder actions");
   });
+
+  it("rejects non-agent Demo Scripts that violate the Capture SDK contract before returning the handoff package", async () => {
+    await expect(
+      generateDemoScriptPackage(
+        {
+          demoBrief: { keyProductFeatures: ["repo validation"] },
+          normalizedSupportingDocuments: [],
+          preparationManifest: manifest(),
+          repoUrl: "https://github.com/example/app",
+        },
+        {
+          projectExplorer: {
+            async exploreProject() {
+              return {
+                assumptions: [],
+                productSurfaces: ["validation dashboard"],
+                summary: "A product for validating demo-ready repos.",
+              };
+            },
+          },
+          demoPlanner: {
+            async planDemo({ demoBrief }) {
+              return {
+                featureOrder: demoBrief.keyProductFeatures,
+                narrative: "Show validation.",
+                risks: [],
+              };
+            },
+          },
+          scriptComposer: {
+            async composeScript() {
+              return {
+                demoPlaywrightScript: [
+                  "await setup(async ({ page, baseUrl }) => {",
+                  "  await page.goto(baseUrl);",
+                  "});",
+                  "await scene('scene_validation', async ({ page, expect }) => {",
+                  "  await page.getByRole('button', { name: 'Validate repo' }).click();",
+                  "  await expect(page.getByText('Validated project')).toBeVisible();",
+                  "});",
+                ].join("\n"),
+                format: "16:9",
+                presentation: {
+                  music: { enabled: false },
+                  textOverlays: [],
+                  transitions: [],
+                },
+                scenes: [
+                  {
+                    expectedVisibleOutcome:
+                      "The validated project result is visible.",
+                    humanReadableDescription:
+                      "Show the validated project result.",
+                    id: "scene_validation",
+                  },
+                ],
+                scriptId: "script_missing_sdk_import",
+                title: "MakeADemo validation demo",
+                version: 1,
+              };
+            },
+          },
+        },
+      ),
+    ).rejects.toThrow("must import { setup, scene }");
+  });
 });
 
 function manifest() {

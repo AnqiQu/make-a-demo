@@ -6,9 +6,10 @@ export class DefaultScriptComposer implements ScriptComposer {
   async composeScript(
     input: Parameters<ScriptComposer["composeScript"]>[0],
   ): Promise<ComposedDemoScript> {
+    const sceneIds = createSceneIds(input.demoPlan.featureOrder);
     const scenes: SceneDescription[] = input.demoPlan.featureOrder.map(
-      (feature) => {
-        const sceneId = `scene-${slug(feature)}`;
+      (feature, index) => {
+        const sceneId = sceneIds[index] ?? "scene-feature";
 
         return {
           expectedVisibleOutcome: `The ${feature} result is visible.`,
@@ -19,7 +20,10 @@ export class DefaultScriptComposer implements ScriptComposer {
     );
 
     return {
-      demoPlaywrightScript: createPlaywrightScript(input.demoPlan.featureOrder),
+      demoPlaywrightScript: createPlaywrightScript(
+        input.demoPlan.featureOrder,
+        sceneIds,
+      ),
       format: "16:9",
       presentation: {
         music: { enabled: true, trackId: "clean" },
@@ -45,7 +49,10 @@ export class DefaultScriptComposer implements ScriptComposer {
   }
 }
 
-function createPlaywrightScript(features: string[]): string {
+function createPlaywrightScript(
+  features: string[],
+  sceneIds: string[],
+): string {
   const lines = [
     "import { scene, setup } from './makeademo-capture-sdk';",
     "",
@@ -55,15 +62,28 @@ function createPlaywrightScript(features: string[]): string {
     "});",
   ];
 
-  for (const feature of features) {
+  for (const [index, feature] of features.entries()) {
+    const sceneId = sceneIds[index] ?? "scene-feature";
     lines.push(
-      `await scene(${JSON.stringify(`scene-${slug(feature)}`)}, async ({ page, expect }) => {`,
+      `await scene(${JSON.stringify(sceneId)}, async ({ page, expect }) => {`,
       `  await expect(page.getByText(${JSON.stringify(feature)}, { exact: false }).first()).toBeVisible();`,
       "});",
     );
   }
 
   return lines.join("\n");
+}
+
+function createSceneIds(features: string[]): string[] {
+  const seenSceneIds = new Map<string, number>();
+
+  return features.map((feature) => {
+    const baseSceneId = `scene-${slug(feature) || "feature"}`;
+    const occurrence = (seenSceneIds.get(baseSceneId) ?? 0) + 1;
+    seenSceneIds.set(baseSceneId, occurrence);
+
+    return occurrence === 1 ? baseSceneId : `${baseSceneId}-${occurrence}`;
+  });
 }
 
 function slug(value: string): string {
