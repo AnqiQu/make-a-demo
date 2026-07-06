@@ -103,11 +103,14 @@ function createSupportingDocumentUploadKey(
 }
 
 function safeFileName(fileName: string) {
-  const extensionMatch = /\.[a-z0-9]+$/i.exec(fileName.trim());
+  const trimmedFileName = fileName.trim();
+  const extensionMatch = /\.[a-z0-9]+$/i.exec(trimmedFileName);
   const extension = extensionMatch?.[0].toLowerCase() ?? "";
-  const base = fileName
-    .trim()
-    .replace(extension, "")
+  const baseName =
+    extension.length === 0
+      ? trimmedFileName
+      : trimmedFileName.slice(0, -extension.length);
+  const base = baseName
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");

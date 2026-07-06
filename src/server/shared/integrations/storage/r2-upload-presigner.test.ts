@@ -66,6 +66,35 @@ describe("createSupportingDocumentUpload", () => {
     ).rejects.toThrow("Supporting Documents cannot be videos or pictures");
   });
 
+  it("preserves repeated extension text while normalizing only the trailing file extension", async () => {
+    const result = await createSupportingDocumentUpload(
+      {
+        draftId: "draft-123",
+        fileName: "Report.pdf Notes.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 1024,
+      },
+      {
+        bucket: "owlet",
+        createId: () => "file-123",
+        putObject: async () => {
+          throw new Error("putObject should not be called");
+        },
+        presignGet: async () => {
+          throw new Error("presignGet should not be called");
+        },
+        presignPut: async (input) => {
+          expect(input.key).toBe(
+            "uploads/draft-123/file-123-report-pdf-notes.pdf",
+          );
+          return `https://uploads.example.test/${input.key}`;
+        },
+      },
+    );
+
+    expect(result.key).toBe("uploads/draft-123/file-123-report-pdf-notes.pdf");
+  });
+
   it("stores uploads directly through the server-side storage adapter", async () => {
     const result = await storeSupportingDocumentUpload(
       {
