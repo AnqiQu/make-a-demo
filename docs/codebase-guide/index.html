@@ -6,324 +6,393 @@
     <title>MakeADemo Codebase Guide</title>
     <meta
       name="description"
-      content="A plain interactive text guide to the MakeADemo codebase."
+      content="A rich static guide to the MakeADemo codebase, organized as Background, Intuition, Code, and Quiz."
     />
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <main>
-      <header>
-        <h1>From entrypoint to final video</h1>
-        <p>
-          This is an interactive text document for the repo. The directory tree
-          is generated from <code>git ls-files</code>. The dependency graph is
-          generated from dependency-cruiser. The process charts are generated
-          from Mermaid source files stored beside this page.
+      <header class="hero">
+        <p class="eyebrow">MakeADemo codebase guide</p>
+        <h1>How a repo turns into a short demo video</h1>
+        <p class="lede">
+          MakeADemo is a Bun/TypeScript product that generates short demo
+          videos from runnable web apps, codebase context, and product
+          descriptions. This page is a local, static walkthrough of the whole
+          codebase: the user-facing intake, the API and queue, the pipeline
+          gates, the sandbox boundary, capture, compositing, and final delivery.
         </p>
+        <div class="hero-grid" aria-label="Pipeline summary">
+          <div class="metric-card">
+            <span>Runtime</span>
+            <strong>Bun + TypeScript</strong>
+          </div>
+          <div class="metric-card">
+            <span>Core shape</span>
+            <strong>Linear pipeline</strong>
+          </div>
+          <div class="metric-card">
+            <span>Trust gate</span>
+            <strong>Capture Path Validation</strong>
+          </div>
+        </div>
       </header>
 
-      <nav aria-label="Guide controls">
-        <button type="button" data-action="expand">Expand all</button>
-        <button type="button" data-action="collapse">Collapse all</button>
+      <nav class="toc" aria-label="Table of contents">
+        <div>
+          <p class="nav-label">Contents</p>
+          <ol>
+            <li><a href="#background">Background</a></li>
+            <li><a href="#intuition">Intuition</a></li>
+            <li><a href="#code">Code walkthrough</a></li>
+            <li><a href="#appendix">Generated appendix</a></li>
+            <li><a href="#quiz">Quiz</a></li>
+          </ol>
+        </div>
+        <div class="controls" aria-label="Guide controls">
+          <button type="button" data-action="expand">Expand all</button>
+          <button type="button" data-action="collapse">Collapse all</button>
+        </div>
       </nav>
 
-      <section aria-labelledby="narrative-title">
-        <h2 id="narrative-title">Narrative: what runs, in order</h2>
+      <section id="background" class="guide-section" aria-labelledby="background-title">
+        <p class="eyebrow">Background</p>
+        <h2 id="background-title">The system before you follow any file</h2>
+        <p>
+          Think of MakeADemo as a compiler for demos. The input is a maker's
+          project plus their intent; the output is a final video. The product is
+          intentionally organized around the MakeADemo Pipeline, because every
+          stage has a different trust level and a different external seam.
+        </p>
 
-        <details open>
-          <summary>1. Browser entrypoint: collect the request</summary>
-          <p>
-            Start in <code>src/app/main.tsx</code>. It renders
-            <code>&lt;ContextGatheringApp /&gt;</code> into <code>#root</code>.
-            The main component is
-            <code>src/app/context-gathering/ContextGatheringApp.tsx</code>.
-          </p>
-          <p>
-            In that file, <code>RepoConnectionFields</code> handles public repo
-            URLs and GitHub App/private repo selection. Important functions to
-            follow are <code>connectGitHub</code>,
-            <code>continueFromRepo</code>,
-            <code>readGitHubCallbackRequest</code>,
-            <code>getGitHubCallbackConnection</code>, and
-            <code>connectGitHubInstallationRepositories</code>.
-          </p>
-          <p>
-            <code>ContextDetailsForm</code> collects name, email, product
-            summary, target users, requested duration, important features, and
-            Supporting Documents. The functions to follow are
-            <code>submitDetailsForm</code>, <code>collectIntakeDetails</code>,
-            <code>startContextGatheringSubmission</code>, and
-            <code>submitIntake</code>. Browser-side draft helpers live in
-            <code>src/app/context-gathering/draft.ts</code>.
-          </p>
-        </details>
+        <div class="callout">
+          <strong>The durable pipeline order:</strong>
+          Context Gathering → Repo Security Screen → Repo Preparation → Script
+          Generation → Capture Path Validation → Footage Capture → Compositing
+          → final output.
+        </div>
 
-        <details open>
-          <summary>2. API entrypoint: upload files and queue durable work</summary>
-          <p>
-            <code>src/server/api/server.mts</code> starts the Bun server and
-            wires real providers: GitHub, R2, Neon, logging, and frontend asset
-            serving. It calls <code>createApiApp</code> from
-            <code>src/server/api/app.ts</code>.
-          </p>
-          <p>
-            Supporting Documents go through <code>POST /api/uploads</code>.
-            That route uses <code>readMultipartUploadRequest</code>,
-            <code>assertSupportingDocumentSize</code>, and
-            <code>storeSupportingDocumentUpload</code>. The storage helper is in
-            <code>src/server/shared/integrations/storage/r2-upload-presigner.ts</code>.
-          </p>
-          <p>
-            The main intake route is
-            <code>POST /api/context-gathering/submit</code>. It calls
-            <code>submitContextGathering</code> in
-            <code>context-gathering-submission.ts</code>, which validates the
-            repo URL, private repo installation, contact fields, requested
-            duration, and Supporting Document metadata. It then calls
-            <code>ContextGatheringStore.createQueuedProject</code>.
-          </p>
-          <p>
-            The Neon implementation is
-            <code>NeonContextGatheringStore.createQueuedProject</code>. It
-            upserts <code>users</code>, inserts a queued <code>projects</code>
-            row, inserts a linked <code>demoRequests</code> row, and returns
-            <code>demoRequestId</code>, <code>projectId</code>, and
-            <code>status: "queued"</code>.
-          </p>
-        </details>
+        <div class="flow-strip" aria-label="MakeADemo pipeline stages">
+          <span>Context Gathering</span>
+          <span>Security Screen</span>
+          <span>Preparation</span>
+          <span>Script</span>
+          <span>Validation</span>
+          <span>Capture</span>
+          <span>Composite</span>
+          <span>Output</span>
+        </div>
 
-        <details open>
-          <summary>3. Worker entrypoint: turn queued rows into Pipeline Jobs</summary>
-          <p>
-            <code>project-demo-generation-worker.mts</code> claims queued
-            projects. It calls
-            <code>processNextProjectDemoGenerationJob</code> in
-            <code>project-demo-generation-queue.ts</code>.
-          </p>
-          <p>
-            The queue store implementation is
-            <code>NeonProjectDemoGenerationQueueStore.claimNextQueuedProject</code>.
-            It atomically changes the oldest queued project to
-            <code>processing</code>, reads the linked Demo Request, maps context
-            into <code>demoBrief</code>, loads normalized Supporting Documents,
-            and returns the input for <code>runFullPipelineJob</code>.
-          </p>
-          <p>
-            For local runs, start at <code>full-pipeline-cli.mts</code>. For
-            production queue runs, start at
-            <code>project-demo-generation-worker.mts</code>.
-          </p>
-        </details>
+        <div class="card-grid">
+          <article class="card">
+            <h3>Beginner mental model</h3>
+            <p>
+              A submitted repo is not trusted just because an agent prepared it.
+              MakeADemo separates the powerful preparation workspace from the
+              locked-down app runtime, then proves the generated browser path in
+              a deterministic validation pass before recording final footage.
+            </p>
+          </article>
+          <article class="card">
+            <h3>The key artifact handoff</h3>
+            <p>
+              Repo Preparation produces a Preparation Manifest. Script
+              Generation produces a Demo Script candidate. That candidate only
+              becomes an <code>AcceptedDemoScript</code> after Capture Path
+              Validation succeeds.
+            </p>
+          </article>
+          <article class="card">
+            <h3>The external seams</h3>
+            <p>
+              The repository keeps infrastructure behind seams: Neon for
+              persistence, R2 for storage, Daytona for sandboxes, Playwright for
+              browser automation, Remotion for rendering, and Resend for final
+              video notification email.
+            </p>
+          </article>
+        </div>
 
         <figure>
           <img src="generated/main-pipeline-flow.svg" alt="Flowchart from frontend entrypoint through API, worker, pipeline, capture, compositing, and final output." />
         </figure>
+      </section>
+
+      <section id="intuition" class="guide-section" aria-labelledby="intuition-title">
+        <p class="eyebrow">Intuition</p>
+        <h2 id="intuition-title">Why the code is shaped this way</h2>
+        <p>
+          The central design pressure is simple: MakeADemo needs enough agency
+          to prepare unknown apps, but enough determinism to trust the footage it
+          ships. The codebase therefore reads like a sequence of gates, not like
+          one giant script.
+        </p>
+
+        <div class="diagram-pair">
+          <div class="mini-diagram">
+            <h3>Powerful side</h3>
+            <p>Preparation agent can inspect, edit, and install dependencies in an ephemeral workspace.</p>
+            <div class="pill-stack">
+              <span>execute</span>
+              <span>syncSubmittedCodeWorkspace</span>
+              <span>dependency install window</span>
+            </div>
+          </div>
+          <div class="mini-diagram safe">
+            <h3>Trusted side</h3>
+            <p>Submitted app runtime is sealed, validated, captured, and rendered through explicit contracts.</p>
+            <div class="pill-stack">
+              <span>executeSubmittedCode</span>
+              <span>Runtime Network Lockdown</span>
+              <span>AcceptedDemoScript</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="callout warning">
+          <strong>Concrete toy example:</strong> if a generated script says
+          “click Sign in, then wait for dashboard,” validation dry-runs that path
+          before capture. If the app tries to call an outside API after the
+          dependency-install-only window, the network attempt is sanitized and
+          treated as boundary evidence rather than silently tolerated.
+        </div>
 
         <details open>
-          <summary>4. Pre-capture gates: only promote a script after validation</summary>
+          <summary>Runtime boundary diagram</summary>
           <p>
-            The core pre-capture function is <code>runPipelineJob</code> in
-            <code>pipeline-orchestrator.ts</code>. It returns the union defined
-            in <code>pipeline-job.ts</code>: <code>security-rejected</code>,
-            <code>preparation-failed</code>,
-            <code>capture-path-validation-failed</code>, or
-            <code>succeeded</code>.
+            This generated SVG shows the agent workspace, submitted-code
+            sandbox, approved network install window, runtime lockdown, and
+            redacted network reporting.
+          </p>
+          <figure>
+            <img src="generated/runtime-boundaries.svg" alt="Flowchart showing agent workspace, submitted-code sandbox, approved network install window, runtime lockdown, and redacted network reporting." />
+          </figure>
+        </details>
+      </section>
+
+      <section id="code" class="guide-section" aria-labelledby="code-title">
+        <p class="eyebrow">Code</p>
+        <h2 id="code-title">A high-level walkthrough of the repository</h2>
+        <p>
+          Follow the product from the browser inward. Each expandable section
+          names the public seam or orchestrator that matters most, then points to
+          the files worth reading next.
+        </p>
+
+        <details open>
+          <summary>1. Frontend intake: collect enough context to queue work</summary>
+          <p>
+            <code>src/app/main.tsx</code> renders
+            <code>ContextGatheringApp</code>. That app coordinates
+            <code>RepoConnectionFields</code> and
+            <code>ContextDetailsForm</code>, then moves the maker's details
+            through <code>collectIntakeDetails</code>,
+            <code>startContextGatheringSubmission</code>, and
+            <code>submitIntake</code>.
+          </p>
+          <pre><code>Browser
+  src/app/main.tsx
+    → ContextGatheringApp
+      → RepoConnectionFields
+      → ContextDetailsForm
+      → submitIntake()</code></pre>
+        </details>
+
+        <details open>
+          <summary>2. API and persistence: uploads plus durable queue records</summary>
+          <p>
+            <code>src/server/api/server.mts</code> calls
+            <code>createApiApp</code> from <code>src/server/api/app.ts</code>.
+            The relevant routes are <code>POST /api/uploads</code> and
+            <code>POST /api/context-gathering/submit</code>. The submit route
+            calls <code>submitContextGathering</code>, which calls
+            <code>ContextGatheringStore.createQueuedProject</code>.
           </p>
           <p>
-            First, <code>screenRepoSecurity</code> runs the deterministic static
-            gate. Next, <code>prepareRepo</code> asks a
-            <code>RepoPreparationAgent</code> to prepare a workspace and then
-            validates the result with <code>readPreparationManifest</code>. The
-            crucial artifact is <code>PreparationManifest</code>: it records the
-            demo command, local URL, setup summary, assumptions, risks, changed
-            files, and script-generation context.
-          </p>
-          <p>
-            Script Generation then produces a <code>DemoScriptCandidate</code>
-            through <code>generateScriptPackage</code> or
-            <code>generateDemoScriptPackage</code>. The candidate is not trusted
-            yet. <code>runCapturePathValidation</code> calls
-            <code>validateCapturePath</code>; only after that succeeds does the
-            orchestrator assign
-            <code>const acceptedDemoScript: AcceptedDemoScript = demoScriptCandidate</code>.
+            The Neon implementation,
+            <code>NeonContextGatheringStore.createQueuedProject</code>, upserts
+            <code>users</code> and creates queued <code>projects</code> plus
+            linked <code>demoRequests</code>.
           </p>
         </details>
 
         <details open>
-          <summary>5. Runtime boundary: separate agent power from submitted app runtime</summary>
+          <summary>3. Worker and queue: claim the next project atomically</summary>
           <p>
-            The boundary starts with <code>PreparationWorkspace</code> in
-            <code>preparation-workspace.interface.ts</code>. Parent workspace
-            commands use <code>execute</code>. Submitted-code sandbox commands
-            use <code>executeSubmittedCode</code>. Network is controlled through
-            <code>setOutboundNetworkAccess</code> and
-            <code>setSubmittedCodeNetworkAccess</code>.
-          </p>
-          <p>
-            The Daytona implementation is
-            <code>DaytonaSdkPreparationWorkspaceProvider</code>. It creates a
-            parent agent sandbox and, when configured, a linked submitted-code
-            sandbox with <code>networkBlockAll: true</code>. The helper
-            <code>syncSubmittedCodeWorkspace</code> copies prepared files from
-            the parent workspace into the submitted-code sandbox.
-          </p>
-          <p>
-            Dependency installs are the controlled exception. The function
-            <code>runDependencyInstallWithNetworkWindow</code> calls
-            <code>evaluateDependencyNetworkRequest</code>, opens submitted-code
-            network access, runs the install with <code>executeSubmittedCode</code>,
-            and reseals network access in <code>finally</code>.
+            <code>project-demo-generation-worker.mts</code> calls
+            <code>processNextProjectDemoGenerationJob</code>.
+            <code>NeonProjectDemoGenerationQueueStore.claimNextQueuedProject</code>
+            atomically claims queued projects and returns the input needed by
+            <code>runFullPipelineJob</code>.
           </p>
         </details>
 
-        <figure>
-          <img src="generated/runtime-boundaries.svg" alt="Flowchart showing agent workspace, submitted-code sandbox, approved network install window, runtime lockdown, and redacted network reporting." />
-        </figure>
+        <details open>
+          <summary>4. Orchestration: promote candidates only after validation</summary>
+          <p>
+            <code>runPipelineJob</code> handles
+            <code>screenRepoSecurity</code>, <code>prepareRepo</code>,
+            <code>generateScriptPackage</code> or
+            <code>generateDemoScriptPackage</code>, and then
+            <code>runCapturePathValidation</code> / <code>validateCapturePath</code>.
+            A candidate becomes an <code>AcceptedDemoScript</code> only after
+            validation succeeds.
+          </p>
+          <pre><code>DemoScriptCandidate
+  └─ validateCapturePath(...)
+       ├─ parse Demo Script
+       ├─ validate prepared runtime
+       ├─ dry-run browser path
+       └─ report boundary violations
+
+success → AcceptedDemoScript</code></pre>
+        </details>
 
         <details open>
-          <summary>6. Capture Path Validation: the non-agent trust gate</summary>
+          <summary>5. Runtime seam: agent power is not app runtime power</summary>
           <p>
-            <code>validateCapturePath</code> first parses the Demo Script with
-            <code>parseDemoScript</code> and enforces the Capture SDK contract
-            with <code>assertDemoScriptCaptureSdkContract</code>. It then runs
-            project preflight through <code>validateProject</code>.
+            <code>PreparationWorkspace</code> exposes <code>execute</code>,
+            <code>executeSubmittedCode</code>,
+            <code>setOutboundNetworkAccess</code>,
+            <code>setSubmittedCodeNetworkAccess</code>, and
+            <code>syncSubmittedCodeWorkspace</code>. The Daytona provider,
+            <code>DaytonaSdkPreparationWorkspaceProvider</code>, creates a parent
+            agent sandbox and a submitted-code sandbox with
+            <code>networkBlockAll: true</code>.
           </p>
           <p>
-            <code>validateProject</code> calls a <code>SandboxRunner</code> and
-            then a <code>BrowserValidator</code>. The Daytona implementation is
-            <code>DaytonaSandboxRunner.runValidation</code>; the browser
-            implementation is <code>PlaywrightBrowserValidator.validate</code>.
-            Runtime network evidence is filtered and redacted by
+            <code>runDependencyInstallWithNetworkWindow</code> opens the
+            dependency-install-only network window and reseals it in
+            <code>finally</code>.
+          </p>
+        </details>
+
+        <details open>
+          <summary>6. Capture Path Validation: deterministic dry-run trust gate</summary>
+          <p>
+            <code>validateCapturePath</code> parses the Demo Script, runs
+            <code>assertDemoScriptCaptureSdkContract</code>, then validates the
+            project through <code>validateProject</code>. The implementation path
+            includes <code>DaytonaSandboxRunner.runValidation</code>,
+            <code>PlaywrightBrowserValidator.validate</code>,
+            <code>DefaultCapturePathSceneValidator.validateScene</code>,
             <code>findRuntimeBoundaryViolations</code>,
             <code>sanitizeNetworkAttempts</code>, and
             <code>sanitizeNetworkAttemptUrl</code>.
           </p>
-          <p>
-            The generated script dry-run is handled by
-            <code>DefaultCapturePathSceneValidator.validateScene</code>. In a
-            prepared workspace it calls
-            <code>validateSceneInPreparationWorkspace</code>, uploads generated
-            harness files, executes submitted code, and parses
-            <code>[makeademo:scene]</code> plus
-            <code>[makeademo:network-blocked]</code> markers.
-          </p>
         </details>
 
         <details open>
-          <summary>7. Footage Capture, Compositing, and final output</summary>
+          <summary>7. Footage, compositing, storage, and notification</summary>
           <p>
-            After pre-capture success, <code>runFullPipelineJob</code> persists
-            the generated script through <code>persistGeneratedScript</code>,
-            then enters <code>captureCompositeAndReview</code>. Before capture,
-            <code>createDaytonaFreshCaptureStatePreparer</code> can restart the
-            prepared demo from a fresh baseline.
+            <code>runFullPipelineJob</code> handles persistence,
+            <code>captureCompositeAndReview</code>, Footage Capture,
+            Compositing, Draft Composite review, and the final result. Footage
+            starts at <code>captureScenesFromScript</code> and records through
+            <code>PreparedWorkspacePlaywrightSceneRecorder</code>, producing a
+            <code>CaptureManifest</code>.
           </p>
           <p>
-            Footage Capture starts at <code>captureScenesFromScript</code>. It
-            parses the accepted Demo Script, checks
-            <code>assertDemoScriptCaptureSdkContract</code>, and records through
-            a <code>SceneRecorder</code>. The prepared-workspace implementation
-            is <code>PreparedWorkspacePlaywrightSceneRecorder</code>. It records
-            one continuous take, reads scene markers, and writes a
-            <code>CaptureManifest</code> plus per-scene clips.
-          </p>
-          <p>
-            Compositing starts at <code>compositeVideoFromScript</code>. It
-            checks that script and capture manifest IDs match, stages clips,
-            fonts, and music, writes <code>render-plan.json</code>, renders
-            <code>final-video.mp4</code> through
-            <code>RemotionVideoRenderer.renderVideo</code>, and writes
-            <code>composite-manifest.json</code>.
-          </p>
-          <p>
-            Final storage is handled by <code>storeAndLinkFinalVideo</code>,
-            <code>R2FinalVideoStorage.storeFinalVideo</code>, and
-            <code>NeonDemoRequestFinalVideoStore.linkFinalVideo</code>. Email, if
-            enabled by <code>finalVideoEmailsEnabled</code>, goes through
+            Compositing starts at <code>compositeVideoFromScript</code> and
+            renders through <code>RemotionVideoRenderer.renderVideo</code>.
+            Delivery is handled by <code>storeAndLinkFinalVideo</code>,
+            <code>R2FinalVideoStorage.storeFinalVideo</code>,
+            <code>NeonDemoRequestFinalVideoStore.linkFinalVideo</code>,
+            <code>finalVideoEmailsEnabled</code>, and
             <code>ResendFinalVideoEmailNotifier.sendFinalVideoReadyEmail</code>.
           </p>
+          <div class="callout caveat">
+            <strong>Source-observed caveat:</strong> the current queued worker
+            path appears not fully wired for complete full-pipeline output,
+            because it does not appear to pass <code>prepareFreshCaptureState</code>
+            or <code>reviewDraftComposite</code>. Treat this as a cautious reading
+            of the source, not as a product guarantee.
+          </div>
         </details>
       </section>
 
-      <section aria-labelledby="mechanisms-title">
-        <h2 id="mechanisms-title">Crucial mechanisms to understand</h2>
+      <section id="appendix" class="guide-section" aria-labelledby="appendix-title">
+        <p class="eyebrow">Appendix</p>
+        <h2 id="appendix-title">Generated maps for deeper exploration</h2>
 
-        <details>
-          <summary>Repo Preparation handoff</summary>
+        <details open>
+          <summary>Generated dependency graph</summary>
           <p>
-            Repo Preparation turns an unknown submitted repo into a known demo
-            runtime. The agent works in an ephemeral workspace, but the durable
-            handoff is the Preparation Manifest: command, URL, mocks, risks,
-            assumptions, and workspace changes.
+            This SVG is generated from the current <code>src/</code> dependency
+            graph using dependency-cruiser, not drawn by hand. Open it in a new
+            tab if the embedded view is too dense.
           </p>
+          <p>
+            Source files:
+            <a href="generated/src-dependency-graph.dot">DOT</a> and
+            <a href="generated/src-dependency-graph.svg">SVG</a>.
+          </p>
+          <figure class="wide-figure">
+            <img src="generated/src-dependency-graph.svg" alt="Generated dependency graph for the src directory." />
+          </figure>
         </details>
 
         <details>
-          <summary>Runtime Network Lockdown</summary>
+          <summary>Generated file-by-file directory tree</summary>
           <p>
-            Dependency installation is the only intended network-open runtime
-            window. After that, validators and capture scripts block external
-            network attempts and report redacted evidence. This keeps final
-            footage from depending on outside services.
+            This tree is rendered from <code>generated/file-inventory.js</code>,
+            which was generated from <code>git ls-files</code>. Every tracked file
+            in the repo appears here with a short purpose note.
           </p>
-        </details>
-
-        <details>
-          <summary>Capture Path Validation</summary>
-          <p>
-            Capture Path Validation is the non-agent gate. It checks the
-            prepared app, the generated Demo Script contract, scene markers,
-            Playwright assertions, runtime network attempts, and repair attempts
-            before Footage Capture is allowed to trust the script.
-          </p>
-        </details>
-
-        <details>
-          <summary>Event-marked Footage Capture</summary>
-          <p>
-            Generated scripts call the MakeADemo Capture SDK. The SDK emits
-            scene/action markers during one continuous take, letting the recorder
-            split reliable scene clips without guessing durations.
-          </p>
-        </details>
-
-        <details>
-          <summary>Compositing and Draft Composite review</summary>
-          <p>
-            Compositing turns scene clips and presentation metadata into a
-            Render Plan and final video. Draft Composite review can reject a
-            rendered draft and route repair back to the script or workspace
-            before accepting the final output.
-          </p>
+          <div class="tree" data-tree></div>
         </details>
       </section>
 
-      <section aria-labelledby="dependency-title">
-        <h2 id="dependency-title">Generated dependency graph</h2>
+      <section id="quiz" class="guide-section" aria-labelledby="quiz-title">
+        <p class="eyebrow">Quiz</p>
+        <h2 id="quiz-title">Check your understanding</h2>
         <p>
-          This SVG is generated from the current <code>src/</code> dependency
-          graph using dependency-cruiser, not drawn by hand. Open it in a new tab
-          if the embedded view is too dense.
+          Choose an answer for each question. The feedback is local JavaScript;
+          nothing leaves this page.
         </p>
-        <p>
-          Source files:
-          <a href="generated/src-dependency-graph.dot">DOT</a> and
-          <a href="generated/src-dependency-graph.svg">SVG</a>.
-        </p>
-        <figure class="wide-figure">
-          <img src="generated/src-dependency-graph.svg" alt="Generated dependency graph for the src directory." />
-        </figure>
-      </section>
 
-      <section aria-labelledby="tree-title">
-        <h2 id="tree-title">Generated file-by-file directory tree</h2>
-        <p>
-          This tree is rendered from <code>generated/file-inventory.js</code>,
-          which was generated from <code>git ls-files</code>. Every tracked file
-          in the repo appears here with a short purpose note.
-        </p>
-        <div class="tree" data-tree></div>
+        <div class="quiz" data-quiz>
+          <article class="quiz-card" data-correct="b">
+            <h3>1. When does a Demo Script candidate become accepted?</h3>
+            <button type="button" data-answer="a">Immediately after Script Generation returns it.</button>
+            <button type="button" data-answer="b">Only after Capture Path Validation succeeds.</button>
+            <button type="button" data-answer="c">After the final video is uploaded to R2.</button>
+            <p class="feedback" aria-live="polite"></p>
+          </article>
+
+          <article class="quiz-card" data-correct="c">
+            <h3>2. Which route queues the main Context Gathering submission?</h3>
+            <button type="button" data-answer="a"><code>GET /api/context-gathering/status</code></button>
+            <button type="button" data-answer="b"><code>POST /api/uploads</code></button>
+            <button type="button" data-answer="c"><code>POST /api/context-gathering/submit</code></button>
+            <p class="feedback" aria-live="polite"></p>
+          </article>
+
+          <article class="quiz-card" data-correct="a">
+            <h3>3. What is the intended network exception for submitted code?</h3>
+            <button type="button" data-answer="a">A dependency-install-only window that is resealed in <code>finally</code>.</button>
+            <button type="button" data-answer="b">Permanent external network access during capture.</button>
+            <button type="button" data-answer="c">Browser-only network access after compositing.</button>
+            <p class="feedback" aria-live="polite"></p>
+          </article>
+
+          <article class="quiz-card" data-correct="b">
+            <h3>4. Which pair is most directly responsible for final video storage linkage?</h3>
+            <button type="button" data-answer="a"><code>RepoConnectionFields</code> and <code>ContextDetailsForm</code>.</button>
+            <button type="button" data-answer="b"><code>R2FinalVideoStorage.storeFinalVideo</code> and <code>NeonDemoRequestFinalVideoStore.linkFinalVideo</code>.</button>
+            <button type="button" data-answer="c"><code>parseDemoScript</code> and <code>assertDemoScriptCaptureSdkContract</code>.</button>
+            <p class="feedback" aria-live="polite"></p>
+          </article>
+
+          <article class="quiz-card" data-correct="c">
+            <h3>5. What is the cautious caveat about the queued worker path?</h3>
+            <button type="button" data-answer="a">It cannot create queued projects in Neon.</button>
+            <button type="button" data-answer="b">It bypasses Context Gathering in the frontend.</button>
+            <button type="button" data-answer="c">It appears not fully wired for complete full-pipeline output because it does not pass fresh-capture preparation or draft review hooks.</button>
+            <p class="feedback" aria-live="polite"></p>
+          </article>
+        </div>
       </section>
     </main>
 

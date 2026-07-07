@@ -1,15 +1,25 @@
 flowchart LR
-  subgraph Parent[Agent workspace]
-    A[OpenCode repo prep/script repair]
-    B[Preparation Manifest]
+  subgraph Parent[Parent agent workspace]
+    A[OpenCode Repo Preparation]
+    B[OpenCode Script Generation / repair / Draft Composite review]
+    C[Preparation Manifest + Demo Script]
   end
+
   subgraph Submitted[Submitted-code sandbox]
-    C[Install dependencies during approved window]
-    D[Run prepared app]
-    E[Browser validation and capture]
+    D[Sync prepared workspace]
+    E[Open dependency-install-only network window]
+    F[Install dependencies]
+    G[Close submitted-code network]
+    H[Runtime Network Lockdown]
+    I[Demo Runtime Preflight]
+    J[Capture Path Validation dry-run]
+    K[Fresh Footage Capture restart]
+    L[Footage Capture]
   end
-  A --> B --> C --> D --> E
-  C --> F[Network resealed]
-  F --> G[Runtime Network Lockdown]
-  G --> E
-  E --> H[Blocked attempts redacted and reported]
+
+  A --> C
+  B --> C
+  C --> D --> E --> F --> G --> H
+  H --> I --> J --> K --> L
+  J --> M[Blocked attempts redacted and reported]
+  L --> M

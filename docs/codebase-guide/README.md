@@ -1,7 +1,8 @@
 # MakeADemo Codebase Guide
 
-Static, build-free guide to the MakeADemo codebase. It is intentionally plain:
-more like an interactive text document than a marketing page.
+Static, build-free guide to the MakeADemo codebase. It is structured like an
+explanatory walkthrough: Background, Intuition, Code, and Quiz, with generated
+local assets for codebase facts that should stay reviewable.
 
 The generated assets are intentionally checked in with the guide:
 
