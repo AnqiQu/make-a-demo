@@ -1,0 +1,15 @@
+flowchart LR
+  subgraph Parent[Agent workspace]
+    A[OpenCode repo prep/script repair]
+    B[Preparation Manifest]
+  end
+  subgraph Submitted[Submitted-code sandbox]
+    C[Install dependencies during approved window]
+    D[Run prepared app]
+    E[Browser validation and capture]
+  end
+  A --> B --> C --> D --> E
+  C --> F[Network resealed]
+  F --> G[Runtime Network Lockdown]
+  G --> E
+  E --> H[Blocked attempts redacted and reported]
