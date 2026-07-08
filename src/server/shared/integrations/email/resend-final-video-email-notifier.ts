@@ -47,13 +47,6 @@ export class ResendFinalVideoEmailNotifier implements FinalVideoEmailNotifier {
   }
 }
 
-export function createResendFinalVideoEmailNotifierFromEnv() {
-  return new ResendFinalVideoEmailNotifier({
-    apiKey: readRequiredEnv("RESEND_API_KEY"),
-    fromEmail: readRequiredEnv("RESEND_FROM_EMAIL"),
-  });
-}
-
 function renderFinalVideoReadyText(input: FinalVideoReadyEmailInput) {
   return `Your MakeADemo video is ready.
 
@@ -79,13 +72,4 @@ function escapeHtml(value: string) {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
-}
-
-function readRequiredEnv(name: string) {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`${name} is required`);
-  }
-
-  return value;
 }
