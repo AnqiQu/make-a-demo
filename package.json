@@ -5,8 +5,6 @@
   "type": "module",
   "scripts": {
     "arch:deps": "depcruise src --config .dependency-cruiser.cjs --include-only \"^src\"",
-    "benchmark:run": "bun scripts/run-benchmark.mts",
-    "benchmark:summarize": "bun scripts/summarize-benchmark.mts",
     "build": "tsc --noEmit -p tsconfig.json && vite build",
     "demo": "vite demo --host 127.0.0.1 --port 3000",
     "demo:validate-scripts": "bun scripts/validate-demo-playwright-scripts.mts",
@@ -19,12 +17,9 @@
     "knip": "knip",
     "lint": "biome check .",
     "lsp:typescript": "typescript-language-server --stdio",
+    "pipeline:run": "bun scripts/run-demo-pipeline.mts",
     "preview": "vite preview",
-    "pipeline:run": "bun src/server/pipeline/00-orchestration/full-pipeline-cli.mts",
-    "scriptgen:run": "bun src/server/pipeline/00-orchestration/script-generation-resume-cli.mts",
-    "pre-capture:run": "bun src/server/pipeline/00-orchestration/pre-capture-cli.mts",
     "start": "bun src/server/api/server.mts",
-    "worker:demo-generation": "bun src/server/pipeline/00-orchestration/project-demo-generation-worker.mts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "verify:daytona-image": "bun scripts/verify-daytona-image.mts"
