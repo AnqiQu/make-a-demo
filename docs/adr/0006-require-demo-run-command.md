@@ -1,3 +1,0 @@
-# Require a Prepared Demo Command
-
-MakeADemo requires Repo Preparation to produce a prepared demo command and local URL that start the app in a deterministic demo mode without runtime network access, secrets, external APIs, external databases, OAuth, paid services, or manual setup. The Preparation Manifest is the source of truth for this command and URL; a repo-provided `makeademo.config.json` may be useful evidence, but it is no longer the primary contract. Dependency installation may use a controlled network window, but after dependency installation the demo sandbox must be isolated: any inbound or outbound network communication across the sandbox boundary is a hard failure for demo runtime, Capture Path Validation, and Footage Capture.

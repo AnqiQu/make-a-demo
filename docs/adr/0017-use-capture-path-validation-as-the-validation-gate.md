@@ -1,7 +1,0 @@
-# Use Capture Path Validation as the Validation Gate
-
-MakeADemo will use Capture Path Validation as the main non-agent validation gate for script-driven runs, rather than running standalone Project Validation before Script Generation. We chose this because the product only needs the prepared app and generated capture path to run under Runtime Network Lockdown; generic project-level checks remain valuable, but they should run as preflight checks inside Capture Path Validation before the generated Browser Actions or Capture Scripts run.
-
-The backend validator remains authoritative over whether a generated capture path is accepted for Footage Capture. If Capture Path Validation fails, the same long-lived agent session may receive structured failure feedback and repair the prepared workspace or script artifact, but every retry must rerun the full Capture Path Validation stage from the beginning.
-
-The repair budget should default to a small bounded number of attempts and be configurable with `MAKEADEMO_CAPTURE_PATH_REPAIR_ATTEMPTS`. If Capture Path Validation still fails after the repair budget is exhausted, the Pipeline Job should fail and tell the user to report the issue to MakeADemo rather than returning a partially trusted script artifact or a Preparation Fallback Prompt. ADR 0018 supersedes the old Video Script Package handoff with Demo Script and records the event-marked capture/fresh-state details.
