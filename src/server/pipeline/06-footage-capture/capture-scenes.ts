@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
+import type { AgentHarnessWorkspaceHandle } from "../../agent-harness/daytona/workspace.interface";
 import { assertDemoScriptCaptureSdkContract } from "./capture-sdk-contract";
 import { type DemoScript, parseDemoScript } from "./demo-script.schema";
 import { PreparedWorkspacePlaywrightSceneRecorder } from "./playwright-scene-recorder";
@@ -32,7 +32,7 @@ export type CaptureManifest = {
 export type CaptureScenesFromScriptInput = {
   baseUrl: string;
   keepTemp?: boolean;
-  preparationWorkspace?: PreparationWorkspaceHandle;
+  preparationWorkspace?: AgentHarnessWorkspaceHandle;
   recorder?: SceneRecorder;
   runId?: string;
   scriptPackage?: unknown;

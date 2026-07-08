@@ -119,7 +119,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
     const handle = await provider.create();
 
-    await handle.workspace.uploadFiles([
+    await handle.workspace.uploadFiles?.([
       {
         destinationPath: "/workspace/package.json",
         sourcePath: "/tmp/repo/package.json",
@@ -189,7 +189,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
     const handle = await provider.create();
 
-    await handle.workspace.uploadFiles([
+    await handle.workspace.uploadFiles?.([
       {
         destinationPath: "/workspace/.makeademo/capture/script.ts",
         sourcePath: "/tmp/script.ts",
@@ -231,7 +231,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     const handle = await provider.create();
 
     const result = await handle.workspace.execute("opencode run hello");
-    await handle.workspace.setOutboundNetworkAccess(false);
+    await handle.workspace.setOutboundNetworkAccess?.(false);
     await handle.destroy();
 
     expect(result).toEqual({ exitCode: 0, stderr: "", stdout: "ok" });
@@ -286,7 +286,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
     const handle = await provider.create();
 
-    await expect(handle.workspace.getPreviewUrl(4173)).resolves.toBe(
+    await expect(handle.workspace.getPreviewUrl?.(4173)).resolves.toBe(
       "https://preview.example.test:4173",
     );
     expect(calls[1]).toEqual({
@@ -302,7 +302,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
     const handle = await provider.create();
 
-    await expect(handle.workspace.getPreviewUrl(4173)).rejects.toThrow(
+    await expect(handle.workspace.getPreviewUrl?.(4173)).rejects.toThrow(
       "Daytona preview URL creation did not finish within 1ms.",
     );
     expect(calls).toEqual(
@@ -715,10 +715,10 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     const handle = await provider.create();
 
     await expect(
-      handle.workspace.setOutboundNetworkAccess(true),
+      handle.workspace.setOutboundNetworkAccess?.(true),
     ).resolves.toBeUndefined();
     await expect(
-      handle.workspace.setOutboundNetworkAccess(false),
+      handle.workspace.setOutboundNetworkAccess?.(false),
     ).resolves.toBeUndefined();
 
     expect(calls.slice(1)).toEqual([
@@ -828,7 +828,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
     const handle = await provider.create();
 
-    await handle.workspace.uploadFiles([
+    await handle.workspace.uploadFiles?.([
       {
         destinationPath: "/workspace/package.json",
         sourcePath: "/tmp/repo/package.json",
@@ -836,7 +836,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ]);
     const result = await handle.workspace.executeSubmittedCode?.("npm test");
     await handle.workspace.setSubmittedCodeNetworkAccess?.(true);
-    await expect(handle.workspace.getPreviewUrl(3000)).resolves.toBe(
+    await expect(handle.workspace.getPreviewUrl?.(3000)).resolves.toBe(
       "https://child-preview.example.test:3000",
     );
 

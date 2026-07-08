@@ -1,9 +1,11 @@
 import { spawn } from "node:child_process";
 import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
-import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
-import type { PreparationWorkspace } from "../03-repo-preparation/preparation-workspace.interface";
-import { executeSubmittedCode } from "../03-repo-preparation/submitted-code-execution";
+import { executeSubmittedCode } from "../../agent-harness/daytona/submitted-code-execution";
+import type {
+  AgentHarnessWorkspace,
+  AgentHarnessWorkspaceHandle,
+} from "../../agent-harness/daytona/workspace.interface";
 import {
   validateDemoScriptCaptureSdkTypes,
   writeGeneratedCaptureSdkHarness,
@@ -171,7 +173,7 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
       pauseAfterSceneMs?: number;
       postRollMs?: number;
       preRollMs?: number;
-      preparationWorkspace: PreparationWorkspaceHandle;
+      preparationWorkspace: AgentHarnessWorkspaceHandle;
       sceneTimeoutMs?: number;
     },
   ) {
@@ -184,9 +186,16 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
 
   async recordScenes(input: RecordSceneInput): Promise<RecordedScene[]> {
     const workspace = this.options.preparationWorkspace.workspace;
-    if (workspace.downloadFiles === undefined) {
+    const downloadFiles = workspace.downloadFiles?.bind(workspace);
+    if (downloadFiles === undefined) {
       throw new Error(
         "Prepared workspace Footage Capture requires artifact download support.",
+      );
+    }
+    const uploadFiles = workspace.uploadFiles?.bind(workspace);
+    if (uploadFiles === undefined) {
+      throw new Error(
+        "Prepared workspace Footage Capture requires artifact upload support.",
       );
     }
 
@@ -234,7 +243,7 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
       workspace,
       `mkdir -p ${shellQuote(remoteSceneWorkspace)} ${shellQuote(remoteVideoScratchDirectory)} ${shellQuote(remoteRawScenesDirectory)} ${shellQuote(remoteSceneClipsDirectory)}`,
     );
-    await workspace.uploadFiles([
+    await uploadFiles([
       {
         destinationPath: `${remoteSceneWorkspace}/makeademo-capture-sdk.js`,
         sourcePath: join(localSceneWorkspace, "makeademo-capture-sdk.js"),
@@ -350,7 +359,7 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
       });
     }
 
-    await workspace.downloadFiles(downloads);
+    await downloadFiles(downloads);
 
     return recordedScenes;
   }
@@ -415,7 +424,7 @@ async function probeVideoDurationSeconds(videoPath: string): Promise<number> {
 
 async function probeRemoteVideoDurationSeconds(input: {
   videoPath: string;
-  workspace: PreparationWorkspace;
+  workspace: AgentHarnessWorkspace;
 }): Promise<number> {
   const result = await executeSubmittedCode(
     input.workspace,
@@ -681,7 +690,7 @@ async function findSingleVideo(directory: string) {
 
 async function findSingleRemoteVideo(input: {
   directory: string;
-  workspace: PreparationWorkspace;
+  workspace: AgentHarnessWorkspace;
 }) {
   const result = await executeSubmittedCode(
     input.workspace,

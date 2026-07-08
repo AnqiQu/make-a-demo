@@ -6,17 +6,15 @@ import { join } from "node:path";
 import { Daytona } from "@daytona/sdk";
 
 import type {
-  PreparationWorkspaceHandle,
-  PreparationWorkspaceProvider,
-} from "../../../pipeline/03-repo-preparation/preparation-workspace-runner";
-import type {
-  PreparationWorkspace,
-  PreparationWorkspaceCommandResult,
-  PreparationWorkspaceDownloadFile,
-  PreparationWorkspaceExecuteOptions,
-  PreparationWorkspaceLogEntry,
-  PreparationWorkspaceUploadFile,
-} from "../../../pipeline/03-repo-preparation/preparation-workspace.interface";
+  AgentHarnessWorkspace,
+  AgentHarnessWorkspaceCommandResult,
+  AgentHarnessWorkspaceDownloadFile,
+  AgentHarnessWorkspaceExecuteOptions,
+  AgentHarnessWorkspaceHandle,
+  AgentHarnessWorkspaceLogEntry,
+  AgentHarnessWorkspaceProvider,
+  AgentHarnessWorkspaceUploadFile,
+} from "../../../agent-harness/daytona/workspace.interface";
 import {
   type PipelineEventLogger,
   type PipelineLogSink,
@@ -145,7 +143,7 @@ export async function createDaytonaSdkPreparationWorkspaceHandle(input: {
   sandboxId: string;
   sandboxLogSinks?: PipelineLogSink[];
   ptyConnectionTimeoutMs?: number;
-}): Promise<PreparationWorkspaceHandle> {
+}): Promise<AgentHarnessWorkspaceHandle> {
   const client =
     input.client ??
     (new Daytona(
@@ -171,7 +169,7 @@ export async function createDaytonaSdkPreparationWorkspaceHandle(input: {
 }
 
 export class DaytonaSdkPreparationWorkspaceProvider
-  implements PreparationWorkspaceProvider
+  implements AgentHarnessWorkspaceProvider
 {
   private readonly client: DaytonaSdkClient;
   private readonly commandTimeoutMs: number;
@@ -207,7 +205,7 @@ export class DaytonaSdkPreparationWorkspaceProvider
     this.sandboxLogSinks = options.sandboxLogSinks ?? [];
   }
 
-  async create(): Promise<PreparationWorkspaceHandle> {
+  async create(): Promise<AgentHarnessWorkspaceHandle> {
     const createOptions = { timeout: this.sandboxCreateTimeoutSeconds };
     const sandbox = await this.createSandboxWithConnectionRetry(
       {
@@ -294,10 +292,11 @@ function createPreparationWorkspaceHandle(input: {
   sandboxLogSinks?: PipelineLogSink[];
   sandbox: DaytonaSdkSandbox;
   submittedCodeSandbox?: DaytonaSdkSandbox;
-}): PreparationWorkspaceHandle {
+}): AgentHarnessWorkspaceHandle {
   const workspace = new DaytonaSdkPreparationWorkspace(
     input.sandbox,
     input.submittedCodeSandbox,
+    input.client,
     input.id,
     input.commandTimeoutMs,
     input.logWriteTimeoutMs,
@@ -308,24 +307,21 @@ function createPreparationWorkspaceHandle(input: {
 
   return {
     async destroy() {
-      await workspace.cancelActiveCommands();
-      if (input.submittedCodeSandbox !== undefined) {
-        await input.client.delete(input.submittedCodeSandbox);
-      }
-      await input.client.delete(input.sandbox);
+      await workspace.destroy();
     },
     id: input.id,
     workspace,
   };
 }
 
-class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
+class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
   private readonly activePtys = new Set<ManagedPty>();
   private readonly sandboxLogger: PipelineEventLogger;
 
   constructor(
     private readonly sandbox: DaytonaSdkSandbox,
     private readonly submittedCodeSandbox: DaytonaSdkSandbox | undefined,
+    private readonly client: DaytonaSdkClient,
     private readonly workspaceId: string,
     private readonly commandTimeoutMs: number,
     private readonly logWriteTimeoutMs: number,
@@ -344,10 +340,24 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
     });
   }
 
+  private destroyed = false;
+
+  async destroy(): Promise<void> {
+    if (this.destroyed) {
+      return;
+    }
+    this.destroyed = true;
+    await this.cancelActiveCommands();
+    if (this.submittedCodeSandbox !== undefined) {
+      await this.client.delete(this.submittedCodeSandbox);
+    }
+    await this.client.delete(this.sandbox);
+  }
+
   async execute(
     command: string,
-    options: PreparationWorkspaceExecuteOptions = {},
-  ): Promise<PreparationWorkspaceCommandResult> {
+    options: AgentHarnessWorkspaceExecuteOptions = {},
+  ): Promise<AgentHarnessWorkspaceCommandResult> {
     if (options.onStdout !== undefined || options.onStderr !== undefined) {
       return this.executeStreaming(command, options);
     }
@@ -372,8 +382,8 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
 
   private async executeStreaming(
     command: string,
-    options: PreparationWorkspaceExecuteOptions,
-  ): Promise<PreparationWorkspaceCommandResult> {
+    options: AgentHarnessWorkspaceExecuteOptions,
+  ): Promise<AgentHarnessWorkspaceCommandResult> {
     const output: string[] = [];
     const decoder = new TextDecoder();
     const pty = await this.createConnectedPty(this.sandbox, {
@@ -417,7 +427,7 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
     );
   }
 
-  async writeSandboxLog(entry: PreparationWorkspaceLogEntry): Promise<void> {
+  async writeSandboxLog(entry: AgentHarnessWorkspaceLogEntry): Promise<void> {
     const { source, timestamp, workspaceId, ...fields } = entry;
     await this.sandboxLogger[readSandboxLogLevel(entry)](
       {
@@ -461,8 +471,8 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
 
   async executeSubmittedCode(
     command: string,
-    options: PreparationWorkspaceExecuteOptions = {},
-  ): Promise<PreparationWorkspaceCommandResult> {
+    options: AgentHarnessWorkspaceExecuteOptions = {},
+  ): Promise<AgentHarnessWorkspaceCommandResult> {
     if (this.submittedCodeSandbox === undefined) {
       throw new Error("Submitted-code Daytona sandbox is not configured.");
     }
@@ -635,7 +645,7 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
     return preview.url;
   }
 
-  async uploadFiles(files: PreparationWorkspaceUploadFile[]): Promise<void> {
+  async uploadFiles(files: AgentHarnessWorkspaceUploadFile[]): Promise<void> {
     const uploadedFiles = files.map((file) => ({
       destination: file.destinationPath,
       source: file.sourcePath,
@@ -645,7 +655,7 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
   }
 
   async downloadFiles(
-    files: PreparationWorkspaceDownloadFile[],
+    files: AgentHarnessWorkspaceDownloadFile[],
   ): Promise<void> {
     const results = await this.sandbox.fs.downloadFiles(
       files.map((file) => ({
@@ -665,8 +675,8 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
   private async executeStreamingInSandbox(
     sandbox: DaytonaSdkSandbox,
     command: string,
-    options: PreparationWorkspaceExecuteOptions,
-  ): Promise<PreparationWorkspaceCommandResult> {
+    options: AgentHarnessWorkspaceExecuteOptions,
+  ): Promise<AgentHarnessWorkspaceCommandResult> {
     const output: string[] = [];
     const decoder = new TextDecoder();
     const pty = await this.createConnectedPty(sandbox, {
@@ -823,7 +833,7 @@ function removeExitMarker(output: string): string {
 }
 
 function readSandboxLogLevel(
-  entry: PreparationWorkspaceLogEntry,
+  entry: AgentHarnessWorkspaceLogEntry,
 ): "error" | "info" | "warn" {
   const event = typeof entry.event === "string" ? entry.event : "";
   if (event.includes("failed") || event.includes("invalid")) {
@@ -837,7 +847,7 @@ function readSandboxLogLevel(
   return "info";
 }
 
-function readSandboxLogMessage(entry: PreparationWorkspaceLogEntry): string {
+function readSandboxLogMessage(entry: AgentHarnessWorkspaceLogEntry): string {
   if (typeof entry.message === "string") {
     return entry.message;
   }

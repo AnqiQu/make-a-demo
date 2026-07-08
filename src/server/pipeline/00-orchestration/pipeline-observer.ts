@@ -1,6 +1,6 @@
 import { createPipelineEventLogger } from "../../shared/logging/pipeline-event-logger";
 
-export type PipelineStage =
+type PipelineStage =
   | "compositing"
   | "capture-path-validation"
   | "project-validation"
@@ -21,7 +21,7 @@ type ExternalCallEventName =
   | "external_call.started"
   | "external_call.succeeded";
 
-export type PipelineObservationContext = Pick<
+type PipelineObservationContext = Pick<
   PipelineObservabilityEvent,
   "demoRequestId" | "projectId" | "runId" | "workspaceId"
 >;

@@ -1,4 +1,3 @@
-import { createGitCloneCommand } from "../src/server/pipeline/03-repo-preparation/git-clone-command";
 import {
   createOpenCodeProviderSandboxSecrets,
   ensureOpenCodeProviderDaytonaSecret,
@@ -119,11 +118,10 @@ try {
       );
       const secretMountedParentGitTrust =
         await secretMountedHandle.workspace.execute(
-          createGitCloneCommand({
-            destinationPath: "/tmp/makeademo-secret-mounted-git-ca-trust",
-            repoUrl: "https://github.com/octocat/Hello-World.git",
-            resetCommand: "rm -rf /tmp/makeademo-secret-mounted-git-ca-trust",
-          }),
+          [
+            "rm -rf /tmp/makeademo-secret-mounted-git-ca-trust",
+            "git clone --depth 1 https://github.com/octocat/Hello-World.git /tmp/makeademo-secret-mounted-git-ca-trust",
+          ].join(" && "),
           {
             onStderr: (chunk) => process.stderr.write(chunk),
             onStdout: (chunk) => process.stdout.write(chunk),

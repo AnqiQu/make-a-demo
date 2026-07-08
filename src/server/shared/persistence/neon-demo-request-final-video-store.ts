@@ -3,15 +3,15 @@ import { type PostgresJsDatabase, drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
 import type {
-  DemoRequestScriptStore,
-  SaveGeneratedScriptInput,
-} from "../../pipeline/04-script-generation/demo-request-script-store.interface";
-import type {
   DemoRequestFinalVideoStore,
   LinkFinalVideoInput,
   LinkedFinalVideoDemoRequest,
   MarkFinalVideoEmailSentInput,
 } from "../../pipeline/07-compositing/final-video-storage.interface";
+import type {
+  DemoRequestScriptStore,
+  SaveGeneratedScriptInput,
+} from "../../pipeline/final-output/demo-request-script-store.interface";
 import type {
   DemoRequestStatus,
   DemoRequestStatusStore,

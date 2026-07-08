@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
+import type { AgentHarnessWorkspaceHandle } from "../../agent-harness/daytona/workspace.interface";
 import { captureScenesFromScript } from "./capture-scenes";
 import type { SceneRecorder } from "./scene-recorder.interface";
 
@@ -160,10 +160,11 @@ describe("captureScenesFromScript", () => {
     const submittedCommands: string[] = [];
     const uploadedDestinations: string[] = [];
     const downloadedSources: string[] = [];
-    const preparationWorkspace: PreparationWorkspaceHandle = {
+    const preparationWorkspace: AgentHarnessWorkspaceHandle = {
       async destroy() {},
       id: "daytona_workspace",
       workspace: {
+        async destroy() {},
         async downloadFiles(files) {
           downloadedSources.push(...files.map((file) => file.sourcePath));
           await Promise.all(
@@ -278,10 +279,11 @@ describe("captureScenesFromScript", () => {
     const tempRoot = join(workspace, "runs");
     const submittedCommands: string[] = [];
     const downloadedSources: string[] = [];
-    const preparationWorkspace: PreparationWorkspaceHandle = {
+    const preparationWorkspace: AgentHarnessWorkspaceHandle = {
       async destroy() {},
       id: "daytona_workspace",
       workspace: {
+        async destroy() {},
         async downloadFiles(files) {
           downloadedSources.push(...files.map((file) => file.sourcePath));
         },

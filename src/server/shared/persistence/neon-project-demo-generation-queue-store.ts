@@ -1,7 +1,4 @@
 import { and, asc, eq } from "drizzle-orm";
-import { type PostgresJsDatabase, drizzle } from "drizzle-orm/postgres-js";
-import postgres from "postgres";
-
 import type { ProjectDemoGenerationQueueStore } from "../../pipeline/00-orchestration/project-demo-generation-queue";
 import type { NormalizedSupportingDocument } from "../../pipeline/01-context-gathering/supporting-documents";
 import { demoRequests, projects } from "./schema";
@@ -158,15 +155,6 @@ export class NeonProjectDemoGenerationQueueStore
   }
 }
 
-export function createNeonProjectDemoGenerationQueueStore(
-  databaseUrl = readRequiredEnv("DATABASE_URL"),
-): NeonProjectDemoGenerationQueueStore {
-  const client = postgres(databaseUrl, { max: 5 });
-  return new NeonProjectDemoGenerationQueueStore(
-    drizzle(client) as PostgresJsDatabase<Record<string, never>>,
-  );
-}
-
 function readDemoBriefFromProjectContext(value: unknown) {
   const context = readRecord(value, "Project context");
   const structuredContext = readRecord(
@@ -249,15 +237,6 @@ function readOptionalString(record: Record<string, unknown>, key: string) {
 
   if (typeof value !== "string") {
     throw new Error(`${key} must be a string when provided`);
-  }
-
-  return value;
-}
-
-function readRequiredEnv(name: string) {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`${name} is required`);
   }
 
   return value;
