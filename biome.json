@@ -6,6 +6,7 @@
       ".demo-script-runs",
       ".makeademo-capture-path-validation-runs",
       ".makeademo-full-pipeline-runs",
+      ".makeademo-terminal-runs",
       "artifacts",
       "demo/artifacts",
       "dist"
