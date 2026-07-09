@@ -226,9 +226,46 @@ export async function createDefaultAgentHarnessDependencies(
       });
       assertOpenCodeSucceeded("Repo Preparation", result);
       opencodeSessionId = result.sessionId;
-      const manifest = readPreparationManifest(
-        await readWorkspaceJson(workspace, artifactPaths.preparationManifest),
+      let manifestResult = await tryReadPreparationManifest(
+        workspace,
+        artifactPaths.preparationManifest,
       );
+      if (!manifestResult.ok) {
+        const repairResult = await openCodeRunner.run({
+          availableTools: ["read", "write", "bash"],
+          configDir: openCodeConfigDirectory,
+          model: `${providerID}/${modelID}`,
+          prompt: createRepoPreparationRepairPrompt({
+            demoBrief,
+            previousResult: result,
+            readError: manifestResult.error,
+            repoProfile,
+            runPlan,
+          }),
+          ...optionalSessionId(opencodeSessionId),
+          stage: "repo-preparation-repair",
+          timeoutMs: 10 * 60_000,
+          workingDirectory: workspaceRepoDirectory,
+          workspace,
+        });
+        assertOpenCodeSucceeded("Repo Preparation Repair", repairResult);
+        opencodeSessionId = repairResult.sessionId ?? opencodeSessionId;
+        manifestResult = await tryReadPreparationManifest(
+          workspace,
+          artifactPaths.preparationManifest,
+        );
+        if (!manifestResult.ok) {
+          throw new Error(
+            formatOpenCodeArtifactContractError({
+              path: artifactPaths.preparationManifest,
+              readError: manifestResult.error,
+              result: repairResult,
+              stage: "Repo Preparation Repair",
+            }),
+          );
+        }
+      }
+      const manifest = manifestResult.manifest;
       await syncAndInstallSubmittedCode({ manifest, runPlan, workspace });
       await startSubmittedCodeApp({ manifest, workspace });
       return {
@@ -434,9 +471,23 @@ async function cloneRepoInWorkspace(input: {
     `sh -lc ${shellQuote(
       [
         `rm -rf ${shellQuote(workspaceRepoDirectory)}`,
-        `git clone --depth 1 ${shellQuote(input.repoUrl)} ${shellQuote(
-          workspaceRepoDirectory,
-        )}`,
+        [
+          "{",
+          "makeademo_git_ca=${GIT_SSL_CAINFO:-};",
+          'for makeademo_candidate_ca in "$makeademo_git_ca" "${SSL_CERT_FILE:-}" "${CURL_CA_BUNDLE:-}" /etc/daytona/netleash/ca.crt /etc/ssl/certs/ca-certificates.crt; do',
+          'if test -n "$makeademo_candidate_ca" && test -f "$makeademo_candidate_ca"; then makeademo_git_ca="$makeademo_candidate_ca"; break; fi;',
+          "done;",
+          'if test -n "$makeademo_git_ca" && test -f "$makeademo_git_ca"; then',
+          `git -c http.sslCAInfo="$makeademo_git_ca" clone --depth 1 ${shellQuote(input.repoUrl)} ${shellQuote(
+            workspaceRepoDirectory,
+          )};`,
+          "else",
+          `git clone --depth 1 ${shellQuote(input.repoUrl)} ${shellQuote(
+            workspaceRepoDirectory,
+          )};`,
+          "fi;",
+          "}",
+        ].join(" "),
         `mkdir -p ${shellQuote(makeADemoDirectory)}`,
       ].join(" && "),
     )}`,
@@ -603,6 +654,62 @@ async function readWorkspaceJson(
   return JSON.parse(result.stdout);
 }
 
+type WorkspaceJsonReadResult =
+  | { ok: true; value: unknown }
+  | { error: string; ok: false };
+
+type PreparationManifestReadResult =
+  | { manifest: PreparationManifest; ok: true }
+  | { error: string; ok: false };
+
+async function tryReadWorkspaceJson(
+  workspace: AgentHarnessWorkspace,
+  path: string,
+): Promise<WorkspaceJsonReadResult> {
+  const result = await workspace.execute(`cat ${shellQuote(path)}`);
+  if (result.exitCode !== 0) {
+    return {
+      error:
+        [result.stderr.trim(), result.stdout.trim()]
+          .filter(Boolean)
+          .join("\n") || `cat exited with code ${result.exitCode}`,
+      ok: false,
+    };
+  }
+
+  try {
+    return { ok: true, value: JSON.parse(result.stdout) };
+  } catch (error) {
+    return {
+      error: `Invalid JSON in ${path}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      ok: false,
+    };
+  }
+}
+
+async function tryReadPreparationManifest(
+  workspace: AgentHarnessWorkspace,
+  path: string,
+): Promise<PreparationManifestReadResult> {
+  const json = await tryReadWorkspaceJson(workspace, path);
+  if (!json.ok) {
+    return json;
+  }
+
+  try {
+    return { manifest: readPreparationManifest(json.value), ok: true };
+  } catch (error) {
+    return {
+      error: `Invalid PreparationManifest in ${path}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      ok: false,
+    };
+  }
+}
+
 function validationReport(input: {
   attemptedCommand?: string;
   exitCode?: number;
@@ -653,6 +760,39 @@ function optionalSessionId(sessionId: string | undefined) {
   return sessionId === undefined ? {} : { sessionId };
 }
 
+function formatOpenCodeArtifactContractError(input: {
+  path: string;
+  readError: string;
+  result: { stderr: string; stdout: string };
+  stage: string;
+}): string {
+  return [
+    `${input.stage} did not produce valid required artifact ${input.path}.`,
+    `Artifact validation error: ${input.readError}`,
+    `OpenCode output excerpt:\n${formatOpenCodeOutputExcerpt(input.result)}`,
+  ].join("\n");
+}
+
+function formatOpenCodeOutputExcerpt(result: {
+  stderr: string;
+  stdout: string;
+}): string {
+  const parts = [
+    result.stderr.trim().length === 0
+      ? ""
+      : `stderr:\n${tail(result.stderr, 2000)}`,
+    result.stdout.trim().length === 0
+      ? ""
+      : `stdout:\n${tail(result.stdout, 2000)}`,
+  ].filter(Boolean);
+  return parts.length === 0 ? "(no OpenCode output)" : parts.join("\n");
+}
+
+function tail(value: string, maxLength: number): string {
+  const trimmed = value.trim();
+  return trimmed.length > maxLength ? trimmed.slice(-maxLength) : trimmed;
+}
+
 function requireWorkspace(
   handle: AgentHarnessWorkspaceHandle | undefined,
 ): AgentHarnessWorkspace {
@@ -689,10 +829,47 @@ function createRepoPreparationPrompt(input: {
       `Use this start command unless you have a stronger repo-specific reason: ${input.runPlan.startCommand}`,
       "Write a valid PreparationManifest JSON object to /workspace/.makeademo/preparation-manifest.json.",
       "The manifest must include id, appDir, installCommandUsed, startCommandUsed, baseUrl, ports, envUsed, localDemoModeChanges, createdFiles, modifiedFiles, mocksAndFixturesAdded, blockedExternalServicesReplaced, requiredLocalOnlyAssumptions, knownLimitations, appExplorationHints, scriptGenerationContext, validationEvidence, and cleanupAndReproInstructions.",
+      'envUsed must be a flat JSON object whose keys and values are strings, such as {"NODE_ENV":"development"}; use {} when no environment values are used. Do not put arrays or nested objects under envUsed.',
       `Demo brief: ${JSON.stringify(input.demoBrief)}`,
       `Repo profile: ${JSON.stringify(input.repoProfile)}`,
     ].join("\n"),
     stage: "repo-preparation",
+  });
+}
+
+function createRepoPreparationRepairPrompt(input: {
+  demoBrief: AgentHarnessPipelineInput["demoBrief"];
+  previousResult: { stderr: string; stdout: string };
+  readError: string;
+  repoProfile: RepoProfile;
+  runPlan: RunPlan;
+}): string {
+  return createStagePrompt({
+    artifactPaths: [
+      artifactPaths.repoProfile,
+      artifactPaths.runPlan,
+      artifactPaths.demoBrief,
+      artifactPaths.preparationManifest,
+    ],
+    instructions: [
+      "Repo Preparation completed without producing the required artifact /workspace/.makeademo/preparation-manifest.json.",
+      "The artifact may be missing, unreadable, invalid JSON, or schema-invalid.",
+      `Backend artifact validation failed with: ${input.readError}`,
+      "Repair only the Repo Preparation output contract. Inspect /workspace/repo and the durable artifacts, then write a valid PreparationManifest JSON object to /workspace/.makeademo/preparation-manifest.json.",
+      "Do not finish until the manifest exists at that exact path.",
+      "Do not write secrets into files. Replace external services with local fixtures or mocks.",
+      `Use this local runtime URL in the manifest: ${input.runPlan.expectedLocalUrl}`,
+      `Use this install command unless you have a stronger repo-specific reason: ${input.runPlan.installCommand}`,
+      `Use this start command unless you have a stronger repo-specific reason: ${input.runPlan.startCommand}`,
+      "The manifest must include id, appDir, installCommandUsed, startCommandUsed, baseUrl, ports, envUsed, localDemoModeChanges, createdFiles, modifiedFiles, mocksAndFixturesAdded, blockedExternalServicesReplaced, requiredLocalOnlyAssumptions, knownLimitations, appExplorationHints, scriptGenerationContext, validationEvidence, and cleanupAndReproInstructions.",
+      'envUsed must be a flat JSON object whose keys and values are strings, such as {"NODE_ENV":"development"}; use {} when no environment values are used. Do not put arrays or nested objects under envUsed.',
+      `Previous OpenCode output excerpt:\n${formatOpenCodeOutputExcerpt(
+        input.previousResult,
+      )}`,
+      `Demo brief: ${JSON.stringify(input.demoBrief)}`,
+      `Repo profile: ${JSON.stringify(input.repoProfile)}`,
+    ].join("\n"),
+    stage: "repo-preparation-repair",
   });
 }
 
