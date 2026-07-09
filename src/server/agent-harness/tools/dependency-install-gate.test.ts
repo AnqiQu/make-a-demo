@@ -9,6 +9,7 @@ describe("dependency install gate", () => {
     for (const command of [
       "bun install --frozen-lockfile",
       "npm ci --no-audit",
+      "npm install --package-lock-only --ignore-scripts --no-audit --no-fund",
       "pnpm install --frozen-lockfile",
       "yarn install --immutable",
       "corepack pnpm install --frozen-lockfile",

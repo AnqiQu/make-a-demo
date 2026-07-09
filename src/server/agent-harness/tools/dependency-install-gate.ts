@@ -33,6 +33,7 @@ const allowedInstallFlags = new Set([
   "--offline",
   "--omit=dev",
   "--omit=optional",
+  "--package-lock-only",
   "--prefer-offline",
   "--prefer-online",
   "--production",

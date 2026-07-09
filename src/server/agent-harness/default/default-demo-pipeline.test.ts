@@ -15,6 +15,13 @@ describe("runDefaultDemoPipeline", () => {
       },
       id: "workspace-1",
       workspace: {
+        async collectSandboxLogs() {
+          calls.push("workspace.collectLogs");
+          return [
+            '{"event":"repo-preparation.started"}',
+            '{"event":"repo-preparation.failed"}',
+          ];
+        },
         async destroy() {
           return undefined;
         },
@@ -233,6 +240,7 @@ describe("runDefaultDemoPipeline", () => {
       "harness:https://github.com/acme/calendar:terminal-run-001",
       "capture:http://127.0.0.1:3000:capture",
       "composite:composite",
+      "workspace.collectLogs",
       "workspace.destroy",
     ]);
     expect(result.finalVideoPath).toBe(
@@ -246,5 +254,10 @@ describe("runDefaultDemoPipeline", () => {
         JSON.parse(content),
       ),
     ).resolves.toMatchObject({ finalStatus: "passed" });
+    await expect(
+      readFile(join(result.runDirectory, "sandbox-log.jsonl"), "utf8"),
+    ).resolves.toBe(
+      '{"event":"repo-preparation.started"}\n{"event":"repo-preparation.failed"}\n',
+    );
   });
 });

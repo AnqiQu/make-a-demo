@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { captureScenesFromScript } from "../../pipeline/06-footage-capture/capture-scenes";
 import type { CaptureManifest } from "../../pipeline/06-footage-capture/capture-scenes";
@@ -22,6 +22,7 @@ import {
   type DefaultHarnessDependencies,
   createDefaultAgentHarnessDependencies,
 } from "./default-harness-dependencies";
+import { assertSafeGithubRepoUrl } from "./github-repo-url";
 import {
   LocalJsonArtifactStore,
   writeJsonFile,
@@ -31,6 +32,7 @@ import { type RepoSnapshot, readGithubRepoSnapshot } from "./repo-snapshot";
 export type DefaultDemoPipelineInput = {
   demoLengthSeconds: number;
   importantFeatures: string[];
+  normalizedSupportingDocuments?: Array<Record<string, unknown>>;
   productSummary?: string;
   repoUrl: string;
   targetUsers?: string;
@@ -67,7 +69,7 @@ export async function runDefaultDemoPipeline(
   input: DefaultDemoPipelineInput,
   options: DefaultDemoPipelineOptions = {},
 ): Promise<DefaultDemoPipelineResult> {
-  assertGithubRepoUrl(input.repoUrl);
+  assertSafeGithubRepoUrl(input.repoUrl);
 
   const runId = options.runId ?? createRunId();
   const outputRoot = options.outputRoot ?? defaultOutputRoot;
@@ -134,6 +136,12 @@ export async function runDefaultDemoPipeline(
             : { targetUsers: input.targetUsers }),
         },
         files: repoSnapshot.files,
+        ...(input.normalizedSupportingDocuments === undefined
+          ? {}
+          : {
+              normalizedSupportingDocuments:
+                input.normalizedSupportingDocuments,
+            }),
         repoStats: repoSnapshot.repoStats,
         repoUrl: input.repoUrl,
         runId,
@@ -196,7 +204,37 @@ export async function runDefaultDemoPipeline(
     await logger.flush();
     throw error;
   } finally {
-    await workspaceHandle()?.destroy();
+    const handle = workspaceHandle();
+    await persistSandboxLogs(handle, runDirectory, logger);
+    await handle?.destroy();
+  }
+}
+
+async function persistSandboxLogs(
+  handle: AgentHarnessWorkspaceHandle | undefined,
+  runDirectory: string,
+  logger: PipelineEventLogger,
+): Promise<void> {
+  if (handle?.workspace.collectSandboxLogs === undefined) {
+    return;
+  }
+
+  try {
+    const lines = await handle.workspace.collectSandboxLogs();
+    const path = join(runDirectory, "sandbox-log.jsonl");
+    await writeFile(path, lines.length === 0 ? "" : `${lines.join("\n")}\n`);
+    await logger.info({
+      event: "sandbox.logs.persisted",
+      lineCount: lines.length,
+      path,
+    });
+    await logger.flush();
+  } catch (error) {
+    await logger.warn({
+      error: error instanceof Error ? error.message : String(error),
+      event: "sandbox.logs.persistence.failed",
+    });
+    await logger.flush();
   }
 }
 
@@ -273,24 +311,4 @@ function requireWorkspaceHandle(
 
 function createRunId(): string {
   return `terminal-${new Date().toISOString().replaceAll(/[:.]/g, "-")}`;
-}
-
-function assertGithubRepoUrl(repoUrl: string): void {
-  let parsed: URL;
-  try {
-    parsed = new URL(repoUrl);
-  } catch {
-    throw new Error("GitHub repo URL must be a valid https://github.com URL.");
-  }
-
-  const parts = parsed.pathname.split("/").filter(Boolean);
-  if (
-    parsed.protocol !== "https:" ||
-    parsed.hostname !== "github.com" ||
-    parts.length < 2
-  ) {
-    throw new Error(
-      "GitHub repo URL must be a valid https://github.com owner/repo URL.",
-    );
-  }
 }

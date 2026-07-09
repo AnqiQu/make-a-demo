@@ -55,6 +55,13 @@ describe("agent harness artifact schemas", () => {
     ).toThrow("baseUrl must be a local http URL");
 
     expect(() =>
+      readPreparationManifest({
+        ...validPreparationManifest(),
+        appDir: "/workspace/repo",
+      }),
+    ).toThrow("appDir must be a relative path within /workspace/repo");
+
+    expect(() =>
       readDemoScriptContract({
         ...validDemoScriptContract(),
         outputPath: "/tmp/demo-script.json",
@@ -70,6 +77,18 @@ describe("agent harness artifact schemas", () => {
 
     expect(() => readFlowSpec({ ...validFlowSpec(), steps: [] })).toThrow(
       "steps must be a non-empty array",
+    );
+  });
+
+  it("reports every invalid Preparation Manifest field in one pass", () => {
+    expect(() =>
+      readPreparationManifest({
+        ...validPreparationManifest(),
+        localDemoModeChanges: "enabled demo mode",
+        scriptGenerationContext: { command: "npm run dev" },
+      }),
+    ).toThrow(
+      "PreparationManifest validation failed: localDemoModeChanges must be an array; scriptGenerationContext must be an array",
     );
   });
 });

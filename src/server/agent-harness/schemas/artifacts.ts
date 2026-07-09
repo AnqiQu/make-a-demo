@@ -288,7 +288,7 @@ export function readRunPlan(value: unknown): RunPlan {
   const record = assertRecord(value, "RunPlan");
   return {
     allowedPorts: readPortArray(record, "allowedPorts"),
-    appDir: readNonEmptyString(record, "appDir"),
+    appDir: readRepoRelativePath(record, "appDir"),
     assumptions: readStringArray(record, "assumptions"),
     ...optionalStringKey(record, "buildCommand"),
     env: readStringRecord(record, "env"),
@@ -304,8 +304,9 @@ export function readRunPlan(value: unknown): RunPlan {
 
 export function readPreparationManifest(value: unknown): PreparationManifest {
   const record = assertRecord(value, "PreparationManifest");
+  assertValidPreparationManifestFields(record);
   return {
-    appDir: readNonEmptyString(record, "appDir"),
+    appDir: readRepoRelativePath(record, "appDir"),
     appExplorationHints: readStringArray(record, "appExplorationHints"),
     ...optionalStringKey(record, "authBypassOrDemoIdentity"),
     baseUrl: readLocalHttpUrl(record, "baseUrl"),
@@ -335,6 +336,50 @@ export function readPreparationManifest(value: unknown): PreparationManifest {
     startCommandUsed: readNonEmptyString(record, "startCommandUsed"),
     validationEvidence: readStringArray(record, "validationEvidence"),
   };
+}
+
+function assertValidPreparationManifestFields(
+  record: Record<string, unknown>,
+): void {
+  const validations: Array<() => unknown> = [
+    () => readNonEmptyString(record, "id"),
+    () => readRepoRelativePath(record, "appDir"),
+    () => readNonEmptyString(record, "installCommandUsed"),
+    ...(record.buildCommandUsed === undefined
+      ? []
+      : [() => readNonEmptyString(record, "buildCommandUsed")]),
+    () => readNonEmptyString(record, "startCommandUsed"),
+    () => readLocalHttpUrl(record, "baseUrl"),
+    () => readPortArray(record, "ports"),
+    () => readStringRecord(record, "envUsed"),
+    () => readStringArray(record, "localDemoModeChanges"),
+    () => readStringArray(record, "createdFiles"),
+    () => readStringArray(record, "modifiedFiles"),
+    () => readStringArray(record, "mocksAndFixturesAdded"),
+    ...(record.authBypassOrDemoIdentity === undefined
+      ? []
+      : [() => readNonEmptyString(record, "authBypassOrDemoIdentity")]),
+    () => readStringArray(record, "blockedExternalServicesReplaced"),
+    () => readStringArray(record, "requiredLocalOnlyAssumptions"),
+    () => readStringArray(record, "knownLimitations"),
+    () => readStringArray(record, "appExplorationHints"),
+    () => readStringArray(record, "scriptGenerationContext"),
+    () => readStringArray(record, "validationEvidence"),
+    () => readStringArray(record, "cleanupAndReproInstructions"),
+  ];
+  const errors: string[] = [];
+  for (const validate of validations) {
+    try {
+      validate();
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  if (errors.length > 0) {
+    throw new Error(
+      `PreparationManifest validation failed: ${errors.join("; ")}`,
+    );
+  }
 }
 
 export function readValidationReport(value: unknown): ValidationReport {
@@ -780,6 +825,25 @@ function readNonEmptyString(
   const value = record[key];
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new Error(`${path} must be a non-empty string`);
+  }
+  return value;
+}
+
+function readRepoRelativePath(
+  record: Record<string, unknown>,
+  key: string,
+): string {
+  const value = readNonEmptyString(record, key);
+  const segments = value.split(/[\\/]/);
+  if (
+    value !== value.trim() ||
+    value.startsWith("/") ||
+    value.startsWith("\\") ||
+    /^[A-Za-z]:[\\/]/.test(value) ||
+    value.includes("\0") ||
+    segments.includes("..")
+  ) {
+    throw new Error(`${key} must be a relative path within /workspace/repo`);
   }
   return value;
 }

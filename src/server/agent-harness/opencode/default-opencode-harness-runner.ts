@@ -19,8 +19,14 @@ export class DefaultOpenCodeHarnessRunner implements OpenCodeHarnessRunner {
       {
         env: {
           OPENCODE_CONFIG_DIR: input.configDir,
-          OPENCODE_ENABLE_EXA: "1",
+          OPENCODE_CONFIG_CONTENT: JSON.stringify(
+            createStageSecurityConfig(input),
+          ),
+          OPENCODE_ENABLE_EXA: "0",
         },
+        ...(input.onStderr === undefined ? {} : { onStderr: input.onStderr }),
+        ...(input.onStdout === undefined ? {} : { onStdout: input.onStdout }),
+        timeoutMs: input.timeoutMs,
       },
     );
 
@@ -42,6 +48,7 @@ function createOpenCodeRunCommand(input: {
   return [
     `mkdir -p ${shellQuote(input.configDir)} &&`,
     "opencode run",
+    "--pure",
     "--dangerously-skip-permissions",
     "--format json",
     `--dir ${shellQuote(input.workingDirectory)}`,
@@ -51,6 +58,82 @@ function createOpenCodeRunCommand(input: {
     `--model ${shellQuote(input.model)}`,
     shellQuote(input.prompt),
   ].join(" ");
+}
+
+function createStageSecurityConfig(input: OpenCodeHarnessRunInput) {
+  const canRead = input.availableTools.includes("read");
+  const canWrite = input.availableTools.includes("write");
+  const canRunShell = input.availableTools.includes("bash");
+
+  return {
+    $schema: "https://opencode.ai/config.json",
+    autoupdate: false,
+    instructions: [],
+    permission: {
+      "*": "deny",
+      bash: canRunShell ? "allow" : "deny",
+      doom_loop: "deny",
+      edit: canWrite ? createStageEditPermissions(input.stage) : "deny",
+      external_directory: {
+        "*": "deny",
+        "/workspace/.makeademo/**": "allow",
+      },
+      glob: canRead ? "allow" : "deny",
+      grep: canRead ? "allow" : "deny",
+      question: "deny",
+      read: canRead
+        ? {
+            "*": "allow",
+            "**/.env": "deny",
+            "**/.env.*": "deny",
+            "**/*.env": "deny",
+            "**/*.env.*": "deny",
+            "**/.env.example": "allow",
+          }
+        : "deny",
+      skill: "deny",
+      task: "deny",
+      webfetch: "deny",
+      websearch: "deny",
+    },
+    plugin: [],
+    share: "disabled",
+  };
+}
+
+function createStageEditPermissions(stage: OpenCodeHarnessRunInput["stage"]) {
+  const artifactPaths = readStageArtifactPaths(stage);
+  const canMutateRepo =
+    stage === "repo-preparation" || stage === "repo-preparation-repair";
+  return Object.fromEntries([
+    ["*", "deny"],
+    ...(canMutateRepo
+      ? [
+          ["**", "allow"],
+          ["/workspace/repo/**", "allow"],
+        ]
+      : []),
+    ["/workspace/.makeademo/**", "deny"],
+    ...artifactPaths.map((path) => [path, "allow"]),
+  ]);
+}
+
+function readStageArtifactPaths(stage: OpenCodeHarnessRunInput["stage"]) {
+  switch (stage) {
+    case "repo-preparation":
+    case "repo-preparation-repair":
+      return ["/workspace/.makeademo/preparation-manifest.json"];
+    case "app-exploration":
+      return [
+        "/workspace/.makeademo/action-catalog.json",
+        "/workspace/.makeademo/app-map.json",
+      ];
+    case "flow-planning":
+      return ["/workspace/.makeademo/flow-spec.json"];
+    case "script-repair":
+    case "script-writing":
+      return ["/workspace/.makeademo/demo-script.json"];
+  }
 }
 
 function readSessionId(result: {

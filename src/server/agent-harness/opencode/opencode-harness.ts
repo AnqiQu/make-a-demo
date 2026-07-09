@@ -12,6 +12,8 @@ export type OpenCodeHarnessRunInput = {
   availableTools: string[];
   configDir: string;
   model: string;
+  onStderr?: (chunk: string) => void;
+  onStdout?: (chunk: string) => void;
   prompt: string;
   sessionId?: string;
   stage: OpenCodeHarnessStage;
