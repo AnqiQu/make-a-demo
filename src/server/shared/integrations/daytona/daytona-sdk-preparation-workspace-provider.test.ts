@@ -263,6 +263,27 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
   });
 
+  it("lets each command override the provider timeout", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeCommandTimeoutClient(calls),
+      commandTimeoutMs: 10_000,
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.execute("opencode run", { timeoutMs: 1_500 });
+
+    expect(calls).toContainEqual({
+      executeCommand: {
+        command: "opencode run",
+        cwd: undefined,
+        env: undefined,
+        sandbox: "parent_sandbox",
+        timeout: 2,
+      },
+    });
+  });
+
   it("fails fast when a Daytona command does not finish", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -424,6 +445,22 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ).toHaveLength(0);
   });
 
+  it("collects durable sandbox log lines before teardown", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, {
+        sandboxLogContents:
+          '{"event":"agent.started"}\n{"event":"agent.failed"}\n',
+      }),
+    });
+    const handle = await provider.create();
+
+    await expect(handle.workspace.collectSandboxLogs?.()).resolves.toEqual([
+      '{"event":"agent.started"}',
+      '{"event":"agent.failed"}',
+    ]);
+  });
+
   it("does not resolve sandbox logging until the workspace-visible mirror is durable", async () => {
     const calls: unknown[] = [];
     const workspaceMirrorStarted = deferred<void>();
@@ -530,6 +567,23 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     expect(
       calls.findIndex((call) => "disconnect" in Object(call)),
     ).toBeLessThan(calls.findIndex((call) => "delete" in Object(call)));
+  });
+
+  it("disconnects and rejects a streaming command at its per-command timeout", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { ptyWaitsForDisconnect: true }),
+      commandTimeoutMs: 10_000,
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.execute("opencode run slow", {
+        onStdout: () => {},
+        timeoutMs: 1,
+      }),
+    ).rejects.toThrow("Daytona command did not finish within 1ms.");
+    expect(calls).toContainEqual({ disconnect: true });
   });
 
   it("passes streaming command environment variables through PTY options", async () => {
@@ -738,6 +792,8 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     const handle = await provider.create();
 
     expect(handle.id).toBe("parent_sandbox");
+    expect(handle.workspace.agentSandboxId).toBe("parent_sandbox");
+    expect(handle.workspace.submittedCodeSandboxId).toBe("submitted_sandbox");
     expect(calls.slice(0, 2)).toEqual([
       {
         create: {
@@ -820,7 +876,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ]);
   });
 
-  it("routes submitted-code execution, network, preview, and uploads through the linked child sandbox", async () => {
+  it("routes submitted-code execution, network, preview, and artifacts through the linked child sandbox", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
       client: fakeLinkedClient(calls),
@@ -834,13 +890,25 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         sourcePath: "/tmp/repo/package.json",
       },
     ]);
+    await handle.workspace.downloadFiles?.([
+      {
+        destinationPath: "/tmp/capture.webm",
+        sourcePath: "/workspace/.makeademo/capture.webm",
+      },
+    ]);
     const result = await handle.workspace.executeSubmittedCode?.("npm test");
     await handle.workspace.setSubmittedCodeNetworkAccess?.(true);
+    const networkTransitions =
+      await handle.workspace.collectNetworkStateLog?.();
     await expect(handle.workspace.getPreviewUrl?.(3000)).resolves.toBe(
       "https://child-preview.example.test:3000",
     );
 
     expect(result).toEqual({ exitCode: 0, stderr: "", stdout: "child ok" });
+    expect(networkTransitions?.map((transition) => transition.state)).toEqual([
+      "runtime-locked",
+      "dependency-install-open",
+    ]);
     expect(calls).toEqual(
       expect.arrayContaining([
         {
@@ -866,6 +934,18 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
           },
         },
         {
+          downloadFiles: {
+            files: [
+              {
+                destination: "/tmp/capture.webm",
+                source: "/workspace/.makeademo/capture.webm",
+              },
+            ],
+            sandbox: "submitted_sandbox",
+            timeoutSec: 0,
+          },
+        },
+        {
           executeCommand: { command: "npm test", sandbox: "submitted_sandbox" },
         },
         {
@@ -883,6 +963,75 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         },
       ]),
     );
+  });
+
+  it("manages the submitted app through a Daytona process session", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.startSubmittedCodeApp?.({
+      command: "npm run dev -- --host 0.0.0.0",
+      cwd: "/workspace/repo with spaces",
+      env: { DEMO_MODE: "customer's demo" },
+    });
+    const status = await handle.workspace.readSubmittedCodeAppStatus?.();
+    await handle.workspace.stopSubmittedCodeApp?.();
+
+    const session = calls.find(
+      (
+        call,
+      ): call is { createSession: { sandbox: string; sessionId: string } } =>
+        typeof call === "object" && call !== null && "createSession" in call,
+    )?.createSession;
+    expect(session).toEqual({
+      sandbox: "submitted_sandbox",
+      sessionId: expect.stringMatching(/^makeademo-app-/),
+    });
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        {
+          executeSessionCommand: {
+            command: expect.stringContaining(
+              "cd '/workspace/repo with spaces' && env 'DEMO_MODE=customer'\\''s demo' sh -lc 'npm run dev -- --host 0.0.0.0'",
+            ),
+            runAsync: true,
+            sandbox: "submitted_sandbox",
+            sessionId: session?.sessionId,
+            suppressInputEcho: true,
+          },
+        },
+        {
+          getSessionCommand: {
+            commandId: "cmd_123",
+            sandbox: "submitted_sandbox",
+            sessionId: session?.sessionId,
+          },
+        },
+        {
+          getSessionCommandLogs: {
+            commandId: "cmd_123",
+            sandbox: "submitted_sandbox",
+            sessionId: session?.sessionId,
+          },
+        },
+        {
+          deleteSession: {
+            sandbox: "submitted_sandbox",
+            sessionId: session?.sessionId,
+          },
+        },
+      ]),
+    );
+    expect(status).toEqual({
+      exitCode: 0,
+      running: false,
+      stderr: "",
+      stdout: "",
+    });
   });
 
   it("passes the configured command timeout to submitted-code Daytona commands", async () => {
@@ -1324,8 +1473,12 @@ function fakeCommandTimeoutSandbox(calls: unknown[], id: string) {
       async createPty() {
         throw new Error("Streaming is not exercised by command timeout tests.");
       },
-      async createSession() {},
-      async deleteSession() {},
+      async createSession(sessionId: string) {
+        calls.push({ createSession: { sandbox: id, sessionId } });
+      },
+      async deleteSession(sessionId: string) {
+        calls.push({ deleteSession: { sandbox: id, sessionId } });
+      },
       async executeCommand(
         command: string,
         cwd?: string,
@@ -1337,13 +1490,29 @@ function fakeCommandTimeoutSandbox(calls: unknown[], id: string) {
         });
         return { exitCode: 0, result: "ok" };
       },
-      async executeSessionCommand() {
+      async executeSessionCommand(
+        sessionId: string,
+        request: {
+          command: string;
+          runAsync?: boolean;
+          suppressInputEcho?: boolean;
+        },
+      ) {
+        calls.push({
+          executeSessionCommand: { ...request, sandbox: id, sessionId },
+        });
         return { cmdId: "cmd_123" };
       },
-      async getSessionCommand() {
+      async getSessionCommand(sessionId: string, commandId: string) {
+        calls.push({
+          getSessionCommand: { commandId, sandbox: id, sessionId },
+        });
         return { exitCode: 0 };
       },
-      async getSessionCommandLogs() {
+      async getSessionCommandLogs(sessionId: string, commandId: string) {
+        calls.push({
+          getSessionCommandLogs: { commandId, sandbox: id, sessionId },
+        });
         return { stderr: "", stdout: "" };
       },
     },
@@ -1507,8 +1676,12 @@ function fakeLinkedSandbox(
       async createPty() {
         throw new Error("Streaming is not exercised by linked sandbox tests.");
       },
-      async createSession() {},
-      async deleteSession() {},
+      async createSession(sessionId: string) {
+        calls.push({ createSession: { sandbox: id, sessionId } });
+      },
+      async deleteSession(sessionId: string) {
+        calls.push({ deleteSession: { sandbox: id, sessionId } });
+      },
       async executeCommand(command: string) {
         calls.push({ executeCommand: { command, sandbox: id } });
         if (options.executeCommandNeverResolves === true) {
@@ -1545,13 +1718,29 @@ function fakeLinkedSandbox(
         }
         return { exitCode: 0, result: stdout };
       },
-      async executeSessionCommand() {
+      async executeSessionCommand(
+        sessionId: string,
+        request: {
+          command: string;
+          runAsync?: boolean;
+          suppressInputEcho?: boolean;
+        },
+      ) {
+        calls.push({
+          executeSessionCommand: { ...request, sandbox: id, sessionId },
+        });
         return { cmdId: "cmd_123" };
       },
-      async getSessionCommand() {
+      async getSessionCommand(sessionId: string, commandId: string) {
+        calls.push({
+          getSessionCommand: { commandId, sandbox: id, sessionId },
+        });
         return { exitCode: 0 };
       },
-      async getSessionCommandLogs() {
+      async getSessionCommandLogs(sessionId: string, commandId: string) {
+        calls.push({
+          getSessionCommandLogs: { commandId, sandbox: id, sessionId },
+        });
         return { stderr: "", stdout: "" };
       },
     },
@@ -1580,6 +1769,7 @@ function fakeClient(
     ptyStaleDuplicateIdOnFirstCreate?: boolean;
     ptyWaitFails?: boolean;
     ptyWaitsForDisconnect?: boolean;
+    sandboxLogContents?: string;
   } = {},
 ) {
   let submittedCodeInitializationFailures = 0;
@@ -1692,6 +1882,12 @@ function fakeClient(
       },
       async executeCommand(command: string) {
         calls.push({ executeCommand: command });
+        if (command.includes("cat /workspace/.makeademo/sandbox-log.jsonl")) {
+          return {
+            exitCode: 0,
+            result: options.sandboxLogContents ?? "",
+          };
+        }
         if (options.executeCommandFails === true) {
           throw new Error("executeCommand failed");
         }

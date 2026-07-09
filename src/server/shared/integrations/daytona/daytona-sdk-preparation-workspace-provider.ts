@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { Daytona } from "@daytona/sdk";
 
 import type {
+  AgentHarnessNetworkStateTransition,
+  AgentHarnessSubmittedCodeAppStartInput,
+  AgentHarnessSubmittedCodeAppStatus,
   AgentHarnessWorkspace,
   AgentHarnessWorkspaceCommandResult,
   AgentHarnessWorkspaceDownloadFile,
@@ -15,6 +18,7 @@ import type {
   AgentHarnessWorkspaceProvider,
   AgentHarnessWorkspaceUploadFile,
 } from "../../../agent-harness/daytona/workspace.interface";
+import { AgentHarnessCommandTimeoutError } from "../../../agent-harness/daytona/workspace.interface";
 import {
   type PipelineEventLogger,
   type PipelineLogSink,
@@ -106,6 +110,11 @@ type DaytonaSdkPtyOptions = Parameters<
   DaytonaSdkSandbox["process"]["createPty"]
 >[0];
 
+type ManagedSubmittedCodeApp = {
+  commandId: string;
+  sessionId: string;
+};
+
 export type DaytonaSdkPreparationWorkspaceProviderOptions = {
   apiKey?: string;
   client?: DaytonaSdkClient;
@@ -126,6 +135,7 @@ const defaultCommandTimeoutMs = 10 * 60_000;
 const defaultLogWriteTimeoutMs = 5_000;
 const defaultPreviewUrlTimeoutMs = 30_000;
 const defaultPtyConnectionTimeoutMs = 30_000;
+const defaultManagedProcessControlTimeoutMs = 30_000;
 const defaultSandboxCreateTimeoutSeconds = 300;
 const sandboxCreateConnectionRetryLimit = 2;
 const ptyStartupRetryLimit = 2;
@@ -315,8 +325,12 @@ function createPreparationWorkspaceHandle(input: {
 }
 
 class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
+  readonly agentSandboxId: string;
   private readonly activePtys = new Set<ManagedPty>();
+  private activeSubmittedCodeApp: ManagedSubmittedCodeApp | undefined;
+  private readonly networkStateTransitions: AgentHarnessNetworkStateTransition[];
   private readonly sandboxLogger: PipelineEventLogger;
+  readonly submittedCodeSandboxId?: string;
 
   constructor(
     private readonly sandbox: DaytonaSdkSandbox,
@@ -329,6 +343,16 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     private readonly ptyConnectionTimeoutMs: number,
     sandboxLogSinks: PipelineLogSink[],
   ) {
+    this.agentSandboxId = workspaceId;
+    const submittedCodeSandboxId =
+      submittedCodeSandbox?.id ?? submittedCodeSandbox?.name;
+    if (submittedCodeSandboxId !== undefined) {
+      this.submittedCodeSandboxId = submittedCodeSandboxId;
+    }
+    this.networkStateTransitions =
+      submittedCodeSandbox === undefined
+        ? []
+        : [{ at: new Date().toISOString(), state: "runtime-locked" }];
     this.sandboxLogger = createPipelineEventLogger({
       base: {
         component: "daytona-sandbox",
@@ -362,15 +386,16 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       return this.executeStreaming(command, options);
     }
 
+    const timeoutMs = options.timeoutMs ?? this.commandTimeoutMs;
     const response = await withTimeout(
       this.sandbox.process.executeCommand(
         command,
         undefined,
         options.env,
-        toSdkTimeoutSeconds(this.commandTimeoutMs),
+        toSdkTimeoutSeconds(timeoutMs),
       ),
-      this.commandTimeoutMs,
-      `Daytona command did not finish within ${this.commandTimeoutMs}ms.`,
+      timeoutMs,
+      () => new AgentHarnessCommandTimeoutError(timeoutMs),
     );
 
     return {
@@ -406,7 +431,12 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       await pty.sendInput(
         `stty -echo\n${command}\nprintf '\\n__MAKEADEMO_EXIT__:%s\\n' $?\nexit\n`,
       );
-      const result = await pty.wait();
+      const timeoutMs = options.timeoutMs ?? this.commandTimeoutMs;
+      const result = await withTimeout(
+        pty.wait(),
+        timeoutMs,
+        () => new AgentHarnessCommandTimeoutError(timeoutMs),
+      );
       const stdout = output.join("");
       const exitCode = readExitCode(stdout) ?? result.exitCode ?? 0;
 
@@ -422,9 +452,30 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
   }
 
   async cancelActiveCommands(): Promise<void> {
-    await Promise.allSettled(
-      [...this.activePtys].map((pty) => pty.disconnect()),
+    await Promise.allSettled([
+      this.stopSubmittedCodeApp(),
+      ...[...this.activePtys].map((pty) => pty.disconnect()),
+    ]);
+  }
+
+  async collectSandboxLogs(): Promise<string[]> {
+    const response = await withTimeout(
+      this.sandbox.process.executeCommand(
+        `sh -lc ${shellQuote(`test ! -f ${workspaceSandboxAuditLogPath} || cat ${workspaceSandboxAuditLogPath}`)}`,
+        undefined,
+        undefined,
+        toSdkTimeoutSeconds(this.logWriteTimeoutMs),
+      ),
+      this.logWriteTimeoutMs,
+      `Daytona sandbox log collection did not finish within ${this.logWriteTimeoutMs}ms.`,
     );
+    if ((response.exitCode ?? 0) !== 0) {
+      throw new Error("Failed to collect Daytona sandbox audit log.");
+    }
+
+    return (response.stdout ?? response.result ?? "")
+      .split("\n")
+      .filter((line) => line.trim().length > 0);
   }
 
   async writeSandboxLog(entry: AgentHarnessWorkspaceLogEntry): Promise<void> {
@@ -485,15 +536,16 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       );
     }
 
+    const timeoutMs = options.timeoutMs ?? this.commandTimeoutMs;
     const response = await withTimeout(
       this.submittedCodeSandbox.process.executeCommand(
         command,
         undefined,
         options.env,
-        toSdkTimeoutSeconds(this.commandTimeoutMs),
+        toSdkTimeoutSeconds(timeoutMs),
       ),
-      this.commandTimeoutMs,
-      `Daytona command did not finish within ${this.commandTimeoutMs}ms.`,
+      timeoutMs,
+      () => new AgentHarnessCommandTimeoutError(timeoutMs),
     );
 
     return {
@@ -501,6 +553,106 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       stderr: response.stderr ?? "",
       stdout: response.stdout ?? response.result ?? "",
     };
+  }
+
+  async startSubmittedCodeApp(
+    input: AgentHarnessSubmittedCodeAppStartInput,
+  ): Promise<void> {
+    const sandbox = this.requireSubmittedCodeSandbox();
+    await this.stopSubmittedCodeApp();
+
+    const sessionId = `makeademo-app-${randomUUID()}`;
+    try {
+      await withTimeout(
+        sandbox.process.createSession(sessionId),
+        this.managedProcessControlTimeoutMs,
+        `Daytona managed-process session creation did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
+      );
+      const response = await withTimeout(
+        sandbox.process.executeSessionCommand(sessionId, {
+          command: createManagedAppCommand(input),
+          runAsync: true,
+          suppressInputEcho: true,
+        }),
+        this.managedProcessControlTimeoutMs,
+        `Daytona managed-process launch did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
+      );
+      const commandId = response.cmdId?.trim();
+      if (commandId === undefined || commandId.length === 0) {
+        throw new Error(
+          "Daytona did not return a command id for the submitted-code app.",
+        );
+      }
+      this.activeSubmittedCodeApp = { commandId, sessionId };
+    } catch (error) {
+      await Promise.allSettled([
+        withTimeout(
+          sandbox.process.deleteSession(sessionId),
+          this.managedProcessControlTimeoutMs,
+          `Daytona managed-process cleanup did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
+        ),
+      ]);
+      throw error;
+    }
+  }
+
+  async readSubmittedCodeAppStatus(): Promise<AgentHarnessSubmittedCodeAppStatus> {
+    const sandbox = this.requireSubmittedCodeSandbox();
+    const app = this.activeSubmittedCodeApp;
+    if (app === undefined) {
+      throw new Error("No submitted-code app session is active.");
+    }
+
+    const [command, logs] = await Promise.all([
+      withTimeout(
+        sandbox.process.getSessionCommand(app.sessionId, app.commandId),
+        this.managedProcessControlTimeoutMs,
+        `Daytona managed-process status did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
+      ),
+      withTimeout(
+        sandbox.process.getSessionCommandLogs(app.sessionId, app.commandId),
+        this.managedProcessControlTimeoutMs,
+        `Daytona managed-process log collection did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
+      ),
+    ]);
+    const exitCode = command.exitCode;
+
+    return {
+      ...(exitCode === undefined ? {} : { exitCode }),
+      running: exitCode === undefined,
+      stderr: logs?.stderr ?? "",
+      stdout: logs?.stdout ?? "",
+    };
+  }
+
+  async stopSubmittedCodeApp(): Promise<void> {
+    const app = this.activeSubmittedCodeApp;
+    if (app === undefined) {
+      return;
+    }
+    const sandbox = this.requireSubmittedCodeSandbox();
+    await withTimeout(
+      sandbox.process.deleteSession(app.sessionId),
+      this.managedProcessControlTimeoutMs,
+      `Daytona managed-process cleanup did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
+    );
+    if (this.activeSubmittedCodeApp === app) {
+      this.activeSubmittedCodeApp = undefined;
+    }
+  }
+
+  private requireSubmittedCodeSandbox(): DaytonaSdkSandbox {
+    if (this.submittedCodeSandbox === undefined) {
+      throw new Error("Submitted-code Daytona sandbox is not configured.");
+    }
+    return this.submittedCodeSandbox;
+  }
+
+  private get managedProcessControlTimeoutMs(): number {
+    return Math.min(
+      this.commandTimeoutMs,
+      defaultManagedProcessControlTimeoutMs,
+    );
   }
 
   async setOutboundNetworkAccess(enabled: boolean): Promise<void> {
@@ -513,6 +665,24 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     }
 
     await this.setSandboxNetworkAccess(this.submittedCodeSandbox, enabled);
+    const at = new Date().toISOString();
+    if (enabled) {
+      this.networkStateTransitions.push({
+        at,
+        state: "dependency-install-open",
+      });
+      return;
+    }
+    this.networkStateTransitions.push(
+      { at, state: "dependency-install-closed" },
+      { at, state: "runtime-locked" },
+    );
+  }
+
+  async collectNetworkStateLog(): Promise<
+    AgentHarnessNetworkStateTransition[]
+  > {
+    return [...this.networkStateTransitions];
   }
 
   async syncSubmittedCodeWorkspace(): Promise<void> {
@@ -657,7 +827,8 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
   async downloadFiles(
     files: AgentHarnessWorkspaceDownloadFile[],
   ): Promise<void> {
-    const results = await this.sandbox.fs.downloadFiles(
+    const artifactSandbox = this.submittedCodeSandbox ?? this.sandbox;
+    const results = await artifactSandbox.fs.downloadFiles(
       files.map((file) => ({
         destination: file.destinationPath,
         source: file.sourcePath,
@@ -699,7 +870,12 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       await pty.sendInput(
         `stty -echo\n${command}\nprintf '\n__MAKEADEMO_EXIT__:%s\n' $?\nexit\n`,
       );
-      const result = await pty.wait();
+      const timeoutMs = options.timeoutMs ?? this.commandTimeoutMs;
+      const result = await withTimeout(
+        pty.wait(),
+        timeoutMs,
+        () => new AgentHarnessCommandTimeoutError(timeoutMs),
+      );
       const stdout = output.join("");
       const exitCode = readExitCode(stdout) ?? result.exitCode ?? 0;
 
@@ -783,7 +959,7 @@ class ManagedPty {
 function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
-  message: string,
+  error: string | (() => Error),
 ): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
@@ -793,7 +969,10 @@ function withTimeout<T>(
       }
     }),
     new Promise<never>((_, reject) => {
-      timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+      timeout = setTimeout(
+        () => reject(typeof error === "string" ? new Error(error) : error()),
+        timeoutMs,
+      );
     }),
   ]);
 }
@@ -853,6 +1032,23 @@ function readSandboxLogMessage(entry: AgentHarnessWorkspaceLogEntry): string {
   }
 
   return typeof entry.event === "string" ? entry.event : "Sandbox log event.";
+}
+
+function createManagedAppCommand(
+  input: AgentHarnessSubmittedCodeAppStartInput,
+): string {
+  const environment = Object.entries(input.env ?? {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, value]) => {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+        throw new Error(`Invalid submitted-code environment variable: ${name}`);
+      }
+      return shellQuote(`${name}=${value}`);
+    });
+  const environmentPrefix =
+    environment.length === 0 ? "" : `env ${environment.join(" ")} `;
+
+  return `cd ${shellQuote(input.cwd)} && ${environmentPrefix}sh -lc ${shellQuote(input.command)}`;
 }
 
 function shellQuote(value: string): string {

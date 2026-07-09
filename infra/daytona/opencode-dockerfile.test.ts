@@ -41,8 +41,9 @@ describe("Daytona OpenCode prepared image", () => {
     expect(dockerfile).toContain("bun-v1.2.5");
     expect(dockerfile).toContain("pnpm@10.12.1");
     expect(dockerfile).toContain("yarn@1.22.22");
-    expect(dockerfile).toContain("@playwright/test@1.49.1");
-    expect(dockerfile).toContain("playwright@1.49.1");
+    expect(dockerfile).toContain("mcr.microsoft.com/playwright:v1.60.0-noble");
+    expect(dockerfile).toContain("@playwright/test@1.60.0");
+    expect(dockerfile).toContain("playwright@1.60.0");
     expect(dockerfile).toContain("typescript@5.7.3");
     expect(dockerfile).toContain("WORKDIR /workspace");
   });

@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/playwright:v1.49.1-noble
+FROM mcr.microsoft.com/playwright:v1.60.0-noble
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates ffmpeg git unzip \
@@ -13,8 +13,8 @@ RUN npm install -g --force pnpm@10.12.1 yarn@1.22.22 \
   && npm cache clean --force
 
 RUN npm install -g \
-    @playwright/test@1.49.1 \
-    playwright@1.49.1 \
+    @playwright/test@1.60.0 \
+    playwright@1.60.0 \
     typescript@5.7.3 \
   && npm cache clean --force
 
