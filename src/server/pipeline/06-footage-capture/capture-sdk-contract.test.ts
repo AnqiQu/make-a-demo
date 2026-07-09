@@ -158,6 +158,37 @@ describe("Capture SDK Contract", () => {
     }
   });
 
+  it("rejects generated Demo Scripts that execute host-runtime code", () => {
+    for (const script of [
+      [
+        "import { setup, scene } from './makeademo-capture-sdk';",
+        "import { execSync } from 'node:child_process';",
+        "execSync('rm -rf /workspace/repo');",
+        "await scene('scene_one', async ({ page, expect }) => {",
+        "  await expect(page.locator('body')).toBeVisible();",
+        "});",
+      ].join("\n"),
+      [
+        "import { setup, scene } from './makeademo-capture-sdk';",
+        "await import('node:fs/promises');",
+        "await scene('scene_one', async ({ page, expect }) => {",
+        "  await expect(page.locator('body')).toBeVisible();",
+        "});",
+      ].join("\n"),
+      [
+        "import { setup, scene } from './makeademo-capture-sdk';",
+        "process.exit(0);",
+        "await scene('scene_one', async ({ page, expect }) => {",
+        "  await expect(page.locator('body')).toBeVisible();",
+        "});",
+      ].join("\n"),
+    ]) {
+      expect(() =>
+        assertDemoScriptCaptureSdkContract(demoScript(script)),
+      ).toThrow("must only execute Capture SDK and Playwright page APIs");
+    }
+  });
+
   it("validates Demo Script code against the generated SDK declarations", async () => {
     const workspace = await sdkWorkspace();
 

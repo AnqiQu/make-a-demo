@@ -60,6 +60,9 @@ const forbiddenAppBypassPatterns: Array<[RegExp, string]> = [
   ],
 ];
 
+const forbiddenHostRuntimePattern =
+  /\b(?:import|require)\b|\b(?:Bun|Deno|process)\s*\.|\b(?:eval|Function)\s*\(/;
+
 /**
  * Validates agent-authored Demo Script code against the generated Capture SDK
  * contract. The agent may import and call setup/scene, but must not own
@@ -97,6 +100,15 @@ export function assertDemoScriptCaptureSdkContract(script: DemoScript): void {
         `Demo Script violates the Capture SDK Contract: ${reason}.`,
       );
     }
+  }
+
+  const hostRuntimeSource = stripCommentsAndStringLiterals(
+    script.demoPlaywrightScript.replace(SDK_IMPORT_PATTERN, ""),
+  );
+  if (forbiddenHostRuntimePattern.test(hostRuntimeSource)) {
+    throw new Error(
+      "Demo Script violates the Capture SDK Contract: Generated Demo Scripts must only execute Capture SDK and Playwright page APIs.",
+    );
   }
 
   const bypassSource = stripCommentsAndStringLiterals(
@@ -621,6 +633,8 @@ Import setup and scene from './makeademo-capture-sdk'. Put off-camera login, see
 Do not launch browsers, create contexts, configure recordVideo, write marker logs, print [makeademo:scene] lines, or provide timestamps/durations.
 
 Do not use real-time network access from the Demo Script. Do not call fetch, XMLHttpRequest, WebSocket, EventSource, navigator.sendBeacon, page.waitForRequest, page.waitForResponse, page.route, page.unroute, or Node network modules.
+
+Do not import any module other than './makeademo-capture-sdk'. Do not use require, dynamic import, process, Bun, Deno, eval, or Function. Capture Scripts may only use the Capture SDK context and Playwright page/locator APIs.
 
 Do not bypass the prepared app UI with app-internal JavaScript such as page.evaluate, page.addScriptTag, page.addInitScript, page.exposeFunction, or page.exposeBinding. Demo Scripts must use user-visible navigation, interactions, and locator assertions against the prepared app.
 `;

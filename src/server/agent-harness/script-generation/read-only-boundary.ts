@@ -38,5 +38,11 @@ function isAllowedPath(path: string): boolean {
     return true;
   }
 
-  return !disallowedWorkspacePathPatterns.some((pattern) => pattern.test(path));
+  const submittedRepoPath = path.replace(
+    /^\/workspace\/repo(?=\/)/,
+    "/workspace",
+  );
+  return !disallowedWorkspacePathPatterns.some((pattern) =>
+    pattern.test(submittedRepoPath),
+  );
 }

@@ -268,7 +268,7 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
 
     const result = await executeSubmittedCode(
       workspace,
-      `cd ${shellQuote(remoteSceneWorkspace)} && timeout -s TERM ${Math.ceil(this.sceneTimeoutMs / 1000)} bun ${shellQuote(remoteScenePath)}`,
+      `cd ${shellQuote(remoteSceneWorkspace)} && NODE_PATH="$(npm root -g)" timeout -s TERM ${Math.ceil(this.sceneTimeoutMs / 1000)} bun ${shellQuote(remoteScenePath)}`,
     );
     await writeFile(markerLogPath, extractMarkerLog(result.stdout));
     const blockedNetworkAttempts = readBlockedNetworkAttempts(result.stderr);
