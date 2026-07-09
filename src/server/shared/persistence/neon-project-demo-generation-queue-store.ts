@@ -162,12 +162,22 @@ function readDemoBriefFromProjectContext(value: unknown) {
     "Project context.structuredContext",
   );
   const targetUsers = readOptionalString(structuredContext, "targetUsers");
+  const productSummary = readOptionalString(
+    structuredContext,
+    "productSummary",
+  );
+  const demoLengthSeconds = readOptionalNumber(
+    structuredContext,
+    "requestedDurationSeconds",
+  );
 
   return {
     ...(targetUsers ? { audience: targetUsers } : {}),
+    ...(demoLengthSeconds === undefined ? {} : { demoLengthSeconds }),
     keyProductFeatures: splitFeatures(
       readString(structuredContext, "importantFeatures"),
     ),
+    ...(productSummary ? { productSummary } : {}),
   };
 }
 
@@ -239,5 +249,16 @@ function readOptionalString(record: Record<string, unknown>, key: string) {
     throw new Error(`${key} must be a string when provided`);
   }
 
+  return value;
+}
+
+function readOptionalNumber(record: Record<string, unknown>, key: string) {
+  const value = record[key];
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    throw new Error(`${key} must be a positive number when provided`);
+  }
   return value;
 }

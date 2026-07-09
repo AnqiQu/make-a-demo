@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
+import { assertSafeGithubRepoUrl } from "./github-repo-url";
 
 export type RepoSnapshot = {
   commitSha?: string;
@@ -59,7 +60,7 @@ export async function readGithubRepoSnapshot(input: {
   repoUrl: string;
   runDirectory: string;
 }): Promise<RepoSnapshot> {
-  assertGithubRepoUrl(input.repoUrl);
+  assertSafeGithubRepoUrl(input.repoUrl);
 
   const checkoutPath = join(input.runDirectory, "repo-snapshot");
   await input.log("repo.clone.started", { checkoutPath });
@@ -171,24 +172,4 @@ function runCommand(command: string, args: string[]) {
       resolve(result);
     });
   });
-}
-
-function assertGithubRepoUrl(repoUrl: string): void {
-  let parsed: URL;
-  try {
-    parsed = new URL(repoUrl);
-  } catch {
-    throw new Error("GitHub repo URL must be a valid https://github.com URL.");
-  }
-
-  const parts = parsed.pathname.split("/").filter(Boolean);
-  if (
-    parsed.protocol !== "https:" ||
-    parsed.hostname !== "github.com" ||
-    parts.length < 2
-  ) {
-    throw new Error(
-      "GitHub repo URL must be a valid https://github.com owner/repo URL.",
-    );
-  }
 }

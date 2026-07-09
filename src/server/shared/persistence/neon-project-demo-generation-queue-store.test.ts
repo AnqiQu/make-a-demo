@@ -92,7 +92,9 @@ describe("NeonProjectDemoGenerationQueueStore", () => {
     await expect(store.claimNextQueuedProject()).resolves.toEqual({
       demoBrief: {
         audience: "Founders",
+        demoLengthSeconds: 60,
         keyProductFeatures: ["script generation", "video generation"],
+        productSummary: "Creates demo videos.",
       },
       demoRequestId: "demo-request-1",
       normalizedSupportingDocuments: [

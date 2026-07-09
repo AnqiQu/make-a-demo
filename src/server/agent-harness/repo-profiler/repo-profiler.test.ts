@@ -54,4 +54,24 @@ describe("profileRepo", () => {
     });
     expect(profile.confidence.overall).toBeGreaterThan(0.7);
   });
+
+  it("uses executable npm script commands and forwards detected ports", () => {
+    const profile = profileRepo({
+      files: [
+        {
+          path: "package.json",
+          text: JSON.stringify({
+            scripts: { build: "vite build", dev: "vite --port 4173" },
+          }),
+        },
+        { path: "package-lock.json", text: "" },
+      ],
+      repoUrl: "https://github.com/example/npm-app",
+    });
+
+    expect(profile.candidateBuildCommands).toEqual(["npm run build"]);
+    expect(profile.candidateStartCommands).toEqual([
+      "npm run dev -- --port 4173",
+    ]);
+  });
 });

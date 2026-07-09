@@ -1,6 +1,8 @@
 export type DemoBrief = {
   audience?: string;
+  demoLengthSeconds?: number;
   keyProductFeatures: string[];
+  productSummary?: string;
 };
 
 export function readDemoBriefSchema(value: unknown): DemoBrief {
@@ -10,14 +12,32 @@ export function readDemoBriefSchema(value: unknown): DemoBrief {
     "keyProductFeatures",
   );
   const audience = record.audience;
+  const demoLengthSeconds = record.demoLengthSeconds;
+  const productSummary = record.productSummary;
 
   if (audience !== undefined && typeof audience !== "string") {
     throw new Error("audience must be a string when provided");
   }
+  if (
+    demoLengthSeconds !== undefined &&
+    (typeof demoLengthSeconds !== "number" ||
+      !Number.isFinite(demoLengthSeconds) ||
+      demoLengthSeconds <= 0)
+  ) {
+    throw new Error(
+      "demoLengthSeconds must be a positive number when provided",
+    );
+  }
+  if (productSummary !== undefined && typeof productSummary !== "string") {
+    throw new Error("productSummary must be a string when provided");
+  }
 
-  return audience === undefined
-    ? { keyProductFeatures }
-    : { audience, keyProductFeatures };
+  return {
+    ...(audience === undefined ? {} : { audience }),
+    ...(demoLengthSeconds === undefined ? {} : { demoLengthSeconds }),
+    keyProductFeatures,
+    ...(productSummary === undefined ? {} : { productSummary }),
+  };
 }
 
 function assertRecord(value: unknown, path: string): Record<string, unknown> {

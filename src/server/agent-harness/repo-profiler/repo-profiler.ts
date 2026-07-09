@@ -159,15 +159,26 @@ function readScriptCommands(
 
   return names
     .filter((name) => scripts[name] !== undefined)
-    .map(
-      (name) =>
-        `${packageManager} ${name}${readPortSuffix(scripts[name] ?? "")}`,
+    .map((name) =>
+      createScriptCommand(packageManager, name, scripts[name] ?? ""),
     );
 }
 
-function readPortSuffix(script: string): string {
+function createScriptCommand(
+  packageManager: Exclude<RepoProfile["packageManager"], "unknown">,
+  name: string,
+  script: string,
+): string {
+  const port = readScriptPort(script);
+  if (packageManager === "npm") {
+    return `npm run ${name}${port === undefined ? "" : ` -- --port ${port}`}`;
+  }
+  return `${packageManager} ${name}${port === undefined ? "" : ` --port ${port}`}`;
+}
+
+function readScriptPort(script: string): string | undefined {
   const match = /(?:--port|-p)\s+(\d{2,5})/.exec(script);
-  return match?.[1] === undefined ? "" : ` --port ${match[1]}`;
+  return match?.[1];
 }
 
 function readCandidatePorts(scripts: Record<string, string>): number[] {
