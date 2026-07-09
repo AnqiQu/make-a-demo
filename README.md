@@ -108,6 +108,8 @@ Required for local full-pipeline runs:
 ```bash
 DAYTONA_API_KEY=...
 OPENAI_API_KEY=sk-...
+MAKEADEMO_DAYTONA_SNAPSHOT=makeademo-opencode-...
+MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT=makeademo-submitted-code-browser-...
 ```
 
 MakeADemo creates or updates a Daytona secret from `OPENAI_API_KEY` before
@@ -175,15 +177,17 @@ DATABASE_URL=<railway-postgres-public-url> bun run db:migrate
 
 ## Pipeline
 
-The primary local pipeline command runs from repository intake through final video output:
+The primary local command runs the artifact-driven harness through final video output:
 
-1. Context Gathering
-2. Repo Security Screen
-3. Repo Preparation with OpenCode
-4. Project Validation
-5. Video Script Package generation with the same OpenCode session
-6. Footage Capture
-7. Compositing
+1. Snapshot and statically screen the submitted repo without executing it.
+2. Profile the repo and synthesize an initial run plan.
+3. Create linked Daytona sandboxes: a credentialed OpenCode sandbox and a secret-free submitted-code sandbox.
+4. Let OpenCode prepare the ephemeral repo and emit a typed Preparation Manifest. OpenCode cannot run shell commands during this stage.
+5. Sync the prepared files into the submitted-code sandbox, open network access only for an allowlisted package-manager install, reseal the network, then build, start, and preflight the app.
+6. Explore the running app with backend-owned Playwright to produce a grounded App Map and Action Catalog.
+7. Plan a flow and write the capture-ready Demo Script with deny-by-default OpenCode permissions.
+8. Run static Capture SDK validation and a dynamic dry-run. Typed failures are fed to Script Repair or Repo Preparation Repair with bounded retries; preparation repairs regenerate all downstream artifacts.
+9. Reset the submitted-code runtime to clean deterministic state, record one continuous Playwright take, split it into Scenes, and composite the final video.
 
 Interactive run:
 
@@ -191,77 +195,32 @@ Interactive run:
 bun run pipeline:run
 ```
 
-Non-interactive run:
+The prompt accepts the GitHub repo URL, product summary, target users, important features, and target length. Full runs require the Daytona/OpenAI settings above. The submitted-code snapshot must be built from `infra/daytona/submitted-code-node-browser.Dockerfile`; run `bun run verify:daytona-image` after changing either image or snapshot.
 
-```bash
-bun run pipeline:run -- \
-  --output-root .makeademo-full-pipeline-runs \
-  --repo https://github.com/OWNER/REPO \
-  --feature "Feature one" \
-  --feature "Feature two" \
-  --doc ./optional-notes.md
-```
-
-Optional flags:
-
-```bash
---doc ./optional-notes.md
-```
-
-Full pipeline runs require `DAYTONA_API_KEY` and `OPENAI_API_KEY`. Repo Security Screen, Repo Preparation, Project Validation, and Script Generation run through Daytona-backed sandboxes using the backend Daytona seam. Repo Preparation runs OpenCode inside Daytona with provider credentials supplied by Daytona sandbox secrets and streams concise progress to the terminal. After backend validation passes, Script Generation resumes the same OpenCode session with a new read-only prompt so the agent keeps the repo context it discovered during preparation while emitting only the capture-ready script artifact.
-
-Each full run writes a local run directory under `--output-root`:
+Each run writes a local directory under `.makeademo-terminal-runs`:
 
 ```text
-.makeademo-full-pipeline-runs/full-pipeline-<timestamp>/
-  full-pipeline-result.json
-  opencode-raw-output.jsonl
+.makeademo-terminal-runs/terminal-<timestamp>/
+  input.json
+  repo-snapshot.json
   pipeline-log.jsonl
-  script-generation-resume.json
-  script-generation-opencode-raw-output.jsonl
-  video-script-package.json
+  demo-script.json
+  artifacts/workspace/.makeademo/
+    repo-profile.json
+    run-plan.json
+    preparation-manifest.json
+    app-map.json
+    action-catalog.json
+    flow-spec.json
+    script-candidate.json
+    *-validation-report.json
+    pipeline-run-manifest.json
   capture/capture/capture-manifest.json
   composite/composite/composite-manifest.json
   composite/composite/final-video.mp4
 ```
 
-The CLI prints the final artifact paths when it completes:
-
-```text
-Full pipeline complete.
-Final video: <path-to-final-video.mp4>
-Generated script: <path-to-video-script-package.json>
-Capture manifest: <path-to-capture-manifest.json>
-Composite manifest: <path-to-composite-manifest.json>
-Log: <path-to-pipeline-log.jsonl>
-Raw OpenCode log: <path-to-opencode-raw-output.jsonl>
-Script Generation raw OpenCode log: <path-to-script-generation-opencode-raw-output.jsonl>
-Result JSON: <path-to-full-pipeline-result.json>
-```
-
-`pipeline-log.jsonl` is the structured high-level pipeline event log. `opencode-raw-output.jsonl` is intentionally more verbose than terminal output: it records raw OpenCode stdout/stderr lines with timestamps and parsed tool metadata when available. `script-generation-opencode-raw-output.jsonl` contains the Script Generation OpenCode turn separately for debugging script quality and repair loops.
-
-After validated Repo Preparation, full runs also write `script-generation-resume.json`. Use it to rerun only Script Generation against the retained Daytona workspace and existing OpenCode session without rebuilding the demo:
-
-```bash
-bun run scriptgen:run -- \
-  --resume .makeademo-full-pipeline-runs/full-pipeline-<timestamp>/script-generation-resume.json
-```
-
-The resume command writes a fresh `video-script-package.json` and `script-generation-opencode-raw-output.jsonl` in the same run directory.
-
-If the pipeline fails, `full-pipeline-result.json` is still written with failure status, failure details, and available log paths.
-
-The pre-capture pipeline can still be run by itself for debugging through Script Generation:
-
-```bash
-bun run pre-capture:run -- \
-  --repo https://github.com/OWNER/REPO \
-  --feature "Feature one" \
-  --feature "Feature two"
-```
-
-The pre-capture pipeline emits the same capture-ready Video Script Package shape used by Footage Capture.
+`pipeline-log.jsonl` contains redacted structured events for the top-level pipeline and every OpenCode stage. The retained typed artifacts and validation reports are the debugging source of truth; OpenCode session memory is only a context cache.
 
 ## Demo Tooling
 
