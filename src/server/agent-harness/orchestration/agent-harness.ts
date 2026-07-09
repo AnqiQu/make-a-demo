@@ -486,7 +486,28 @@ async function runAsyncStage<T>(
   stageTimings: PipelineRunManifest["stageTimings"],
   callback: () => Promise<T>,
 ): Promise<T> {
-  return await runStage(stage, stageStatuses, stageTimings, callback);
+  const startedAt = new Date().toISOString();
+  stageStatuses[stage] = "running";
+  try {
+    const result = await callback();
+    stageStatuses[stage] = "passed";
+    stageTimings.push({
+      durationMs: Math.max(0, Date.now() - Date.parse(startedAt)),
+      finishedAt: new Date().toISOString(),
+      stage,
+      startedAt,
+    });
+    return result;
+  } catch (error) {
+    stageStatuses[stage] = "failed";
+    stageTimings.push({
+      durationMs: Math.max(0, Date.now() - Date.parse(startedAt)),
+      finishedAt: new Date().toISOString(),
+      stage,
+      startedAt,
+    });
+    throw error;
+  }
 }
 
 async function writeArtifact<T>(

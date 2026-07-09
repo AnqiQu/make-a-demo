@@ -158,6 +158,70 @@ describe("runAgentHarnessPipeline", () => {
       ),
     ).rejects.toThrow("Script Writing modified disallowed workspace paths");
   });
+
+  it("records async stage failures after the stage promise rejects", async () => {
+    const artifacts: Record<string, unknown> = {};
+
+    await expect(
+      runAgentHarnessPipeline(
+        {
+          demoBrief: { keyProductFeatures: ["dashboard"] },
+          files: [
+            { path: "package.json", text: "{}" },
+            { path: "bun.lock", text: "" },
+          ],
+          repoStats: { fileCount: 2, sizeBytes: 200 },
+          repoUrl: "https://github.com/example/app",
+          runId: "run_003",
+        },
+        {
+          artifactStore: {
+            async writeJson(path, value) {
+              artifacts[path] = value;
+            },
+          },
+          async createWorkspace() {
+            return workspace();
+          },
+          async exploreApp() {
+            throw new Error("App Exploration should not run.");
+          },
+          async planFlow() {
+            throw new Error("Flow Planning should not run.");
+          },
+          async prepareRepo() {
+            throw new Error("Repo clone failed.");
+          },
+          async synthesizeRunPlan() {
+            return runPlan();
+          },
+          async validateCapturePath() {
+            throw new Error("Capture Path Validation should not run.");
+          },
+          async validatePreparation() {
+            throw new Error("Preparation Preflight should not run.");
+          },
+          async validateScriptContract() {
+            throw new Error("Static Script Contract should not run.");
+          },
+          async writeScript() {
+            throw new Error("Script Writing should not run.");
+          },
+        },
+      ),
+    ).rejects.toThrow("Repo clone failed.");
+
+    expect(
+      artifacts["/workspace/.makeademo/pipeline-run-manifest.json"],
+    ).toMatchObject({
+      finalStatus: "failed",
+      stageStatuses: {
+        "agent-harness": "failed",
+        "repo-preparation": "failed",
+      },
+      unsupportedOrFailureReason: "Repo clone failed.",
+    });
+  });
 });
 
 function workspace() {
