@@ -3,6 +3,17 @@ import { describe, expect, it } from "vitest";
 import { parsePreCaptureCliArgs } from "./pre-capture-cli-options";
 
 describe("parsePreCaptureCliArgs", () => {
+  it("defaults backend pipeline runs to GPT-5.6 Luna", () => {
+    expect(
+      parsePreCaptureCliArgs([
+        "--repo",
+        "https://github.com/example/app",
+        "--feature",
+        "validation dashboard",
+      ]),
+    ).toMatchObject({ modelID: "gpt-5.6-luna", providerID: "openai" });
+  });
+
   it("parses repo, features, docs, and model options", () => {
     expect(
       parsePreCaptureCliArgs([

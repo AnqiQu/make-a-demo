@@ -1,4 +1,5 @@
 import { DaytonaOpenCodeScriptGeneration } from "../../shared/integrations/agents/daytona-opencode-script-generation";
+import { defaultOpenCodeModel } from "../../shared/integrations/agents/opencode-model-defaults";
 import { ensureOpenCodeProviderDaytonaSecret } from "../../shared/integrations/agents/opencode-provider-secrets";
 import {
   createRepoPreparationAgent,
@@ -29,8 +30,10 @@ const daytonaSnapshot = readOptionalEnv("MAKEADEMO_DAYTONA_SNAPSHOT");
 const daytonaSubmittedCodeSnapshot = readOptionalEnv(
   "MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT",
 );
-const providerID = process.env.REPO_PREPARATION_PROVIDER_ID ?? "openai";
-const modelID = process.env.REPO_PREPARATION_MODEL_ID ?? "gpt-4.1";
+const providerID =
+  process.env.REPO_PREPARATION_PROVIDER_ID ?? defaultOpenCodeModel.providerID;
+const modelID =
+  process.env.REPO_PREPARATION_MODEL_ID ?? defaultOpenCodeModel.modelID;
 const shouldSendFinalVideoEmail = finalVideoEmailsEnabled(process.env);
 const publicAppBaseUrl = shouldSendFinalVideoEmail
   ? readRequiredEnv("PUBLIC_APP_BASE_URL")

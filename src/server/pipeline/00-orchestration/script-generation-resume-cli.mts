@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { DaytonaOpenCodeScriptGeneration } from "../../shared/integrations/agents/daytona-opencode-script-generation";
+import { defaultOpenCodeModel } from "../../shared/integrations/agents/opencode-model-defaults";
 import { createDaytonaSdkPreparationWorkspaceHandle } from "../../shared/integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import { createOpenCodeOutputStream } from "./opencode-output-stream";
 import { createOpenCodeRawOutputLog } from "./opencode-raw-output-log";
@@ -67,8 +68,8 @@ process.stdout.write(`Title: ${result.scriptPackage.title}\n`);
 process.stdout.write(`Scenes: ${countScenes(result.scriptPackage)}\n`);
 
 function readArgs(args: string[]) {
-  let modelID = "gpt-5.5";
-  let providerID = "openai";
+  let modelID: string = defaultOpenCodeModel.modelID;
+  let providerID: string = defaultOpenCodeModel.providerID;
   let resumePath: string | undefined;
 
   for (let index = 0; index < args.length; index += 1) {

@@ -18,7 +18,7 @@ describe("collectPreCaptureCliOptions", () => {
     expect(options).toEqual({
       docs: ["./brief.md", "./setup-notes.txt"],
       features: ["validation dashboard", "script package"],
-      modelID: "gpt-5.5",
+      modelID: "gpt-5.6-luna",
       providerID: "openai",
       repoUrl: "https://github.com/example/app",
       workspaceId: expect.stringMatching(/^workspace-example-app-\d+$/),

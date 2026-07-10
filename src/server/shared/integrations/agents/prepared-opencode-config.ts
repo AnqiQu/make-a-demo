@@ -1,6 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
+import { defaultOpenCodeModel } from "./opencode-model-defaults";
+
 export type PreparedOpenCodeFile = {
   content: string;
   path: string;
@@ -12,12 +14,24 @@ export function createMakeADemoOpenCodeConfigFiles(): PreparedOpenCodeFile[] {
       content: JSON.stringify(
         {
           $schema: "https://opencode.ai/config.json",
+          model: `${defaultOpenCodeModel.providerID}/${defaultOpenCodeModel.modelID}`,
           permission: {
             "*": "allow",
             bash: "deny",
             makeademo_dependency_request_install: "allow",
             makeademo_submit_preparation_result: "allow",
             makeademo_validate_preparation: "allow",
+          },
+          provider: {
+            [defaultOpenCodeModel.providerID]: {
+              models: {
+                [defaultOpenCodeModel.modelID]: {
+                  options: {
+                    reasoningEffort: defaultOpenCodeModel.reasoningEffort,
+                  },
+                },
+              },
+            },
           },
         },
         null,

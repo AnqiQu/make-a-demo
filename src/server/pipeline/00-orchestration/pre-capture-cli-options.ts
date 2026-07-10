@@ -1,3 +1,5 @@
+import { defaultOpenCodeModel } from "../../shared/integrations/agents/opencode-model-defaults";
+
 export type PreCaptureCliOptions = {
   docs: string[];
   features: string[];
@@ -10,8 +12,8 @@ export type PreCaptureCliOptions = {
 export function parsePreCaptureCliArgs(args: string[]): PreCaptureCliOptions {
   const docs: string[] = [];
   const features: string[] = [];
-  let modelID = "gpt-5.5";
-  let providerID = "openai";
+  let modelID: string = defaultOpenCodeModel.modelID;
+  let providerID: string = defaultOpenCodeModel.providerID;
   let repoUrl: string | undefined;
   let workspaceId: string | undefined;
 
