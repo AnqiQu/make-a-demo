@@ -197,16 +197,43 @@ export async function runDefaultDemoPipeline(
       scriptPath,
     };
   } catch (error) {
-    await logger.error({
-      error: error instanceof Error ? error.message : String(error),
-      event: "pipeline.failed",
-    });
-    await logger.flush();
+    try {
+      await logger.error({
+        error: error instanceof Error ? error.message : String(error),
+        event: "pipeline.failed",
+      });
+      await logger.flush();
+    } catch {
+      // Preserve the pipeline failure when observability is unavailable.
+    }
     throw error;
   } finally {
     const handle = workspaceHandle();
-    await persistSandboxLogs(handle, runDirectory, logger);
-    await handle?.destroy();
+    let cleanupFailure: unknown;
+    try {
+      await persistSandboxLogs(handle, runDirectory, logger);
+    } catch (error) {
+      cleanupFailure = error;
+    }
+    try {
+      await handle?.destroy();
+    } catch (error) {
+      cleanupFailure ??= error;
+    }
+    if (cleanupFailure !== undefined) {
+      try {
+        await logger.warn({
+          error:
+            cleanupFailure instanceof Error
+              ? cleanupFailure.message
+              : String(cleanupFailure),
+          event: "sandbox.cleanup.failed",
+        });
+        await logger.flush();
+      } catch {
+        // Preserve the primary pipeline or cleanup failure.
+      }
+    }
   }
 }
 

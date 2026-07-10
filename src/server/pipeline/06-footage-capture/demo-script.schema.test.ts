@@ -21,6 +21,39 @@ describe("parseDemoScript", () => {
     });
   });
 
+  it("defaults omitted presentation options to no music, overlays, or transitions", () => {
+    expect(
+      parseDemoScript({
+        ...validDemoScript(),
+        presentation: {},
+      }).presentation,
+    ).toEqual({
+      music: { enabled: false },
+      textOverlays: [],
+      transitions: [],
+    });
+  });
+
+  it("accepts a Scene without a human-readable description", () => {
+    const script = validDemoScript();
+    expect(
+      parseDemoScript({
+        ...script,
+        scenes: [
+          {
+            expectedVisibleOutcome: "Main content is visible.",
+            id: "scene_one",
+          },
+        ],
+      }).scenes,
+    ).toEqual([
+      {
+        expectedVisibleOutcome: "Main content is visible.",
+        id: "scene_one",
+      },
+    ]);
+  });
+
   it("rejects missing required Demo Script fields", () => {
     const invalidCases: Array<[string, unknown]> = [
       ["demoPlaywrightScript", { demoPlaywrightScript: "" }],

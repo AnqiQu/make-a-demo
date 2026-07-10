@@ -586,6 +586,26 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     expect(calls).toContainEqual({ disconnect: true });
   });
 
+  it("preserves a command timeout when PTY disconnection stalls", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, {
+        ptyDisconnectNeverResolves: true,
+        ptyWaitsForDisconnect: true,
+      }),
+      commandTimeoutMs: 10_000,
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.execute("opencode run slow", {
+        onStdout: () => {},
+        timeoutMs: 1,
+      }),
+    ).rejects.toThrow("Daytona command did not finish within 1ms.");
+    expect(calls).toContainEqual({ disconnect: true });
+  });
+
   it("passes streaming command environment variables through PTY options", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -803,6 +823,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       },
       {
         create: {
+          autoStopInterval: 0,
           autoDeleteInterval: 0,
           ephemeral: true,
           linkedSandbox: "parent_sandbox",
@@ -811,6 +832,101 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         },
       },
     ]);
+  });
+
+  it("uploads submitted-code artifacts only to the submitted-code sandbox", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.uploadSubmittedCodeFiles?.([
+      {
+        destinationPath: "/workspace/.makeademo/capture/demo-script.ts",
+        sourcePath: "/tmp/demo-script.ts",
+      },
+    ]);
+
+    expect(
+      calls.filter(
+        (call) =>
+          typeof call === "object" && call !== null && "uploadFiles" in call,
+      ),
+    ).toEqual([
+      {
+        uploadFiles: {
+          files: [
+            {
+              destination: "/workspace/.makeademo/capture/demo-script.ts",
+              source: "/tmp/demo-script.ts",
+            },
+          ],
+          sandbox: "submitted_sandbox",
+          timeoutSec: 60,
+        },
+      },
+    ]);
+  });
+
+  it("retries a transient submitted-code artifact upload", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls, {
+        submittedUploadFailuresBeforeSuccess: 1,
+      }),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.uploadSubmittedCodeFiles?.([
+        {
+          destinationPath: "/workspace/.makeademo/capture/demo-script.ts",
+          sourcePath: "/tmp/demo-script.ts",
+        },
+      ]),
+    ).resolves.toBeUndefined();
+
+    expect(
+      calls.filter(
+        (call) =>
+          typeof call === "object" &&
+          call !== null &&
+          "uploadFiles" in call &&
+          (call as { uploadFiles: { sandbox: string } }).uploadFiles.sandbox ===
+            "submitted_sandbox",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("reports a typed submitted-code artifact failure after bounded retries", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls, {
+        submittedUploadFailuresBeforeSuccess: 99,
+      }),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.uploadSubmittedCodeFiles?.([
+        {
+          destinationPath: "/workspace/.makeademo/capture/demo-script.ts",
+          sourcePath: "/tmp/demo-script.ts",
+        },
+      ]),
+    ).rejects.toMatchObject({
+      attempts: 3,
+      message: expect.stringContaining(
+        "DaytonaTimeoutError: Operation timed out",
+      ),
+      name: "AgentHarnessArtifactTransferError",
+      operation: "upload",
+      sandboxId: "submitted_sandbox",
+    });
   });
 
   it("deletes the parent sandbox when linked submitted-code sandbox creation fails", async () => {
@@ -866,6 +982,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       },
       {
         create: {
+          autoStopInterval: 0,
           autoDeleteInterval: 0,
           ephemeral: true,
           linkedSandbox: "parent_sandbox",
@@ -1388,6 +1505,23 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       { delete: "parent_sandbox" },
     ]);
   });
+
+  it("treats an already deleted submitted sandbox as successful cleanup", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls, {
+        missingSubmittedSandboxOnDelete: true,
+      }),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await expect(handle.destroy()).resolves.toBeUndefined();
+    expect(calls.slice(-2)).toEqual([
+      { delete: "submitted_sandbox" },
+      { delete: "parent_sandbox" },
+    ]);
+  });
 });
 
 function fakeLinkedClient(
@@ -1397,7 +1531,9 @@ function fakeLinkedClient(
     executeCommandNeverResolves?: boolean;
     failParentArchive?: boolean;
     failSubmittedRestore?: boolean;
+    missingSubmittedSandboxOnDelete?: boolean;
     remoteCleanupNeverResolves?: boolean;
+    submittedUploadFailuresBeforeSuccess?: number;
   } = {},
 ) {
   const parentSandbox = fakeLinkedSandbox(
@@ -1427,7 +1563,16 @@ function fakeLinkedClient(
       return parentSandbox;
     },
     async delete(input: { id?: string; name?: string }) {
-      calls.push({ delete: input.id ?? input.name });
+      const sandboxId = input.id ?? input.name;
+      calls.push({ delete: sandboxId });
+      if (
+        options.missingSubmittedSandboxOnDelete === true &&
+        sandboxId === "submitted_sandbox"
+      ) {
+        throw Object.assign(new Error("Sandbox not found"), {
+          statusCode: 404,
+        });
+      }
     },
   };
 }
@@ -1647,8 +1792,10 @@ function fakeLinkedSandbox(
     failParentArchive?: boolean;
     failSubmittedRestore?: boolean;
     remoteCleanupNeverResolves?: boolean;
+    submittedUploadFailuresBeforeSuccess?: number;
   } = {},
 ) {
+  let uploadAttempts = 0;
   return {
     fs: {
       async downloadFiles(
@@ -1661,8 +1808,23 @@ function fakeLinkedSandbox(
         }
         return files.map((file) => ({ source: file.source }));
       },
-      async uploadFiles(files: unknown[]) {
-        calls.push({ uploadFiles: { files, sandbox: id } });
+      async uploadFiles(files: unknown[], timeoutSec?: number) {
+        uploadAttempts += 1;
+        calls.push({
+          uploadFiles: {
+            files,
+            sandbox: id,
+            ...(timeoutSec === undefined ? {} : { timeoutSec }),
+          },
+        });
+        if (
+          id === "submitted_sandbox" &&
+          uploadAttempts <= (options.submittedUploadFailuresBeforeSuccess ?? 0)
+        ) {
+          const error = new Error("Operation timed out");
+          error.name = "DaytonaTimeoutError";
+          throw error;
+        }
       },
     },
     id,
@@ -1765,6 +1927,7 @@ function fakeClient(
     onWorkspaceLogMirrorStarted?: () => void;
     previewNeverResolves?: boolean;
     ptyConnectionFailuresBeforeSuccess?: number;
+    ptyDisconnectNeverResolves?: boolean;
     ptyNeverConnects?: boolean;
     ptyStaleDuplicateIdOnFirstCreate?: boolean;
     ptyWaitFails?: boolean;
@@ -1841,6 +2004,9 @@ function fakeClient(
             disconnected = true;
             calls.push({ disconnect: true });
             resolveDisconnect?.();
+            if (options.ptyDisconnectNeverResolves === true) {
+              await new Promise(() => {});
+            }
           },
           async sendInput(data: string | Uint8Array) {
             calls.push({ sendInput: data });

@@ -46,6 +46,16 @@ describe("exploreSubmittedApp", () => {
     expect(commands[0]).toContain(
       'NODE_PATH="$(npm root -g)" bun /workspace/.makeademo/exploration/explore-app.mjs',
     );
+    const encodedScript = /printf %s '([^']+)'/.exec(commands[0] ?? "")?.[1];
+    expect(encodedScript).toBeDefined();
+    const explorerScript = Buffer.from(encodedScript ?? "", "base64").toString(
+      "utf8",
+    );
+    expect(explorerScript).toContain("href: target.href");
+    expect(explorerScript).toContain(
+      "sameOrigin: target.origin === location.origin",
+    );
+    expect(explorerScript).toContain('page.url() + ": " + error.message');
     expect(result.validationReport.status).toBe("passed");
     expect(result.appMap).toMatchObject({
       baseUrl: "http://127.0.0.1:3000",
@@ -75,7 +85,7 @@ describe("exploreSubmittedApp", () => {
     );
   });
 
-  it("fails exploration when the running app attempts external network access", async () => {
+  it("reports unique attempted external resources together with page errors", async () => {
     const result = await exploreSubmittedApp({
       baseUrl: "http://127.0.0.1:3000",
       preparationManifestId: "prep_001",
@@ -91,9 +101,10 @@ describe("exploreSubmittedApp", () => {
             stdout: JSON.stringify({
               blockedNetworkAttempts: [
                 { host: "api.example.com", url: "https://api.example.com/v1" },
+                { host: "api.example.com", url: "https://api.example.com/v1" },
               ],
               consoleErrors: [],
-              pageErrors: [],
+              pageErrors: ["http://127.0.0.1:3000/: render failed"],
               routes: [
                 {
                   buttons: [],
@@ -116,8 +127,16 @@ describe("exploreSubmittedApp", () => {
     });
 
     expect(result.validationReport).toMatchObject({
-      failureClassification: "external network required",
+      failureClassification: "external network attempted",
+      blockedNetworkAttempts: [
+        expect.objectContaining({ url: "https://api.example.com/v1" }),
+      ],
       status: "failed",
     });
+    expect(result.validationReport.blockedNetworkAttempts).toHaveLength(1);
+    expect(result.validationReport.logsSummary).toContain(
+      "1 unique external network request",
+    );
+    expect(result.validationReport.logsSummary).toContain("1 page error");
   });
 });

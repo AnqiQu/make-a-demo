@@ -165,7 +165,12 @@ describe("captureScenesFromScript", () => {
       id: "daytona_workspace",
       workspace: {
         async destroy() {},
-        async downloadFiles(files) {
+        async downloadFiles() {
+          throw new Error(
+            "generic artifact download must not cross trust boundaries",
+          );
+        },
+        async downloadSubmittedCodeFiles(files) {
           downloadedSources.push(...files.map((file) => file.sourcePath));
           await Promise.all(
             files.map(async (file) => {
@@ -219,7 +224,12 @@ describe("captureScenesFromScript", () => {
           return "https://preview.example.test/";
         },
         async setOutboundNetworkAccess() {},
-        async uploadFiles(files) {
+        async uploadFiles() {
+          throw new Error(
+            "generic artifact upload must not cross trust boundaries",
+          );
+        },
+        async uploadSubmittedCodeFiles(files) {
           uploadedDestinations.push(
             ...files.map((file) => file.destinationPath),
           );
@@ -287,6 +297,9 @@ describe("captureScenesFromScript", () => {
         async downloadFiles(files) {
           downloadedSources.push(...files.map((file) => file.sourcePath));
         },
+        async downloadSubmittedCodeFiles(files) {
+          downloadedSources.push(...files.map((file) => file.sourcePath));
+        },
         async execute() {
           throw new Error(
             "outer workspace execution must not run capture commands",
@@ -316,6 +329,7 @@ describe("captureScenesFromScript", () => {
         },
         async setOutboundNetworkAccess() {},
         async uploadFiles() {},
+        async uploadSubmittedCodeFiles() {},
       },
     };
 

@@ -4,12 +4,27 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   assertDemoScriptCaptureSdkContract,
+  createCaptureSdkAgentContract,
   validateDemoScriptCaptureSdkTypes,
   writeGeneratedCaptureSdkHarness,
 } from "./capture-sdk-contract";
 import type { DemoScript } from "./demo-script.schema";
 
 describe("Capture SDK Contract", () => {
+  it("provides the agent with a canonical callback-based SDK example", () => {
+    const contract = createCaptureSdkAgentContract();
+
+    expect(contract.canonicalExample).toContain(
+      "await setup(async ({ page, baseUrl, expect }) => {",
+    );
+    expect(contract.canonicalExample).toContain(
+      "await scene('scene_main', async ({ page, expect }) => {",
+    );
+    expect(contract.canonicalExample).toContain(
+      "await expect(page.getByRole('heading', { name: 'Main content' })).toBeVisible();",
+    );
+  });
+
   it("writes generated runtime, declaration, and instruction harness files", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "makeademo-sdk-"));
 
@@ -87,6 +102,22 @@ describe("Capture SDK Contract", () => {
         assertDemoScriptCaptureSdkContract(demoScript(script)),
       ).toThrow("visible Playwright assertion");
     }
+  });
+
+  it("accepts visible assertions against locator variables", () => {
+    expect(() =>
+      assertDemoScriptCaptureSdkContract(
+        demoScript(
+          [
+            "import { setup, scene } from './makeademo-capture-sdk';",
+            "await scene('scene_one', async ({ page, expect }) => {",
+            "  const main = page.locator('main');",
+            "  await expect(main).toBeVisible();",
+            "});",
+          ].join("\n"),
+        ),
+      ),
+    ).not.toThrow();
   });
 
   it("rejects generated Demo Scripts that use runtime network APIs", () => {

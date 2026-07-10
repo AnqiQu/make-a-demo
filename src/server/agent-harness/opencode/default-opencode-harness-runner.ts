@@ -1,3 +1,4 @@
+import path from "node:path/posix";
 import type {
   OpenCodeHarnessRunInput,
   OpenCodeHarnessRunResult,
@@ -73,7 +74,9 @@ function createStageSecurityConfig(input: OpenCodeHarnessRunInput) {
       "*": "deny",
       bash: canRunShell ? "allow" : "deny",
       doom_loop: "deny",
-      edit: canWrite ? createStageEditPermissions(input.stage) : "deny",
+      edit: canWrite
+        ? createStageEditPermissions(input.stage, input.workingDirectory)
+        : "deny",
       external_directory: {
         "*": "deny",
         "/workspace/.makeademo/**": "allow",
@@ -101,8 +104,15 @@ function createStageSecurityConfig(input: OpenCodeHarnessRunInput) {
   };
 }
 
-function createStageEditPermissions(stage: OpenCodeHarnessRunInput["stage"]) {
+function createStageEditPermissions(
+  stage: OpenCodeHarnessRunInput["stage"],
+  workingDirectory: string,
+) {
   const artifactPaths = readStageArtifactPaths(stage);
+  const artifactDirectoryPattern = `${path.relative(
+    workingDirectory,
+    "/workspace/.makeademo",
+  )}/**`;
   const canMutateRepo =
     stage === "repo-preparation" || stage === "repo-preparation-repair";
   return Object.fromEntries([
@@ -113,8 +123,11 @@ function createStageEditPermissions(stage: OpenCodeHarnessRunInput["stage"]) {
           ["/workspace/repo/**", "allow"],
         ]
       : []),
-    ["/workspace/.makeademo/**", "deny"],
-    ...artifactPaths.map((path) => [path, "allow"]),
+    [artifactDirectoryPattern, "deny"],
+    ...artifactPaths.map((artifactPath) => [
+      path.relative(workingDirectory, artifactPath),
+      "allow",
+    ]),
   ]);
 }
 

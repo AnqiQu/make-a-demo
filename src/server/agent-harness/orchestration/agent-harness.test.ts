@@ -556,6 +556,173 @@ describe("runAgentHarnessPipeline", () => {
     ]);
   });
 
+  it("allows three preparation repairs independently in preflight and app exploration", async () => {
+    let explorationAttempts = 0;
+    let preflightAttempts = 0;
+    const repairStages: string[] = [];
+
+    const result = await runAgentHarnessPipeline(
+      {
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        files: [
+          { path: "package.json", text: "{}" },
+          { path: "bun.lock", text: "" },
+        ],
+        repoStats: { fileCount: 2, sizeBytes: 200 },
+        repoUrl: "https://github.com/example/app",
+        runId: "run_phase_repair_budgets",
+      },
+      {
+        async createWorkspace() {
+          return workspace();
+        },
+        async exploreApp() {
+          explorationAttempts += 1;
+          return {
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport:
+              explorationAttempts <= 3
+                ? {
+                    ...report("app-exploration", "failed"),
+                    failureClassification: "external network attempted",
+                    logsSummary: "Blocked external stylesheet",
+                  }
+                : report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation({ failureReport }) {
+          repairStages.push(failureReport.stage);
+          return {
+            manifest: {
+              ...preparationManifest(),
+              id: `prep_repaired_${repairStages.length}`,
+            },
+          };
+        },
+        async synthesizeRunPlan() {
+          return runPlan();
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          return preflightAttempts <= 3
+            ? {
+                ...report("preparation-preflight", "failed"),
+                failureClassification: "start failure",
+                logsSummary: "App is not ready",
+              }
+            : report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript({ preparationManifest: manifest }) {
+          return {
+            ...scriptCandidate(),
+            sourcePreparationManifestId: manifest.id,
+          };
+        },
+      },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(repairStages).toEqual([
+      "preparation-preflight",
+      "preparation-preflight",
+      "preparation-preflight",
+      "app-exploration",
+      "app-exploration",
+      "app-exploration",
+    ]);
+  });
+
+  it("allows three script repairs independently in static and capture validation", async () => {
+    let captureAttempts = 0;
+    let staticAttempts = 0;
+    const repairStages: string[] = [];
+
+    const result = await runAgentHarnessPipeline(
+      {
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        files: [
+          { path: "package.json", text: "{}" },
+          { path: "bun.lock", text: "" },
+        ],
+        repoStats: { fileCount: 2, sizeBytes: 200 },
+        repoUrl: "https://github.com/example/app",
+        runId: "run_phase_script_repair_budgets",
+      },
+      {
+        async createWorkspace() {
+          return workspace();
+        },
+        async exploreApp() {
+          return {
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairScript({ failureReport }) {
+          repairStages.push(failureReport.stage);
+          return scriptCandidate();
+        },
+        async synthesizeRunPlan() {
+          return runPlan();
+        },
+        async validateCapturePath() {
+          captureAttempts += 1;
+          return captureAttempts <= 3
+            ? {
+                ...report("capture-path-validation", "failed"),
+                failureClassification: "locator failure",
+              }
+            : report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          staticAttempts += 1;
+          return staticAttempts <= 3
+            ? {
+                ...report("static-script-contract-validation", "failed"),
+                failureClassification: "script contract failure",
+              }
+            : report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(repairStages).toEqual([
+      "static-script-contract-validation",
+      "static-script-contract-validation",
+      "static-script-contract-validation",
+      "capture-path-validation",
+      "capture-path-validation",
+      "capture-path-validation",
+    ]);
+  });
+
   it("repairs preparation and regenerates downstream artifacts after a runtime capture failure", async () => {
     let captureAttempts = 0;
     const calls: string[] = [];

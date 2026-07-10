@@ -5,6 +5,16 @@ import type { DemoScript } from "./demo-script.schema";
 
 const SDK_IMPORT_PATTERN =
   /import\s+\{\s*(?:scene\s*,\s*setup|setup\s*,\s*scene)\s*\}\s+from\s+['"]\.\/makeademo-capture-sdk['"];?/;
+const visibleAssertionMatchers = [
+  "toBeInViewport",
+  "toBeVisible",
+  "toContainText",
+  "toHaveCount",
+  "toHaveText",
+  "toHaveTitle",
+  "toHaveURL",
+] as const;
+const visibleAssertionMatcherSet = new Set<string>(visibleAssertionMatchers);
 
 const forbiddenCaptureControlPatterns: Array<[RegExp, string]> = [
   [/\brecordVideo\b/, "Playwright recordVideo is owned by MakeADemo"],
@@ -62,6 +72,33 @@ const forbiddenAppBypassPatterns: Array<[RegExp, string]> = [
 
 const forbiddenHostRuntimePattern =
   /\b(?:import|require)\b|\b(?:Bun|Deno|process)\s*\.|\b(?:eval|Function)\s*\(/;
+
+/**
+ * Returns the backend-owned Capture SDK instructions supplied to Script
+ * Writing and Script Repair. The canonical example is executable contract
+ * syntax, but agents must ground its Scene IDs and locators in durable app
+ * artifacts.
+ */
+export function createCaptureSdkAgentContract() {
+  return {
+    canonicalExample: [
+      "import { setup, scene } from './makeademo-capture-sdk';",
+      "",
+      "await setup(async ({ page, baseUrl, expect }) => {",
+      "  await page.goto(baseUrl);",
+      "  await expect(page.locator('body')).toBeVisible();",
+      "});",
+      "",
+      "await scene('scene_main', async ({ page, expect }) => {",
+      "  await expect(page.getByRole('heading', { name: 'Main content' })).toBeVisible();",
+      "});",
+    ].join("\n"),
+    contractVersion: "2026-07-10",
+    declarations: declarationSource(),
+    instructions: instructionsSource(),
+    visibleAssertionMatchers,
+  } as const;
+}
 
 /**
  * Validates agent-authored Demo Script code against the generated Capture SDK
@@ -142,9 +179,39 @@ export function assertDemoScriptCaptureSdkContract(script: DemoScript): void {
 
 function hasVisiblePlaywrightAssertion(source: string) {
   const assertionSource = stripCommentsAndStringLiterals(source);
-  return /\bexpect\s*\(\s*(?:page\.|[^)]*\b(?:locator|getBy(?:Role|Text|Label|Placeholder|TestId|Title|AltText))\b)[\s\S]*?\)\s*\.\s*(?:toBeVisible|toBeInViewport|toContainText|toHaveText|toHaveURL|toHaveTitle|toHaveCount)\s*\(/.test(
-    assertionSource,
-  );
+  const expectCall = /\bexpect\s*\(/g;
+  for (const match of assertionSource.matchAll(expectCall)) {
+    const openParenthesis = (match.index ?? 0) + match[0].lastIndexOf("(");
+    const closeParenthesis = findMatchingParenthesis(
+      assertionSource,
+      openParenthesis,
+    );
+    if (closeParenthesis === undefined) {
+      continue;
+    }
+    const matcher = /^\s*\.\s*([A-Za-z_$][\w$]*)\s*\(/.exec(
+      assertionSource.slice(closeParenthesis + 1),
+    )?.[1];
+    if (matcher !== undefined && visibleAssertionMatcherSet.has(matcher)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function findMatchingParenthesis(source: string, openIndex: number) {
+  let depth = 0;
+  for (let index = openIndex; index < source.length; index += 1) {
+    if (source[index] === "(") {
+      depth += 1;
+    } else if (source[index] === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+  return undefined;
 }
 
 function stripCommentsAndStringLiterals(source: string) {

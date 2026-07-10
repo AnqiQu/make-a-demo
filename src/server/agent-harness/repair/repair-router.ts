@@ -16,6 +16,7 @@ const preparationFailureClassifications = new Set([
   "browser console/page error",
   "build failure",
   "empty/unmeaningful app state",
+  "external network attempted",
   "external network required",
   "install failure",
   "missing env",
@@ -37,7 +38,8 @@ export function classifyRepairRoute(input: {
     if (
       classification === "unsafe repo" ||
       classification === "unsupported repo" ||
-      classification === "harness/internal failure"
+      classification === "harness/internal failure" ||
+      classification === "transient infrastructure failure"
     ) {
       return "fail";
     }

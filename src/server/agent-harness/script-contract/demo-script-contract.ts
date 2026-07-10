@@ -77,11 +77,7 @@ export function createDemoScriptContract(): DemoScriptContract {
       "scenes",
       "presentation",
     ],
-    requiredMetadata: [
-      "presentation.music",
-      "presentation.textOverlays",
-      "presentation.transitions",
-    ],
+    requiredMetadata: [],
     timingConventions: [
       "bounded waits only",
       "no agent-authored scene durations",

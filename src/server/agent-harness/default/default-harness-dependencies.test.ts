@@ -9,10 +9,119 @@ import type {
   PreparationManifest,
   RepoProfile,
   RunPlan,
+  ValidationReport,
 } from "../schemas/artifacts";
 import { createDefaultAgentHarnessDependencies } from "./default-harness-dependencies";
 
 describe("createDefaultAgentHarnessDependencies", () => {
+  it("gives Flow Planning the complete backend-owned FlowSpec contract", async () => {
+    const commands: string[] = [];
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute(command) {
+        commands.push(command);
+        if (command === "cat '/workspace/.makeademo/flow-spec.json'") {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: JSON.stringify(flowSpec()),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(input) {
+          expect(input.stage).toBe("flow-planning");
+          expect(input.prompt).toContain(
+            "/workspace/.makeademo/flow-spec-contract.json",
+          );
+          return { exitCode: 0, stderr: "", stdout: "planned" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      workspaceProvider: {
+        async create() {
+          return { async destroy() {}, id: "workspace", workspace };
+        },
+      },
+    });
+    await harness.dependencies.createWorkspace({
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+    });
+
+    await expect(
+      harness.dependencies.planFlow({
+        actionCatalog: actionCatalog(),
+        appMap: appMap(),
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+      }),
+    ).resolves.toEqual(flowSpec());
+
+    const contractWrite = commands.find((command) =>
+      command.includes("flow-spec-contract.json"),
+    );
+    expect(contractWrite).toContain("expectedVisibleAssertions");
+    expect(contractWrite).toContain("referencedAppMapRoutePaths");
+    expect(contractWrite).toContain("skippedOrBlockedFlows");
+    expect(contractWrite).toContain("additionalProperties");
+  });
+
+  it("fails Flow Planning immediately when its required artifact write is denied", async () => {
+    let attempts = 0;
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute(command) {
+        if (command === "cat '/workspace/.makeademo/flow-spec.json'") {
+          return { exitCode: 1, stderr: "No such file", stdout: "" };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run() {
+          attempts += 1;
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout:
+              "I attempted to write /workspace/.makeademo/flow-spec.json, but the write was blocked by a permission rule.",
+          };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      workspaceProvider: {
+        async create() {
+          return { async destroy() {}, id: "workspace", workspace };
+        },
+      },
+    });
+    await harness.dependencies.createWorkspace({
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+    });
+
+    await expect(
+      harness.dependencies.planFlow({
+        actionCatalog: actionCatalog(),
+        appMap: appMap(),
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+      }),
+    ).rejects.toThrow(
+      /Flow Planning harness configuration failure.*write.*denied/i,
+    );
+    expect(attempts).toBe(1);
+  });
+
   it("writes a complete Preparation Manifest template before agent execution", async () => {
     const commands: string[] = [];
     const workspace: AgentHarnessWorkspace = {
@@ -258,7 +367,12 @@ describe("createDefaultAgentHarnessDependencies", () => {
   });
 
   it("feeds a command timeout back through the Repo Preparation repair loop", async () => {
-    const workspace = repairableRepoPreparationWorkspace();
+    const workspace = {
+      ...repairableRepoPreparationWorkspace(),
+      async writeSandboxLog() {
+        throw new Error("sandbox audit log is unavailable");
+      },
+    };
     const prompts: string[] = [];
     const harness = await createDefaultAgentHarnessDependencies({
       artifactStore: { async writeJson() {} },
@@ -632,6 +746,54 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(shellCommands.join("\n")).not.toMatch(/nohup|app\.pid/);
   });
 
+  it("classifies readiness-probe execution errors as harness failures without a shell retry loop", async () => {
+    const commands: string[] = [];
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        if (command.includes("curl")) {
+          return {
+            exitCode: 2,
+            stderr:
+              'sh: Syntax error: end of file unexpected (expecting "done")',
+            stdout: "",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async setSubmittedCodeNetworkAccess() {},
+      async startSubmittedCodeApp() {},
+      async stopSubmittedCodeApp() {},
+      async syncSubmittedCodeWorkspace() {},
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+    });
+
+    await expect(
+      harness.dependencies.validatePreparation({
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).resolves.toMatchObject({
+      failureClassification: "harness/internal failure",
+      status: "failed",
+    });
+    const readinessCommands = commands.filter((command) =>
+      command.includes("curl"),
+    );
+    expect(readinessCommands).toHaveLength(1);
+    expect(readinessCommands[0]).not.toContain("for attempt");
+  });
+
   it("preserves complete git paths when enforcing the read-only script boundary", async () => {
     const harness = await createDefaultAgentHarnessDependencies({
       artifactStore: { async writeJson() {} },
@@ -743,6 +905,9 @@ describe("createDefaultAgentHarnessDependencies", () => {
           stages.push(input.stage);
           if (input.stage === "script-repair") {
             expect(input.prompt).toContain("missing");
+            expect(input.prompt).toContain(
+              "/workspace/.makeademo/capture-sdk-contract.json",
+            );
             demoScript = { scriptId: "script_repaired" };
           }
           return {
@@ -771,6 +936,139 @@ describe("createDefaultAgentHarnessDependencies", () => {
       scriptJsonContent: { scriptId: "script_repaired" },
     });
     expect(stages).toEqual(["script-writing", "script-repair"]);
+  });
+
+  it("gives Script Writing the canonical Capture SDK contract artifact", async () => {
+    const commands: string[] = [];
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute(command) {
+        commands.push(command);
+        if (command === "cat '/workspace/.makeademo/demo-script.json'") {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: JSON.stringify({ scriptId: "script" }),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(input) {
+          expect(input.prompt).toContain(
+            "/workspace/.makeademo/capture-sdk-contract.json",
+          );
+          return { exitCode: 0, stderr: "", stdout: "written" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+    });
+
+    await harness.dependencies.writeScript({
+      actionCatalog: actionCatalog(),
+      appMap: appMap(),
+      demoBrief: { keyProductFeatures: ["dashboard"] },
+      flowSpec: flowSpec(),
+      outputPath: "/workspace/.makeademo/demo-script.json",
+      preparationManifest: preparationManifest(),
+      repoProfile: repoProfile(),
+      workspace,
+    });
+
+    const contractWrite = commands.find((command) =>
+      command.includes("capture-sdk-contract.json"),
+    );
+    expect(contractWrite).toContain(
+      "await setup(async ({ page, baseUrl, expect }) => {",
+    );
+    expect(contractWrite).toContain("scene_main");
+    expect(contractWrite).toContain("async ({ page, expect }) => {");
+  });
+
+  it("gives runtime repairs complete browser evidence and unique artifact attempts", async () => {
+    const artifactPaths: string[] = [];
+    const prompts: string[] = [];
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute(command) {
+        if (
+          command === "cat '/workspace/.makeademo/preparation-manifest.json'"
+        ) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: JSON.stringify(preparationManifest()),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: {
+        async writeJson(path) {
+          artifactPaths.push(path);
+        },
+      },
+      openCodeRunner: {
+        async run(input) {
+          prompts.push(input.prompt);
+          return {
+            exitCode: 0,
+            sessionId: "session_repair",
+            stderr: "",
+            stdout: "repaired",
+          };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+    });
+    const repairPreparation = harness.dependencies.repairPreparation;
+    expect(repairPreparation).toBeDefined();
+    const failureReport = {
+      ...validationReport("app-exploration", "failed"),
+      blockedNetworkAttempts: [
+        {
+          direction: "outbound" as const,
+          host: "fonts.googleapis.com",
+          phase: "browser" as const,
+          url: "https://fonts.googleapis.com/css?family=Demo",
+        },
+      ],
+      browserObservations: ["/: dashboard rendered"],
+      consoleErrors: ["blocked stylesheet"],
+      failureClassification: "external network attempted",
+      pageErrors: ["/: render failed"],
+    };
+
+    for (let call = 0; call < 2; call += 1) {
+      await repairPreparation?.({
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        failureReport,
+        normalizedSupportingDocuments: undefined,
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      });
+    }
+
+    expect(prompts[0]).toContain(
+      "https://fonts.googleapis.com/css?family=Demo",
+    );
+    expect(prompts[0]).toContain("/: dashboard rendered");
+    expect(prompts[0]).toContain("/: render failed");
+    expect(prompts[0]).toContain(
+      "/workspace/.makeademo/app-exploration-validation-report.json",
+    );
+    expect(artifactPaths).toEqual(
+      expect.arrayContaining([
+        "/workspace/.makeademo/agent-artifact-attempts/repo-preparation-runtime-repair/attempt-1.json",
+        "/workspace/.makeademo/agent-artifact-attempts/repo-preparation-runtime-repair/attempt-2.json",
+      ]),
+    );
   });
 });
 
@@ -804,6 +1102,28 @@ function appMap(): AppMap {
     primaryNavigation: [],
     routeTitles: { "/": "Home" },
     stableLocatorCandidates: ["role=heading[name=Welcome]"],
+  };
+}
+
+function validationReport(
+  stage: string,
+  status: "failed" | "passed",
+): ValidationReport {
+  return {
+    artifactReferences: [],
+    blockedNetworkAttempts: [],
+    browserObservations: [],
+    consoleErrors: [],
+    logsSummary: `${stage} ${status}`,
+    networkAttempts: [],
+    pageErrors: [],
+    retryCount: 0,
+    screenshots: [],
+    stage,
+    status,
+    stderrExcerpts: [],
+    stdoutExcerpts: [],
+    suggestedRepairHints: [],
   };
 }
 
@@ -895,6 +1215,10 @@ function repoPreparationRunner(): OpenCodeHarnessRunner {
       expect(input.stage).toBe("repo-preparation");
       expect(input.prompt).toContain(
         "envUsed must be a flat JSON object whose keys and values are strings",
+      );
+      expect(input.prompt).toContain("attempt zero outbound browser requests");
+      expect(input.prompt).toContain(
+        "protocol-relative URLs beginning with //",
       );
       return {
         exitCode: 0,

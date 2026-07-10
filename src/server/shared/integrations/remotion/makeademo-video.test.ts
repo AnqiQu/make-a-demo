@@ -1,5 +1,5 @@
 import type React from "react";
-import { Audio } from "remotion";
+import { Audio, Sequence } from "remotion";
 import { describe, expect, it } from "vitest";
 import type { CompositingRenderPlan } from "../../../pipeline/07-compositing/video-renderer.interface";
 import { MakeADemoVideo } from "./makeademo-video";
@@ -39,7 +39,59 @@ describe("MakeADemoVideo", () => {
       volume: 0.75,
     });
   });
+
+  it("renders scenes back-to-back when no transitions are configured", () => {
+    const element = MakeADemoVideo({
+      compositionId: "MakeADemoVideo",
+      durationInFrames: 75,
+      fontAssets: {},
+      fps: 30,
+      height: 720,
+      outputPath: "final-video.mp4",
+      publicDir: "public",
+      scenes: [
+        {
+          durationFrames: 30,
+          sceneId: "scene-001",
+          type: "playwright-recording",
+        },
+        {
+          durationFrames: 45,
+          sceneId: "scene-002",
+          type: "playwright-recording",
+        },
+      ],
+      scriptId: "script-001",
+      title: "Demo",
+      width: 1280,
+    } satisfies CompositingRenderPlan);
+
+    expect(
+      findChildrenByType(element, Sequence).map(({ props }) => props),
+    ).toMatchObject([
+      { durationInFrames: 30, from: 0 },
+      { durationInFrames: 45, from: 30 },
+    ]);
+  });
 });
+
+function findChildrenByType(
+  node: React.ReactNode,
+  type: unknown,
+): React.ReactElement[] {
+  if (Array.isArray(node)) {
+    return node.flatMap((child) => findChildrenByType(child, type));
+  }
+  if (!isReactElement(node)) {
+    return [];
+  }
+
+  const matches = node.type === type ? [node] : [];
+  return [
+    ...matches,
+    ...findChildrenByType(node.props.children as React.ReactNode, type),
+  ];
+}
 
 function findChildByType(
   element: React.ReactNode,

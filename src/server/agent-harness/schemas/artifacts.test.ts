@@ -34,6 +34,9 @@ describe("agent harness artifact schemas", () => {
     expect(runPlan.expectedLocalUrl).toBe("http://127.0.0.1:3000");
     expect(preparationManifest.baseUrl).toBe("http://127.0.0.1:3000");
     expect(validationReport.stage).toBe("preparation-preflight");
+    expect(validationReport.blockedNetworkAttempts[0]?.route).toBe(
+      "http://127.0.0.1:3000/dashboard",
+    );
     expect(appMap.discoveredRoutes[0]?.path).toBe("/");
     expect(actionCatalog.actions[0]?.kind).toBe("click");
     expect(flowSpec.referencedActionIds).toEqual(["open-dashboard"]);
@@ -165,7 +168,12 @@ function validValidationReport() {
     artifactReferences: ["preparation-preflight.json"],
     attemptedCommand: "bun run dev --host 127.0.0.1 --port 3000",
     blockedNetworkAttempts: [
-      { direction: "outbound", host: "api.example.com", phase: "runtime" },
+      {
+        direction: "outbound",
+        host: "api.example.com",
+        phase: "runtime",
+        route: "http://127.0.0.1:3000/dashboard",
+      },
     ],
     browserObservations: ["Dashboard loaded"],
     consoleErrors: [],

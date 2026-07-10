@@ -260,4 +260,51 @@ describe("runDefaultDemoPipeline", () => {
       '{"event":"repo-preparation.started"}\n{"event":"repo-preparation.failed"}\n',
     );
   });
+
+  it("preserves the primary pipeline failure when workspace cleanup also fails", async () => {
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-default-"));
+    const workspaceHandle = {
+      async destroy() {
+        throw new Error("cleanup failed");
+      },
+      id: "workspace-1",
+      workspace: {
+        async destroy() {},
+        async execute() {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+      },
+    };
+
+    await expect(
+      runDefaultDemoPipeline(
+        {
+          demoLengthSeconds: 30,
+          importantFeatures: [],
+          productSummary: "Test app",
+          repoUrl: "https://github.com/acme/test-app",
+          targetUsers: "Test users",
+        },
+        {
+          async createHarnessDependencies() {
+            return {
+              dependencies: {} as never,
+              getWorkspaceHandle: () => workspaceHandle,
+            };
+          },
+          outputRoot,
+          async readRepoSnapshot() {
+            return {
+              files: [{ path: "package.json", text: "{}" }],
+              repoStats: { fileCount: 1, sizeBytes: 2 },
+            };
+          },
+          runId: "cleanup-failure",
+          async runHarnessPipeline() {
+            throw new Error("primary pipeline failure");
+          },
+        },
+      ),
+    ).rejects.toThrow("primary pipeline failure");
+  });
 });

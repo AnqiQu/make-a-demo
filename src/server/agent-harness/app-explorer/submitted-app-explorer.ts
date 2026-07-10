@@ -16,7 +16,7 @@ export type SubmittedAppExplorationResult = {
   validationReport: ValidationReport;
 };
 
-type ObservedLink = { href: string; name: string };
+type ObservedLink = { href: string; name: string; sameOrigin?: boolean };
 type ObservedRoute = {
   buttons: string[];
   forms: string[];
@@ -31,7 +31,7 @@ type ObservedRoute = {
   title: string;
 };
 type BrowserExplorationProtocol = {
-  blockedNetworkAttempts: Array<{ host: string; url?: string }>;
+  blockedNetworkAttempts: Array<{ host: string; route?: string; url?: string }>;
   consoleErrors: string[];
   pageErrors: string[];
   routes: ObservedRoute[];
@@ -85,13 +85,16 @@ function createExplorationArtifacts(input: {
 }): SubmittedAppExplorationResult {
   const appMapId = `${input.preparationManifestId}_app_map`;
   const actionCatalogId = `${input.preparationManifestId}_actions`;
-  const networkAttempts = input.observation.blockedNetworkAttempts.map(
-    (attempt): NetworkAttempt => ({
-      direction: "outbound",
-      host: attempt.host,
-      phase: "browser",
-      ...(attempt.url === undefined ? {} : { url: attempt.url }),
-    }),
+  const networkAttempts = uniqueNetworkAttempts(
+    input.observation.blockedNetworkAttempts.map(
+      (attempt): NetworkAttempt => ({
+        direction: "outbound",
+        host: attempt.host,
+        phase: "browser",
+        ...(attempt.route === undefined ? {} : { route: attempt.route }),
+        ...(attempt.url === undefined ? {} : { url: attempt.url }),
+      }),
+    ),
   );
   const routes = input.observation.routes.map((route) => ({
     buttons: route.buttons,
@@ -122,10 +125,12 @@ function createExplorationArtifacts(input: {
     candidateFlows: unique(
       input.observation.routes.flatMap((route) => [
         ...route.buttons,
-        ...route.links.map((link) => link.name),
+        ...route.links
+          .filter((link) => link.sameOrigin !== false)
+          .map((link) => link.name),
       ]),
     ),
-    consoleErrors: input.observation.consoleErrors,
+    consoleErrors: unique(input.observation.consoleErrors),
     discoveredRoutes: routes,
     forms: unique(input.observation.routes.flatMap((route) => route.forms)),
     id: appMapId,
@@ -137,7 +142,7 @@ function createExplorationArtifacts(input: {
     ),
     loginOrAuthWalls,
     networkAttempts,
-    pageErrors: input.observation.pageErrors,
+    pageErrors: unique(input.observation.pageErrors),
     primaryNavigation: unique(
       input.observation.routes.flatMap((route) => route.primaryNavigation),
     ),
@@ -198,7 +203,7 @@ function createActions(routes: ObservedRoute[]) {
       });
     });
     route.links.forEach((link, index) => {
-      if (link.name.length === 0) {
+      if (link.name.length === 0 || link.sameOrigin === false) {
         return;
       }
       actions.push({
@@ -272,7 +277,24 @@ function createExplorationValidationReport(input: {
     suggestedRepairHints:
       failure === undefined
         ? []
-        : ["Repair the prepared runtime, then rerun browser exploration."],
+        : [
+            ...(input.networkAttempts.length === 0
+              ? []
+              : [
+                  `Remove, vendor, mock, or locally replace every blocked browser URL: ${input.networkAttempts.map((attempt) => attempt.url ?? attempt.host).join(", ")}`,
+                ]),
+            ...(input.appMap.pageErrors.length === 0
+              ? []
+              : [
+                  `Repair these route-aware page errors: ${input.appMap.pageErrors.join(" | ")}`,
+                ]),
+            ...(input.appMap.consoleErrors.length === 0
+              ? []
+              : [
+                  `Repair these route-aware console errors: ${input.appMap.consoleErrors.join(" | ")}`,
+                ]),
+            "Rerun browser exploration after repairing the prepared runtime.",
+          ],
     urlChecked: input.appMap.baseUrl,
   });
 }
@@ -282,15 +304,23 @@ function readExplorationFailure(
   networkAttempts: NetworkAttempt[],
 ): { classification: string; message: string } | undefined {
   if (networkAttempts.length > 0) {
+    const pageErrorSummary =
+      appMap.pageErrors.length === 0
+        ? ""
+        : ` Browser exploration also observed ${formatCount(appMap.pageErrors.length, "page error")}: ${appMap.pageErrors.slice(0, 3).join(" | ")}.`;
+    const consoleErrorSummary =
+      appMap.consoleErrors.length === 0
+        ? ""
+        : ` Browser exploration also observed ${formatCount(appMap.consoleErrors.length, "console error")}: ${appMap.consoleErrors.slice(0, 3).join(" | ")}.`;
     return {
-      classification: "external network required",
-      message: `Browser exploration blocked ${networkAttempts.length} external network attempt(s).`,
+      classification: "external network attempted",
+      message: `Browser exploration blocked ${formatCount(networkAttempts.length, "unique external network request")}: ${networkAttempts.map((attempt) => attempt.url ?? attempt.host).join(", ")}.${pageErrorSummary}${consoleErrorSummary}`,
     };
   }
-  if (appMap.pageErrors.length > 0) {
+  if (appMap.pageErrors.length > 0 || appMap.consoleErrors.length > 0) {
     return {
       classification: "browser console/page error",
-      message: `Browser exploration observed ${appMap.pageErrors.length} page error(s).`,
+      message: `Browser exploration observed ${formatCount(appMap.pageErrors.length, "page error")} and ${formatCount(appMap.consoleErrors.length, "console error")}: ${[...appMap.pageErrors, ...appMap.consoleErrors].slice(0, 6).join(" | ")}.`,
     };
   }
   if (
@@ -303,6 +333,21 @@ function readExplorationFailure(
     };
   }
   return undefined;
+}
+
+function formatCount(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+function uniqueNetworkAttempts(attempts: NetworkAttempt[]): NetworkAttempt[] {
+  const uniqueAttempts = new Map<string, NetworkAttempt>();
+  for (const attempt of attempts) {
+    const key = `${attempt.host}\u0000${attempt.url ?? ""}`;
+    if (!uniqueAttempts.has(key)) {
+      uniqueAttempts.set(key, attempt);
+    }
+  }
+  return [...uniqueAttempts.values()];
 }
 
 function createRouteLocatorCandidates(route: ObservedRoute): string[] {
@@ -350,6 +395,7 @@ import { chromium } from "@playwright/test";
 import { mkdir, writeFile } from "node:fs/promises";
 
 const baseUrl = ${JSON.stringify(baseUrl)};
+const baseOrigin = new URL(baseUrl).origin;
 const outputDirectory = ${JSON.stringify(explorerDirectory)};
 const result = { blockedNetworkAttempts: [], consoleErrors: [], pageErrors: [], routes: [] };
 const browser = await chromium.launch({ headless: true });
@@ -363,7 +409,9 @@ try {
         await route.continue();
         return;
       }
-      result.blockedNetworkAttempts.push({ host: parsed.host, url: requestUrl });
+      let initiatorRoute;
+      try { initiatorRoute = route.request().frame().url(); } catch {}
+      result.blockedNetworkAttempts.push({ host: parsed.host, route: initiatorRoute, url: requestUrl });
       await route.abort("blockedbyclient");
     } catch {
       await route.abort("blockedbyclient");
@@ -371,9 +419,9 @@ try {
   });
   const page = await context.newPage();
   page.on("console", (message) => {
-    if (message.type() === "error") result.consoleErrors.push(message.text());
+    if (message.type() === "error") result.consoleErrors.push(page.url() + ": " + message.text());
   });
-  page.on("pageerror", (error) => result.pageErrors.push(error.message));
+  page.on("pageerror", (error) => result.pageErrors.push(page.url() + ": " + error.message));
   const queue = [new URL(baseUrl).toString()];
   const seen = new Set();
   await mkdir(outputDirectory, { recursive: true });
@@ -394,7 +442,7 @@ try {
         const texts = (selector) => Array.from(document.querySelectorAll(selector)).filter(visible).map((element) => clean(element.textContent)).filter(Boolean);
         const links = Array.from(document.querySelectorAll("a[href]")).filter(visible).map((element) => {
           const target = new URL(element.href, location.href);
-          return { href: target.pathname + target.search + target.hash, name: clean(element.textContent || element.getAttribute("aria-label")) };
+          return { href: target.href, name: clean(element.textContent || element.getAttribute("aria-label")), sameOrigin: target.origin === location.origin };
         });
         const inputs = Array.from(document.querySelectorAll("input, textarea, select")).filter(visible).map((element) => clean(element.getAttribute("aria-label") || element.getAttribute("placeholder") || element.getAttribute("name") || element.id || element.tagName.toLowerCase())).filter(Boolean);
         return {
@@ -419,10 +467,10 @@ try {
       result.routes.push({ ...observed, path, screenshot, snapshot });
       for (const link of observed.links) {
         const target = new URL(link.href, baseUrl);
-        if (target.origin === new URL(baseUrl).origin && !seen.has(target.toString())) queue.push(target.toString());
+        if (link.sameOrigin && target.origin === baseOrigin && !seen.has(target.toString())) queue.push(target.toString());
       }
     } catch (error) {
-      result.pageErrors.push(error instanceof Error ? error.message : String(error));
+      result.pageErrors.push(url + ": " + (error instanceof Error ? error.message : String(error)));
     }
   }
 } finally {

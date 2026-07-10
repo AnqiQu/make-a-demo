@@ -213,7 +213,7 @@ describe("OpenCode harness seam", () => {
       bash: "deny",
       edit: {
         "*": "deny",
-        "/workspace/.makeademo/demo-script.json": "allow",
+        "../.makeademo/demo-script.json": "allow",
       },
       task: "deny",
       webfetch: "deny",
@@ -247,9 +247,69 @@ describe("OpenCode harness seam", () => {
     };
     expect(config.permission.edit).toMatchObject({
       "**": "allow",
-      "/workspace/.makeademo/**": "deny",
-      "/workspace/.makeademo/preparation-manifest.json": "allow",
+      "../.makeademo/**": "deny",
+      "../.makeademo/preparation-manifest.json": "allow",
       "/workspace/repo/**": "allow",
     });
+    expect(Object.keys(config.permission.edit)).toEqual([
+      "*",
+      "**",
+      "/workspace/repo/**",
+      "../.makeademo/**",
+      "../.makeademo/preparation-manifest.json",
+    ]);
+  });
+
+  it("authorizes every stage artifact using OpenCode worktree-relative paths", async () => {
+    const cases: Array<{
+      artifacts: string[];
+      stage: OpenCodeHarnessStage;
+    }> = [
+      {
+        artifacts: [
+          "../.makeademo/action-catalog.json",
+          "../.makeademo/app-map.json",
+        ],
+        stage: "app-exploration",
+      },
+      {
+        artifacts: ["../.makeademo/flow-spec.json"],
+        stage: "flow-planning",
+      },
+      {
+        artifacts: ["../.makeademo/preparation-manifest.json"],
+        stage: "repo-preparation-repair",
+      },
+      {
+        artifacts: ["../.makeademo/demo-script.json"],
+        stage: "script-repair",
+      },
+    ];
+
+    for (const testCase of cases) {
+      let configContent = "{}";
+      await new DefaultOpenCodeHarnessRunner().run({
+        availableTools: ["read", "write"],
+        configDir: "/tmp/makeademo/opencode",
+        model: "openai/gpt-5",
+        prompt: "Write the stage artifact.",
+        stage: testCase.stage,
+        timeoutMs: 1000,
+        workingDirectory: "/workspace/repo",
+        workspace: {
+          async destroy() {},
+          async execute(_command, options) {
+            configContent = options?.env?.OPENCODE_CONFIG_CONTENT ?? "{}";
+            return { exitCode: 0, stderr: "", stdout: "" };
+          },
+        },
+      });
+      const config = JSON.parse(configContent) as {
+        permission: { edit: Record<string, string> };
+      };
+      for (const artifact of testCase.artifacts) {
+        expect(config.permission.edit[artifact]).toBe("allow");
+      }
+    }
   });
 });

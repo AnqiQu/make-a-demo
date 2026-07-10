@@ -19,6 +19,15 @@ describe("DemoScriptContract", () => {
       status: "passed",
     });
     expect(createDemoScriptContract().outputPath).toBe(DEMO_SCRIPT_OUTPUT_PATH);
+    expect(createDemoScriptContract().requiredMetadata).not.toContain(
+      "presentation.music",
+    );
+    expect(createDemoScriptContract().requiredMetadata).not.toContain(
+      "presentation.textOverlays",
+    );
+    expect(createDemoScriptContract().requiredMetadata).not.toContain(
+      "presentation.transitions",
+    );
   });
 
   it("fails invalid scripts with typed contract failures", () => {

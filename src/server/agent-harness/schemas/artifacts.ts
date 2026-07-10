@@ -12,6 +12,7 @@ export type NetworkAttempt = {
   direction: "inbound" | "outbound";
   host: string;
   phase: "browser" | "dependency-install" | "runtime";
+  route?: string;
   url?: string;
 };
 
@@ -697,6 +698,9 @@ function readNetworkAttempts(
         ["browser", "dependency-install", "runtime"],
         path,
       ),
+      ...(attempt.route === undefined
+        ? {}
+        : { route: readNonEmptyString(attempt, "route", path) }),
       ...(attempt.url === undefined
         ? {}
         : { url: readNonEmptyString(attempt, "url", path) }),

@@ -14,6 +14,33 @@ export class AgentHarnessCommandTimeoutError extends Error {
   }
 }
 
+/** Identifies a bounded artifact transfer failure at a specific trust boundary. */
+export class AgentHarnessArtifactTransferError extends Error {
+  readonly attempts: number;
+  readonly operation: "download" | "upload";
+  readonly sandboxId: string;
+
+  constructor(input: {
+    attempts: number;
+    cause: unknown;
+    operation: "download" | "upload";
+    sandboxId: string;
+  }) {
+    const causeMessage =
+      input.cause instanceof Error
+        ? `${input.cause.name}: ${input.cause.message}`
+        : String(input.cause);
+    super(
+      `Submitted-code artifact ${input.operation} failed after ${input.attempts} attempt(s) in sandbox ${input.sandboxId}: ${causeMessage}`,
+    );
+    this.name = "AgentHarnessArtifactTransferError";
+    this.attempts = input.attempts;
+    this.operation = input.operation;
+    this.sandboxId = input.sandboxId;
+    this.cause = input.cause;
+  }
+}
+
 export type AgentHarnessWorkspaceUploadFile = {
   destinationPath: string;
   sourcePath: string;
@@ -104,6 +131,19 @@ export interface AgentHarnessWorkspace {
   writeSandboxLog?(entry: AgentHarnessWorkspaceLogEntry): Promise<void>;
   uploadFiles?(files: AgentHarnessWorkspaceUploadFile[]): Promise<void>;
   downloadFiles?(files: AgentHarnessWorkspaceDownloadFile[]): Promise<void>;
+  /**
+   * Uploads runtime inputs only to the submitted-code trust boundary.
+   * Implementations must not copy these files into an agent sandbox.
+   */
+  uploadSubmittedCodeFiles?(
+    files: AgentHarnessWorkspaceUploadFile[],
+  ): Promise<void>;
+  /**
+   * Downloads runtime artifacts only from the submitted-code trust boundary.
+   */
+  downloadSubmittedCodeFiles?(
+    files: AgentHarnessWorkspaceDownloadFile[],
+  ): Promise<void>;
   uploadArtifacts?(
     files: Array<{ destinationPath: string; sourcePath: string }>,
   ): Promise<void>;

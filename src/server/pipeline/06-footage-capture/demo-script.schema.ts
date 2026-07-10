@@ -1,6 +1,6 @@
 export type SceneDescription = {
   id: string;
-  humanReadableDescription: string;
+  humanReadableDescription?: string;
   expectedVisibleOutcome: string;
 };
 
@@ -108,13 +108,16 @@ function readScenes(scriptRecord: Record<string, unknown>) {
     }
     seenSceneIds.add(id);
 
+    const humanReadableDescription = readSceneDescription(sceneRecord, path);
     return {
       expectedVisibleOutcome: readNonEmptyString(
         sceneRecord,
         "expectedVisibleOutcome",
         path,
       ),
-      humanReadableDescription: readSceneDescription(sceneRecord, path),
+      ...(humanReadableDescription === undefined
+        ? {}
+        : { humanReadableDescription }),
       id,
     };
   });
@@ -123,12 +126,14 @@ function readScenes(scriptRecord: Record<string, unknown>) {
 function readSceneDescription(
   sceneRecord: Record<string, unknown>,
   path: string,
-) {
+): string | undefined {
   if (sceneRecord.humanReadableDescription !== undefined) {
     return readNonEmptyString(sceneRecord, "humanReadableDescription", path);
   }
-
-  return readNonEmptyString(sceneRecord, "description", path);
+  if (sceneRecord.description !== undefined) {
+    return readNonEmptyString(sceneRecord, "description", path);
+  }
+  return undefined;
 }
 
 function readPresentation(
@@ -148,6 +153,9 @@ function readPresentation(
 }
 
 function readMusicIntent(value: unknown): DemoScriptMusicIntent {
+  if (value === undefined) {
+    return { enabled: false };
+  }
   const musicRecord = assertRecord(value, "presentation.music");
   const enabled = readBoolean(musicRecord, "enabled", "presentation.music");
 
@@ -166,6 +174,9 @@ function readMusicIntent(value: unknown): DemoScriptMusicIntent {
 }
 
 function readTextOverlays(value: unknown, sceneIds: Set<string>) {
+  if (value === undefined) {
+    return [];
+  }
   if (!Array.isArray(value)) {
     throw new Error("presentation.textOverlays must be an array");
   }
@@ -192,6 +203,9 @@ function readTextOverlays(value: unknown, sceneIds: Set<string>) {
 }
 
 function readTransitions(value: unknown, sceneIds: Set<string>) {
+  if (value === undefined) {
+    return [];
+  }
   if (!Array.isArray(value)) {
     throw new Error("presentation.transitions must be an array");
   }

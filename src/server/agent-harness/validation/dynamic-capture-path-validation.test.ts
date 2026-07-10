@@ -41,4 +41,36 @@ describe("validateDynamicCapturePath", () => {
       urlChecked: "http://127.0.0.1:3000",
     });
   });
+
+  it("classifies an exhausted Daytona artifact transfer separately from script failures", async () => {
+    const report = await validateDynamicCapturePath(
+      {
+        preparationManifest: { baseUrl: "http://127.0.0.1:3000" },
+        scriptCandidate: {
+          outputPath: "/workspace/.makeademo/demo-script.json",
+        },
+      },
+      {
+        async runCapturePath() {
+          return {
+            blockedNetworkAttempts: [],
+            browserUrl: "http://127.0.0.1:3000",
+            failureReason:
+              "AgentHarnessArtifactTransferError: Submitted-code artifact upload failed after 3 attempts in sandbox submitted_123: DaytonaTimeoutError: Operation timed out",
+            logs: ["DaytonaTimeoutError: Operation timed out"],
+            status: "failed" as const,
+            warnings: [],
+          };
+        },
+      },
+    );
+
+    expect(report).toMatchObject({
+      failureClassification: "transient infrastructure failure",
+      status: "failed",
+    });
+    expect(report.browserObservations).toContain(
+      "DaytonaTimeoutError: Operation timed out",
+    );
+  });
 });

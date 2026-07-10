@@ -166,7 +166,9 @@ export type AgentHarnessPipelineResult = {
 
 export type AgentHarnessPipelineOptions = {
   destroyWorkspaceOnCompletion?: boolean;
+  /** Maximum Repo Preparation repairs allowed independently per failing validation stage. */
   repoPreparationRepairLimit?: number;
+  /** Maximum Script repairs allowed independently per failing validation stage. */
   scriptRepairLimit?: number;
 };
 
@@ -288,24 +290,27 @@ export async function runAgentHarnessPipeline(
       readPreparationManifest(preparation.manifest),
     );
 
-    const repoPreparationRepairLimit = options.repoPreparationRepairLimit ?? 2;
+    const repoPreparationRepairLimit = options.repoPreparationRepairLimit ?? 3;
+    const preparationRepairAttemptsByPhase: Record<string, number> = {};
+    const scriptRepairAttemptsByPhase: Record<string, number> = {};
+    const scriptRepairLimit = options.scriptRepairLimit ?? 3;
+    const validationAttemptCounts: Record<string, number> = {};
     let preparationState = await ensureValidPreparation({
       dependencies,
       input,
       preparationManifest,
-      repoPreparationRepairAttempts: 0,
+      preparationRepairAttemptsByPhase,
       repoPreparationRepairLimit,
       repoProfile,
       runPlan,
       stageStatuses,
       stageTimings,
       validationReports,
+      validationAttemptCounts,
       workspace: requireWorkspace(workspace),
     });
     preparationManifest = preparationState.preparationManifest;
     let preparationValidation = preparationState.preparationValidation;
-    let repoPreparationRepairAttempts =
-      preparationState.repoPreparationRepairAttempts;
     opencodeSessionIds.push(...preparationState.opencodeSessionIds);
 
     let appMap: AppMap;
@@ -339,17 +344,28 @@ export async function runAgentHarnessPipeline(
           artifactPaths.actionCatalog,
           readActionCatalog(exploration.actionCatalog),
         );
+        const explorationAttempt = nextValidationAttempt(
+          validationAttemptCounts,
+          "app-exploration",
+        );
         const explorationValidation = readValidationReport({
           ...exploration.validationReport,
-          retryCount: repoPreparationRepairAttempts,
+          retryCount: explorationAttempt - 1,
         });
         validationReports.push(explorationValidation);
         stageStatuses["app-exploration"] = explorationValidation.status;
-        await writeArtifact(
-          dependencies,
-          artifactPaths.appExplorationValidation,
-          explorationValidation,
-        );
+        await Promise.all([
+          writeArtifact(
+            dependencies,
+            artifactPaths.appExplorationValidation,
+            explorationValidation,
+          ),
+          writeArtifact(
+            dependencies,
+            `${artifactPaths.validationAttempts}/app-exploration/attempt-${explorationAttempt}.json`,
+            explorationValidation,
+          ),
+        ]);
         if (explorationValidation.status === "passed") {
           break;
         }
@@ -359,19 +375,18 @@ export async function runAgentHarnessPipeline(
           initialFailure: explorationValidation,
           input,
           preparationManifest,
-          repoPreparationRepairAttempts,
+          preparationRepairAttemptsByPhase,
           repoPreparationRepairLimit,
           repoProfile,
           runPlan,
           stageStatuses,
           stageTimings,
           validationReports,
+          validationAttemptCounts,
           workspace: requireWorkspace(workspace),
         });
         preparationManifest = preparationState.preparationManifest;
         preparationValidation = preparationState.preparationValidation;
-        repoPreparationRepairAttempts =
-          preparationState.repoPreparationRepairAttempts;
         opencodeSessionIds.push(...preparationState.opencodeSessionIds);
       }
 
@@ -425,9 +440,9 @@ export async function runAgentHarnessPipeline(
         scriptCandidate,
       );
 
-      let scriptRepairAttempts = 0;
-      const scriptRepairLimit = options.scriptRepairLimit ?? 3;
       for (;;) {
+        const staticRepairAttempts =
+          scriptRepairAttemptsByPhase["static-script-contract-validation"] ?? 0;
         const staticContractValidation = await runValidationStage(
           "static-script-contract-validation",
           dependencies,
@@ -442,7 +457,8 @@ export async function runAgentHarnessPipeline(
               preparationManifest,
               scriptCandidate,
             }),
-          scriptRepairAttempts,
+          validationAttemptCounts,
+          staticRepairAttempts,
         );
         if (staticContractValidation.status === "failed") {
           scriptCandidate = await repairScriptCandidate({
@@ -454,13 +470,14 @@ export async function runAgentHarnessPipeline(
             preparationManifest,
             repoProfile,
             scriptCandidate,
-            scriptRepairAttempts,
+            scriptRepairAttempts: staticRepairAttempts,
             scriptRepairLimit,
             stageStatuses,
             stageTimings,
             workspace: requireWorkspace(workspace),
           });
-          scriptRepairAttempts += 1;
+          scriptRepairAttemptsByPhase["static-script-contract-validation"] =
+            staticRepairAttempts + 1;
           await writeArtifact(
             dependencies,
             artifactPaths.scriptCandidate,
@@ -469,6 +486,8 @@ export async function runAgentHarnessPipeline(
           continue;
         }
 
+        const captureRepairAttempts =
+          scriptRepairAttemptsByPhase["capture-path-validation"] ?? 0;
         const capturePathValidation = await runValidationStage(
           "capture-path-validation",
           dependencies,
@@ -485,7 +504,8 @@ export async function runAgentHarnessPipeline(
               scriptCandidate,
               workspace: requireWorkspace(workspace),
             }),
-          scriptRepairAttempts,
+          validationAttemptCounts,
+          captureRepairAttempts,
         );
         if (capturePathValidation.status === "passed") {
           break;
@@ -500,19 +520,18 @@ export async function runAgentHarnessPipeline(
             initialFailure: capturePathValidation,
             input,
             preparationManifest,
-            repoPreparationRepairAttempts,
+            preparationRepairAttemptsByPhase,
             repoPreparationRepairLimit,
             repoProfile,
             runPlan,
             stageStatuses,
             stageTimings,
             validationReports,
+            validationAttemptCounts,
             workspace: requireWorkspace(workspace),
           });
           preparationManifest = preparationState.preparationManifest;
           preparationValidation = preparationState.preparationValidation;
-          repoPreparationRepairAttempts =
-            preparationState.repoPreparationRepairAttempts;
           opencodeSessionIds.push(...preparationState.opencodeSessionIds);
           continue pipelineAttempt;
         }
@@ -526,13 +545,14 @@ export async function runAgentHarnessPipeline(
           preparationManifest,
           repoProfile,
           scriptCandidate,
-          scriptRepairAttempts,
+          scriptRepairAttempts: captureRepairAttempts,
           scriptRepairLimit,
           stageStatuses,
           stageTimings,
           workspace: requireWorkspace(workspace),
         });
-        scriptRepairAttempts += 1;
+        scriptRepairAttemptsByPhase["capture-path-validation"] =
+          captureRepairAttempts + 1;
         await writeArtifact(
           dependencies,
           artifactPaths.scriptCandidate,
@@ -555,6 +575,7 @@ export async function runAgentHarnessPipeline(
               runPlan,
               workspace: requireWorkspace(workspace),
             }) as Promise<ValidationReport>,
+          validationAttemptCounts,
         );
         assertValidationPassed(resetValidation);
       }
@@ -630,8 +651,10 @@ async function runValidationStage(
   stageStatuses: Record<string, string>,
   stageTimings: PipelineRunManifest["stageTimings"],
   callback: () => Promise<ValidationReport>,
+  validationAttemptCounts: Record<string, number>,
   retryCount = 0,
 ): Promise<ValidationReport> {
+  const attempt = nextValidationAttempt(validationAttemptCounts, stage);
   const rawReport = await runAsyncStage(
     stage,
     stageStatuses,
@@ -645,11 +668,20 @@ async function runValidationStage(
     writeArtifact(dependencies, path, report),
     writeArtifact(
       dependencies,
-      `${artifactPaths.validationAttempts}/${stage.replaceAll(/[^A-Za-z0-9_-]/g, "-")}/attempt-${retryCount + 1}.json`,
+      `${artifactPaths.validationAttempts}/${stage.replaceAll(/[^A-Za-z0-9_-]/g, "-")}/attempt-${attempt}.json`,
       report,
     ),
   ]);
   return report;
+}
+
+function nextValidationAttempt(
+  validationAttemptCounts: Record<string, number>,
+  stage: string,
+): number {
+  const attempt = (validationAttemptCounts[stage] ?? 0) + 1;
+  validationAttemptCounts[stage] = attempt;
+  return attempt;
 }
 
 async function repairScriptCandidate(input: {
@@ -688,7 +720,7 @@ async function repairScriptCandidate(input: {
   }
 
   const repairedCandidate = await runAsyncStage(
-    `script-repair-${budget.nextAttempt}`,
+    `${input.failureReport.stage}-script-repair-${budget.nextAttempt}`,
     input.stageStatuses,
     input.stageTimings,
     async () =>
@@ -720,33 +752,35 @@ async function ensureValidPreparation(input: {
   initialFailure?: ValidationReport;
   input: AgentHarnessPipelineInput;
   preparationManifest: PreparationManifest;
-  repoPreparationRepairAttempts: number;
+  preparationRepairAttemptsByPhase: Record<string, number>;
   repoPreparationRepairLimit: number;
   repoProfile: RepoProfile;
   runPlan: RunPlan;
   stageStatuses: Record<string, string>;
   stageTimings: PipelineRunManifest["stageTimings"];
   validationReports: ValidationReport[];
+  validationAttemptCounts: Record<string, number>;
   workspace: AgentHarnessWorkspace;
 }): Promise<{
   opencodeSessionIds: string[];
   preparationManifest: PreparationManifest;
   preparationValidation: ValidationReport;
-  repoPreparationRepairAttempts: number;
 }> {
   let preparationManifest = input.preparationManifest;
-  let repairAttempts = input.repoPreparationRepairAttempts;
   let failure = input.initialFailure;
   const opencodeSessionIds: string[] = [];
 
   for (;;) {
     if (failure !== undefined) {
+      const phase = failure.stage;
+      const phaseRepairAttempts =
+        input.preparationRepairAttemptsByPhase[phase] ?? 0;
       const repair = await repairPreparationManifest({
         dependencies: input.dependencies,
         failureReport: failure,
         input: input.input,
         preparationManifest,
-        repoPreparationRepairAttempts: repairAttempts,
+        phaseRepairAttempts,
         repoPreparationRepairLimit: input.repoPreparationRepairLimit,
         repoProfile: input.repoProfile,
         runPlan: input.runPlan,
@@ -754,7 +788,7 @@ async function ensureValidPreparation(input: {
         stageTimings: input.stageTimings,
         workspace: input.workspace,
       });
-      repairAttempts += 1;
+      input.preparationRepairAttemptsByPhase[phase] = phaseRepairAttempts + 1;
       if (repair.opencodeSessionId !== undefined) {
         opencodeSessionIds.push(repair.opencodeSessionId);
       }
@@ -779,14 +813,14 @@ async function ensureValidPreparation(input: {
           runPlan: input.runPlan,
           workspace: input.workspace,
         }),
-      repairAttempts,
+      input.validationAttemptCounts,
+      input.preparationRepairAttemptsByPhase["preparation-preflight"] ?? 0,
     );
     if (preparationValidation.status === "passed") {
       return {
         opencodeSessionIds,
         preparationManifest,
         preparationValidation,
-        repoPreparationRepairAttempts: repairAttempts,
       };
     }
     failure = preparationValidation;
@@ -798,7 +832,7 @@ async function repairPreparationManifest(input: {
   failureReport: ValidationReport;
   input: AgentHarnessPipelineInput;
   preparationManifest: PreparationManifest;
-  repoPreparationRepairAttempts: number;
+  phaseRepairAttempts: number;
   repoPreparationRepairLimit: number;
   repoProfile: RepoProfile;
   runPlan: RunPlan;
@@ -816,7 +850,7 @@ async function repairPreparationManifest(input: {
   }
 
   const budget = readRepairBudgetDecision({
-    attempted: input.repoPreparationRepairAttempts,
+    attempted: input.phaseRepairAttempts,
     limit: input.repoPreparationRepairLimit,
     route,
   });
@@ -827,7 +861,7 @@ async function repairPreparationManifest(input: {
   }
 
   return await runAsyncStage(
-    `repo-preparation-repair-${budget.nextAttempt}`,
+    `${input.failureReport.stage}-repo-preparation-repair-${budget.nextAttempt}`,
     input.stageStatuses,
     input.stageTimings,
     () =>

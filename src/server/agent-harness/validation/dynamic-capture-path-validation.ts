@@ -94,6 +94,13 @@ function normalizeNetworkAttempts(
 }
 
 function classifyFailure(reason: string): string {
+  if (
+    /AgentHarnessArtifactTransferError|DaytonaTimeoutError|Operation timed out|artifact (?:upload|download) failed/i.test(
+      reason,
+    )
+  ) {
+    return "transient infrastructure failure";
+  }
   if (/locator/i.test(reason)) {
     return "locator failure";
   }

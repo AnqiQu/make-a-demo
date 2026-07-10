@@ -186,13 +186,13 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
 
   async recordScenes(input: RecordSceneInput): Promise<RecordedScene[]> {
     const workspace = this.options.preparationWorkspace.workspace;
-    const downloadFiles = workspace.downloadFiles?.bind(workspace);
+    const downloadFiles = workspace.downloadSubmittedCodeFiles?.bind(workspace);
     if (downloadFiles === undefined) {
       throw new Error(
         "Prepared workspace Footage Capture requires artifact download support.",
       );
     }
-    const uploadFiles = workspace.uploadFiles?.bind(workspace);
+    const uploadFiles = workspace.uploadSubmittedCodeFiles?.bind(workspace);
     if (uploadFiles === undefined) {
       throw new Error(
         "Prepared workspace Footage Capture requires artifact upload support.",

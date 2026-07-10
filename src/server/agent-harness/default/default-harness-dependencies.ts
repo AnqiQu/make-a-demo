@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { captureScenesFromScript } from "../../pipeline/06-footage-capture/capture-scenes";
+import { createCaptureSdkAgentContract } from "../../pipeline/06-footage-capture/capture-sdk-contract";
 import {
   createOpenCodeProviderSandboxSecrets,
   ensureOpenCodeProviderDaytonaSecret,
@@ -9,6 +9,7 @@ import type { PipelineEventLogger } from "../../shared/logging/pipeline-event-lo
 import { exploreSubmittedApp } from "../app-explorer/submitted-app-explorer";
 import type {
   AgentHarnessWorkspace,
+  AgentHarnessWorkspaceCommandResult,
   AgentHarnessWorkspaceHandle,
   AgentHarnessWorkspaceProvider,
 } from "../daytona/workspace.interface";
@@ -37,11 +38,16 @@ import {
   readFlowSpec,
   readPreparationManifest,
 } from "../schemas/artifacts";
+import { createFlowSpecContract } from "../schemas/flow-spec-contract";
 import { createPreparationManifestTemplate } from "../schemas/preparation-manifest-template";
-import { validateDemoScriptCandidateContract } from "../script-contract/demo-script-contract";
+import {
+  createDemoScriptContract,
+  validateDemoScriptCandidateContract,
+} from "../script-contract/demo-script-contract";
 import { runDependencyInstallThroughGate } from "../tools/dependency-install-gate";
 import { planLockfileReconciliation } from "../tools/lockfile-reconciliation";
 import { validateDynamicCapturePath } from "../validation/dynamic-capture-path-validation";
+import { validatePreparedWorkspaceCapturePath } from "../validation/prepared-workspace-capture-path-validator";
 
 export type DefaultHarnessDependenciesOptions = {
   artifactStore: NonNullable<AgentHarnessPipelineDependencies["artifactStore"]>;
@@ -69,11 +75,16 @@ const artifactPaths = {
   actionCatalog: "/workspace/.makeademo/action-catalog.json",
   agentArtifactAttempts: "/workspace/.makeademo/agent-artifact-attempts",
   appMap: "/workspace/.makeademo/app-map.json",
+  appExplorationValidation:
+    "/workspace/.makeademo/app-exploration-validation-report.json",
   capturePathValidation:
     "/workspace/.makeademo/capture-path-validation-report.json",
+  captureSdkContract: "/workspace/.makeademo/capture-sdk-contract.json",
   demoBrief: "/workspace/.makeademo/demo-brief.json",
   demoScript: DEMO_SCRIPT_OUTPUT_PATH,
+  demoScriptContract: "/workspace/.makeademo/demo-script-contract.json",
   flowSpec: "/workspace/.makeademo/flow-spec.json",
+  flowSpecContract: "/workspace/.makeademo/flow-spec-contract.json",
   preparationManifest: "/workspace/.makeademo/preparation-manifest.json",
   preparationManifestTemplate:
     "/workspace/.makeademo/preparation-manifest-template.json",
@@ -94,6 +105,7 @@ export async function createDefaultAgentHarnessDependencies(
     options.openCodeRunner ?? new DefaultOpenCodeHarnessRunner();
   let workspaceHandle: AgentHarnessWorkspaceHandle | undefined;
   let opencodeSessionId: string | undefined;
+  let runtimeRepairArtifactAttempt = 0;
   let scriptWritingBaseline = new Set<string>();
   const runOpenCode = (input: OpenCodeHarnessRunInput) =>
     runLoggedOpenCode({ input, logger: options.logger, openCodeRunner });
@@ -147,6 +159,11 @@ export async function createDefaultAgentHarnessDependencies(
         artifactPaths.repoProfile,
         repoProfile,
       );
+      await writeWorkspaceJson(
+        workspace,
+        artifactPaths.flowSpecContract,
+        createFlowSpecContract(),
+      );
       let artifactError = "FlowSpec was not produced.";
       for (let attempt = 1; attempt <= 3; attempt += 1) {
         const result = await runOpenCode({
@@ -179,6 +196,11 @@ export async function createDefaultAgentHarnessDependencies(
         } else {
           artifactError = flowSpecResult.error;
         }
+        throwIfRequiredArtifactWriteWasDenied({
+          path: artifactPaths.flowSpec,
+          result,
+          stage: "Flow Planning",
+        });
         if (attempt === 3) {
           throw new Error(
             formatOpenCodeArtifactContractError({
@@ -286,6 +308,11 @@ export async function createDefaultAgentHarnessDependencies(
           };
         }
         readError = manifestResult.error;
+        throwIfRequiredArtifactWriteWasDenied({
+          path: artifactPaths.preparationManifest,
+          result,
+          stage: "Repo Preparation",
+        });
         if (attempt === 3) {
           throw attachOpenCodeSession(
             new Error(
@@ -318,7 +345,7 @@ export async function createDefaultAgentHarnessDependencies(
       );
       await writeWorkspaceJson(
         workspace,
-        artifactPaths.preparationPreflight,
+        validationArtifactPath(failureReport.stage),
         failureReport,
       );
       await writeWorkspaceJson(
@@ -363,15 +390,16 @@ export async function createDefaultAgentHarnessDependencies(
                 error: `OpenCode exited with code ${result.exitCode}: ${result.stderr || result.stdout}`,
                 ok: false as const,
               };
+        runtimeRepairArtifactAttempt += 1;
         await persistAgentArtifactAttempt({
           artifactStore: options.artifactStore,
-          attempt,
+          attempt: runtimeRepairArtifactAttempt,
           result: manifestResult,
           route: "repo-preparation-runtime-repair",
           sessionId: opencodeSessionId,
         });
         await writeAgentArtifactValidationLog({
-          attempt,
+          attempt: runtimeRepairArtifactAttempt,
           logger: options.logger,
           result: manifestResult,
           route: "repo-preparation-runtime-repair",
@@ -385,6 +413,11 @@ export async function createDefaultAgentHarnessDependencies(
           };
         }
         artifactError = manifestResult.error;
+        throwIfRequiredArtifactWriteWasDenied({
+          path: artifactPaths.preparationManifest,
+          result,
+          stage: "Repo Preparation Repair",
+        });
         if (attempt === 3) {
           throw new Error(
             formatOpenCodeArtifactContractError({
@@ -407,6 +440,7 @@ export async function createDefaultAgentHarnessDependencies(
       repoProfile,
       workspace,
     }) {
+      await writeScriptContracts(workspace);
       await writeWorkspaceJson(
         workspace,
         artifactPaths.actionCatalog,
@@ -464,6 +498,11 @@ export async function createDefaultAgentHarnessDependencies(
           });
         }
         artifactError = demoScriptResult.error;
+        throwIfRequiredArtifactWriteWasDenied({
+          path: DEMO_SCRIPT_OUTPUT_PATH,
+          result,
+          stage: "Script Repair",
+        });
         if (attempt === 3) {
           throw new Error(
             formatOpenCodeArtifactContractError({
@@ -499,32 +538,35 @@ export async function createDefaultAgentHarnessDependencies(
         {
           async runCapturePath() {
             try {
-              const captureManifest = await captureScenesFromScript({
+              const result = await validatePreparedWorkspaceCapturePath({
                 baseUrl: preparationManifest.baseUrl,
-                keepTemp: true,
-                preparationWorkspace: handle,
-                runId: `capture-path-validation-${Date.now()}`,
-                scriptPackage: scriptCandidate.scriptJsonContent,
-                tempRoot: join(options.outputRoot, "capture-path-validation"),
+                demoPlaywrightScript: readDemoPlaywrightScript(
+                  scriptCandidate.scriptJsonContent,
+                ),
+                localRunDirectory: join(
+                  options.outputRoot,
+                  "capture-path-validation",
+                  `capture-path-validation-${Date.now()}`,
+                ),
+                onEvent: async (entry) => {
+                  const level =
+                    entry.level === "error"
+                      ? "error"
+                      : entry.level === "warn"
+                        ? "warn"
+                        : "info";
+                  await options.logger?.[level](entry);
+                },
+                workspace: handle,
               });
-              return {
-                blockedNetworkAttempts: [],
-                browserUrl: preparationManifest.baseUrl,
-                logs: [
-                  `Captured ${captureManifest.scenes.length} Demo Script scene(s).`,
-                ],
-                runDirectory: captureManifest.runDirectory,
-                scriptPath: scriptCandidate.outputPath,
-                status: "succeeded" as const,
-                warnings: captureManifest.qualityFindings,
-              };
+              return result;
             } catch (error) {
+              const diagnostic = readErrorDiagnostic(error);
               return {
                 blockedNetworkAttempts: [],
                 browserUrl: preparationManifest.baseUrl,
-                failureReason:
-                  error instanceof Error ? error.message : String(error),
-                logs: [],
+                failureReason: diagnostic.summary,
+                logs: diagnostic.details,
                 scriptPath: scriptCandidate.outputPath,
                 status: "failed" as const,
                 warnings: [],
@@ -562,6 +604,7 @@ export async function createDefaultAgentHarnessDependencies(
       workspace,
     }) {
       scriptWritingBaseline = await readGitStatus(workspace);
+      await writeScriptContracts(workspace);
       await writeWorkspaceJson(
         workspace,
         artifactPaths.actionCatalog,
@@ -617,6 +660,12 @@ export async function createDefaultAgentHarnessDependencies(
           });
         }
         artifactError = demoScriptResult.error;
+        throwIfRequiredArtifactWriteWasDenied({
+          path: DEMO_SCRIPT_OUTPUT_PATH,
+          result,
+          stage:
+            stage === "script-writing" ? "Script Writing" : "Script Repair",
+        });
         if (attempt === 3) {
           throw new Error(
             formatOpenCodeArtifactContractError({
@@ -743,14 +792,42 @@ async function writeAgentStageLog(
   entry: Record<string, unknown>,
   level: "error" | "info",
 ): Promise<void> {
-  await Promise.all([
-    input.logger?.[level](entry) ?? Promise.resolve(),
-    input.input.workspace.writeSandboxLog?.({
+  await input.logger?.[level](entry);
+  await writeSandboxLogBestEffort({
+    entry: {
       ...entry,
       source: "agent-harness",
       timestamp: new Date().toISOString(),
-    }) ?? Promise.resolve(),
-  ]);
+    },
+    logger: input.logger,
+    workspace: input.input.workspace,
+  });
+}
+
+async function writeSandboxLogBestEffort(input: {
+  entry: Record<string, unknown>;
+  logger: PipelineEventLogger | undefined;
+  workspace: AgentHarnessWorkspace;
+}): Promise<void> {
+  if (input.workspace.writeSandboxLog === undefined) {
+    return;
+  }
+  try {
+    await input.workspace.writeSandboxLog(input.entry);
+  } catch (error) {
+    try {
+      await input.logger?.warn({
+        error: readErrorMessage(error),
+        event: "sandbox.log.write.failed",
+        message: "Sandbox audit log write failed; continuing with local logs.",
+        ...(typeof input.entry.stage === "string"
+          ? { stage: input.entry.stage }
+          : {}),
+      });
+    } catch {
+      // The primary operation must not be replaced by observability failures.
+    }
+  }
 }
 
 async function createDaytonaWorkspaceProvider(input: {
@@ -951,10 +1028,12 @@ async function validateSubmittedCodeRuntime(input: {
     });
   }
 
-  const preflightResult = await executeSubmitted(
+  const preflightResult = await probeSubmittedCodeRuntime(
     input.workspace,
-    createCurlRetryCommand(manifest.baseUrl),
+    manifest.baseUrl,
   );
+  const probeExecutionFailed =
+    isReadinessProbeExecutionFailure(preflightResult);
   let appStatus:
     | Awaited<
         ReturnType<
@@ -995,7 +1074,11 @@ async function validateSubmittedCodeRuntime(input: {
     attemptedCommand: `curl ${manifest.baseUrl}`,
     exitCode: preflightResult.exitCode,
     failureClassification:
-      preflightResult.exitCode === 0 ? "none" : "start failure",
+      preflightResult.exitCode === 0
+        ? "none"
+        : probeExecutionFailed
+          ? "harness/internal failure"
+          : "start failure",
     logsSummary:
       preflightResult.exitCode === 0
         ? "Prepared submitted-code runtime responded successfully."
@@ -1070,16 +1153,41 @@ function absoluteAppDirectory(appDir: string): string {
     : `${workspaceRepoDirectory}/${relativeAppDirectory}`;
 }
 
-function createCurlRetryCommand(url: string): string {
-  return `sh -lc ${shellQuote(
-    [
-      "for attempt in 1 2 3 4 5 6 7 8 9 10; do",
-      `curl -fsS --max-time 10 ${shellQuote(url)} >/tmp/makeademo/preflight.html && exit 0`,
-      "sleep 2",
-      "done",
-      "exit 1",
-    ].join(" "),
-  )}`;
+async function probeSubmittedCodeRuntime(
+  workspace: AgentHarnessWorkspace,
+  url: string,
+): Promise<AgentHarnessWorkspaceCommandResult> {
+  let result: AgentHarnessWorkspaceCommandResult = {
+    exitCode: 1,
+    stderr: "Readiness probe did not run.",
+    stdout: "",
+  };
+  for (let attempt = 1; attempt <= 10; attempt += 1) {
+    result = await executeSubmitted(
+      workspace,
+      `curl -fsS --max-time 10 ${shellQuote(url)} -o /tmp/makeademo/preflight.html`,
+    );
+    if (result.exitCode === 0 || isReadinessProbeExecutionFailure(result)) {
+      return result;
+    }
+    if (attempt < 10) {
+      await wait(2_000);
+    }
+  }
+  return result;
+}
+
+function isReadinessProbeExecutionFailure(
+  result: AgentHarnessWorkspaceCommandResult,
+): boolean {
+  return (
+    [2, 126, 127].includes(result.exitCode) ||
+    /(?:syntax error|curl:\s*(?:command )?not found)/i.test(result.stderr)
+  );
+}
+
+function wait(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 async function readGitStatus(
@@ -1120,6 +1228,21 @@ async function writeWorkspaceJson(
       `Failed to write workspace artifact ${path}: ${result.stderr}`,
     );
   }
+}
+
+async function writeScriptContracts(
+  workspace: AgentHarnessWorkspace,
+): Promise<void> {
+  await writeWorkspaceJson(
+    workspace,
+    artifactPaths.captureSdkContract,
+    createCaptureSdkAgentContract(),
+  );
+  await writeWorkspaceJson(
+    workspace,
+    artifactPaths.demoScriptContract,
+    createDemoScriptContract(),
+  );
 }
 
 type WorkspaceJsonReadResult =
@@ -1258,14 +1381,16 @@ async function writeAgentArtifactValidationLog(input: {
       : { opencodeSessionId: input.sessionId }),
     stage: input.route,
   };
-  await Promise.all([
-    input.logger?.[level](entry) ?? Promise.resolve(),
-    input.workspace.writeSandboxLog?.({
+  await input.logger?.[level](entry);
+  await writeSandboxLogBestEffort({
+    entry: {
       ...entry,
       source: "agent-harness",
       timestamp: new Date().toISOString(),
-    }) ?? Promise.resolve(),
-  ]);
+    },
+    logger: input.logger,
+    workspace: input.workspace,
+  });
 }
 
 function validationReport(input: {
@@ -1366,6 +1491,32 @@ function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function readErrorDiagnostic(error: unknown): {
+  details: string[];
+  summary: string;
+} {
+  if (!(error instanceof Error)) {
+    const summary = String(error);
+    return { details: [summary], summary };
+  }
+  const summary = `${error.name}: ${error.message}`;
+  return {
+    details: [summary, ...(error.stack === undefined ? [] : [error.stack])],
+    summary,
+  };
+}
+
+function readDemoPlaywrightScript(value: unknown): string {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    typeof Reflect.get(value, "demoPlaywrightScript") !== "string"
+  ) {
+    throw new Error("ScriptCandidate is missing demoPlaywrightScript.");
+  }
+  return Reflect.get(value, "demoPlaywrightScript") as string;
+}
+
 function optionalSessionId(sessionId: string | undefined) {
   return sessionId === undefined ? {} : { sessionId };
 }
@@ -1390,6 +1541,26 @@ function formatOpenCodeArtifactContractError(input: {
     `Artifact validation error: ${input.readError}`,
     `OpenCode output excerpt:\n${formatOpenCodeOutputExcerpt(input.result)}`,
   ].join("\n");
+}
+
+function throwIfRequiredArtifactWriteWasDenied(input: {
+  path: string;
+  result: Pick<OpenCodeHarnessRunResult, "stderr" | "stdout">;
+  stage: string;
+}): void {
+  const output = `${input.result.stderr}\n${input.result.stdout}`;
+  const artifactName = input.path.slice(input.path.lastIndexOf("/") + 1);
+  const mentionsArtifact =
+    output.includes(input.path) || output.includes(artifactName);
+  const reportsPermissionDenial =
+    /(?:write|create|edit)[^\n]{0,120}(?:blocked|denied)[^\n]{0,120}permission|(?:blocked|denied)[^\n]{0,120}(?:permission|write|creation)|specified a rule which prevents you from using this specific tool call/i.test(
+      output,
+    );
+  if (mentionsArtifact && reportsPermissionDenial) {
+    throw new Error(
+      `${input.stage} harness configuration failure: required artifact write was denied for ${input.path}.`,
+    );
+  }
 }
 
 function formatOpenCodeOutputExcerpt(result: {
@@ -1445,6 +1616,7 @@ function createRepoPreparationPrompt(input: {
       "Prepare the cloned app in /workspace/repo for a local MakeADemo run.",
       "You may modify app files in /workspace/repo only when needed to make a deterministic local demo mode.",
       "Do not write secrets into files. Replace external services with local fixtures or mocks.",
+      "Inventory every browser-reachable external dependency, including scripts, stylesheets, fonts, icons, images, analytics, API calls, WebSockets, and protocol-relative URLs beginning with //. The prepared app must attempt zero outbound browser requests; remove, vendor, or replace every dependency locally.",
       "Do not install dependencies, build, start, or execute submitted application code in the agent sandbox. The backend runs those commands in the secret-free submitted-code sandbox.",
       "Read /workspace/.makeademo/supporting-documents.json when it contains maker-provided context and incorporate relevant setup or demo requirements.",
       `Use this local runtime URL in the manifest: ${input.runPlan.expectedLocalUrl}`,
@@ -1516,12 +1688,16 @@ function createRuntimePreparationRepairPrompt(input: {
       artifactPaths.demoBrief,
       artifactPaths.preparationManifestTemplate,
       artifactPaths.preparationManifest,
-      artifactPaths.preparationPreflight,
+      validationArtifactPath(input.failureReport.stage),
     ],
     instructions: [
       "Backend-owned submitted-code validation failed. Repair the prepared repo and update the PreparationManifest; do not claim success yourself.",
       `Failure classification: ${input.failureReport.failureClassification ?? "unknown"}`,
       `Failure summary: ${input.failureReport.logsSummary}`,
+      `Browser observations: ${JSON.stringify(input.failureReport.browserObservations)}`,
+      `Blocked network attempts: ${JSON.stringify(input.failureReport.blockedNetworkAttempts)}`,
+      `Console errors: ${JSON.stringify(input.failureReport.consoleErrors)}`,
+      `Page errors: ${JSON.stringify(input.failureReport.pageErrors)}`,
       `stderr evidence: ${JSON.stringify(input.failureReport.stderrExcerpts)}`,
       `stdout evidence: ${JSON.stringify(input.failureReport.stdoutExcerpts)}`,
       `Suggested repair hints: ${JSON.stringify(input.failureReport.suggestedRepairHints)}`,
@@ -1531,6 +1707,7 @@ function createRuntimePreparationRepairPrompt(input: {
             `The previous repaired manifest was rejected: ${input.artifactError}`,
           ]),
       "Do not run the app, install dependencies, or use the network. The backend will rerun install, build, start, and browser validation in the isolated submitted-code sandbox.",
+      "For browser network failures, repair every unique blocked URL shown above. Handle protocol-relative //host/path assets as external, and make the browser attempt zero outbound requests by removing, vendoring, mocking, or replacing them locally.",
       "You may edit /workspace/repo and must rewrite /workspace/.makeademo/preparation-manifest.json to match the actual repaired state.",
       "Use /workspace/.makeademo/preparation-manifest-template.json as the canonical shape; preserve every field type while repairing all reported violations.",
       'appDir must remain relative to /workspace/repo: use "." for the repo root or a path such as "frontend"; never use an absolute path.',
@@ -1544,18 +1721,30 @@ function createRuntimePreparationRepairPrompt(input: {
   });
 }
 
+function validationArtifactPath(stage: string): string {
+  if (stage === "app-exploration") {
+    return artifactPaths.appExplorationValidation;
+  }
+  if (stage === "capture-path-validation") {
+    return artifactPaths.capturePathValidation;
+  }
+  return artifactPaths.preparationPreflight;
+}
+
 function createFlowPlanningPrompt(artifactError?: string): string {
   return createStagePrompt({
     artifactPaths: [
       artifactPaths.appMap,
       artifactPaths.actionCatalog,
       artifactPaths.demoBrief,
+      artifactPaths.flowSpecContract,
       artifactPaths.flowSpec,
     ],
     instructions: [
       "Plan one short demo flow from the AppMap, ActionCatalog, and demo brief.",
+      "Read /workspace/.makeademo/flow-spec-contract.json and satisfy every required field, property type, and invariant it defines.",
       "Write a valid FlowSpec JSON object to /workspace/.makeademo/flow-spec.json.",
-      "The FlowSpec must include a non-empty steps array, selectedFlowName, objective, referenced route paths, referenced action IDs, expected visible assertions, and repair constraints.",
+      "Do not invent alternate field names or object-shaped steps. Every steps entry and every repairConstraints entry must be a string.",
       ...(artifactError === undefined
         ? []
         : [
@@ -1576,14 +1765,19 @@ function createScriptWritingPrompt(input: {
       artifactPaths.appMap,
       artifactPaths.actionCatalog,
       artifactPaths.flowSpec,
+      artifactPaths.demoScriptContract,
+      artifactPaths.captureSdkContract,
       artifactPaths.demoScript,
     ],
     instructions: [
       "Write the final capture-ready Demo Script JSON.",
+      "Read /workspace/.makeademo/demo-script-contract.json and /workspace/.makeademo/capture-sdk-contract.json before writing. Follow the canonical Capture SDK example exactly, changing only Scene IDs, actions, and locators grounded in the durable app artifacts.",
       "Do not edit app source files. Only write /workspace/.makeademo/demo-script.json.",
       "The JSON must conform to the Capture SDK contract: version, scriptId, title, format 16:9, scenes, demoPlaywrightScript, and presentation.",
+      "Each Scene requires id and expectedVisibleOutcome; description is optional human-readable metadata.",
+      "presentation.music, presentation.textOverlays, and presentation.transitions are optional. When omitted they default to disabled music, no overlays, and direct back-to-back Scene playback.",
       "The demoPlaywrightScript must import { setup, scene } from './makeademo-capture-sdk', use the provided baseUrl, avoid external URLs, and include visible assertions.",
-      "Use scene IDs that match the scenes array and presentation overlays.",
+      "When optional textOverlays or transitions are present, their Scene IDs must match the scenes array.",
       `Target demo length seconds: ${input.demoBrief.demoLengthSeconds ?? 30}`,
       `Demo brief: ${JSON.stringify(input.demoBrief)}`,
     ].join("\n"),
@@ -1601,13 +1795,18 @@ function createScriptArtifactRepairPrompt(input: {
       artifactPaths.appMap,
       artifactPaths.actionCatalog,
       artifactPaths.flowSpec,
+      artifactPaths.demoScriptContract,
+      artifactPaths.captureSdkContract,
       artifactPaths.demoScript,
     ],
     instructions: [
       "The previous Script Writing attempt did not produce readable JSON at /workspace/.makeademo/demo-script.json.",
+      "Re-read /workspace/.makeademo/demo-script-contract.json and /workspace/.makeademo/capture-sdk-contract.json, then preserve the canonical callback-based setup and scene syntax.",
       `Backend artifact error: ${input.artifactError}`,
       "Repair only the Demo Script artifact at that exact path. Do not edit app source or preparation files.",
       "The JSON must include version, scriptId, title, format, scenes, demoPlaywrightScript, and presentation.",
+      "Scene description is optional; do not spend a repair attempt adding one when id and expectedVisibleOutcome are already valid.",
+      "presentation.music, presentation.textOverlays, and presentation.transitions may be omitted; the backend supplies safe defaults.",
       "The demoPlaywrightScript must use the Capture SDK setup and scene helpers and ground locators in AppMap and ActionCatalog evidence.",
       `Demo brief: ${JSON.stringify(input.demoBrief)}`,
     ].join("\n"),
@@ -1625,6 +1824,8 @@ function createScriptRepairPrompt(input: {
       artifactPaths.appMap,
       artifactPaths.actionCatalog,
       artifactPaths.flowSpec,
+      artifactPaths.demoScriptContract,
+      artifactPaths.captureSdkContract,
       input.failureReport.stage === "capture-path-validation"
         ? artifactPaths.capturePathValidation
         : "/workspace/.makeademo/static-script-contract-validation.json",
@@ -1632,6 +1833,7 @@ function createScriptRepairPrompt(input: {
     ],
     instructions: [
       "Backend validation rejected the Demo Script. Repair only /workspace/.makeademo/demo-script.json.",
+      "Re-read /workspace/.makeademo/demo-script-contract.json and /workspace/.makeademo/capture-sdk-contract.json. The canonical Capture SDK example is authoritative for setup, scene callbacks, context values, and visible assertions.",
       "Do not edit app source or preparation files. Durable artifacts are the source of truth.",
       `Failure classification: ${input.failureReport.failureClassification ?? "unknown"}`,
       `Failure summary: ${input.failureReport.logsSummary}`,
@@ -1641,6 +1843,8 @@ function createScriptRepairPrompt(input: {
       `Blocked network attempts: ${JSON.stringify(input.failureReport.blockedNetworkAttempts)}`,
       `stderr evidence: ${JSON.stringify(input.failureReport.stderrExcerpts)}`,
       `Suggested repair hints: ${JSON.stringify(input.failureReport.suggestedRepairHints)}`,
+      "Scene description is optional human-readable metadata and is not required for capture or validation.",
+      "presentation.music, presentation.textOverlays, and presentation.transitions are optional and default to disabled music, no overlays, and direct back-to-back Scene playback when omitted.",
       ...(input.artifactError === undefined
         ? []
         : [
