@@ -7,6 +7,7 @@
       ".makeademo-benchmark-runs",
       ".makeademo-capture-path-validation-runs",
       ".makeademo-full-pipeline-runs",
+      ".makeademo-goal-runs",
       "artifacts",
       "demo/artifacts",
       "dist"
