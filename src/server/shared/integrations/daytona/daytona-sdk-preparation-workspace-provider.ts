@@ -130,6 +130,7 @@ const defaultPreviewUrlTimeoutMs = 30_000;
 const defaultPtyConnectionTimeoutMs = 30_000;
 const defaultSandboxCreateTimeoutSeconds = 300;
 const sandboxCreateConnectionRetryLimit = 2;
+const networkSettingsConnectionRetryLimit = 2;
 const ptyStartupRetryLimit = 2;
 const makeADemoArtifactDirectory = "/tmp/makeademo";
 const workspaceMakeADemoDirectory = "/workspace/.makeademo";
@@ -436,7 +437,10 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
   private async writeSandboxLogLine(line: string): Promise<void> {
     const response = await withTimeout(
       this.sandbox.process.executeCommand(
-        `mkdir -p ${shellQuote(makeADemoArtifactDirectory)} && printf '%s' ${shellQuote(line)} >> ${shellQuote(sandboxAuditLogPath)}`,
+        [
+          `mkdir -p ${shellQuote(makeADemoArtifactDirectory)} ${shellQuote(workspaceMakeADemoDirectory)}`,
+          `printf '%s' ${shellQuote(line)} | tee -a ${shellQuote(sandboxAuditLogPath)} >> ${shellQuote(workspaceSandboxAuditLogPath)}`,
+        ].join(" && "),
       ),
       this.logWriteTimeoutMs,
       `Daytona sandbox log write did not finish within ${this.logWriteTimeoutMs}ms.`,
@@ -444,18 +448,6 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
 
     if ((response.exitCode ?? 0) !== 0) {
       throw new Error("Failed to write Daytona sandbox audit log.");
-    }
-
-    const mirrorResponse = await withTimeout(
-      this.sandbox.process.executeCommand(
-        `mkdir -p ${shellQuote(workspaceMakeADemoDirectory)} && cp ${shellQuote(sandboxAuditLogPath)} ${shellQuote(workspaceSandboxAuditLogPath)}`,
-      ),
-      this.logWriteTimeoutMs,
-      `Daytona sandbox log mirror did not finish within ${this.logWriteTimeoutMs}ms.`,
-    );
-
-    if ((mirrorResponse.exitCode ?? 0) !== 0) {
-      throw new Error("Failed to mirror Daytona sandbox audit log.");
     }
   }
 
@@ -610,14 +602,27 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
     sandbox: DaytonaSdkSandbox,
     enabled: boolean,
   ): Promise<void> {
-    try {
-      await sandbox.updateNetworkSettings({ networkBlockAll: !enabled });
-    } catch (error) {
-      if (isRestrictedNetworkPolicyError(error)) {
+    for (
+      let attempt = 0;
+      attempt <= networkSettingsConnectionRetryLimit;
+      attempt += 1
+    ) {
+      try {
+        await sandbox.updateNetworkSettings({ networkBlockAll: !enabled });
         return;
-      }
+      } catch (error) {
+        if (isRestrictedNetworkPolicyError(error)) {
+          return;
+        }
+        if (
+          attempt === networkSettingsConnectionRetryLimit ||
+          !isDaytonaConnectionError(error)
+        ) {
+          throw error;
+        }
 
-      throw error;
+        await wait(250 * (attempt + 1));
+      }
     }
   }
 
@@ -805,7 +810,8 @@ function isDaytonaConnectionError(error: unknown): boolean {
     error.name === "DaytonaConnectionError" ||
     error.message.includes("ECONNREFUSED") ||
     error.message.includes("ECONNRESET") ||
-    error.message.includes("ETIMEDOUT")
+    error.message.includes("ETIMEDOUT") ||
+    error.message.toLowerCase().includes("socket connection was closed")
   );
 }
 

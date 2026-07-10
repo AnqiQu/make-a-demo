@@ -351,6 +351,33 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ]);
   });
 
+  it("appends each sandbox log event to both durable paths with one command", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls),
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.writeSandboxLog?.({
+      event: "repo-preparation.started",
+      stage: "repo-preparation",
+    });
+
+    const commands = calls.flatMap((call) =>
+      typeof call === "object" &&
+      call !== null &&
+      "executeCommand" in call &&
+      typeof call.executeCommand === "string"
+        ? [call.executeCommand]
+        : [],
+    );
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toContain("/tmp/makeademo/sandbox-log.jsonl");
+    expect(commands[0]).toContain("/workspace/.makeademo/sandbox-log.jsonl");
+    expect(commands[0]).not.toContain(" cp ");
+    expect(countOccurrences(commands[0] ?? "", '"event"')).toBe(1);
+  });
+
   it("writes Pino-formatted sandbox logs through durable files", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -424,14 +451,14 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ).toHaveLength(0);
   });
 
-  it("does not resolve sandbox logging until the workspace-visible mirror is durable", async () => {
+  it("does not resolve sandbox logging until both durable appends finish", async () => {
     const calls: unknown[] = [];
-    const workspaceMirrorStarted = deferred<void>();
-    const workspaceMirror = deferred<void>();
+    const workspaceLogWriteStarted = deferred<void>();
+    const workspaceLogWrite = deferred<void>();
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
       client: fakeClient(calls, {
-        awaitWorkspaceLogMirror: workspaceMirror.promise,
-        onWorkspaceLogMirrorStarted: workspaceMirrorStarted.resolve,
+        awaitWorkspaceLogWrite: workspaceLogWrite.promise,
+        onWorkspaceLogWriteStarted: workspaceLogWriteStarted.resolve,
       }),
     });
     const handle = await provider.create();
@@ -446,28 +473,28 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         resolved = true;
       });
 
-    await workspaceMirrorStarted.promise;
+    await workspaceLogWriteStarted.promise;
 
     expect(calls).toEqual(
       expect.arrayContaining([
         {
           executeCommand: expect.stringContaining(
-            "cp '/tmp/makeademo/sandbox-log.jsonl' '/workspace/.makeademo/sandbox-log.jsonl'",
+            "tee -a '/tmp/makeademo/sandbox-log.jsonl' >> '/workspace/.makeademo/sandbox-log.jsonl'",
           ),
         },
       ]),
     );
     expect(resolved).toBe(false);
 
-    workspaceMirror.resolve();
+    workspaceLogWrite.resolve();
     await expect(write).resolves.toBeUndefined();
     expect(resolved).toBe(true);
   });
 
-  it("surfaces sandbox logging failures when the workspace mirror path is unavailable", async () => {
+  it("surfaces sandbox logging failures when a durable path is unavailable", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
-      client: fakeClient(calls, { failWorkspaceLogMirror: true }),
+      client: fakeClient(calls, { failWorkspaceLogWrite: true }),
     });
     const handle = await provider.create();
 
@@ -476,18 +503,13 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         event: "repo-preparation.started",
         stage: "repo-preparation",
       }),
-    ).rejects.toThrow("Failed to mirror Daytona sandbox audit log.");
+    ).rejects.toThrow("Failed to write Daytona sandbox audit log.");
 
     expect(calls).toEqual(
       expect.arrayContaining([
         {
           executeCommand: expect.stringContaining(
-            ">> '/tmp/makeademo/sandbox-log.jsonl'",
-          ),
-        },
-        {
-          executeCommand: expect.stringContaining(
-            "cp '/tmp/makeademo/sandbox-log.jsonl' '/workspace/.makeademo/sandbox-log.jsonl'",
+            "tee -a '/tmp/makeademo/sandbox-log.jsonl' >> '/workspace/.makeademo/sandbox-log.jsonl'",
           ),
         },
       ]),
@@ -724,6 +746,30 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     expect(calls.slice(1)).toEqual([
       { updateNetworkSettings: { networkBlockAll: false } },
       { updateNetworkSettings: { networkBlockAll: true } },
+    ]);
+  });
+
+  it("retries transient socket closures when updating sandbox network access", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { networkFailuresBeforeSuccess: 1 }),
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.setOutboundNetworkAccess(true),
+    ).resolves.toBeUndefined();
+
+    expect(
+      calls.filter(
+        (call) =>
+          typeof call === "object" &&
+          call !== null &&
+          "updateNetworkSettings" in call,
+      ),
+    ).toEqual([
+      { updateNetworkSettings: { networkBlockAll: false } },
+      { updateNetworkSettings: { networkBlockAll: false } },
     ]);
   });
 
@@ -1564,16 +1610,17 @@ function fakeLinkedSandbox(
 function fakeClient(
   calls: unknown[],
   options: {
-    awaitWorkspaceLogMirror?: Promise<void>;
+    awaitWorkspaceLogWrite?: Promise<void>;
     downloadError?: string;
     executeCommandFails?: boolean;
     executeCommandNeverResolves?: boolean;
     failFirstSubmittedCodeInitialization?: boolean;
-    failWorkspaceLogMirror?: boolean;
+    failWorkspaceLogWrite?: boolean;
     failSubmittedCodeNetworkDisable?: boolean;
     missingSubmittedCodeImage?: boolean;
     networkError?: Error;
-    onWorkspaceLogMirrorStarted?: () => void;
+    networkFailuresBeforeSuccess?: number;
+    onWorkspaceLogWriteStarted?: () => void;
     previewNeverResolves?: boolean;
     ptyConnectionFailuresBeforeSuccess?: number;
     ptyNeverConnects?: boolean;
@@ -1583,6 +1630,7 @@ function fakeClient(
   } = {},
 ) {
   let submittedCodeInitializationFailures = 0;
+  let networkFailures = 0;
   let ptyConnectionFailures = 0;
   const stalePtyIds = new Set<string>();
   const sandbox = {
@@ -1709,14 +1757,14 @@ function fakeClient(
           };
         }
         if (
-          options.awaitWorkspaceLogMirror !== undefined &&
+          options.awaitWorkspaceLogWrite !== undefined &&
           command.includes("/workspace/.makeademo/sandbox-log.jsonl")
         ) {
-          options.onWorkspaceLogMirrorStarted?.();
-          await options.awaitWorkspaceLogMirror;
+          options.onWorkspaceLogWriteStarted?.();
+          await options.awaitWorkspaceLogWrite;
         }
         if (
-          options.failWorkspaceLogMirror === true &&
+          options.failWorkspaceLogWrite === true &&
           command.includes("/workspace/.makeademo/sandbox-log.jsonl")
         ) {
           return {
@@ -1780,6 +1828,10 @@ function fakeClient(
     },
     async updateNetworkSettings(settings: unknown) {
       calls.push({ updateNetworkSettings: settings });
+      if (networkFailures < (options.networkFailuresBeforeSuccess ?? 0)) {
+        networkFailures += 1;
+        throw new Error("The socket connection was closed unexpectedly");
+      }
       if (options.networkError !== undefined) {
         throw options.networkError;
       }

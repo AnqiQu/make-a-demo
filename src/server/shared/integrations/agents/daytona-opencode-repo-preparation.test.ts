@@ -117,7 +117,7 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
         commandStdout: ["Submitted preparation result."],
         commandStdoutChunks: ["agent output"],
         preparationResult: successResult(),
-        sandboxLogFailureEvent: "opencode.output",
+        sandboxLogFailureEvent: "opencode.stderr",
         validationResult: validationArtifact(),
       }),
       providerID: "openai",
@@ -152,10 +152,11 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     const agent = new DaytonaOpenCodeRepoPreparation({
       modelID: "gpt-5.5",
       provider: fakeProvider(events, {
+        commandStderrChunks: ["agent warning"],
         commandStdout: ["Submitted preparation result."],
         commandStdoutChunks: ["agent output"],
         preparationResult: successResult(),
-        sandboxLogNeverSettlesEvent: "opencode.output",
+        sandboxLogNeverSettlesEvent: "opencode.stderr",
         validationResult: validationArtifact(),
       }),
       providerID: "openai",
@@ -2059,7 +2060,7 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     );
   });
 
-  it("mirrors meaningful streamed OpenCode output into the sandbox Pino log seam", async () => {
+  it("mirrors bounded streamed OpenCode stderr into the sandbox Pino log seam", async () => {
     const events: unknown[] = [];
     const streamed: string[] = [];
     const agent = new DaytonaOpenCodeRepoPreparation({
@@ -2089,17 +2090,9 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
       expect.arrayContaining([
         {
           sandboxLog: expect.objectContaining({
-            channel: "stdout",
-            event: "opencode.output",
-            raw: "agent output",
-            stage: "repo-preparation",
-          }),
-        },
-        {
-          sandboxLog: expect.objectContaining({
             channel: "stderr",
-            event: "opencode.output",
-            raw: "agent warning",
+            event: "opencode.stderr",
+            message: "agent warning",
             stage: "repo-preparation",
           }),
         },

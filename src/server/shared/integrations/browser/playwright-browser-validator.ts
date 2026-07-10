@@ -200,10 +200,7 @@ export class PlaywrightBrowserValidator implements BrowserValidator {
         ? {}
         : { blockedNetworkAttempts }),
       interactable,
-      logs: [
-        `Loaded ${input.url}`,
-        `Captured screenshot ${screenshotArtifactId}`,
-      ],
+      logs: [`Loaded ${input.url}`, "Captured screenshot proof."],
       screenshotArtifactId,
     };
   }
@@ -302,7 +299,7 @@ async function main() {
   const interactable = bodyText.trim().length > 0 && !/error|exception|stack trace|not found/i.test(bodyText);
   console.log(JSON.stringify({
     interactable,
-    logs: ["Loaded " + targetUrl, "Captured screenshot " + screenshotArtifactId],
+    logs: ["Loaded " + targetUrl, "Captured screenshot proof."],
     screenshotArtifactId,
   }));
 } catch (error) {

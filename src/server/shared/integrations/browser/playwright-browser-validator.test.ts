@@ -19,10 +19,7 @@ describe("PlaywrightBrowserValidator", () => {
       validator.validate({ url: "http://localhost:3000" }),
     ).resolves.toEqual({
       interactable: true,
-      logs: [
-        "Loaded http://localhost:3000",
-        "Captured screenshot artifact_screenshot",
-      ],
+      logs: ["Loaded http://localhost:3000", "Captured screenshot proof."],
       screenshotArtifactId: "artifact_screenshot",
     });
   });
@@ -323,10 +320,7 @@ describe("PlaywrightBrowserValidator", () => {
         }),
       ).resolves.toEqual({
         interactable: true,
-        logs: [
-          "Loaded http://localhost:3000",
-          "Captured screenshot screenshot:ZmFrZQ==",
-        ],
+        logs: ["Loaded http://localhost:3000", "Captured screenshot proof."],
         screenshotArtifactId: "screenshot:ZmFrZQ==",
       });
     } finally {

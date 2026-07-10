@@ -68,7 +68,7 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
     );
   });
 
-  it("mirrors Script Generation OpenCode output into the sandbox Pino log seam", async () => {
+  it("mirrors bounded Script Generation stderr into the sandbox Pino log seam", async () => {
     const events: unknown[] = [];
     const stderr: string[] = [];
     const stdout: string[] = [];
@@ -95,17 +95,9 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
       expect.arrayContaining([
         {
           sandboxLog: expect.objectContaining({
-            channel: "stdout",
-            event: "opencode.output",
-            raw: "script generation output",
-            stage: "script-generation",
-          }),
-        },
-        {
-          sandboxLog: expect.objectContaining({
             channel: "stderr",
-            event: "opencode.output",
-            raw: "script generation warning",
+            event: "opencode.stderr",
+            message: "script generation warning",
             stage: "script-generation",
           }),
         },
@@ -133,7 +125,7 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
       ...scriptGenerationInput(),
       opencodeSessionID: "session_prepare_123",
       preparationWorkspace: workspaceHandle(events, [interactivePackage()], {
-        rejectSandboxLogEvents: ["opencode.output"],
+        rejectSandboxLogEvents: ["opencode.stderr"],
       }),
     });
 
@@ -167,7 +159,7 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
         ...scriptGenerationInput(),
         opencodeSessionID: "session_prepare_123",
         preparationWorkspace: workspaceHandle(events, [interactivePackage()], {
-          neverSettleSandboxLogEvents: ["opencode.output"],
+          neverSettleSandboxLogEvents: ["opencode.stderr"],
         }),
       }),
       new Promise<"timed-out">((resolve) =>

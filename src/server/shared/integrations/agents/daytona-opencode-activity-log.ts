@@ -36,15 +36,36 @@ function createOpenCodeActivityLogEntry(
   }
 
   const parsed = raw === undefined ? undefined : parseOpenCodeEvent(raw);
+  if (parsed === undefined) {
+    if (entry.channel !== "stderr" || raw === undefined) {
+      return undefined;
+    }
+    const compactEntry = omitRawActivityPayload(entry);
+    return {
+      ...compactEntry,
+      event: "opencode.stderr",
+      message: removeAnsiSequences(raw).trim().slice(0, 2_000),
+      source: entry.source ?? "opencode",
+    };
+  }
+
+  const compactEntry = omitRawActivityPayload(entry);
+  const part = readRecordField(parsed, "part");
+  const toolState = readRecordField(part, "state");
   const parsedType = readStringField(parsed, "type");
-  const tool = readStringField(parsed, "tool");
-  const state = readStringField(parsed, "state");
-  const title = readStringField(parsed, "title");
+  const sessionID = readStringField(parsed, "sessionID");
+  const message = readStringField(part, "text")?.slice(0, 2_000);
+  const tool = readStringField(part, "tool") ?? readStringField(parsed, "tool");
+  const state =
+    readStringField(toolState, "status") ?? readStringField(parsed, "state");
+  const title =
+    readStringField(toolState, "title") ?? readStringField(parsed, "title");
 
   return {
-    ...entry,
-    ...(parsed === undefined ? {} : { parsed }),
+    ...compactEntry,
     ...(parsedType === undefined ? {} : { eventType: parsedType }),
+    ...(message === undefined ? {} : { message }),
+    ...(sessionID === undefined ? {} : { sessionID }),
     ...(tool === undefined ? {} : { tool }),
     ...(state === undefined ? {} : { toolState: state }),
     ...(title === undefined ? {} : { toolTitle: title }),
@@ -52,6 +73,22 @@ function createOpenCodeActivityLogEntry(
       parsedType === undefined ? "opencode.output" : `opencode.${parsedType}`,
     source: entry.source ?? "opencode",
   };
+}
+
+function readRecordField(
+  value: Record<string, unknown> | undefined,
+  field: string,
+): Record<string, unknown> | undefined {
+  const fieldValue = value?.[field];
+  return typeof fieldValue === "object" && fieldValue !== null
+    ? (fieldValue as Record<string, unknown>)
+    : undefined;
+}
+
+function omitRawActivityPayload(entry: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(entry).filter(([field]) => field !== "raw"),
+  );
 }
 
 function isTerminalControlOnly(raw: string): boolean {
