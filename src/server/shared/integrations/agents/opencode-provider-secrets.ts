@@ -4,6 +4,7 @@ import type { PipelineEventLogger } from "../../logging/pipeline-event-logger";
 
 const defaultOpenAiDaytonaSecretName = "makeademo-openai";
 const defaultEnsureOpenCodeProviderSecretTimeoutMs = 30_000;
+const defaultEnsureOpenCodeProviderSecretRetryBackoffMs = 250;
 const openAiSecretHosts = ["api.openai.com"];
 
 type DaytonaSecret = {
@@ -55,6 +56,7 @@ export async function ensureOpenCodeProviderDaytonaSecret(input: {
   env?: Record<string, string | undefined>;
   logger?: PipelineEventLogger;
   providerID: string;
+  retryBackoffMs?: number;
   timeoutMs?: number;
 }): Promise<string> {
   const provider = readOpenCodeProviderSecret(input.providerID, input.env);
@@ -71,6 +73,8 @@ export async function ensureOpenCodeProviderDaytonaSecret(input: {
     ) as DaytonaSecretClient);
   const timeoutMs =
     input.timeoutMs ?? defaultEnsureOpenCodeProviderSecretTimeoutMs;
+  const retryBackoffMs =
+    input.retryBackoffMs ?? defaultEnsureOpenCodeProviderSecretRetryBackoffMs;
 
   await input.logger?.info(
     {
@@ -85,12 +89,29 @@ export async function ensureOpenCodeProviderDaytonaSecret(input: {
   );
 
   try {
-    await ensureOpenCodeProviderDaytonaSecretValue({
+    await ensureOpenCodeProviderDaytonaSecretValueWithRetry({
       client,
       providerApiKey: provider.apiKey,
       providerHosts: provider.hosts,
       secretName,
       timeoutMs,
+      retryBackoffMs,
+      onRetry: async (attempt) => {
+        await input.logger?.warn(
+          {
+            component: "opencode-provider-secrets",
+            event: "opencode-provider-secret.ensure.retrying",
+            providerID: input.providerID,
+            secretName,
+            stage: "repo-preparation",
+            attempt,
+            maxAttempts: 2,
+            retryBackoffMs,
+            timeoutMs,
+          },
+          "Retrying timed out OpenCode provider Daytona secret ensure.",
+        );
+      },
     });
   } catch (error) {
     if (isOpenCodeProviderSecretTimeoutError(error)) {
@@ -193,6 +214,34 @@ async function ensureOpenCodeProviderDaytonaSecretValue(input: {
   );
 }
 
+async function ensureOpenCodeProviderDaytonaSecretValueWithRetry(input: {
+  client: DaytonaSecretClient;
+  providerApiKey: string;
+  providerHosts: string[];
+  secretName: string;
+  timeoutMs: number;
+  retryBackoffMs: number;
+  onRetry: (attempt: number) => Promise<void>;
+}): Promise<void> {
+  const maxAttempts = 2;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await ensureOpenCodeProviderDaytonaSecretValue(input);
+      return;
+    } catch (error) {
+      if (
+        !isOpenCodeProviderSecretTimeoutError(error) ||
+        attempt === maxAttempts
+      ) {
+        throw error;
+      }
+
+      await input.onRetry(attempt + 1);
+      await wait(input.retryBackoffMs);
+    }
+  }
+}
+
 async function withDaytonaSecretConnectionRetry<T>(
   operation: () => Promise<T>,
   timeoutMs: number,
@@ -221,6 +270,9 @@ async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
 ): Promise<T> {
+  // The underlying request cannot be cancelled by the Daytona client. Attach a
+  // rejection handler so a late failure after the local timeout is consumed.
+  void promise.catch(() => undefined);
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -236,6 +288,15 @@ async function withTimeout<T>(
       clearTimeout(timeout);
     }
   }
+}
+
+async function wait(delayMs: number): Promise<void> {
+  if (delayMs <= 0) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
 }
 
 class OpenCodeProviderSecretTimeoutError extends Error {

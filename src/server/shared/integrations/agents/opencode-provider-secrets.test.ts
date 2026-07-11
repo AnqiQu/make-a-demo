@@ -68,6 +68,33 @@ describe("OpenCode provider Daytona secrets", () => {
     ]);
   });
 
+  it("does not retry a non-timeout secret ensure failure", async () => {
+    const calls: unknown[] = [];
+
+    await expect(
+      ensureOpenCodeProviderDaytonaSecret({
+        client: {
+          secret: {
+            async list() {
+              calls.push({ list: true });
+              throw new Error("permission denied");
+            },
+            async create() {
+              throw new Error("create should not run");
+            },
+            async update() {
+              throw new Error("update should not run");
+            },
+          },
+        },
+        env: { OPENAI_API_KEY: "sk-local" },
+        providerID: "openai",
+      }),
+    ).rejects.toThrow("permission denied");
+
+    expect(calls).toEqual([{ list: true }]);
+  });
+
   it("updates the existing Daytona secret when it already exists", async () => {
     const calls: unknown[] = [];
 
@@ -253,20 +280,71 @@ describe("OpenCode provider Daytona secrets", () => {
     });
 
     await Promise.resolve();
-    vi.advanceTimersByTime(25);
-
-    await expect(promise).rejects.toThrow(
+    const rejection = expect(promise).rejects.toThrow(
       "Timed out ensuring OpenCode provider Daytona secret",
     );
+    await vi.advanceTimersByTimeAsync(25 + 250 + 25);
+
+    await rejection;
     expect(logger.entries.map((entry) => entry.event)).toEqual([
       "opencode-provider-secret.ensure.started",
+      "opencode-provider-secret.ensure.retrying",
       "opencode-provider-secret.ensure.timeout",
     ]);
     expect(logger.entries.map((entry) => entry.stage)).toEqual([
       "repo-preparation",
       "repo-preparation",
+      "repo-preparation",
     ]);
     expect(JSON.stringify(logger.entries)).not.toContain("sk-should-not-leak");
+  });
+
+  it("retries the whole secret ensure transaction after a timeout", async () => {
+    vi.useFakeTimers();
+    const calls: unknown[] = [];
+    let listCount = 0;
+    const promise = ensureOpenCodeProviderDaytonaSecret({
+      client: {
+        secret: {
+          async create(input) {
+            calls.push({ create: input });
+            return { id: "secret_makeademo-openai", name: input.name };
+          },
+          async list() {
+            calls.push({ list: true });
+            listCount += 1;
+            if (listCount === 1) {
+              return await new Promise<never>(() => undefined);
+            }
+            return [];
+          },
+          async update() {
+            throw new Error("update should not run");
+          },
+        },
+      },
+      env: { OPENAI_API_KEY: "sk-retry" },
+      providerID: "openai",
+      timeoutMs: 25,
+      retryBackoffMs: 10,
+    });
+
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(25 + 10);
+
+    await expect(promise).resolves.toBe("makeademo-openai");
+    expect(calls).toEqual([
+      { list: true },
+      { list: true },
+      {
+        create: {
+          description: "MakeADemo OpenCode provider credential.",
+          hosts: ["api.openai.com"],
+          name: "makeademo-openai",
+          value: "sk-retry",
+        },
+      },
+    ]);
   });
 });
 
