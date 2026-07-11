@@ -16,9 +16,9 @@ describe("createMakeADemoOpenCodeConfigFiles", () => {
     const configFile = files.find((file) => file.path === "opencode.json");
     const config = JSON.parse(configFile?.content ?? "{}");
 
-    expect(config.model).toBe("openai/gpt-5.6-luna");
-    expect(config.provider.openai.models["gpt-5.6-luna"].options).toEqual({
-      reasoningEffort: "max",
+    expect(config.model).toBe("openai/gpt-5.6-terra");
+    expect(config.provider.openai.models["gpt-5.6-terra"].options).toEqual({
+      reasoningEffort: "high",
     });
     expect(config.provider.openai.models["gpt-5.6-sol"].options).toEqual({
       reasoningEffort: "medium",
