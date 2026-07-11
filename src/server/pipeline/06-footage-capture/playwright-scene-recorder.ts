@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
+import { uploadSubmittedCodeWorkspaceFiles } from "../03-repo-preparation/preparation-workspace-upload";
 import type { PreparationWorkspace } from "../03-repo-preparation/preparation-workspace.interface";
 import { executeSubmittedCode } from "../03-repo-preparation/submitted-code-execution";
 import {
@@ -234,28 +235,31 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
       workspace,
       `mkdir -p ${shellQuote(remoteSceneWorkspace)} ${shellQuote(remoteVideoScratchDirectory)} ${shellQuote(remoteRawScenesDirectory)} ${shellQuote(remoteSceneClipsDirectory)}`,
     );
-    await workspace.uploadFiles([
-      {
-        destinationPath: `${remoteSceneWorkspace}/makeademo-capture-sdk.js`,
-        sourcePath: join(localSceneWorkspace, "makeademo-capture-sdk.js"),
-      },
-      {
-        destinationPath: `${remoteSceneWorkspace}/makeademo-capture-sdk.d.ts`,
-        sourcePath: join(localSceneWorkspace, "makeademo-capture-sdk.d.ts"),
-      },
-      {
-        destinationPath: `${remoteSceneWorkspace}/makeademo-capture-sdk.instructions.md`,
-        sourcePath: join(
-          localSceneWorkspace,
-          "makeademo-capture-sdk.instructions.md",
-        ),
-      },
-      {
-        destinationPath: `${remoteSceneWorkspace}/demo-script.contract.ts`,
-        sourcePath: join(localSceneWorkspace, "demo-script.contract.ts"),
-      },
-      { destinationPath: remoteScenePath, sourcePath: localScenePath },
-    ]);
+    await uploadSubmittedCodeWorkspaceFiles({
+      files: [
+        {
+          destinationPath: `${remoteSceneWorkspace}/makeademo-capture-sdk.js`,
+          sourcePath: join(localSceneWorkspace, "makeademo-capture-sdk.js"),
+        },
+        {
+          destinationPath: `${remoteSceneWorkspace}/makeademo-capture-sdk.d.ts`,
+          sourcePath: join(localSceneWorkspace, "makeademo-capture-sdk.d.ts"),
+        },
+        {
+          destinationPath: `${remoteSceneWorkspace}/makeademo-capture-sdk.instructions.md`,
+          sourcePath: join(
+            localSceneWorkspace,
+            "makeademo-capture-sdk.instructions.md",
+          ),
+        },
+        {
+          destinationPath: `${remoteSceneWorkspace}/demo-script.contract.ts`,
+          sourcePath: join(localSceneWorkspace, "demo-script.contract.ts"),
+        },
+        { destinationPath: remoteScenePath, sourcePath: localScenePath },
+      ],
+      workspace,
+    });
 
     const result = await executeSubmittedCode(
       workspace,

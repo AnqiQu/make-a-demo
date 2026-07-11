@@ -61,4 +61,11 @@ export interface PreparationWorkspace {
    */
   syncSubmittedCodeWorkspace?(): Promise<void>;
   uploadFiles(files: PreparationWorkspaceUploadFile[]): Promise<void>;
+  /**
+   * Uploads files only to the submitted-code runtime boundary when one exists.
+   * Implementations must not mirror these files into the agent workspace.
+   */
+  uploadSubmittedCodeFiles?(
+    files: PreparationWorkspaceUploadFile[],
+  ): Promise<void>;
 }

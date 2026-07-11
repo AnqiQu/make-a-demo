@@ -554,6 +554,21 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ).toBeLessThan(calls.findIndex((call) => "delete" in Object(call)));
   });
 
+  it("times out and disconnects a streaming command that never finishes", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { ptyWaitsForDisconnect: true }),
+      commandTimeoutMs: 1,
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.execute("opencode run slow", { onStdout: () => {} }),
+    ).rejects.toThrow("Daytona command did not finish within 1ms.");
+
+    expect(calls).toEqual(expect.arrayContaining([{ disconnect: true }]));
+  });
+
   it("passes streaming command environment variables through PTY options", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -923,7 +938,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       });
       const handle = await provider.create();
 
-      await handle.workspace.uploadFiles([
+      await handle.workspace.uploadSubmittedCodeFiles?.([
         {
           destinationPath: "/workspace/.makeademo/capture/script.ts",
           sourcePath,
@@ -945,6 +960,17 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
             },
           ],
           sandbox: "submitted_sandbox",
+        },
+      });
+      expect(calls).not.toContainEqual({
+        uploadFiles: {
+          files: [
+            {
+              destination: "/workspace/.makeademo/capture/script.ts",
+              source: sourcePath,
+            },
+          ],
+          sandbox: "parent_sandbox",
         },
       });
       expect(calls).toEqual(

@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { uploadSubmittedCodeWorkspaceFiles } from "../03-repo-preparation/preparation-workspace-upload";
 import { executeSubmittedCode } from "../03-repo-preparation/submitted-code-execution";
 import {
   validateDemoScriptCaptureSdkTypes,
@@ -191,25 +192,28 @@ export class DefaultCapturePathSceneValidator
         preparationWorkspace.workspace,
         `mkdir -p ${shellQuote(remoteRunDirectory)}`,
       );
-      await preparationWorkspace.workspace.uploadFiles([
-        {
-          destinationPath: `${remoteRunDirectory}/makeademo-capture-sdk.js`,
-          sourcePath: localSdkRuntimePath,
-        },
-        {
-          destinationPath: `${remoteRunDirectory}/makeademo-capture-sdk.d.ts`,
-          sourcePath: localSdkDeclarationPath,
-        },
-        {
-          destinationPath: `${remoteRunDirectory}/makeademo-capture-sdk.instructions.md`,
-          sourcePath: localSdkInstructionsPath,
-        },
-        {
-          destinationPath: `${remoteRunDirectory}/demo-script.contract.ts`,
-          sourcePath: localContractPath,
-        },
-        { destinationPath: remoteScenePath, sourcePath: localScenePath },
-      ]);
+      await uploadSubmittedCodeWorkspaceFiles({
+        files: [
+          {
+            destinationPath: `${remoteRunDirectory}/makeademo-capture-sdk.js`,
+            sourcePath: localSdkRuntimePath,
+          },
+          {
+            destinationPath: `${remoteRunDirectory}/makeademo-capture-sdk.d.ts`,
+            sourcePath: localSdkDeclarationPath,
+          },
+          {
+            destinationPath: `${remoteRunDirectory}/makeademo-capture-sdk.instructions.md`,
+            sourcePath: localSdkInstructionsPath,
+          },
+          {
+            destinationPath: `${remoteRunDirectory}/demo-script.contract.ts`,
+            sourcePath: localContractPath,
+          },
+          { destinationPath: remoteScenePath, sourcePath: localScenePath },
+        ],
+        workspace: preparationWorkspace.workspace,
+      });
 
       const result = await executeSubmittedCode(
         preparationWorkspace.workspace,

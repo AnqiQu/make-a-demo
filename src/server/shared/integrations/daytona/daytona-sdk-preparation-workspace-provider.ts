@@ -394,10 +394,16 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
     });
 
     try {
-      await pty.sendInput(
-        `stty -echo\n${command}\nprintf '\\n__MAKEADEMO_EXIT__:%s\\n' $?\nexit\n`,
+      const result = await withTimeout(
+        (async () => {
+          await pty.sendInput(
+            `stty -echo\n${command}\nprintf '\\n__MAKEADEMO_EXIT__:%s\\n' $?\nexit\n`,
+          );
+          return pty.wait();
+        })(),
+        this.commandTimeoutMs,
+        `Daytona command did not finish within ${this.commandTimeoutMs}ms.`,
       );
-      const result = await pty.wait();
       const stdout = output.join("");
       const exitCode = readExitCode(stdout) ?? result.exitCode ?? 0;
 
@@ -646,7 +652,18 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
       source: file.sourcePath,
     }));
     await this.sandbox.fs.uploadFiles(uploadedFiles);
+  }
+
+  async uploadSubmittedCodeFiles(
+    files: PreparationWorkspaceUploadFile[],
+  ): Promise<void> {
     if (this.submittedCodeSandbox === undefined) {
+      await this.sandbox.fs.uploadFiles(
+        files.map((file) => ({
+          destination: file.destinationPath,
+          source: file.sourcePath,
+        })),
+      );
       return;
     }
 
@@ -715,10 +732,16 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
     });
 
     try {
-      await pty.sendInput(
-        `stty -echo\n${command}\nprintf '\n__MAKEADEMO_EXIT__:%s\n' $?\nexit\n`,
+      const result = await withTimeout(
+        (async () => {
+          await pty.sendInput(
+            `stty -echo\n${command}\nprintf '\n__MAKEADEMO_EXIT__:%s\n' $?\nexit\n`,
+          );
+          return pty.wait();
+        })(),
+        this.commandTimeoutMs,
+        `Daytona command did not finish within ${this.commandTimeoutMs}ms.`,
       );
-      const result = await pty.wait();
       const stdout = output.join("");
       const exitCode = readExitCode(stdout) ?? result.exitCode ?? 0;
 

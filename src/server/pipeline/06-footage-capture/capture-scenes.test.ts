@@ -218,7 +218,10 @@ describe("captureScenesFromScript", () => {
           return "https://preview.example.test/";
         },
         async setOutboundNetworkAccess() {},
-        async uploadFiles(files) {
+        async uploadFiles() {
+          throw new Error("parent upload must not be used for scene files");
+        },
+        async uploadSubmittedCodeFiles(files) {
           uploadedDestinations.push(
             ...files.map((file) => file.destinationPath),
           );
