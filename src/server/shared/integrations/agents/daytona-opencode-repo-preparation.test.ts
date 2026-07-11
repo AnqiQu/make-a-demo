@@ -330,6 +330,61 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     );
   });
 
+  it("retries Daytona socket-closed clone failures before starting OpenCode", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        captureCloneTimeouts: true,
+        cloneResults: [
+          new Error("The socket connection was closed unexpectedly..."),
+          { exitCode: 0, stderr: "", stdout: "cloned" },
+        ],
+        commandStdout: ["Submitted preparation result."],
+        preparationResult: successResult(),
+        validationResult: validationArtifact(),
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({ status: "succeeded" });
+    expect(
+      events.filter(
+        (event): event is { cloneTimeoutMs: number } =>
+          typeof event === "object" &&
+          event !== null &&
+          "cloneTimeoutMs" in event,
+      ),
+    ).toEqual([{ cloneTimeoutMs: 120_000 }, { cloneTimeoutMs: 120_000 }]);
+    expect(
+      events.filter(
+        (event): event is { execute: string } =>
+          typeof event === "object" &&
+          event !== null &&
+          "execute" in event &&
+          typeof event.execute === "string" &&
+          event.execute.includes("git clone"),
+      ),
+    ).toHaveLength(2);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          configDir: "/tmp/makeademo/opencode",
+          execute: expect.stringContaining("opencode run"),
+          streaming: true,
+        },
+      ]),
+    );
+  });
+
   it("does not retry OpenCode execution errors from the Repo Preparation agent", async () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparation({
@@ -2547,6 +2602,7 @@ function fakeProvider(
         captureOpenCodeTimeouts?: boolean;
         dependencyInstallRequestReadNeverSettles?: boolean;
         cloneDiagnosticsStdout?: string;
+        captureCloneTimeouts?: boolean;
         cloneResults?: Array<PreparationWorkspaceCommandResult | Error>;
         dependencyInstallRequest?: { command: string };
         manifestPayload?: unknown;
@@ -2613,6 +2669,7 @@ function fakeWorkspace(
     captureOpenCodeTimeouts?: boolean;
     dependencyInstallRequestReadNeverSettles?: boolean;
     cloneDiagnosticsStdout?: string;
+    captureCloneTimeouts?: boolean;
     cloneResults?: Array<PreparationWorkspaceCommandResult | Error>;
     dependencyInstallRequest?: { command: string };
     manifestPayload?: unknown;
@@ -2673,6 +2730,12 @@ function fakeWorkspace(
             }
           : {}),
       });
+      if (
+        command.includes("git clone") &&
+        input.captureCloneTimeouts === true
+      ) {
+        events.push({ cloneTimeoutMs: options?.timeoutMs });
+      }
       if (
         command.includes("opencode run") &&
         input.captureOpenCodeTimeouts === true

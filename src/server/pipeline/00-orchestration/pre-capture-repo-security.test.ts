@@ -86,6 +86,8 @@ describe("readRepoSecurityInput", () => {
     ]);
     expect(firstWorkspace.cloneAttempts).toBe(1);
     expect(secondWorkspace.cloneAttempts).toBe(1);
+    expect(firstWorkspace.cloneTimeoutsMs).toEqual([120_000]);
+    expect(secondWorkspace.cloneTimeoutsMs).toEqual([120_000]);
     expect(lines.map((line) => JSON.parse(line))).toContainEqual(
       expect.objectContaining({
         durationMs: expect.any(Number),
@@ -124,6 +126,39 @@ describe("readRepoSecurityInput", () => {
     ]);
     expect(firstWorkspace.cloneAttempts).toBe(1);
     expect(secondWorkspace.cloneAttempts).toBe(1);
+    expect(firstWorkspace.cloneTimeoutsMs).toEqual([120_000]);
+    expect(secondWorkspace.cloneTimeoutsMs).toEqual([120_000]);
+  });
+
+  it("retries a Daytona socket connection failure in a fresh workspace", async () => {
+    const firstCloneError = new Error(
+      "The socket connection was closed unexpectedly",
+    );
+    firstCloneError.name = "DaytonaConnectionError";
+    const firstWorkspace = new FakePreparationWorkspace({
+      cloneError: firstCloneError,
+    });
+    const secondWorkspace = new FakePreparationWorkspace();
+    const provider = new FakePreparationWorkspaceProvider([
+      firstWorkspace,
+      secondWorkspace,
+    ]);
+
+    const result = await readRepoSecurityInput(
+      provider,
+      "https://github.com/example/app",
+      { cloneWorkspaceRetryDelaysMs: [] },
+    );
+
+    expect(result.repoStats).toEqual({ fileCount: 1, sizeBytes: 17 });
+    expect(provider.destroyedWorkspaceIds).toEqual([
+      "workspace-1",
+      "workspace-2",
+    ]);
+    expect(firstWorkspace.cloneAttempts).toBe(1);
+    expect(secondWorkspace.cloneAttempts).toBe(1);
+    expect(firstWorkspace.cloneTimeoutsMs).toEqual([120_000]);
+    expect(secondWorkspace.cloneTimeoutsMs).toEqual([120_000]);
   });
 
   it("logs Daytona clone progress through Pino JSON", async () => {
@@ -321,6 +356,7 @@ function readWorkspaceAt(
 
 class FakePreparationWorkspace implements PreparationWorkspace {
   cloneAttempts = 0;
+  readonly cloneTimeoutsMs: number[] = [];
   readonly networkAccessChanges: boolean[] = [];
 
   constructor(
@@ -331,9 +367,15 @@ class FakePreparationWorkspace implements PreparationWorkspace {
     } = {},
   ) {}
 
-  async execute(command: string): Promise<PreparationWorkspaceCommandResult> {
+  async execute(
+    command: string,
+    options?: { timeoutMs?: number },
+  ): Promise<PreparationWorkspaceCommandResult> {
     this.input.commands?.push(command);
     if (command.includes("git clone")) {
+      if (options?.timeoutMs !== undefined) {
+        this.cloneTimeoutsMs.push(options.timeoutMs);
+      }
       if (this.input.cloneError !== undefined) {
         this.cloneAttempts += 1;
         throw this.input.cloneError;

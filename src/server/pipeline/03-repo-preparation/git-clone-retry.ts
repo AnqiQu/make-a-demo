@@ -34,7 +34,7 @@ export async function runGitCloneWithTransientRetry(input: {
 }
 
 function isTransientGitCloneFailure(output: string): boolean {
-  return /could not resolve host|temporary failure in name resolution|name or service not known|econnrefused|connection refused|econnreset|connection reset|etimedout|timed out|operation timed out/i.test(
+  return /could not resolve host|temporary failure in name resolution|name or service not known|econnrefused|connection refused|econnreset|connection reset|etimedout|timed out|operation timed out|the socket connection was closed unexpectedly|daytonaconnectionerror/i.test(
     output,
   );
 }
@@ -46,7 +46,13 @@ function readCommandOutput(result: PreparationWorkspaceCommandResult): string {
 }
 
 function readErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (!(error instanceof Error)) {
+    return String(error);
+  }
+
+  return error.name === "Error"
+    ? error.message
+    : `${error.name}: ${error.message}`;
 }
 
 function delay(ms: number): Promise<void> {

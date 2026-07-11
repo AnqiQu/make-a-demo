@@ -1508,7 +1508,10 @@ async function cloneWorkspaceWithNetworkAccess(
 ): Promise<PreparationWorkspaceCommandResult> {
   try {
     return await runGitCloneWithTransientRetry({
-      clone: () => workspace.execute(createCloneCommand(repoUrl)),
+      clone: () =>
+        workspace.execute(createCloneCommand(repoUrl), {
+          timeoutMs: 120_000,
+        }),
     });
   } finally {
     await workspace.setOutboundNetworkAccess(false);

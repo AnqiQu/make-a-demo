@@ -13,13 +13,21 @@ import type {
 import type { PreparationWorkspace } from "../03-repo-preparation/preparation-workspace.interface";
 
 const defaultWorkspaceDestroyTimeoutMs = 30_000;
+const defaultCloneAttemptTimeoutMs = 120_000;
+const defaultCloneWorkspaceRetryDelaysMs = [250, 500];
+const maxCloneWorkspaceRetries = 2;
 
 export async function readRepoSecurityInput(
   provider: PreparationWorkspaceProvider,
   repoUrl: string,
-  options: { destroyTimeoutMs?: number; logger?: PipelineEventLogger } = {},
+  options: {
+    cloneWorkspaceRetryDelaysMs?: number[];
+    destroyTimeoutMs?: number;
+    logger?: PipelineEventLogger;
+  } = {},
 ): Promise<RepoSecurityInput> {
-  const maxCloneTimeoutRetries = 2;
+  const cloneWorkspaceRetryDelaysMs =
+    options.cloneWorkspaceRetryDelaysMs ?? defaultCloneWorkspaceRetryDelaysMs;
 
   for (let attempt = 0; ; attempt += 1) {
     const handle = await provider.create();
@@ -46,7 +54,11 @@ export async function readRepoSecurityInput(
       });
 
       await destroyWorkspace(handle, options);
-      if (attempt < maxCloneTimeoutRetries && isCloneTimeoutError(error)) {
+      if (
+        attempt < maxCloneWorkspaceRetries &&
+        isCloneWorkspaceRetryableError(error)
+      ) {
+        await delay(cloneWorkspaceRetryDelaysMs[attempt] ?? 0);
         continue;
       }
 
@@ -176,6 +188,7 @@ async function cloneWithNetworkAccess(
             repoUrl,
             resetCommand: createDaytonaWorkspaceResetCommand(),
           }),
+          { timeoutMs: defaultCloneAttemptTimeoutMs },
         ),
       retryThrownErrors: false,
     });
@@ -310,10 +323,18 @@ async function logCloneEvent(
   }
 }
 
-function isCloneTimeoutError(error: unknown): boolean {
-  return /Daytona command did not finish within \d+ms|etimedout|timed out|timeout/i.test(
+function isCloneWorkspaceRetryableError(error: unknown): boolean {
+  if (error instanceof Error && error.name === "DaytonaConnectionError") {
+    return true;
+  }
+
+  return /Daytona command did not finish within \d+ms|socket connection was closed|econnreset|connection reset|econnrefused|connection refused|etimedout|timed out|timeout/i.test(
     readErrorMessage(error),
   );
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function readErrorMessage(error: unknown): string {
