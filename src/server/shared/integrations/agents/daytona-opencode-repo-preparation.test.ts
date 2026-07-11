@@ -1459,6 +1459,69 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     );
   });
 
+  it("cancels a still-running OpenCode command after a completed validation tool event", async () => {
+    const events: unknown[] = [];
+    let validationStarted = false;
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandOutputChunks: [
+          {
+            channel: "stdout",
+            chunk: `${JSON.stringify({
+              part: {
+                state: {
+                  input: {
+                    manifestPath:
+                      "/tmp/makeademo/submitted-code/preparation-manifest.json",
+                  },
+                  status: "completed",
+                },
+                tool: "makeademo_validate_preparation",
+              },
+              type: "tool_use",
+            })}\n`,
+          },
+        ],
+        openCodeWaitsForCancellation: true,
+        validationRequestReadNeverSettles: true,
+      }),
+      providerID: "openai",
+      timeoutMs: 250,
+      validatePreparation: async () => {
+        validationStarted = true;
+        return validationArtifact().validation;
+      },
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      validation: { status: "succeeded" },
+    });
+    expect(validationStarted).toBe(true);
+    expect(
+      events.filter(
+        (event) => event instanceof Object && "cancelActiveCommands" in event,
+      ),
+    ).toHaveLength(1);
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "validation-request-read.started",
+          }),
+        },
+      ]),
+    );
+  });
+
   it("runs dependency install from streamed structured tool input when the dependency artifact read never settles", async () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparation({
@@ -2246,6 +2309,7 @@ function fakeProvider(
         commandStdoutChunks?: string[];
         commandDelayMs?: number;
         commandDelayMsByRun?: number[];
+        openCodeWaitsForCancellation?: boolean;
         dependencyInstallRequestReadNeverSettles?: boolean;
         cloneDiagnosticsStdout?: string;
         cloneResults?: Array<PreparationWorkspaceCommandResult | Error>;
@@ -2303,6 +2367,7 @@ function fakeWorkspace(
     commandStdoutChunks?: string[];
     commandDelayMs?: number;
     commandDelayMsByRun?: number[];
+    openCodeWaitsForCancellation?: boolean;
     dependencyInstallRequestReadNeverSettles?: boolean;
     cloneDiagnosticsStdout?: string;
     cloneResults?: Array<PreparationWorkspaceCommandResult | Error>;
@@ -2335,6 +2400,7 @@ function fakeWorkspace(
   let sandboxLogChain = Promise.resolve();
   let validationRequest = input.validationRequest;
   let validationResult = input.validationResult;
+  let releaseOpenCode: (() => void) | undefined;
   const commandDelayMsByRun = [...(input.commandDelayMsByRun ?? [])];
 
   return {
@@ -2367,6 +2433,13 @@ function fakeWorkspace(
       ) {
         throw openCodeStartupErrors.shift();
       }
+      const openCodeCompletion =
+        command.includes("opencode run") &&
+        input.openCodeWaitsForCancellation === true
+          ? new Promise<void>((resolve) => {
+              releaseOpenCode = resolve;
+            })
+          : undefined;
       const commandOutputChunks = command.includes("opencode run")
         ? commandOutputChunksByRun.length > 0
           ? commandOutputChunksByRun.shift()
@@ -2387,6 +2460,9 @@ function fakeWorkspace(
         for (const chunk of input.commandStderrChunks ?? []) {
           options?.onStderr?.(chunk);
         }
+      }
+      if (openCodeCompletion !== undefined) {
+        await openCodeCompletion;
       }
       if (
         command.startsWith("if test -f") &&
@@ -2553,6 +2629,8 @@ function fakeWorkspace(
     async cancelActiveCommands() {
       events.push({ cancelActiveCommands: true });
       events.push({ submittedCodeNetwork: false });
+      releaseOpenCode?.();
+      releaseOpenCode = undefined;
     },
     async uploadFiles() {
       throw new Error("Repo Preparation should clone inside Daytona.");

@@ -588,10 +588,55 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
     const streamedToolTracker = createLatestMakeADemoToolTracker();
     const streamedToolPayloadTracker =
       createLatestMakeADemoToolPayloadTracker();
+    let interruptionRequested = false;
+    const requestInterruption = () => {
+      if (interruptionRequested) {
+        return;
+      }
+      const completedPayload = streamedToolPayloadTracker.readCompleted();
+      if (completedPayload === undefined) {
+        return;
+      }
+
+      interruptionRequested = true;
+      void writePreparationSandboxLog(this.logger, handle.workspace, {
+        attempt: input.attempt,
+        event: "opencode-interruption.started",
+        toolName: completedPayload.toolName,
+      });
+      let cancellation: Promise<void>;
+      try {
+        cancellation = Promise.resolve(
+          handle.workspace.cancelActiveCommands?.(),
+        ).then(() => undefined);
+      } catch (error) {
+        cancellation = Promise.reject(error);
+      }
+      void cancellation
+        .then(() =>
+          writePreparationSandboxLog(this.logger, handle.workspace, {
+            attempt: input.attempt,
+            event: "opencode-interruption.succeeded",
+            toolName: completedPayload.toolName,
+          }),
+        )
+        .catch((error: unknown) =>
+          writePreparationSandboxLog(this.logger, handle.workspace, {
+            attempt: input.attempt,
+            error: readErrorMessage(error),
+            event: "opencode-interruption.failed",
+            toolName: completedPayload.toolName,
+          }),
+        )
+        .catch(() => {
+          // Interruption logging is best effort and must not affect preparation.
+        });
+    };
     const streamedSessionIDTracker = createOpenCodeSessionIDTracker();
     const onStdout = (chunk: string) => {
       streamedToolTracker.write(chunk);
       streamedToolPayloadTracker.write(chunk);
+      requestInterruption();
       streamedSessionIDTracker.write(chunk);
       this.onStdout?.(chunk);
       void writeDaytonaOpenCodeActivityLog(handle.workspace, {
@@ -604,6 +649,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
     const onStderr = (chunk: string) => {
       streamedToolTracker.write(chunk);
       streamedToolPayloadTracker.write(chunk);
+      requestInterruption();
       streamedSessionIDTracker.write(chunk);
       this.onStderr?.(chunk);
       void writeDaytonaOpenCodeActivityLog(handle.workspace, {
@@ -1929,6 +1975,7 @@ function readLatestMakeADemoToolPayload(
 }
 
 function createLatestMakeADemoToolPayloadTracker(): {
+  readCompleted: () => MakeADemoOpenCodeToolPayload | undefined;
   read: () => MakeADemoOpenCodeToolPayload | undefined;
   readError: () => string | undefined;
   write: (chunk: string) => void;
@@ -1937,8 +1984,14 @@ function createLatestMakeADemoToolPayloadTracker(): {
   let carry = "";
   let latestError: string | undefined;
   let latestPayload: MakeADemoOpenCodeToolPayload | undefined;
+  let latestCompletedPayload: MakeADemoOpenCodeToolPayload | undefined;
 
   return {
+    readCompleted() {
+      return (
+        latestCompletedPayload ?? readLatestCompletedMakeADemoToolPayload(carry)
+      );
+    },
     readError() {
       const carryPayload = readLatestMakeADemoToolPayload(carry);
       if (carryPayload !== undefined) {
@@ -1956,6 +2009,10 @@ function createLatestMakeADemoToolPayloadTracker(): {
       carry = lines.pop() ?? "";
       for (const line of lines) {
         const payload = readLatestMakeADemoToolPayload(line);
+        const completedPayload = readLatestCompletedMakeADemoToolPayload(line);
+        if (completedPayload !== undefined) {
+          latestCompletedPayload = completedPayload;
+        }
         if (payload !== undefined) {
           latestPayload = payload;
           latestError = undefined;
@@ -1970,8 +2027,66 @@ function createLatestMakeADemoToolPayloadTracker(): {
       if (carry.length > maximumCarryLength) {
         carry = carry.slice(-maximumCarryLength);
       }
+      const completedPayload = readLatestCompletedMakeADemoToolPayload(carry);
+      if (completedPayload !== undefined) {
+        latestCompletedPayload = completedPayload;
+      }
     },
   };
+}
+
+function readLatestCompletedMakeADemoToolPayload(
+  output: string,
+): MakeADemoOpenCodeToolPayload | undefined {
+  let latestPayload: MakeADemoOpenCodeToolPayload | undefined;
+  for (const line of output.split("\n")) {
+    const event = tryParseJson(line);
+    if (event === undefined) {
+      continue;
+    }
+    for (const payload of readCompletedMakeADemoToolPayloads(event)) {
+      latestPayload = payload;
+    }
+  }
+  return latestPayload;
+}
+
+function readCompletedMakeADemoToolPayloads(
+  value: unknown,
+): MakeADemoOpenCodeToolPayload[] {
+  if (typeof value !== "object" || value === null) {
+    return [];
+  }
+
+  const record = value as Record<string, unknown>;
+  const payload = createMakeADemoToolPayload(
+    readMakeADemoToolName(record),
+    readToolInput(record),
+  );
+  const payloads =
+    payload !== undefined && isCompletedMakeADemoToolRecord(record)
+      ? [payload]
+      : [];
+  for (const child of Object.values(record)) {
+    if (typeof child === "object" && child !== null) {
+      payloads.push(...readCompletedMakeADemoToolPayloads(child));
+    }
+  }
+  return payloads;
+}
+
+function isCompletedMakeADemoToolRecord(
+  record: Record<string, unknown>,
+): boolean {
+  if (record.status === "completed") {
+    return true;
+  }
+  const state = record.state;
+  return (
+    typeof state === "object" &&
+    state !== null &&
+    (state as Record<string, unknown>).status === "completed"
+  );
 }
 
 function readLatestMakeADemoToolPayloadError(
