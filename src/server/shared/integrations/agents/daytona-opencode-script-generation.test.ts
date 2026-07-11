@@ -1,12 +1,15 @@
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { PreparationWorkspace } from "../../../pipeline/03-repo-preparation/preparation-workspace.interface";
 import type { PipelineEventLogger } from "../../logging/pipeline-event-logger";
 import { createPipelineEventLogger } from "../../logging/pipeline-event-logger";
-import { DaytonaOpenCodeScriptGeneration } from "./daytona-opencode-script-generation";
+import {
+  DaytonaOpenCodeScriptGeneration,
+  type DraftCompositeReviewInput,
+} from "./daytona-opencode-script-generation";
 
 describe("DaytonaOpenCodeScriptGeneration", () => {
   it("resumes the Repo Preparation OpenCode session and returns an interactive Demo Script", async () => {
@@ -35,9 +38,21 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
         expect.objectContaining({
           configDir: "/tmp/makeademo/opencode",
           execute: expect.stringContaining("opencode run"),
+          timeoutMs: expect.any(Number),
         }),
       ]),
     );
+    const openCodeTimeout = events.find(
+      (event): event is { timeoutMs: number; execute: string } =>
+        typeof event === "object" &&
+        event !== null &&
+        "timeoutMs" in event &&
+        typeof event.timeoutMs === "number" &&
+        "execute" in event &&
+        typeof event.execute === "string" &&
+        event.execute.includes("opencode run"),
+    )?.timeoutMs;
+    expect(openCodeTimeout).toBeGreaterThan(1_800_000);
     expect(events).not.toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -66,6 +81,154 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
     expect(stdout.join("\n")).toContain(
       "Script Generation OpenCode attempt 1 produced a Demo Script candidate.",
     );
+  });
+
+  it("retries a Demo Script candidate that uses Capture SDK context outside callbacks", async () => {
+    const events: unknown[] = [];
+    const stdout: string[] = [];
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      maxAttempts: 2,
+      modelID: "gpt-5.5",
+      onStdout: (chunk) => stdout.push(chunk),
+      providerID: "openai",
+    });
+
+    const result = await agent.generateScriptPackage({
+      ...scriptGenerationInput(),
+      opencodeSessionID: "session_prepare_123",
+      preparationWorkspace: workspaceHandle(events, [
+        outOfScopeContextPackage(),
+        interactivePackage(),
+      ]),
+    });
+
+    expect(result.scriptId).toBe("script_conduit");
+    expect(
+      events.filter(
+        (event) =>
+          typeof event === "object" &&
+          event !== null &&
+          "execute" in event &&
+          typeof event.execute === "string" &&
+          event.execute.includes("opencode run"),
+      ),
+    ).toHaveLength(2);
+    expect(stdout.join("\n")).toContain(
+      "Script Generation OpenCode attempt 1 produced an invalid artifact",
+    );
+    expect(stdout.join("\n")).toContain(
+      "Script Generation OpenCode attempt 2 produced a Demo Script candidate.",
+    );
+  });
+
+  it("times out inactive Script Generation without extending for step_start and cancels active commands", async () => {
+    vi.useFakeTimers();
+    try {
+      const events: unknown[] = [];
+      const agent = new DaytonaOpenCodeScriptGeneration({
+        hardTimeoutMs: 1_000,
+        maxAttempts: 1,
+        modelID: "gpt-5.5",
+        providerID: "openai",
+        timeoutMs: 100,
+      });
+
+      const pending = agent.generateScriptPackage({
+        ...scriptGenerationInput(),
+        opencodeSessionID: "session_prepare_123",
+        preparationWorkspace: workspaceHandle(events, [interactivePackage()], {
+          commandOutputScheduleByRun: [
+            [
+              {
+                afterMs: 40,
+                channel: "stdout",
+                chunk: '{"type":"step_start"}\n',
+              },
+              {
+                afterMs: 40,
+                channel: "stdout",
+                chunk: '{"type":"step_start"}\n',
+              },
+            ],
+          ],
+          openCodeWaitsForCancellation: true,
+        }),
+      });
+
+      const rejection = expect(pending).rejects.toThrow(
+        "Script Generation agent timed out after 100ms of inactivity.",
+      );
+      await vi.advanceTimersByTimeAsync(120);
+      await rejection;
+      expect(events).toEqual(
+        expect.arrayContaining([{ cancelActiveCommands: true }]),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("extends Script Generation inactivity for structured text and completed editor tools", async () => {
+    vi.useFakeTimers();
+    try {
+      const events: unknown[] = [];
+      const agent = new DaytonaOpenCodeScriptGeneration({
+        hardTimeoutMs: 1_000,
+        modelID: "gpt-5.5",
+        providerID: "openai",
+        timeoutMs: 100,
+      });
+
+      const pending = agent.generateScriptPackage({
+        ...scriptGenerationInput(),
+        opencodeSessionID: "session_prepare_123",
+        preparationWorkspace: workspaceHandle(events, [interactivePackage()], {
+          commandOutputScheduleByRun: [
+            [
+              {
+                afterMs: 80,
+                channel: "stdout",
+                chunk: '{"type":"text","part":{"text":"working"}}\n',
+              },
+              {
+                afterMs: 80,
+                channel: "stdout",
+                chunk: '{"state":{"status":"completed"},"tool":"write"}\n',
+              },
+            ],
+          ],
+        }),
+      });
+
+      await vi.advanceTimersByTimeAsync(130);
+      await vi.advanceTimersByTimeAsync(80);
+      await expect(pending).resolves.toMatchObject({
+        scriptId: "script_conduit",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds Script Generation artifact reads by the public stage timeout", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      hardTimeoutMs: 100,
+      maxAttempts: 1,
+      modelID: "gpt-5.5",
+      providerID: "openai",
+      timeoutMs: 5,
+    });
+
+    await expect(
+      agent.generateScriptPackage({
+        ...scriptGenerationInput(),
+        opencodeSessionID: "session_prepare_123",
+        preparationWorkspace: workspaceHandle(events, [interactivePackage()], {
+          neverSettleArtifactReads: ["demo-script.json"],
+        }),
+      }),
+    ).rejects.toThrow(/Initial Script Generation artifact read .*timed out/);
   });
 
   it("mirrors bounded Script Generation stderr into the sandbox Pino log seam", async () => {
@@ -163,7 +326,7 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
         }),
       }),
       new Promise<"timed-out">((resolve) =>
-        setTimeout(() => resolve("timed-out"), 50),
+        setTimeout(() => resolve("timed-out"), 2_000),
       ),
     ]);
 
@@ -443,7 +606,7 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
           ),
         })
         .then((script) => script.scriptId),
-      delay(100).then(() => "timed-out"),
+      delay(2_000).then(() => "timed-out"),
     ]);
 
     expect(result).toBe("script_conduit");
@@ -1045,14 +1208,6 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
         {
           uploadFiles: [
             {
-              destinationPath: "/workspace/.makeademo/draft-review/draft.mp4",
-              sourcePath: draftPath,
-            },
-            {
-              destinationPath: "/workspace/.makeademo/draft-review/raw.webm",
-              sourcePath: rawTakePath,
-            },
-            {
               destinationPath:
                 "/workspace/.makeademo/draft-review/contact-sheet.jpg",
               sourcePath: contactSheetPath,
@@ -1062,11 +1217,42 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
                 "/workspace/.makeademo/draft-review/sample-001.jpg",
               sourcePath: sampledFramePath,
             },
+            {
+              destinationPath: "/workspace/.makeademo/draft-review/draft.mp4",
+              sourcePath: draftPath,
+            },
           ],
         },
         expect.objectContaining({
           execute: expect.stringContaining("opencode run"),
         }),
+      ]),
+    );
+    const uploadEventIndex = events.findIndex(
+      (event) =>
+        typeof event === "object" && event !== null && "uploadFiles" in event,
+    );
+    const openCodeEventIndex = events.findIndex(
+      (event) =>
+        typeof event === "object" &&
+        event !== null &&
+        "execute" in event &&
+        typeof event.execute === "string" &&
+        event.execute.includes("opencode run"),
+    );
+    expect(uploadEventIndex).toBeGreaterThanOrEqual(0);
+    expect(openCodeEventIndex).toBeGreaterThan(uploadEventIndex);
+    const uploadedFiles = (
+      events[uploadEventIndex] as { uploadFiles: Array<{ sourcePath: string }> }
+    ).uploadFiles;
+    expect(uploadedFiles).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ sourcePath: rawTakePath }),
+      ]),
+    );
+    expect(uploadedFiles).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ sourcePath: draftPath }),
       ]),
     );
     const openCodeCommand = events.find(
@@ -1097,15 +1283,235 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
     expect(openCodeCommand).toContain("sampledFramePaths");
     expect(openCodeCommand).toContain("ffmpegFindings");
   });
+
+  it("retries a transient Daytona socket closure while uploading Draft Composite evidence", async () => {
+    const events: unknown[] = [];
+    const logs: Array<Record<string, unknown>> = [];
+    const reviewDirectory = await mkdtemp(join(tmpdir(), "makeademo-review-"));
+    const contactSheetPath = join(reviewDirectory, "contact-sheet.jpg");
+    await writeFile(contactSheetPath, "contact sheet");
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      logger: testLogger(logs),
+      modelID: "gpt-5.5",
+      providerID: "openai",
+    });
+
+    await expect(
+      agent.reviewDraftComposite({
+        ...draftCompositeReviewInput(reviewDirectory, {
+          contactSheetPaths: [contactSheetPath],
+          sampledFramePaths: [],
+        }),
+        preparationWorkspace: workspaceHandle(
+          events,
+          [{ decision: "accept", reason: "Looks good." }],
+          { transientSocketClosureUploadFiles: 1 },
+        ),
+      }),
+    ).resolves.toEqual({ decision: "accept", reason: "Looks good." });
+
+    expect(
+      events.filter(
+        (event) =>
+          typeof event === "object" && event !== null && "uploadFiles" in event,
+      ),
+    ).toHaveLength(2);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(logs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "draft-composite-review.evidence-upload.retrying",
+          uploadAttempt: 1,
+          nextAttempt: 2,
+          delayMs: 250,
+          reason: expect.stringContaining("Transient Daytona socket closure"),
+          stage: "draft-composite-review",
+        }),
+      ]),
+    );
+  });
+
+  it("times out hanging Draft Composite review evidence uploads before OpenCode", async () => {
+    const events: unknown[] = [];
+    const fallbackLogs: Array<Record<string, unknown>> = [];
+    const logger = testLogger(fallbackLogs);
+    const reviewDirectory = await mkdtemp(join(tmpdir(), "makeademo-review-"));
+    const contactSheetPath = join(reviewDirectory, "contact-sheet.jpg");
+    const sampledFramePath = join(reviewDirectory, "sample-001.jpg");
+    await writeFile(contactSheetPath, "contact sheet");
+    await writeFile(sampledFramePath, "sampled frame");
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      draftReviewEvidenceUploadTimeoutMs: 5,
+      logger,
+      modelID: "gpt-5.5",
+      providerID: "openai",
+    });
+
+    await expect(
+      agent.reviewDraftComposite({
+        ...draftCompositeReviewInput(reviewDirectory, {
+          contactSheetPaths: [contactSheetPath],
+          sampledFramePaths: [sampledFramePath],
+        }),
+        preparationWorkspace: workspaceHandle(
+          events,
+          [{ decision: "accept", reason: "Looks good." }],
+          {
+            neverSettleUploadFiles: true,
+          },
+        ),
+      }),
+    ).rejects.toThrow(
+      "Draft Composite review evidence upload timed out after 5ms.",
+    );
+
+    await logger.flush();
+    expect(fallbackLogs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          bytes: 26,
+          event: "draft-composite-review.evidence-upload.failed",
+          fileCount: 2,
+          reason: "Draft Composite review evidence upload timed out after 5ms.",
+          stage: "draft-composite-review",
+        }),
+      ]),
+    );
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          execute: expect.stringContaining("opencode run"),
+        }),
+      ]),
+    );
+  });
+
+  it("retries a timed-out Draft Composite evidence upload once", async () => {
+    const events: unknown[] = [];
+    const reviewDirectory = await mkdtemp(join(tmpdir(), "makeademo-review-"));
+    const contactSheetPath = join(reviewDirectory, "contact-sheet.jpg");
+    await writeFile(contactSheetPath, "contact sheet");
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      draftReviewEvidenceUploadAttemptTimeoutMs: 5,
+      draftReviewEvidenceUploadTimeoutMs: 300,
+      modelID: "gpt-5.5",
+      providerID: "openai",
+    });
+
+    await expect(
+      agent.reviewDraftComposite({
+        ...draftCompositeReviewInput(reviewDirectory, {
+          contactSheetPaths: [contactSheetPath],
+          sampledFramePaths: [],
+        }),
+        preparationWorkspace: workspaceHandle(
+          events,
+          [{ decision: "accept", reason: "Looks good." }],
+          { neverSettleUploadFileAttempts: 1 },
+        ),
+      }),
+    ).resolves.toEqual({ decision: "accept", reason: "Looks good." });
+
+    expect(
+      events.filter(
+        (event) =>
+          typeof event === "object" && event !== null && "uploadFiles" in event,
+      ),
+    ).toHaveLength(2);
+  });
 });
+
+function draftCompositeReviewInput(
+  reviewDirectory: string,
+  evidence: {
+    contactSheetPaths: string[];
+    sampledFramePaths: string[];
+  },
+): Omit<DraftCompositeReviewInput, "preparationWorkspace"> {
+  const draftPath = join(reviewDirectory, "draft.mp4");
+  const rawTakePath = join(reviewDirectory, "raw.webm");
+
+  return {
+    attempt: 1,
+    captureManifest: {
+      baseUrl: "https://preview.example.test/",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      keepTemp: true,
+      manifestPath: join(reviewDirectory, "capture-manifest.json"),
+      qualityFindings: [],
+      rawTakePath,
+      runDirectory: reviewDirectory,
+      runId: "capture-1",
+      scenes: [
+        {
+          durationSeconds: 5,
+          sceneId: "scene_feed",
+          sectionId: "demo-script",
+          videoPath: join(reviewDirectory, "scene-feed.webm"),
+        },
+      ],
+      scriptId: "script_conduit",
+      temporary: true,
+      title: "Conduit article feed demo",
+    },
+    derivedEvidence: {
+      ...evidence,
+      draftDurationSeconds: 5,
+      ffmpegFindings: ["ffprobe audio probe found no audio stream"],
+      markerSummary: [{ durationSeconds: 5, sceneId: "scene_feed" }],
+      qualityFindings: [],
+      rawDraftCompositePath: draftPath,
+      rawTakePath,
+    },
+    draftComposite: {
+      createdAt: "2026-01-01T00:00:00.000Z",
+      durationInFrames: 150,
+      fps: 30,
+      manifestPath: join(reviewDirectory, "composite-manifest.json"),
+      outputVideoPath: draftPath,
+      renderPlanPath: join(reviewDirectory, "render-plan.json"),
+      runDirectory: reviewDirectory,
+      runId: "composite-1",
+      scriptId: "script_conduit",
+      title: "Conduit article feed demo",
+      viewUrl: "file:///tmp/draft.mp4",
+    },
+    opencodeSessionID: "session_prepare_123",
+    scriptPackage: {
+      ...interactivePackage(),
+      assumptions: [],
+      demoPlan: {
+        featureOrder: ["article feed"],
+        narrative: "Conduit article feed demo",
+        risks: [],
+      },
+      exploration: {
+        assumptions: [],
+        productSurfaces: [],
+        summary: "Prepared Conduit with local articles.",
+      },
+    },
+  };
+}
 
 function workspaceHandle(
   events: unknown[],
   artifacts: unknown[],
   helperOptions: {
+    commandOutputScheduleByRun?: Array<
+      Array<{
+        afterMs: number;
+        channel: "stderr" | "stdout";
+        chunk: string;
+      }>
+    >;
     firstOpenCodeFailure?: { stderr: string; stdout: string };
+    openCodeWaitsForCancellation?: boolean;
     neverSettleArtifactReads?: string[];
     neverSettleSandboxLogEvents?: string[];
+    neverSettleUploadFiles?: boolean;
+    neverSettleUploadFileAttempts?: number;
+    transientSocketClosureUploadFiles?: number;
     rejectArtifactReads?: string[];
     rejectSandboxLogEvents?: string[];
     transientSocketClosureArtifactReads?: Record<string, number>;
@@ -1113,6 +1519,10 @@ function workspaceHandle(
 ) {
   let latestArtifact: unknown;
   let openCodeAttempt = 0;
+  const commandOutputScheduleByRun = [
+    ...(helperOptions.commandOutputScheduleByRun ?? []),
+  ];
+  let releaseOpenCode: (() => void) | undefined;
   const workspace: PreparationWorkspace = {
     async execute(command, commandOptions) {
       events.push({
@@ -1121,6 +1531,9 @@ function workspaceHandle(
           ? {}
           : { configDir: commandOptions.env.OPENCODE_CONFIG_DIR }),
         ...(commandOptions?.onStdout === undefined ? {} : { streaming: true }),
+        ...(commandOptions?.timeoutMs === undefined
+          ? {}
+          : { timeoutMs: commandOptions.timeoutMs }),
       });
 
       if (command.includes("opencode run")) {
@@ -1133,8 +1546,25 @@ function workspaceHandle(
           };
         }
         latestArtifact = artifacts.shift();
-        commandOptions?.onStdout?.("script generation output");
-        commandOptions?.onStderr?.("script generation warning");
+        const schedule = commandOutputScheduleByRun.shift();
+        if (schedule !== undefined) {
+          for (const output of schedule) {
+            await new Promise((resolve) => setTimeout(resolve, output.afterMs));
+            if (output.channel === "stdout") {
+              commandOptions?.onStdout?.(output.chunk);
+            } else {
+              commandOptions?.onStderr?.(output.chunk);
+            }
+          }
+        } else {
+          commandOptions?.onStdout?.("script generation output");
+          commandOptions?.onStderr?.("script generation warning");
+        }
+        if (helperOptions.openCodeWaitsForCancellation) {
+          await new Promise<void>((resolve) => {
+            releaseOpenCode = resolve;
+          });
+        }
         return { exitCode: 0, stderr: "", stdout: "generated" };
       }
 
@@ -1223,6 +1653,24 @@ function workspaceHandle(
     async setOutboundNetworkAccess() {},
     async uploadFiles(files) {
       events.push({ uploadFiles: files });
+      if (helperOptions.neverSettleUploadFiles) {
+        await new Promise(() => {});
+      }
+      if ((helperOptions.neverSettleUploadFileAttempts ?? 0) > 0) {
+        helperOptions.neverSettleUploadFileAttempts =
+          (helperOptions.neverSettleUploadFileAttempts ?? 0) - 1;
+        await new Promise(() => {});
+      }
+      if ((helperOptions.transientSocketClosureUploadFiles ?? 0) > 0) {
+        helperOptions.transientSocketClosureUploadFiles =
+          (helperOptions.transientSocketClosureUploadFiles ?? 0) - 1;
+        throw new Error("The socket connection was closed unexpectedly");
+      }
+    },
+    async cancelActiveCommands() {
+      events.push({ cancelActiveCommands: true });
+      releaseOpenCode?.();
+      releaseOpenCode = undefined;
     },
     async writeSandboxLog(entry) {
       if (
@@ -1369,6 +1817,21 @@ function interactivePackage() {
     scriptId: "script_conduit",
     title: "Conduit article feed demo",
     version: 1,
+  };
+}
+
+function outOfScopeContextPackage() {
+  return {
+    ...interactivePackage(),
+    demoPlaywrightScript: [
+      "import { setup, scene } from './makeademo-capture-sdk';",
+      "await setup(async ({ page, baseUrl }) => { await page.goto(baseUrl + '#/'); });",
+      "await scene('scene_feed', async ({ page, expect }) => {",
+      "  await page.getByText('Global Feed').click();",
+      "  await expect(page.getByText('demo')).toBeVisible();",
+      "});",
+      "await expect(page.locator('body')).toBeVisible();",
+    ].join("\n"),
   };
 }
 

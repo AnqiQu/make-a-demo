@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DemoScript } from "./demo-script.schema";
 
@@ -179,6 +180,32 @@ export async function validateDemoScriptCaptureSdkTypes(input: {
         .filter(Boolean)
         .join("\n")}`,
     );
+  }
+}
+
+/**
+ * Validates a generated Demo Script against the Capture SDK declarations in an
+ * isolated temporary harness. The harness is always removed before this
+ * function settles, including when TypeScript validation fails.
+ */
+export async function validateDemoScriptCaptureSdkTypesInTemporaryHarness(
+  demoPlaywrightScript: string,
+): Promise<void> {
+  const directory = await mkdtemp(
+    join(tmpdir(), "makeademo-capture-sdk-validation-"),
+  );
+  try {
+    await writeGeneratedCaptureSdkHarness(directory);
+    await symlink(
+      join(process.cwd(), "node_modules"),
+      join(directory, "node_modules"),
+    );
+    await validateDemoScriptCaptureSdkTypes({
+      demoPlaywrightScript,
+      directory,
+    });
+  } finally {
+    await rm(directory, { force: true, recursive: true });
   }
 }
 

@@ -15,7 +15,10 @@ import type {
   CapturePathRepairer,
 } from "../../../pipeline/05-capture-path-validation/capture-path-repairer.interface";
 import type { CaptureManifest } from "../../../pipeline/06-footage-capture/capture-scenes";
-import { assertDemoScriptCaptureSdkContract } from "../../../pipeline/06-footage-capture/capture-sdk-contract";
+import {
+  assertDemoScriptCaptureSdkContract,
+  validateDemoScriptCaptureSdkTypesInTemporaryHarness,
+} from "../../../pipeline/06-footage-capture/capture-sdk-contract";
 import {
   type DemoScript,
   parseDemoScript,
@@ -26,6 +29,10 @@ import {
   createPipelineEventLogger,
 } from "../../logging/pipeline-event-logger";
 import { writeDaytonaOpenCodeActivityLog } from "./daytona-opencode-activity-log";
+import {
+  createMeaningfulActivityTracker,
+  runWithMeaningfulActivityTimeout,
+} from "./opencode-meaningful-activity-timeout";
 import { draftCompositeReviewOpenCodeModel } from "./opencode-model-defaults";
 
 const makeADemoArtifactDirectory = "/workspace/.makeademo";
@@ -38,6 +45,12 @@ const initialArtifactReadTimeoutMs = 60_000;
 const initialArtifactReadRetryDelaysMs = [250, 500] as const;
 const postRepairArtifactReadTimeoutMs = 60_000;
 const postRepairArtifactReadRetryDelaysMs = [250, 500] as const;
+const draftReviewEvidenceUploadAttemptTimeoutMs = 30_000;
+const draftReviewEvidenceUploadTimeoutMs = 60_250;
+const draftReviewEvidenceUploadRetryDelaysMs = [250] as const;
+const defaultInactivityTimeoutMs = 600_000;
+const defaultHardTimeoutMs = 1_800_000;
+const openCodeHardCapGraceMs = 30_000;
 
 export type DaytonaOpenCodeScriptGenerationOptions = {
   /**
@@ -52,6 +65,13 @@ export type DaytonaOpenCodeScriptGenerationOptions = {
   providerID: string;
   maxAttempts?: number;
   postRepairArtifactReadTimeoutMs?: number;
+  draftReviewEvidenceUploadTimeoutMs?: number;
+  draftReviewEvidenceUploadAttemptTimeoutMs?: number;
+  draftReviewEvidenceUploadRetryDelaysMs?: readonly number[];
+  /** Meaningful agent inactivity limit for each OpenCode call. */
+  timeoutMs?: number;
+  /** Absolute cap for each public Script Generation, repair, or review call. */
+  hardTimeoutMs?: number;
 };
 
 export type DraftCompositeReviewDecision =
@@ -103,40 +123,73 @@ class DaytonaOpenCodeSessionRunner {
       | "draft-composite-review"
       | "script-generation";
     workspace: PreparationWorkspace;
+    hardDeadlineAt: number;
+    inactivityTimeoutMs: number;
+    hardTimeoutMs: number;
   }) {
     const model =
       input.stage === "draft-composite-review"
         ? draftCompositeReviewOpenCodeModel
         : { modelID: this.modelID, providerID: this.providerID };
-    const result = await input.workspace.execute(
-      createOpenCodeRunCommand({
-        model: `${model.providerID}/${model.modelID}`,
-        prompt: input.prompt,
-        sessionID: input.sessionID,
-      }),
-      removeUndefinedOptions({
-        env: createOpenCodeEnv(),
-        onStderr: (chunk) => {
-          this.onStderr?.(chunk);
-          void writeDaytonaOpenCodeActivityLog(input.workspace, {
-            attempt: input.attempt,
-            channel: "stderr",
-            raw: chunk,
-            stage: input.stage,
-          });
-        },
-        onStdout: (chunk) => {
-          this.onStdout?.(chunk);
-          void writeDaytonaOpenCodeActivityLog(input.workspace, {
-            attempt: input.attempt,
-            channel: "stdout",
-            raw: chunk,
-            stage: input.stage,
-          });
-        },
-      }),
+    const activity = createMeaningfulActivityTracker();
+    return runWithMeaningfulActivityTimeout(
+      () =>
+        input.workspace.execute(
+          createOpenCodeRunCommand({
+            model: `${model.providerID}/${model.modelID}`,
+            prompt: input.prompt,
+            sessionID: input.sessionID,
+          }),
+          removeUndefinedOptions({
+            env: createOpenCodeEnv(),
+            onStderr: (chunk) => {
+              activity.write("stderr", chunk);
+              this.onStderr?.(chunk);
+              void writeDaytonaOpenCodeActivityLog(input.workspace, {
+                attempt: input.attempt,
+                channel: "stderr",
+                raw: chunk,
+                stage: input.stage,
+              });
+            },
+            onStdout: (chunk) => {
+              activity.write("stdout", chunk);
+              this.onStdout?.(chunk);
+              void writeDaytonaOpenCodeActivityLog(input.workspace, {
+                attempt: input.attempt,
+                channel: "stdout",
+                raw: chunk,
+                stage: input.stage,
+              });
+            },
+            timeoutMs: Math.max(
+              1,
+              input.hardDeadlineAt - Date.now() + openCodeHardCapGraceMs,
+            ),
+          }),
+        ),
+      {
+        activity,
+        hardDeadlineAt: input.hardDeadlineAt,
+        hardTimeoutMs: input.hardTimeoutMs,
+        inactivityTimeoutMs: input.inactivityTimeoutMs,
+        label: `${stageLabel(input.stage)} agent`,
+        onTimeout: () => input.workspace.cancelActiveCommands?.(),
+      },
     );
-    return result;
+  }
+}
+
+function stageLabel(
+  stage: "capture-path-repair" | "draft-composite-review" | "script-generation",
+) {
+  switch (stage) {
+    case "capture-path-repair":
+      return "Capture Path repair";
+    case "draft-composite-review":
+      return "Draft Composite review";
+    default:
+      return "Script Generation";
   }
 }
 
@@ -148,6 +201,11 @@ export class DaytonaOpenCodeScriptGeneration
   private readonly onStdout: ((chunk: string) => void) | undefined;
   private readonly openCode: DaytonaOpenCodeSessionRunner;
   private readonly postRepairArtifactReadTimeoutMs: number;
+  private readonly draftReviewEvidenceUploadTimeoutMs: number;
+  private readonly draftReviewEvidenceUploadAttemptTimeoutMs: number;
+  private readonly draftReviewEvidenceUploadRetryDelaysMs: readonly number[];
+  private readonly timeoutMs: number;
+  private readonly hardTimeoutMs: number;
 
   constructor(options: DaytonaOpenCodeScriptGenerationOptions) {
     this.logger = options.logger ?? createScriptGenerationLogger();
@@ -157,16 +215,34 @@ export class DaytonaOpenCodeScriptGeneration
     this.postRepairArtifactReadTimeoutMs =
       options.postRepairArtifactReadTimeoutMs ??
       postRepairArtifactReadTimeoutMs;
+    this.draftReviewEvidenceUploadTimeoutMs =
+      options.draftReviewEvidenceUploadTimeoutMs ??
+      draftReviewEvidenceUploadTimeoutMs;
+    this.draftReviewEvidenceUploadAttemptTimeoutMs =
+      options.draftReviewEvidenceUploadAttemptTimeoutMs ??
+      draftReviewEvidenceUploadAttemptTimeoutMs;
+    this.draftReviewEvidenceUploadRetryDelaysMs = (
+      options.draftReviewEvidenceUploadRetryDelaysMs ??
+      draftReviewEvidenceUploadRetryDelaysMs
+    ).slice(0, 1);
+    this.timeoutMs = options.timeoutMs ?? defaultInactivityTimeoutMs;
+    this.hardTimeoutMs = options.hardTimeoutMs ?? defaultHardTimeoutMs;
   }
 
   async generateScriptPackage(
     input: AgenticScriptGenerationInput,
   ): Promise<DemoScriptPackage> {
+    const hardDeadlineAt = Date.now() + this.hardTimeoutMs;
     let prompt = createScriptGenerationPrompt(input);
     let lastFailure =
       "Script Generation did not produce a valid script package.";
 
     for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
+      if (Date.now() >= hardDeadlineAt) {
+        throw new Error(
+          `Script Generation exceeded its hard cap of ${this.hardTimeoutMs}ms.`,
+        );
+      }
       await writeScriptGenerationSandboxLog(this.logger, input, {
         attempt,
         event: "script-generation.opencode-attempt.started",
@@ -182,6 +258,9 @@ export class DaytonaOpenCodeScriptGeneration
         sessionID: input.opencodeSessionID,
         stage: "script-generation",
         workspace: input.preparationWorkspace.workspace,
+        hardDeadlineAt,
+        inactivityTimeoutMs: this.timeoutMs,
+        hardTimeoutMs: this.hardTimeoutMs,
       });
 
       if (result.exitCode !== 0) {
@@ -209,6 +288,10 @@ export class DaytonaOpenCodeScriptGeneration
         attempt,
         input,
         logger: this.logger,
+        timeoutMs: boundedArtifactTimeout(
+          Math.min(initialArtifactReadTimeoutMs, this.timeoutMs),
+          hardDeadlineAt,
+        ),
       });
       if (artifact.status === "failed") {
         lastFailure = artifact.reason;
@@ -232,6 +315,9 @@ export class DaytonaOpenCodeScriptGeneration
       try {
         const demoScript = parseDemoScript(artifact.value);
         assertDemoScriptCaptureSdkContract(demoScript);
+        await validateDemoScriptCaptureSdkTypesInTemporaryHarness(
+          demoScript.demoPlaywrightScript,
+        );
         assertCaptureReadyScriptQuality(demoScript);
         await writeScriptGenerationSandboxLog(this.logger, input, {
           attempt,
@@ -274,6 +360,7 @@ export class DaytonaOpenCodeScriptGeneration
       throw new Error("Capture Path repair requires the prepared workspace.");
     }
     const preparationWorkspace = input.preparationWorkspace;
+    const hardDeadlineAt = Date.now() + this.hardTimeoutMs;
 
     await writeRepairSandboxLog(this.logger, input, {
       attempt: input.attempt,
@@ -291,6 +378,9 @@ export class DaytonaOpenCodeScriptGeneration
       sessionID: input.opencodeSessionID,
       stage: "capture-path-repair",
       workspace: preparationWorkspace.workspace,
+      hardDeadlineAt,
+      inactivityTimeoutMs: this.timeoutMs,
+      hardTimeoutMs: this.hardTimeoutMs,
     });
 
     if (result.exitCode !== 0) {
@@ -308,8 +398,20 @@ export class DaytonaOpenCodeScriptGeneration
       artifactName: "demo-script.json",
       input,
       logger: this.logger,
-      read: () => readScriptPackageArtifact({ preparationWorkspace }),
-      timeoutMs: this.postRepairArtifactReadTimeoutMs,
+      read: () =>
+        readScriptPackageArtifact(
+          { preparationWorkspace },
+          {
+            timeoutMs: boundedArtifactTimeout(
+              Math.min(this.postRepairArtifactReadTimeoutMs, this.timeoutMs),
+              hardDeadlineAt,
+            ),
+          },
+        ),
+      timeoutMs: boundedArtifactTimeout(
+        Math.min(this.postRepairArtifactReadTimeoutMs, this.timeoutMs),
+        hardDeadlineAt,
+      ),
     });
     if (scriptArtifact.status === "failed") {
       await writeRepairSandboxLog(this.logger, input, {
@@ -324,8 +426,20 @@ export class DaytonaOpenCodeScriptGeneration
       artifactName: "preparation-manifest.json",
       input,
       logger: this.logger,
-      read: () => readPreparationManifestArtifact({ preparationWorkspace }),
-      timeoutMs: this.postRepairArtifactReadTimeoutMs,
+      read: () =>
+        readPreparationManifestArtifact(
+          { preparationWorkspace },
+          {
+            timeoutMs: boundedArtifactTimeout(
+              Math.min(this.postRepairArtifactReadTimeoutMs, this.timeoutMs),
+              hardDeadlineAt,
+            ),
+          },
+        ),
+      timeoutMs: boundedArtifactTimeout(
+        Math.min(this.postRepairArtifactReadTimeoutMs, this.timeoutMs),
+        hardDeadlineAt,
+      ),
     });
 
     if (manifestArtifact.status === "failed") {
@@ -390,14 +504,56 @@ export class DaytonaOpenCodeScriptGeneration
       );
     }
     const preparationWorkspace = input.preparationWorkspace;
+    const hardDeadlineAt = Date.now() + this.hardTimeoutMs;
 
-    await uploadDraftReviewFiles(input);
+    const draftReviewUpload = await collectDraftReviewFiles(input);
+    logDraftReviewEvidenceUpload(this.logger, {
+      bytes: draftReviewUpload.bytes,
+      event: "draft-composite-review.evidence-upload.started",
+      fileCount: draftReviewUpload.files.length,
+    });
+    if (draftReviewUpload.files.length > 0) {
+      try {
+        await uploadDraftReviewEvidenceWithRetry({
+          bytes: draftReviewUpload.bytes,
+          files: draftReviewUpload.files,
+          logger: this.logger,
+          timeoutMs: boundedArtifactTimeout(
+            this.draftReviewEvidenceUploadTimeoutMs,
+            hardDeadlineAt,
+          ),
+          attemptTimeoutMs: boundedArtifactTimeout(
+            this.draftReviewEvidenceUploadAttemptTimeoutMs,
+            hardDeadlineAt,
+          ),
+          retryDelaysMs: this.draftReviewEvidenceUploadRetryDelaysMs,
+          upload: () =>
+            preparationWorkspace.workspace.uploadFiles(draftReviewUpload.files),
+        });
+      } catch (error) {
+        logDraftReviewEvidenceUpload(this.logger, {
+          bytes: draftReviewUpload.bytes,
+          event: "draft-composite-review.evidence-upload.failed",
+          fileCount: draftReviewUpload.files.length,
+          reason: readErrorMessage(error),
+        });
+        throw error;
+      }
+    }
+    logDraftReviewEvidenceUpload(this.logger, {
+      bytes: draftReviewUpload.bytes,
+      event: "draft-composite-review.evidence-upload.succeeded",
+      fileCount: draftReviewUpload.files.length,
+    });
     const result = await this.openCode.run({
       attempt: input.attempt,
       prompt: createDraftCompositeReviewPrompt(input),
       sessionID: input.opencodeSessionID,
       stage: "draft-composite-review",
       workspace: preparationWorkspace.workspace,
+      hardDeadlineAt,
+      inactivityTimeoutMs: this.timeoutMs,
+      hardTimeoutMs: this.hardTimeoutMs,
     });
 
     if (result.exitCode !== 0) {
@@ -406,8 +562,17 @@ export class DaytonaOpenCodeScriptGeneration
       );
     }
 
-    const artifact = await preparationWorkspace.workspace.execute(
-      `cat ${shellQuote(draftCompositeReviewPath)}`,
+    const reviewReadTimeoutMs = boundedArtifactTimeout(
+      this.timeoutMs,
+      hardDeadlineAt,
+    );
+    const artifact = await withTimeout(
+      preparationWorkspace.workspace.execute(
+        `cat ${shellQuote(draftCompositeReviewPath)}`,
+        { timeoutMs: reviewReadTimeoutMs },
+      ),
+      reviewReadTimeoutMs,
+      `Draft Composite review artifact read timed out after ${reviewReadTimeoutMs}ms.`,
     );
     if (artifact.exitCode !== 0) {
       throw new Error(
@@ -429,39 +594,143 @@ export class DaytonaOpenCodeScriptGeneration
   }
 }
 
-async function uploadDraftReviewFiles(input: DraftCompositeReviewInput) {
+async function collectDraftReviewFiles(input: DraftCompositeReviewInput) {
   if (input.preparationWorkspace === undefined) {
-    return;
+    return { bytes: 0, files: [] };
   }
 
   const paths = [
-    input.derivedEvidence.rawDraftCompositePath,
-    input.derivedEvidence.rawTakePath,
     ...input.derivedEvidence.contactSheetPaths,
     ...input.derivedEvidence.sampledFramePaths,
+    input.derivedEvidence.rawDraftCompositePath,
   ].filter((path): path is string => path !== undefined);
-  const files = [];
+  const files: Array<{
+    destinationPath: string;
+    sourcePath: string;
+  }> = [];
+  let bytes = 0;
   for (const sourcePath of paths) {
-    if (await exists(sourcePath)) {
+    const fileSize = await fileSizeBytes(sourcePath);
+    if (fileSize !== undefined) {
       files.push({
         destinationPath: `${draftReviewDirectory}/${basename(sourcePath)}`,
         sourcePath,
       });
+      bytes += fileSize;
     }
   }
 
-  if (files.length > 0) {
-    await input.preparationWorkspace.workspace.uploadFiles(files);
+  return { bytes, files };
+}
+
+async function fileSizeBytes(path: string): Promise<number | undefined> {
+  try {
+    return (await stat(path)).size;
+  } catch {
+    return undefined;
   }
 }
 
-async function exists(path: string) {
+function logDraftReviewEvidenceUpload(
+  logger: PipelineEventLogger,
+  entry: {
+    bytes: number;
+    event:
+      | "draft-composite-review.evidence-upload.started"
+      | "draft-composite-review.evidence-upload.retrying"
+      | "draft-composite-review.evidence-upload.succeeded"
+      | "draft-composite-review.evidence-upload.failed";
+    fileCount: number;
+    uploadAttempt?: number;
+    nextAttempt?: number;
+    delayMs?: number;
+    reason?: string;
+  },
+): void {
   try {
-    await stat(path);
-    return true;
+    void logger
+      .info({
+        ...entry,
+        stage: "draft-composite-review",
+      })
+      .catch(() => undefined);
   } catch {
-    return false;
+    // Evidence-upload logging is best effort and must not block review.
   }
+}
+
+async function uploadDraftReviewEvidenceWithRetry(input: {
+  bytes: number;
+  files: Array<{ destinationPath: string; sourcePath: string }>;
+  logger: PipelineEventLogger;
+  timeoutMs: number;
+  attemptTimeoutMs: number;
+  retryDelaysMs: readonly number[];
+  upload: () => Promise<void>;
+}): Promise<void> {
+  const timeoutMessage = `Draft Composite review evidence upload timed out after ${input.timeoutMs}ms.`;
+  const startedAt = Date.now();
+  const deadline = startedAt + input.timeoutMs;
+  let failure: unknown;
+
+  for (
+    let uploadAttempt = 1;
+    uploadAttempt <= input.retryDelaysMs.length + 1;
+    uploadAttempt += 1
+  ) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      failure = new Error(timeoutMessage);
+      break;
+    }
+
+    try {
+      await withTimeout(
+        input.upload(),
+        Math.min(input.attemptTimeoutMs, remainingMs),
+        timeoutMessage,
+      );
+      return;
+    } catch (error) {
+      if (
+        uploadAttempt <= input.retryDelaysMs.length &&
+        (isTransientDaytonaSocketClosedError(error) ||
+          (error instanceof Error && error.message === timeoutMessage))
+      ) {
+        const delayMs = input.retryDelaysMs[uploadAttempt - 1] ?? 0;
+        const remainingAfterUploadMs = deadline - Date.now();
+        if (remainingAfterUploadMs > 0) {
+          logDraftReviewEvidenceUpload(input.logger, {
+            bytes: input.bytes,
+            delayMs,
+            event: "draft-composite-review.evidence-upload.retrying",
+            fileCount: input.files.length,
+            nextAttempt: uploadAttempt + 1,
+            reason: isTransientDaytonaSocketClosedError(error)
+              ? `Transient Daytona socket closure while uploading Draft Composite review evidence: ${readErrorMessage(error)}`
+              : `Draft Composite review evidence upload attempt timed out: ${readErrorMessage(error)}`,
+            uploadAttempt,
+          });
+          try {
+            await withTimeout(
+              wait(delayMs),
+              remainingAfterUploadMs,
+              timeoutMessage,
+            );
+            continue;
+          } catch (retryDelayError) {
+            failure = retryDelayError;
+            break;
+          }
+        }
+      }
+
+      failure = error;
+      break;
+    }
+  }
+
+  throw failure ?? new Error(timeoutMessage);
 }
 
 function parseDraftCompositeReviewDecision(
@@ -667,6 +936,13 @@ function withTimeout<T>(
   });
 }
 
+function boundedArtifactTimeout(
+  timeoutMs: number,
+  hardDeadlineAt: number,
+): number {
+  return Math.max(1, Math.min(timeoutMs, hardDeadlineAt - Date.now()));
+}
+
 async function writeScriptGenerationSandboxLog(
   logger: PipelineEventLogger,
   input: AgenticScriptGenerationInput,
@@ -772,20 +1048,21 @@ async function readInitialScriptPackageArtifact(input: {
   attempt: number;
   input: AgenticScriptGenerationInput;
   logger: PipelineEventLogger;
+  timeoutMs: number;
 }): Promise<
   { status: "succeeded"; value: unknown } | { reason: string; status: "failed" }
 > {
   const startedAt = Date.now();
-  const timeoutMessage = `Initial Script Generation artifact read ${demoScriptPath} timed out after ${initialArtifactReadTimeoutMs}ms.`;
+  const timeoutMessage = `Initial Script Generation artifact read ${demoScriptPath} timed out after ${input.timeoutMs}ms.`;
   await writeScriptGenerationSandboxLog(input.logger, input.input, {
     artifact: basename(demoScriptPath),
     attempt: input.attempt,
     event: "script-generation.artifact-read.started",
     operation: `initial artifact read ${basename(demoScriptPath)}`,
-    timeoutMs: initialArtifactReadTimeoutMs,
+    timeoutMs: input.timeoutMs,
   });
 
-  const deadline = startedAt + initialArtifactReadTimeoutMs;
+  const deadline = startedAt + input.timeoutMs;
   for (
     let readAttempt = 1;
     readAttempt <= initialArtifactReadRetryDelaysMs.length + 1;
@@ -798,7 +1075,7 @@ async function readInitialScriptPackageArtifact(input: {
 
     try {
       const artifact = await withTimeout(
-        readScriptPackageArtifact(input.input),
+        readScriptPackageArtifact(input.input, { timeoutMs: input.timeoutMs }),
         remainingMs,
         timeoutMessage,
       );
@@ -853,11 +1130,13 @@ async function readInitialScriptPackageArtifact(input: {
 
 async function readScriptPackageArtifact(
   input: Pick<AgenticScriptGenerationInput, "preparationWorkspace">,
+  options: { timeoutMs?: number } = {},
 ): Promise<
   { status: "succeeded"; value: unknown } | { reason: string; status: "failed" }
 > {
   const result = await input.preparationWorkspace.workspace.execute(
     `if test -f ${shellQuote(demoScriptPath)}; then cat ${shellQuote(demoScriptPath)}; else exit 1; fi`,
+    options,
   );
   if (result.exitCode !== 0) {
     return {
@@ -876,15 +1155,19 @@ async function readScriptPackageArtifact(
   }
 }
 
-async function readPreparationManifestArtifact(input: {
-  preparationWorkspace: AgenticScriptGenerationInput["preparationWorkspace"];
-}): Promise<
+async function readPreparationManifestArtifact(
+  input: {
+    preparationWorkspace: AgenticScriptGenerationInput["preparationWorkspace"];
+  },
+  options: { timeoutMs?: number } = {},
+): Promise<
   | { status: "succeeded"; value: ReturnType<typeof readPreparationManifest> }
   | { status: "missing" }
   | { reason: string; status: "failed" }
 > {
   const result = await input.preparationWorkspace.workspace.execute(
     `if test -f ${shellQuote(preparationManifestPath)}; then cat ${shellQuote(preparationManifestPath)}; else exit 42; fi`,
+    options,
   );
   if (result.exitCode === 42) {
     return { status: "missing" };
@@ -952,9 +1235,11 @@ function removeUndefinedOptions(input: {
   env: Record<string, string>;
   onStderr: ((chunk: string) => void) | undefined;
   onStdout: ((chunk: string) => void) | undefined;
+  timeoutMs: number;
 }) {
   return {
     env: input.env,
+    timeoutMs: input.timeoutMs,
     ...(input.onStderr === undefined ? {} : { onStderr: input.onStderr }),
     ...(input.onStdout === undefined ? {} : { onStdout: input.onStdout }),
   };
