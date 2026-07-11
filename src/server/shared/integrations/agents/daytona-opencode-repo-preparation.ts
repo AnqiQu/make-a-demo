@@ -43,6 +43,9 @@ const cloneFailureDiagnosticValueMaxLength = 500;
 const dependencyInstallOutputTailMaxLength = 1_500;
 const requestArtifactReadMaxTimeoutMs = 5_000;
 const requestArtifactReadMinTimeoutMs = 50;
+const defaultInactivityTimeoutMs = 600_000;
+const defaultHardTimeoutMs = 1_800_000;
+const openCodeHardCapGraceMs = 30_000;
 export type DaytonaOpenCodeRepoPreparationOptions = {
   /**
    * Non-secret provider configuration copied into clone-failure diagnostics.
@@ -62,6 +65,8 @@ export type DaytonaOpenCodeRepoPreparationOptions = {
   provider: PreparationWorkspaceProvider;
   providerID: string;
   timeoutMs?: number;
+  /** Overall post-setup Repo Preparation/OpenCode loop cap. */
+  hardTimeoutMs?: number;
   validatePreparation?: (input: {
     manifest: ReturnType<typeof readPreparationManifest>;
     workspace: PreparationWorkspaceHandle;
@@ -79,6 +84,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
   private readonly provider: PreparationWorkspaceProvider;
   private readonly providerID: string;
   private readonly timeoutMs: number;
+  private readonly hardTimeoutMs: number;
   private readonly validatePreparation:
     | ((input: {
         manifest: ReturnType<typeof readPreparationManifest>;
@@ -95,7 +101,8 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
     this.onStdout = options.onStdout;
     this.provider = options.provider;
     this.providerID = options.providerID;
-    this.timeoutMs = options.timeoutMs ?? 10 * 60 * 1_000;
+    this.timeoutMs = options.timeoutMs ?? defaultInactivityTimeoutMs;
+    this.hardTimeoutMs = options.hardTimeoutMs ?? defaultHardTimeoutMs;
     this.validatePreparation = options.validatePreparation;
   }
 
@@ -132,8 +139,9 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
     if (result.status !== "succeeded") {
       await this.writeSandboxLog(handle.workspace, {
         event: "preparation-timeout",
-        reason: result.reason,
         workspaceId: handle.id,
+        ...result,
+        reason: result.reason,
       });
       await cancelActiveCommandsQuietly(handle);
       await destroyQuietly(handle);
@@ -265,29 +273,57 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
   ): Promise<RawPreparationRunResult> {
     let prompt = initialPrompt;
     let currentSessionID: string | undefined;
+    const hardDeadlineAt = Date.now() + this.hardTimeoutMs;
     for (let attempt = 0; attempt < 8; attempt += 1) {
-      const deadlineAt = Date.now() + this.timeoutMs;
+      const initialDeadlineAt = Math.min(
+        Date.now() + this.timeoutMs,
+        hardDeadlineAt,
+      );
+      let deadlineAt = initialDeadlineAt;
+      if (Date.now() >= hardDeadlineAt) {
+        return this.timeoutPreparation(
+          handle,
+          `Repo Preparation exceeded its hard cap of ${this.hardTimeoutMs}ms.`,
+          {
+            timeoutKind: "hard-cap",
+            hardTimeoutMs: this.hardTimeoutMs,
+            inactivityTimeoutMs: this.timeoutMs,
+          },
+        );
+      }
       await this.writeSandboxLog(handle.workspace, {
         attempt: attempt + 1,
         event: "opencode-started",
         remainingMs: deadlineAt - Date.now(),
       });
-      const openCodeRun = await raceWithTimeout(
-        this.executeOpenCode(handle, {
-          attempt: attempt + 1,
-          model: `${this.providerID}/${this.modelID}`,
-          prompt,
-          providerID: this.providerID,
-          ...(currentSessionID === undefined
-            ? {}
-            : { sessionID: currentSessionID }),
-        }),
-        Math.max(1, deadlineAt - Date.now()),
+      const activity = createMeaningfulActivityTracker();
+      const openCodeRun = await raceWithActivityTimeout(
+        () =>
+          this.executeOpenCode(handle, {
+            attempt: attempt + 1,
+            model: `${this.providerID}/${this.modelID}`,
+            prompt,
+            providerID: this.providerID,
+            hardDeadlineAt,
+            activity,
+            ...(currentSessionID === undefined
+              ? {}
+              : { sessionID: currentSessionID }),
+          }),
+        {
+          activity,
+          hardDeadlineAt,
+          hardTimeoutMs: this.hardTimeoutMs,
+          inactivityTimeoutMs: this.timeoutMs,
+        },
       );
       if (openCodeRun.status !== "succeeded") {
-        return this.timeoutPreparation(handle, openCodeRun.reason);
+        return this.timeoutPreparation(handle, openCodeRun.reason, openCodeRun);
       }
       const openCodeResult = openCodeRun.value;
+      if (Date.now() > initialDeadlineAt && activity.read() !== undefined) {
+        deadlineAt = Math.min(Date.now() + this.timeoutMs, hardDeadlineAt);
+      }
       currentSessionID = openCodeResult.sessionID ?? currentSessionID;
       await this.writeSandboxLog(handle.workspace, {
         attempt: attempt + 1,
@@ -327,7 +363,11 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
             continue;
           }
           if (validationOutcome.status === "timeout") {
-            return this.timeoutPreparation(handle, validationOutcome.reason);
+            return this.timeoutPreparation(
+              handle,
+              validationOutcome.reason,
+              this.timeoutMetadataForDeadline(hardDeadlineAt),
+            );
           }
 
           return validationOutcome.result;
@@ -361,7 +401,11 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
             continue;
           }
           if (validationOutcome.status === "timeout") {
-            return this.timeoutPreparation(handle, validationOutcome.reason);
+            return this.timeoutPreparation(
+              handle,
+              validationOutcome.reason,
+              this.timeoutMetadataForDeadline(hardDeadlineAt),
+            );
           }
 
           return validationOutcome.result;
@@ -414,7 +458,11 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
           Math.max(1, deadlineAt - Date.now()),
         );
         if (installRun.status !== "succeeded") {
-          return this.timeoutPreparation(handle, installRun.reason);
+          return this.timeoutPreparation(
+            handle,
+            installRun.reason,
+            this.timeoutMetadataForDeadline(hardDeadlineAt),
+          );
         }
         const installResult = installRun.value;
         const clearDependencyInstallRequestRun = await raceWithTimeout(
@@ -476,7 +524,11 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
           continue;
         }
         if (validationOutcome.status === "timeout") {
-          return this.timeoutPreparation(handle, validationOutcome.reason);
+          return this.timeoutPreparation(
+            handle,
+            validationOutcome.reason,
+            this.timeoutMetadataForDeadline(hardDeadlineAt),
+          );
         }
 
         return validationOutcome.result;
@@ -551,11 +603,13 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
   private async timeoutPreparation(
     handle: PreparationWorkspaceHandle,
     reason: string,
+    timeoutMetadata: TimeoutMetadata = {},
   ): Promise<RawPreparationRunResult> {
     await this.writeSandboxLog(handle.workspace, {
       event: "preparation-timeout",
       reason,
       workspaceId: handle.id,
+      ...timeoutMetadata,
     });
     await cancelActiveCommandsQuietly(handle);
     return {
@@ -568,6 +622,14 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
     };
   }
 
+  private timeoutMetadataForDeadline(hardDeadlineAt: number): TimeoutMetadata {
+    return {
+      hardTimeoutMs: this.hardTimeoutMs,
+      inactivityTimeoutMs: this.timeoutMs,
+      timeoutKind: Date.now() >= hardDeadlineAt ? "hard-cap" : "inactivity",
+    };
+  }
+
   private async executeOpenCode(
     handle: PreparationWorkspaceHandle,
     input: {
@@ -576,6 +638,8 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
       prompt: string;
       providerID: string;
       sessionID?: string;
+      hardDeadlineAt: number;
+      activity: MeaningfulActivityTracker;
     },
   ): Promise<
     PreparationWorkspaceCommandResult & {
@@ -634,6 +698,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
     };
     const streamedSessionIDTracker = createOpenCodeSessionIDTracker();
     const onStdout = (chunk: string) => {
+      input.activity.write("stdout", chunk);
       streamedToolTracker.write(chunk);
       streamedToolPayloadTracker.write(chunk);
       requestInterruption();
@@ -647,6 +712,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
       });
     };
     const onStderr = (chunk: string) => {
+      input.activity.write("stderr", chunk);
       streamedToolTracker.write(chunk);
       streamedToolPayloadTracker.write(chunk);
       requestInterruption();
@@ -663,6 +729,10 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
       env: createOpenCodeEnv(input),
       onStderr,
       onStdout,
+      timeoutMs: Math.max(
+        1,
+        input.hardDeadlineAt - Date.now() + openCodeHardCapGraceMs,
+      ),
     };
 
     const result = await handle.workspace.execute(
@@ -984,7 +1054,30 @@ type MakeADemoOpenCodeToolName =
 
 type TimedRunResult<T> =
   | { status: "succeeded"; value: T }
-  | { reason: string; status: "failed" | "timed-out" };
+  | ({ reason: string; status: "failed" | "timed-out" } & TimeoutMetadata);
+
+type TimeoutMetadata = {
+  timeoutKind?: "inactivity" | "hard-cap";
+  inactivityTimeoutMs?: number;
+  hardTimeoutMs?: number;
+  lastMeaningfulActivity?: MeaningfulActivity;
+  lastMeaningfulActivityAt?: number;
+  lastMeaningfulActivityKind?: MeaningfulActivityKind;
+  lastMeaningfulActivityTool?: string;
+};
+
+type MeaningfulActivityKind = "text" | "editor-tool" | "makeademo-tool";
+
+type MeaningfulActivity = {
+  at: number;
+  kind: MeaningfulActivityKind;
+  tool?: string;
+};
+
+type MeaningfulActivityTracker = {
+  read: () => MeaningfulActivity | undefined;
+  write: (channel: "stdout" | "stderr", chunk: string) => void;
+};
 
 type PreparationSetupResult =
   | { prompt: string; status: "ready" }
@@ -995,7 +1088,9 @@ function raceWithTimeout<T>(
   timeoutMs: number,
 ): Promise<TimedRunResult<T>> {
   return new Promise((resolve, reject) => {
+    let settled = false;
     const timeout = setTimeout(() => {
+      settled = true;
       resolve({
         reason: `Repo Preparation agent timed out after ${timeoutMs}ms.`,
         status: "timed-out",
@@ -1005,11 +1100,155 @@ function raceWithTimeout<T>(
     promise.then(
       (value) => {
         clearTimeout(timeout);
-        resolve({ status: "succeeded", value });
+        if (!settled) {
+          settled = true;
+          resolve({ status: "succeeded", value });
+        }
       },
       (error: unknown) => {
         clearTimeout(timeout);
-        reject(error);
+        if (!settled) {
+          settled = true;
+          reject(error);
+        }
+      },
+    );
+  });
+}
+
+function raceWithActivityTimeout<T>(
+  start: () => Promise<T>,
+  input: {
+    activity: MeaningfulActivityTracker;
+    hardDeadlineAt: number;
+    hardTimeoutMs: number;
+    inactivityTimeoutMs: number;
+  },
+): Promise<TimedRunResult<T>> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
+    let hardCapTimer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (result: TimedRunResult<T>) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (inactivityTimer !== undefined) {
+        clearTimeout(inactivityTimer);
+      }
+      if (hardCapTimer !== undefined) {
+        clearTimeout(hardCapTimer);
+      }
+      resolve(result);
+    };
+    const timeoutMetadata = (
+      timeoutKind: "inactivity" | "hard-cap",
+    ): TimeoutMetadata => {
+      const last = input.activity.read();
+      return {
+        hardTimeoutMs: input.hardTimeoutMs,
+        inactivityTimeoutMs: input.inactivityTimeoutMs,
+        ...(last === undefined ? {} : { lastMeaningfulActivity: last }),
+        ...(last === undefined
+          ? {}
+          : {
+              lastMeaningfulActivityAt: last.at,
+              lastMeaningfulActivityKind: last.kind,
+            }),
+        ...(last?.tool === undefined
+          ? {}
+          : { lastMeaningfulActivityTool: last.tool }),
+        timeoutKind,
+      };
+    };
+    const armInactivityTimer = () => {
+      if (settled) {
+        return;
+      }
+      if (Date.now() >= input.hardDeadlineAt) {
+        finish({
+          reason: `Repo Preparation exceeded its hard cap of ${input.hardTimeoutMs}ms.`,
+          status: "timed-out",
+          ...timeoutMetadata("hard-cap"),
+        });
+        return;
+      }
+      if (inactivityTimer !== undefined) {
+        clearTimeout(inactivityTimer);
+      }
+      const delay = Math.max(
+        1,
+        Math.min(input.inactivityTimeoutMs, input.hardDeadlineAt - Date.now()),
+      );
+      inactivityTimer = setTimeout(() => {
+        if (Date.now() >= input.hardDeadlineAt) {
+          finish({
+            reason: `Repo Preparation exceeded its hard cap of ${input.hardTimeoutMs}ms.`,
+            status: "timed-out",
+            ...timeoutMetadata("hard-cap"),
+          });
+        } else {
+          finish({
+            reason: `Repo Preparation agent timed out after ${input.inactivityTimeoutMs}ms of inactivity.`,
+            status: "timed-out",
+            ...timeoutMetadata("inactivity"),
+          });
+        }
+      }, delay);
+    };
+    hardCapTimer = setTimeout(
+      () => {
+        finish({
+          reason: `Repo Preparation exceeded its hard cap of ${input.hardTimeoutMs}ms.`,
+          status: "timed-out",
+          ...timeoutMetadata("hard-cap"),
+        });
+      },
+      Math.max(1, input.hardDeadlineAt - Date.now()),
+    );
+    const originalWrite = input.activity.write;
+    input.activity.write = (channel, chunk) => {
+      const previous = input.activity.read();
+      originalWrite(channel, chunk);
+      const current = input.activity.read();
+      if (current !== previous) {
+        armInactivityTimer();
+      }
+    };
+    armInactivityTimer();
+    let promise: Promise<T>;
+    try {
+      promise = start();
+    } catch (error) {
+      settled = true;
+      if (inactivityTimer !== undefined) {
+        clearTimeout(inactivityTimer);
+      }
+      clearTimeout(hardCapTimer);
+      reject(error);
+      return;
+    }
+    promise.then(
+      (value) => {
+        clearTimeout(hardCapTimer);
+        if (!settled) {
+          settled = true;
+          if (inactivityTimer !== undefined) {
+            clearTimeout(inactivityTimer);
+          }
+          resolve({ status: "succeeded", value });
+        }
+      },
+      (error: unknown) => {
+        clearTimeout(hardCapTimer);
+        if (!settled) {
+          settled = true;
+          if (inactivityTimer !== undefined) {
+            clearTimeout(inactivityTimer);
+          }
+          reject(error);
+        }
       },
     );
   });
@@ -1954,6 +2193,127 @@ function readLatestMakeADemoTool(
   }
 
   return latestTool;
+}
+
+function createMeaningfulActivityTracker(): MeaningfulActivityTracker {
+  const carries: Record<"stdout" | "stderr", string> = {
+    stderr: "",
+    stdout: "",
+  };
+  let latest: MeaningfulActivity | undefined;
+
+  const inspect = (line: string) => {
+    const event = tryParseJson(line);
+    if (event === undefined) {
+      return;
+    }
+    const text = readStructuredText(event);
+    if (text !== undefined && text.trim().length > 0) {
+      latest = { at: Date.now(), kind: "text" };
+    }
+    const completed = readCompletedActivityTool(event);
+    if (completed === undefined) {
+      return;
+    }
+    latest = {
+      at: Date.now(),
+      kind: completed.kind,
+      tool: completed.tool,
+    };
+  };
+
+  return {
+    read: () => latest,
+    write(channel, chunk) {
+      const output = `${carries[channel]}${chunk}`;
+      const lines = output.split("\n");
+      carries[channel] = lines.pop() ?? "";
+      for (const line of lines) {
+        inspect(line);
+      }
+      if (carries[channel].length > 65_536) {
+        carries[channel] = carries[channel].slice(-65_536);
+      }
+    },
+  };
+}
+
+function readStructuredText(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (record.type === "text") {
+    const part = record.part;
+    if (typeof part === "object" && part !== null) {
+      const text = (part as Record<string, unknown>).text;
+      return typeof text === "string" ? text : undefined;
+    }
+    return typeof record.text === "string" ? record.text : undefined;
+  }
+  for (const child of Object.values(record)) {
+    const text = readStructuredText(child);
+    if (text !== undefined) {
+      return text;
+    }
+  }
+  return undefined;
+}
+
+function readCompletedActivityTool(
+  value: unknown,
+): { kind: MeaningfulActivityKind; tool: string } | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const status =
+    record.status === "completed" ||
+    (typeof record.state === "object" &&
+      record.state !== null &&
+      (record.state as Record<string, unknown>).status === "completed");
+  if (status) {
+    const tool = findActivityToolName(record);
+    if (tool !== undefined) {
+      if (tool.startsWith("makeademo_")) {
+        return { kind: "makeademo-tool", tool };
+      }
+      if (["apply_patch", "write", "edit"].includes(tool)) {
+        return { kind: "editor-tool", tool };
+      }
+    }
+  }
+  for (const child of Object.values(record)) {
+    const nested = readCompletedActivityTool(child);
+    if (nested !== undefined) {
+      return nested;
+    }
+  }
+  return undefined;
+}
+
+function findActivityToolName(value: unknown): string | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of ["toolName", "tool", "name"]) {
+    const candidate = record[key];
+    if (
+      typeof candidate === "string" &&
+      (candidate.startsWith("makeademo_") ||
+        ["apply_patch", "write", "edit"].includes(candidate))
+    ) {
+      return candidate;
+    }
+  }
+  for (const child of Object.values(record)) {
+    const nested = findActivityToolName(child);
+    if (nested !== undefined) {
+      return nested;
+    }
+  }
+  return undefined;
 }
 
 function readLatestMakeADemoToolPayload(

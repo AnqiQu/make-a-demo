@@ -263,6 +263,27 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
   });
 
+  it("uses a per-call timeout override for parent Daytona commands", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeCommandTimeoutClient(calls),
+      commandTimeoutMs: 1_500,
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.execute("opencode run hello", { timeoutMs: 2_500 });
+
+    expect(calls).toContainEqual({
+      executeCommand: {
+        command: "opencode run hello",
+        cwd: undefined,
+        env: undefined,
+        sandbox: "parent_sandbox",
+        timeout: 3,
+      },
+    });
+  });
+
   it("fails fast when a Daytona command does not finish", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -349,6 +370,23 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       { wait: true },
       { disconnect: true },
     ]);
+  });
+
+  it("uses a per-call timeout override for streaming Daytona commands", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { ptyWaitsForDisconnect: true }),
+      commandTimeoutMs: 1_000,
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.execute("opencode run slow", {
+        onStdout: () => {},
+        timeoutMs: 1,
+      }),
+    ).rejects.toThrow("Daytona command did not finish within 1ms.");
+    expect(calls).toEqual(expect.arrayContaining([{ disconnect: true }]));
   });
 
   it("appends each sandbox log event to both durable paths with one command", async () => {

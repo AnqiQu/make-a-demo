@@ -18,6 +18,8 @@ export type PreparationWorkspaceExecuteOptions = {
   env?: Record<string, string>;
   onStderr?: (chunk: string) => void;
   onStdout?: (chunk: string) => void;
+  /** Optional per-command provider fail-safe timeout in milliseconds. */
+  timeoutMs?: number;
 };
 
 export type PreparationWorkspaceLogEntry = Record<string, unknown>;

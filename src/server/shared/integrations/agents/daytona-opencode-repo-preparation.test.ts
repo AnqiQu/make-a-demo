@@ -2287,6 +2287,233 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     });
     expect(validationStarted).toBe(false);
   });
+
+  it("stops repeated OpenCode passes at the overall hard cap", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandDelayMs: 200,
+        commandStdout: ["not structured preparation output"],
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+      hardTimeoutMs: 150,
+    });
+
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({
+      blockers: ["Repo Preparation exceeded its hard cap of 150ms."],
+      status: "failed",
+    });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "preparation-timeout",
+            hardTimeoutMs: 150,
+            timeoutKind: "hard-cap",
+          }),
+        },
+      ]),
+    );
+  });
+
+  it("does not extend inactivity for periodic step_start heartbeats", async () => {
+    vi.useFakeTimers();
+    try {
+      const events: unknown[] = [];
+      const agent = new DaytonaOpenCodeRepoPreparation({
+        modelID: "gpt-5.5",
+        provider: fakeProvider(events, {
+          commandOutputScheduleByRun: [
+            [
+              {
+                afterMs: 40,
+                channel: "stdout",
+                chunk: '{"type":"step_start"}\n',
+              },
+              {
+                afterMs: 40,
+                channel: "stdout",
+                chunk: '{"type":"step_start"}\n',
+              },
+              {
+                afterMs: 40,
+                channel: "stdout",
+                chunk: '{"type":"step_start"}\n',
+              },
+            ],
+          ],
+          openCodeWaitsForCancellation: true,
+        }),
+        providerID: "openai",
+        timeoutMs: 100,
+        hardTimeoutMs: 1_000,
+      });
+      const pending = agent.prepare({
+        normalizedSupportingDocuments: [],
+        repoUrl: "https://github.com/example/app",
+        structuredDemoIntent: { keyProductFeatures: ["validation"] },
+        workspaceId: "workspace_123",
+      });
+      await vi.advanceTimersByTimeAsync(130);
+      await expect(pending).resolves.toMatchObject({
+        blockers: [
+          "Repo Preparation agent timed out after 100ms of inactivity.",
+        ],
+        status: "failed",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("extends inactivity for structured text and accepts validation after the original deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const events: unknown[] = [];
+      const agent = new DaytonaOpenCodeRepoPreparation({
+        modelID: "gpt-5.5",
+        provider: fakeProvider(events, {
+          commandOutputScheduleByRun: [
+            [
+              {
+                afterMs: 80,
+                channel: "stdout",
+                chunk: '{"type":"text","part":{"text":"working"}}\n',
+              },
+              {
+                afterMs: 50,
+                channel: "stdout",
+                chunk: `${JSON.stringify({
+                  input: {
+                    manifestPath:
+                      "/tmp/makeademo/submitted-code/preparation-manifest.json",
+                  },
+                  state: { status: "completed" },
+                  toolName: "makeademo_validate_preparation",
+                })}\n`,
+              },
+            ],
+          ],
+          openCodeWaitsForCancellation: true,
+          validationResult: validationArtifact(),
+        }),
+        providerID: "openai",
+        timeoutMs: 100,
+        hardTimeoutMs: 1_000,
+        validatePreparation: async () => validationArtifact().validation,
+      });
+      const pending = agent.prepare({
+        normalizedSupportingDocuments: [],
+        repoUrl: "https://github.com/example/app",
+        structuredDemoIntent: { keyProductFeatures: ["validation"] },
+        workspaceId: "workspace_123",
+      });
+      await vi.advanceTimersByTimeAsync(130);
+      await expect(pending).resolves.toMatchObject({ status: "succeeded" });
+      expect(events).toEqual(
+        expect.arrayContaining([{ cancelActiveCommands: true }]),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops a periodically meaningful OpenCode run at the hard cap", async () => {
+    vi.useFakeTimers();
+    try {
+      const events: unknown[] = [];
+      const agent = new DaytonaOpenCodeRepoPreparation({
+        modelID: "gpt-5.5",
+        provider: fakeProvider(events, {
+          commandOutputScheduleByRun: [
+            [
+              {
+                afterMs: 80,
+                channel: "stdout",
+                chunk: '{"type":"text","part":{"text":"one"}}\n',
+              },
+              {
+                afterMs: 80,
+                channel: "stdout",
+                chunk: '{"type":"text","part":{"text":"two"}}\n',
+              },
+              {
+                afterMs: 80,
+                channel: "stdout",
+                chunk: '{"type":"text","part":{"text":"three"}}\n',
+              },
+            ],
+          ],
+          openCodeWaitsForCancellation: true,
+        }),
+        providerID: "openai",
+        timeoutMs: 100,
+        hardTimeoutMs: 250,
+      });
+      const pending = agent.prepare({
+        normalizedSupportingDocuments: [],
+        repoUrl: "https://github.com/example/app",
+        structuredDemoIntent: { keyProductFeatures: ["validation"] },
+        workspaceId: "workspace_123",
+      });
+      await vi.advanceTimersByTimeAsync(260);
+      await expect(pending).resolves.toMatchObject({
+        blockers: ["Repo Preparation exceeded its hard cap of 250ms."],
+        status: "failed",
+      });
+      expect(events).toEqual(
+        expect.arrayContaining([
+          {
+            sandboxLog: expect.objectContaining({
+              event: "preparation-timeout",
+              timeoutKind: "hard-cap",
+            }),
+          },
+        ]),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives OpenCode the remaining hard-cap timeout plus grace", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        captureOpenCodeTimeouts: true,
+        commandStdout: ["not structured preparation output"],
+      }),
+      providerID: "openai",
+      timeoutMs: 1_000,
+      hardTimeoutMs: 500,
+    });
+
+    await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    const timeout = events.find(
+      (event): event is { openCodeTimeoutMs: number } =>
+        typeof event === "object" &&
+        event !== null &&
+        "openCodeTimeoutMs" in event &&
+        typeof event.openCodeTimeoutMs === "number",
+    )?.openCodeTimeoutMs;
+    expect(timeout).toBeGreaterThan(500);
+  });
 });
 
 function fakeProvider(
@@ -2305,11 +2532,19 @@ function fakeProvider(
             chunk: string;
           }>
         >;
+        commandOutputScheduleByRun?: Array<
+          Array<{
+            afterMs: number;
+            channel: "stderr" | "stdout";
+            chunk: string;
+          }>
+        >;
         commandStderrChunks?: string[];
         commandStdoutChunks?: string[];
         commandDelayMs?: number;
         commandDelayMsByRun?: number[];
         openCodeWaitsForCancellation?: boolean;
+        captureOpenCodeTimeouts?: boolean;
         dependencyInstallRequestReadNeverSettles?: boolean;
         cloneDiagnosticsStdout?: string;
         cloneResults?: Array<PreparationWorkspaceCommandResult | Error>;
@@ -2363,11 +2598,19 @@ function fakeWorkspace(
         chunk: string;
       }>
     >;
+    commandOutputScheduleByRun?: Array<
+      Array<{
+        afterMs: number;
+        channel: "stderr" | "stdout";
+        chunk: string;
+      }>
+    >;
     commandStderrChunks?: string[];
     commandStdoutChunks?: string[];
     commandDelayMs?: number;
     commandDelayMsByRun?: number[];
     openCodeWaitsForCancellation?: boolean;
+    captureOpenCodeTimeouts?: boolean;
     dependencyInstallRequestReadNeverSettles?: boolean;
     cloneDiagnosticsStdout?: string;
     cloneResults?: Array<PreparationWorkspaceCommandResult | Error>;
@@ -2394,6 +2637,9 @@ function fakeWorkspace(
     JSON.stringify(successResult()),
   ];
   const commandOutputChunksByRun = [...(input.commandOutputChunksByRun ?? [])];
+  const commandOutputScheduleByRun = [
+    ...(input.commandOutputScheduleByRun ?? []),
+  ];
   const cloneResults = [...(input.cloneResults ?? [])];
   const openCodeStartupErrors = [...(input.openCodeStartupErrors ?? [])];
   let dependencyInstallRequest = input.dependencyInstallRequest;
@@ -2429,6 +2675,12 @@ function fakeWorkspace(
       });
       if (
         command.includes("opencode run") &&
+        input.captureOpenCodeTimeouts === true
+      ) {
+        events.push({ openCodeTimeoutMs: options?.timeoutMs });
+      }
+      if (
+        command.includes("opencode run") &&
         openCodeStartupErrors.length > 0
       ) {
         throw openCodeStartupErrors.shift();
@@ -2445,7 +2697,23 @@ function fakeWorkspace(
           ? commandOutputChunksByRun.shift()
           : input.commandOutputChunks
         : undefined;
-      if (commandOutputChunks !== undefined) {
+      const commandOutputSchedule = command.includes("opencode run")
+        ? commandOutputScheduleByRun.shift()
+        : undefined;
+      if (commandOutputSchedule !== undefined) {
+        for (const output of commandOutputSchedule) {
+          await new Promise((resolve) => setTimeout(resolve, output.afterMs));
+          if (output.channel === "stdout") {
+            options?.onStdout?.(output.chunk);
+          } else {
+            options?.onStderr?.(output.chunk);
+          }
+        }
+      }
+      if (
+        commandOutputSchedule === undefined &&
+        commandOutputChunks !== undefined
+      ) {
         for (const output of commandOutputChunks) {
           if (output.channel === "stdout") {
             options?.onStdout?.(output.chunk);

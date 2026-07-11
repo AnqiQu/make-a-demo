@@ -353,15 +353,16 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
       return this.executeStreaming(command, options);
     }
 
+    const timeoutMs = options.timeoutMs ?? this.commandTimeoutMs;
     const response = await withTimeout(
       this.sandbox.process.executeCommand(
         command,
         undefined,
         options.env,
-        toSdkTimeoutSeconds(this.commandTimeoutMs),
+        toSdkTimeoutSeconds(timeoutMs),
       ),
-      this.commandTimeoutMs,
-      `Daytona command did not finish within ${this.commandTimeoutMs}ms.`,
+      timeoutMs,
+      `Daytona command did not finish within ${timeoutMs}ms.`,
     );
 
     return {
@@ -376,6 +377,7 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
     options: PreparationWorkspaceExecuteOptions,
   ): Promise<PreparationWorkspaceCommandResult> {
     const output: string[] = [];
+    const timeoutMs = options.timeoutMs ?? this.commandTimeoutMs;
     const decoder = new TextDecoder();
     const pty = await this.createConnectedPty(this.sandbox, {
       cols: 120,
@@ -401,8 +403,8 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
           );
           return pty.wait();
         })(),
-        this.commandTimeoutMs,
-        `Daytona command did not finish within ${this.commandTimeoutMs}ms.`,
+        timeoutMs,
+        `Daytona command did not finish within ${timeoutMs}ms.`,
       );
       const stdout = output.join("");
       const exitCode = readExitCode(stdout) ?? result.exitCode ?? 0;
@@ -473,15 +475,16 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
       );
     }
 
+    const timeoutMs = options.timeoutMs ?? this.commandTimeoutMs;
     const response = await withTimeout(
       this.submittedCodeSandbox.process.executeCommand(
         command,
         undefined,
         options.env,
-        toSdkTimeoutSeconds(this.commandTimeoutMs),
+        toSdkTimeoutSeconds(timeoutMs),
       ),
-      this.commandTimeoutMs,
-      `Daytona command did not finish within ${this.commandTimeoutMs}ms.`,
+      timeoutMs,
+      `Daytona command did not finish within ${timeoutMs}ms.`,
     );
 
     return {
@@ -730,6 +733,7 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
     options: PreparationWorkspaceExecuteOptions,
   ): Promise<PreparationWorkspaceCommandResult> {
     const output: string[] = [];
+    const timeoutMs = options.timeoutMs ?? this.commandTimeoutMs;
     const decoder = new TextDecoder();
     const pty = await this.createConnectedPty(sandbox, {
       cols: 120,
@@ -755,8 +759,8 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
           );
           return pty.wait();
         })(),
-        this.commandTimeoutMs,
-        `Daytona command did not finish within ${this.commandTimeoutMs}ms.`,
+        timeoutMs,
+        `Daytona command did not finish within ${timeoutMs}ms.`,
       );
       const stdout = output.join("");
       const exitCode = readExitCode(stdout) ?? result.exitCode ?? 0;
