@@ -132,6 +132,7 @@ const defaultSandboxCreateTimeoutSeconds = 300;
 const sandboxCreateConnectionRetryLimit = 2;
 const networkSettingsConnectionRetryLimit = 2;
 const ptyStartupRetryLimit = 2;
+const submittedCodeSyncMaxAttempts = 2;
 const makeADemoArtifactDirectory = "/tmp/makeademo";
 const workspaceMakeADemoDirectory = "/workspace/.makeademo";
 const sandboxAuditLogPath = `${makeADemoArtifactDirectory}/sandbox-log.jsonl`;
@@ -511,12 +512,55 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
       throw new Error("Submitted-code Daytona sandbox is not configured.");
     }
 
+    await this.sandboxLogger.info({
+      event: "daytona.sync-submitted-code-workspace.started",
+      maxAttempts: submittedCodeSyncMaxAttempts,
+    });
+    for (
+      let attempt = 1;
+      attempt <= submittedCodeSyncMaxAttempts;
+      attempt += 1
+    ) {
+      try {
+        await this.syncSubmittedCodeWorkspaceAttempt(attempt);
+        await this.sandboxLogger.info({
+          event: "daytona.sync-submitted-code-workspace.succeeded",
+          attempt,
+          maxAttempts: submittedCodeSyncMaxAttempts,
+        });
+        return;
+      } catch (error) {
+        if (
+          attempt === submittedCodeSyncMaxAttempts ||
+          !isDaytonaAuthenticationError(error)
+        ) {
+          throw error;
+        }
+        await this.sandboxLogger.warn({
+          event: "daytona.sync-submitted-code-workspace.retrying",
+          attempt,
+          maxAttempts: submittedCodeSyncMaxAttempts,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        await wait(250);
+      }
+    }
+  }
+
+  private async syncSubmittedCodeWorkspaceAttempt(
+    attempt: number,
+  ): Promise<void> {
+    const submittedCodeSandbox = this.submittedCodeSandbox;
+    if (submittedCodeSandbox === undefined) {
+      throw new Error("Submitted-code Daytona sandbox is not configured.");
+    }
     const archiveName = `prepared-workspace-${randomUUID()}.tgz`;
     const remoteArchivePath = `${makeADemoArtifactDirectory}/${archiveName}`;
     const localDirectory = await mkdtemp(
       join(tmpdir(), "makeademo-daytona-sync-"),
     );
     const localArchivePath = join(localDirectory, archiveName);
+    let operation = "archive";
 
     try {
       const archiveResult = await withTimeout(
@@ -538,6 +582,7 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
         );
       }
 
+      operation = "download";
       const downloadResults = await withTimeout(
         this.sandbox.fs.downloadFiles(
           [{ destination: localArchivePath, source: remoteArchivePath }],
@@ -555,15 +600,17 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
         );
       }
 
+      operation = "upload";
       await withTimeout(
-        this.submittedCodeSandbox.fs.uploadFiles([
+        submittedCodeSandbox.fs.uploadFiles([
           { destination: remoteArchivePath, source: localArchivePath },
         ]),
         this.commandTimeoutMs,
         `Daytona prepared workspace archive upload did not finish within ${this.commandTimeoutMs}ms.`,
       );
+      operation = "extract";
       const extractResult = await withTimeout(
-        this.submittedCodeSandbox.process.executeCommand(
+        submittedCodeSandbox.process.executeCommand(
           createSubmittedCodeWorkspaceExtractCommand(remoteArchivePath),
           undefined,
           undefined,
@@ -580,6 +627,15 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
           ),
         );
       }
+    } catch (error) {
+      await this.sandboxLogger.error({
+        event: "daytona.sync-submitted-code-workspace.operation.failed",
+        operation,
+        attempt,
+        maxAttempts: submittedCodeSyncMaxAttempts,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
     } finally {
       await Promise.allSettled([
         withTimeout(
@@ -593,7 +649,7 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
           `Daytona prepared workspace archive cleanup did not finish within ${this.commandTimeoutMs}ms.`,
         ),
         withTimeout(
-          this.submittedCodeSandbox.process.executeCommand(
+          submittedCodeSandbox.process.executeCommand(
             `rm -f ${shellQuote(remoteArchivePath)}`,
             undefined,
             undefined,
@@ -879,6 +935,14 @@ function isDaytonaConnectionError(error: unknown): boolean {
     error.message.includes("ECONNRESET") ||
     error.message.includes("ETIMEDOUT") ||
     error.message.toLowerCase().includes("socket connection was closed")
+  );
+}
+
+function isDaytonaAuthenticationError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.trim().toLowerCase() ===
+      "unauthorized: authentication failed: bearer token is invalid"
   );
 }
 

@@ -1206,6 +1206,95 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     );
   });
 
+  it("retries an invalid Daytona bearer token once with fresh archive paths and telemetry", async () => {
+    const calls: unknown[] = [];
+    const relayedLogs: string[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls, {
+        archiveAuthFailuresBeforeSuccess: 1,
+      }),
+      sandboxLogSinks: [{ write: (line) => void relayedLogs.push(line) }],
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.syncSubmittedCodeWorkspace?.();
+
+    const archiveCommands = calls
+      .filter((call) => isArchiveCall(call, "parent_sandbox"))
+      .map(
+        (call) =>
+          (call as { executeCommand: { command: string } }).executeCommand
+            .command,
+      );
+    expect(archiveCommands).toHaveLength(2);
+    expect(
+      new Set(
+        archiveCommands.map(
+          (command) => command.match(/prepared-workspace-[a-f0-9-]+\.tgz/)?.[0],
+        ),
+      ),
+    ).toHaveLength(2);
+    expect(
+      calls.filter(
+        (call) =>
+          typeof call === "object" && call !== null && "uploadFiles" in call,
+      ),
+    ).toHaveLength(1);
+    expect(calls.filter((call) => isCleanupCall(call))).toHaveLength(4);
+
+    const events = relayedLogs.map(
+      (line) => JSON.parse(line) as Record<string, unknown>,
+    );
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "daytona.sync-submitted-code-workspace.started",
+        }),
+        expect.objectContaining({
+          event: "daytona.sync-submitted-code-workspace.operation.failed",
+          operation: "archive",
+          attempt: 1,
+          maxAttempts: 2,
+        }),
+        expect.objectContaining({
+          event: "daytona.sync-submitted-code-workspace.retrying",
+          attempt: 1,
+          maxAttempts: 2,
+        }),
+        expect.objectContaining({
+          event: "daytona.sync-submitted-code-workspace.succeeded",
+          attempt: 2,
+          maxAttempts: 2,
+        }),
+      ]),
+    );
+  });
+
+  it("does not retry a near-match Daytona authentication error", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls, {
+        archiveAuthError:
+          "unauthorized: authentication failed: Bearer token is invalid (temporary)",
+      }),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.syncSubmittedCodeWorkspace?.(),
+    ).rejects.toThrow(
+      "unauthorized: authentication failed: Bearer token is invalid (temporary)",
+    );
+    expect(
+      calls.filter(
+        (call) =>
+          typeof call === "object" && call !== null && "uploadFiles" in call,
+      ),
+    ).toHaveLength(0);
+  });
+
   it("escapes submitted-code restore find grouping for the sandbox shell", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -1384,6 +1473,8 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
 function fakeLinkedClient(
   calls: unknown[],
   options: {
+    archiveAuthError?: string;
+    archiveAuthFailuresBeforeSuccess?: number;
     downloadFilesNeverResolves?: boolean;
     executeCommandNeverResolves?: boolean;
     failParentArchive?: boolean;
@@ -1612,11 +1703,51 @@ async function expectPathMissing(path: string): Promise<void> {
   await expect(access(path)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
+function isArchiveCall(call: unknown, sandbox: string): boolean {
+  if (
+    typeof call !== "object" ||
+    call === null ||
+    !("executeCommand" in call)
+  ) {
+    return false;
+  }
+  const executeCommand = (call as { executeCommand?: unknown }).executeCommand;
+  if (typeof executeCommand !== "object" || executeCommand === null) {
+    return false;
+  }
+  const command = executeCommand as { command?: unknown; sandbox?: unknown };
+  return (
+    command.sandbox === sandbox &&
+    typeof command.command === "string" &&
+    command.command.includes("tar ") &&
+    command.command.includes("-czf")
+  );
+}
+
+function isCleanupCall(call: unknown): boolean {
+  if (
+    typeof call !== "object" ||
+    call === null ||
+    !("executeCommand" in call)
+  ) {
+    return false;
+  }
+  const executeCommand = (call as { executeCommand?: unknown }).executeCommand;
+  return (
+    typeof executeCommand === "object" &&
+    executeCommand !== null &&
+    typeof (executeCommand as { command?: unknown }).command === "string" &&
+    (executeCommand as { command: string }).command.startsWith("rm -f")
+  );
+}
+
 function fakeLinkedSandbox(
   calls: unknown[],
   id: string,
   stdout: string,
   options: {
+    archiveAuthError?: string;
+    archiveAuthFailuresBeforeSuccess?: number;
     downloadFilesNeverResolves?: boolean;
     executeCommandNeverResolves?: boolean;
     failParentArchive?: boolean;
@@ -1624,6 +1755,7 @@ function fakeLinkedSandbox(
     remoteCleanupNeverResolves?: boolean;
   } = {},
 ) {
+  let archiveAuthFailures = options.archiveAuthFailuresBeforeSuccess ?? 0;
   return {
     fs: {
       async downloadFiles(
@@ -1669,6 +1801,18 @@ function fakeLinkedSandbox(
             result: "archive started",
             stderr: "tar: permission denied",
           };
+        }
+        if (
+          id === "parent_sandbox" &&
+          command.includes("tar ") &&
+          command.includes("-czf") &&
+          (options.archiveAuthError !== undefined || archiveAuthFailures > 0)
+        ) {
+          if (archiveAuthFailures > 0) archiveAuthFailures -= 1;
+          throw new Error(
+            options.archiveAuthError ??
+              "unauthorized: authentication failed: Bearer token is invalid",
+          );
         }
         if (
           options.failSubmittedRestore === true &&
