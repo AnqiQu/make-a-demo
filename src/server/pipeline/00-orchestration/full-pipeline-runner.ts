@@ -150,6 +150,8 @@ type DraftCompositeEvidence = {
   staticSceneIds: string[];
 };
 
+const DEFAULT_EVIDENCE_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
+
 type DraftCompositeReviewDecision =
   | {
       decision: "accept";
@@ -176,6 +178,8 @@ export type FullPipelineRunnerOptions = PipelineOrchestratorOptions & {
     input: CompositeVideoFromScriptInput,
   ) => Promise<CompositedVideoManifest>;
   demoRequestScriptStore?: DemoRequestScriptStore;
+  /** Maximum duration for each ffmpeg or ffprobe evidence command. */
+  evidenceCommandTimeoutMs?: number;
   onLog?: (entry: FullPipelineLogEntry) => void;
   logSinks?: PipelineLogSink[];
   outputRoot?: string;
@@ -836,6 +840,9 @@ async function readDraftCompositeEvidence(input: {
     (await generateDraftCompositeEvidence({
       captureManifest: input.captureManifest,
       finalVideo: input.finalVideo,
+      timeoutMs:
+        input.options.evidenceCommandTimeoutMs ??
+        DEFAULT_EVIDENCE_COMMAND_TIMEOUT_MS,
     }))
   );
 }
@@ -843,8 +850,9 @@ async function readDraftCompositeEvidence(input: {
 async function generateDraftCompositeEvidence(input: {
   captureManifest: CaptureManifest;
   finalVideo: CompositedVideoManifest;
+  timeoutMs: number;
 }): Promise<DraftCompositeEvidence> {
-  const { captureManifest, finalVideo } = input;
+  const { captureManifest, finalVideo, timeoutMs } = input;
   if (finalVideo.outputVideoPath === undefined) {
     return {
       audioProbeFailed: true,
@@ -882,37 +890,49 @@ async function generateDraftCompositeEvidence(input: {
   const sampledFramePattern = join(evidenceDirectory, "sample-%03d.jpg");
   const contactSheetPath = join(evidenceDirectory, "contact-sheet.jpg");
   const [sampledFrames, contactSheet, audioProbe] = await Promise.all([
-    runEvidenceCommand("ffmpeg", [
-      "-y",
-      "-i",
-      finalVideo.outputVideoPath,
-      "-vf",
-      "fps=1/5",
-      "-frames:v",
-      "4",
-      sampledFramePattern,
-    ]),
-    runEvidenceCommand("ffmpeg", [
-      "-y",
-      "-i",
-      finalVideo.outputVideoPath,
-      "-vf",
-      "fps=1/5,scale=320:-1,tile=2x2",
-      "-frames:v",
-      "1",
-      contactSheetPath,
-    ]),
-    runEvidenceCommand("ffprobe", [
-      "-v",
-      "error",
-      "-select_streams",
-      "a",
-      "-show_entries",
-      "stream=index",
-      "-of",
-      "csv=p=0",
-      finalVideo.outputVideoPath,
-    ]),
+    runEvidenceCommand(
+      "ffmpeg",
+      [
+        "-y",
+        "-i",
+        finalVideo.outputVideoPath,
+        "-vf",
+        "fps=1/5",
+        "-frames:v",
+        "4",
+        sampledFramePattern,
+      ],
+      timeoutMs,
+    ),
+    runEvidenceCommand(
+      "ffmpeg",
+      [
+        "-y",
+        "-i",
+        finalVideo.outputVideoPath,
+        "-vf",
+        "fps=1/5,scale=320:-1,tile=2x2",
+        "-frames:v",
+        "1",
+        contactSheetPath,
+      ],
+      timeoutMs,
+    ),
+    runEvidenceCommand(
+      "ffprobe",
+      [
+        "-v",
+        "error",
+        "-select_streams",
+        "a",
+        "-show_entries",
+        "stream=index",
+        "-of",
+        "csv=p=0",
+        finalVideo.outputVideoPath,
+      ],
+      timeoutMs,
+    ),
   ]);
   if (sampledFrames.exitCode !== 0) {
     findings.push(
@@ -932,6 +952,7 @@ async function generateDraftCompositeEvidence(input: {
   const staticFootageProbe = await detectStaticScenes({
     captureManifest,
     findings,
+    timeoutMs,
     videoPath: finalVideo.outputVideoPath,
   });
 
@@ -959,6 +980,7 @@ async function generateDraftCompositeEvidence(input: {
 async function detectStaticScenes(input: {
   captureManifest: CaptureManifest;
   findings: string[];
+  timeoutMs: number;
   videoPath: string;
 }) {
   const failedSceneIds: string[] = [];
@@ -976,22 +998,26 @@ async function detectStaticScenes(input: {
       2,
       Math.max(0.5, durationSeconds * 0.75),
     );
-    const probe = await runEvidenceCommand("ffmpeg", [
-      "-v",
-      "info",
-      "-ss",
-      sceneStartSeconds.toFixed(3),
-      "-t",
-      durationSeconds.toFixed(3),
-      "-i",
-      input.videoPath,
-      "-vf",
-      `freezedetect=n=-60dB:d=${freezeDurationSeconds.toFixed(3)}`,
-      "-an",
-      "-f",
-      "null",
-      "-",
-    ]);
+    const probe = await runEvidenceCommand(
+      "ffmpeg",
+      [
+        "-v",
+        "info",
+        "-ss",
+        sceneStartSeconds.toFixed(3),
+        "-t",
+        durationSeconds.toFixed(3),
+        "-i",
+        input.videoPath,
+        "-vf",
+        `freezedetect=n=-60dB:d=${freezeDurationSeconds.toFixed(3)}`,
+        "-an",
+        "-f",
+        "null",
+        "-",
+      ],
+      input.timeoutMs,
+    );
 
     if (probe.exitCode !== 0) {
       failedSceneIds.push(scene.sceneId);
@@ -1037,7 +1063,11 @@ async function exists(path: string) {
   }
 }
 
-async function runEvidenceCommand(command: string, args: string[]) {
+async function runEvidenceCommand(
+  command: string,
+  args: string[],
+  timeoutMs = DEFAULT_EVIDENCE_COMMAND_TIMEOUT_MS,
+) {
   return new Promise<{
     exitCode: number | null;
     stderr: string;
@@ -1046,6 +1076,23 @@ async function runEvidenceCommand(command: string, args: string[]) {
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const settle = (result: {
+      exitCode: number | null;
+      stderr: string;
+      stdout: string;
+    }) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeoutTimer !== undefined) {
+        clearTimeout(timeoutTimer);
+      }
+      resolve(result);
+    };
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -1056,11 +1103,33 @@ async function runEvidenceCommand(command: string, args: string[]) {
       stderr += chunk;
     });
     child.once("error", (error) => {
-      resolve({ exitCode: 127, stderr: error.message, stdout });
+      settle({ exitCode: 127, stderr: error.message, stdout });
     });
     child.once("close", (exitCode) => {
-      resolve({ exitCode, stderr, stdout });
+      if (forceKillTimer !== undefined) {
+        clearTimeout(forceKillTimer);
+      }
+      settle({ exitCode, stderr, stdout });
     });
+
+    const timeoutTimer = setTimeout(
+      () => {
+        if (settled) {
+          return;
+        }
+
+        stderr += `Command timed out after ${timeoutMs}ms.`;
+        child.kill("SIGTERM");
+        forceKillTimer = setTimeout(
+          () => {
+            child.kill("SIGKILL");
+          },
+          Math.min(1000, Math.max(100, timeoutMs)),
+        );
+        settle({ exitCode: null, stderr, stdout });
+      },
+      Math.max(1, timeoutMs),
+    );
   });
 }
 

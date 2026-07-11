@@ -1,5 +1,12 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -1352,6 +1359,85 @@ describe("runFullPipelineJob", () => {
         process.env.PATH = previousPath;
       }
       await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("bounds hanging Draft Composite evidence commands", async () => {
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
+    const toolsRoot = await mkdtemp(join(tmpdir(), "makeademo-tools-"));
+    const previousPath = process.env.PATH;
+    const previousReviewAttempts =
+      process.env.MAKEADEMO_DRAFT_COMPOSITE_REVIEW_ATTEMPTS;
+    const ffmpegFindings: string[][] = [];
+    process.env.PATH = toolsRoot;
+    process.env.MAKEADEMO_DRAFT_COMPOSITE_REVIEW_ATTEMPTS = "0";
+
+    try {
+      const hangingTool = `#!${process.execPath}\nsetTimeout(() => {}, 60_000);\n`;
+      for (const command of ["ffmpeg", "ffprobe"]) {
+        const commandPath = join(toolsRoot, command);
+        await writeFile(commandPath, hangingTool);
+        await chmod(commandPath, 0o755);
+      }
+
+      const startedAt = Date.now();
+      const result = await runFullPipelineJob(
+        {
+          demoBrief: { keyProductFeatures: ["article feed"] },
+          normalizedSupportingDocuments: [],
+          repoSecurity: {
+            files: [{ path: "package.json", text: "{}" }],
+            repoStats: { fileCount: 1, sizeBytes: 100 },
+          },
+          repoUrl: "https://github.com/example/app",
+          workspaceId: "workspace_123",
+        },
+        stage1Dependencies([]),
+        {
+          async captureScenes(input) {
+            return captureManifest(outputRoot, input.runId ?? "capture");
+          },
+          async compositeVideo(input) {
+            const manifest = compositeManifest(
+              outputRoot,
+              input.runId ?? "composite",
+            );
+            await writeFile(manifest.outputVideoPath ?? "", "draft video");
+            return manifest;
+          },
+          evidenceCommandTimeoutMs: 25,
+          outputRoot,
+          async reviewDraftComposite(input) {
+            ffmpegFindings.push(input.derivedEvidence.ffmpegFindings);
+            return { decision: "accept" };
+          },
+          runId: "full-run",
+        },
+      );
+
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+      expect(ffmpegFindings[0]).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("timed out after 25ms"),
+        ]),
+      );
+    } finally {
+      if (previousPath === undefined) {
+        Reflect.deleteProperty(process.env, "PATH");
+      } else {
+        process.env.PATH = previousPath;
+      }
+      if (previousReviewAttempts === undefined) {
+        Reflect.deleteProperty(
+          process.env,
+          "MAKEADEMO_DRAFT_COMPOSITE_REVIEW_ATTEMPTS",
+        );
+      } else {
+        process.env.MAKEADEMO_DRAFT_COMPOSITE_REVIEW_ATTEMPTS =
+          previousReviewAttempts;
+      }
+      await rm(outputRoot, { force: true, recursive: true });
+      await rm(toolsRoot, { force: true, recursive: true });
     }
   });
 
