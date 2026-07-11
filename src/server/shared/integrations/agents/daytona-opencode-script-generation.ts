@@ -33,6 +33,8 @@ const preparationManifestPath = `${makeADemoArtifactDirectory}/preparation-manif
 const demoScriptPath = `${makeADemoArtifactDirectory}/demo-script.json`;
 const draftCompositeReviewPath = `${makeADemoArtifactDirectory}/draft-composite-review.json`;
 const draftReviewDirectory = `${makeADemoArtifactDirectory}/draft-review`;
+const initialArtifactReadTimeoutMs = 60_000;
+const initialArtifactReadRetryDelaysMs = [250, 500] as const;
 const postRepairArtifactReadTimeoutMs = 60_000;
 const postRepairArtifactReadRetryDelaysMs = [250, 500] as const;
 
@@ -198,7 +200,11 @@ export class DaytonaOpenCodeScriptGeneration
         continue;
       }
 
-      const artifact = await readScriptPackageArtifact(input);
+      const artifact = await readInitialScriptPackageArtifact({
+        attempt,
+        input,
+        logger: this.logger,
+      });
       if (artifact.status === "failed") {
         lastFailure = artifact.reason;
         await writeScriptGenerationSandboxLog(this.logger, input, {
@@ -755,6 +761,89 @@ async function removePreviousScriptPackage(
   await input.preparationWorkspace.workspace.execute(
     `rm -f ${shellQuote(demoScriptPath)}`,
   );
+}
+
+async function readInitialScriptPackageArtifact(input: {
+  attempt: number;
+  input: AgenticScriptGenerationInput;
+  logger: PipelineEventLogger;
+}): Promise<
+  { status: "succeeded"; value: unknown } | { reason: string; status: "failed" }
+> {
+  const startedAt = Date.now();
+  const timeoutMessage = `Initial Script Generation artifact read ${demoScriptPath} timed out after ${initialArtifactReadTimeoutMs}ms.`;
+  await writeScriptGenerationSandboxLog(input.logger, input.input, {
+    artifact: basename(demoScriptPath),
+    attempt: input.attempt,
+    event: "script-generation.artifact-read.started",
+    operation: `initial artifact read ${basename(demoScriptPath)}`,
+    timeoutMs: initialArtifactReadTimeoutMs,
+  });
+
+  const deadline = startedAt + initialArtifactReadTimeoutMs;
+  for (
+    let readAttempt = 1;
+    readAttempt <= initialArtifactReadRetryDelaysMs.length + 1;
+    readAttempt += 1
+  ) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      throw new Error(timeoutMessage);
+    }
+
+    try {
+      const artifact = await withTimeout(
+        readScriptPackageArtifact(input.input),
+        remainingMs,
+        timeoutMessage,
+      );
+      if (artifact.status === "failed") {
+        return artifact;
+      }
+
+      await writeScriptGenerationSandboxLog(input.logger, input.input, {
+        artifact: basename(demoScriptPath),
+        attempt: input.attempt,
+        durationMs: Date.now() - startedAt,
+        event: "script-generation.artifact-read.succeeded",
+        operation: `initial artifact read ${basename(demoScriptPath)}`,
+        readAttempt,
+      });
+      return artifact;
+    } catch (error) {
+      if (
+        readAttempt <= initialArtifactReadRetryDelaysMs.length &&
+        isTransientDaytonaSocketClosedError(error)
+      ) {
+        const delayMs = initialArtifactReadRetryDelaysMs[readAttempt - 1] ?? 0;
+        const remainingAfterReadMs = deadline - Date.now();
+        if (remainingAfterReadMs > 0) {
+          await writeScriptGenerationSandboxLog(input.logger, input.input, {
+            artifact: basename(demoScriptPath),
+            attempt: readAttempt,
+            delayMs,
+            durationMs: Date.now() - startedAt,
+            event: "script-generation.artifact-read.retrying",
+            generationAttempt: input.attempt,
+            nextAttempt: readAttempt + 1,
+            operation: `initial artifact read ${basename(demoScriptPath)}`,
+            readAttempt,
+            reason: `Transient Daytona socket closure while reading ${basename(demoScriptPath)}: ${readErrorMessage(error)}`,
+          });
+          await withTimeout(
+            wait(delayMs),
+            remainingAfterReadMs,
+            timeoutMessage,
+          );
+          continue;
+        }
+      }
+
+      throw error;
+    }
+  }
+
+  throw new Error(timeoutMessage);
 }
 
 async function readScriptPackageArtifact(

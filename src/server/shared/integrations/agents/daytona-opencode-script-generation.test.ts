@@ -175,6 +175,53 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
     );
   });
 
+  it("retries transient Daytona socket closures while reading the initial Demo Script artifact", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      modelID: "gpt-5.5",
+      providerID: "openai",
+    });
+
+    const result = await agent.generateScriptPackage({
+      ...scriptGenerationInput(),
+      opencodeSessionID: "session_prepare_123",
+      preparationWorkspace: workspaceHandle(events, [interactivePackage()], {
+        transientSocketClosureArtifactReads: { "demo-script.json": 2 },
+      }),
+    });
+
+    expect(result.scriptId).toBe("script_conduit");
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            artifact: "demo-script.json",
+            delayMs: 250,
+            event: "script-generation.artifact-read.retrying",
+            nextAttempt: 2,
+            stage: "script-generation",
+          }),
+        },
+        {
+          sandboxLog: expect.objectContaining({
+            artifact: "demo-script.json",
+            delayMs: 500,
+            event: "script-generation.artifact-read.retrying",
+            nextAttempt: 3,
+            stage: "script-generation",
+          }),
+        },
+        {
+          sandboxLog: expect.objectContaining({
+            artifact: "demo-script.json",
+            event: "script-generation.artifact-read.succeeded",
+            stage: "script-generation",
+          }),
+        },
+      ]),
+    );
+  });
+
   it("repairs static placeholder Demo Scripts in the same OpenCode session", async () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeScriptGeneration({
