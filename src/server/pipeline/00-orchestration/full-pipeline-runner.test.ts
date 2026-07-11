@@ -11,7 +11,7 @@ import { runFullPipelineJob } from "./full-pipeline-runner";
 import type { PipelineOrchestratorDependencies } from "./pipeline-orchestrator";
 
 describe("runFullPipelineJob", () => {
-  it("runs Stage 1, captures scenes from the capture-path browser URL, and composites the final video", async () => {
+  it("runs Stage 1, captures prepared scenes from the local app URL, and composites the final video", async () => {
     const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
     const calls: string[] = [];
 
@@ -93,7 +93,7 @@ describe("runFullPipelineJob", () => {
         "script-generation",
         "capture-path-validation",
         "fresh-capture:https://preview.example.test/",
-        "capture:https://fresh-preview.example.test/",
+        "capture:http://localhost:3000/",
         `composite:${join(outputRoot, "capture-manifest.json")}`,
         "review:1:session_prepare_123",
       ]);
@@ -887,13 +887,13 @@ describe("runFullPipelineJob", () => {
         "script-generation",
         "capture-path-validation",
         "fresh-capture:1:https://preview.example.test/",
-        "capture:capture-1:script_test:https://fresh-preview-1.example.test/",
+        "capture:capture-1:script_test:http://localhost:3000/",
         "composite:composite-1:script_test",
         "review:1:script_test:session_prepare_123",
         "draft-repair:1:script_test:session_prepare_123",
         "capture-path-validation",
         "fresh-capture:2:https://preview.example.test/",
-        "capture:capture-2:script_repaired_after_review:https://fresh-preview-2.example.test/",
+        "capture:capture-2:script_repaired_after_review:http://localhost:3000/",
         "composite:composite-2:script_repaired_after_review",
         "review:2:script_repaired_after_review:session_prepare_123",
       ]);
@@ -968,14 +968,14 @@ describe("runFullPipelineJob", () => {
         "repo-preparation",
         "script-generation",
         "capture-path-validation:1",
-        "capture:capture-1:https://preview.example.test/",
+        "capture:capture-1:http://localhost:3000/",
         "composite:composite-1",
         "review:1:session_prepare_123",
         "repo-security-screen",
         "repo-preparation",
         "script-generation",
         "capture-path-validation:2",
-        "capture:capture-2:https://repaired-preview.example.test/",
+        "capture:capture-2:http://localhost:3000/",
         "composite:composite-2",
         "review:2:session_prepare_123",
       ]);

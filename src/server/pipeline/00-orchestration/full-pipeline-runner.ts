@@ -443,9 +443,13 @@ async function captureCompositeAndReview(input: {
       stage1,
     });
     browserUrl = freshState?.browserUrl ?? browserUrl;
+    const captureBaseUrl =
+      stage1.preparationWorkspace === undefined
+        ? browserUrl
+        : stage1.preparationManifest.url;
     await input.log({
       attempt,
-      baseUrl: browserUrl,
+      baseUrl: captureBaseUrl,
       event: "capture-started",
       message: "Footage Capture started.",
       ...(scriptPersistence.scriptPath === undefined
@@ -455,7 +459,7 @@ async function captureCompositeAndReview(input: {
     const captureManifest = await (
       input.options.captureScenes ?? captureScenesFromScript
     )({
-      baseUrl: browserUrl,
+      baseUrl: captureBaseUrl,
       keepTemp: true,
       runId: `capture-${runSuffix}`,
       scriptPackage: stage1.demoScriptPackage,

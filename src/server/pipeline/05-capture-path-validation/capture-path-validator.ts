@@ -176,6 +176,10 @@ export async function validateCapturePath(
   const logs = [...projectValidation.logs];
   const browserUrl =
     projectValidation.browserUrl ?? input.preparationManifest.url;
+  const sceneBaseUrl =
+    input.preparationWorkspace === undefined
+      ? browserUrl
+      : input.preparationManifest.url;
   await writeCapturePathSandboxLog(input, {
     diagnosticsLogPath: capturePathDiagnosticsLogPath,
     event: "capture-path-validation.demo-script.started",
@@ -193,7 +197,7 @@ export async function validateCapturePath(
   try {
     sceneResult = await withTimeout(
       dependencies.sceneValidator.validateScene({
-        baseUrl: browserUrl,
+        baseUrl: sceneBaseUrl,
         demoPlaywrightScript: scriptPackage.demoPlaywrightScript,
         ...(input.preparationWorkspace === undefined
           ? {}

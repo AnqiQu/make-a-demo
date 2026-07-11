@@ -66,7 +66,7 @@ describe("validateCapturePath", () => {
     });
     expect(calls).toEqual([
       "project-checks",
-      "scene:scene_validation:https://preview.example.test/:import { setup, scene } from './makeademo-capture-sdk';\n\nawait setup(async ({ page, baseUrl, expect }) => {\n  await page.goto(baseUrl);\n  await expect(page.locator('body')).toBeVisible();\n});\nawait scene('scene_validation', async ({ page, expect }) => {\n  await expect(page.locator('body')).toBeVisible();\n});",
+      "scene:scene_validation:http://localhost:3000:import { setup, scene } from './makeademo-capture-sdk';\n\nawait setup(async ({ page, baseUrl, expect }) => {\n  await page.goto(baseUrl);\n  await expect(page.locator('body')).toBeVisible();\n});\nawait scene('scene_validation', async ({ page, expect }) => {\n  await expect(page.locator('body')).toBeVisible();\n});",
     ]);
     expect(sandboxLogs).toEqual(
       expect.arrayContaining([
