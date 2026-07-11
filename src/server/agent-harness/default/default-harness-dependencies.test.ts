@@ -1,3 +1,7 @@
+import { createHash } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createPipelineEventLogger } from "../../shared/logging/pipeline-event-logger";
 import type { AgentHarnessWorkspace } from "../daytona/workspace.interface";
@@ -12,12 +16,14 @@ import type {
   ValidationReport,
 } from "../schemas/artifacts";
 import { createDefaultAgentHarnessDependencies } from "./default-harness-dependencies";
+import type { RepoSourceArchive } from "./repo-snapshot";
 
 describe("createDefaultAgentHarnessDependencies", () => {
   it("gives Flow Planning the complete backend-owned FlowSpec contract", async () => {
     const commands: string[] = [];
     const workspace: AgentHarnessWorkspace = {
       async destroy() {},
+      async uploadFiles() {},
       async execute(command) {
         commands.push(command);
         if (command === "cat '/workspace/.makeademo/flow-spec.json'") {
@@ -42,6 +48,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         },
       },
       outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
       workspaceProvider: {
         async create() {
           return { async destroy() {}, id: "workspace", workspace };
@@ -72,10 +79,72 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(contractWrite).toContain("additionalProperties");
   });
 
+  it("repairs FlowSpecs that reference actions outside the observed ActionCatalog", async () => {
+    let attempts = 0;
+    const prompts: string[] = [];
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async uploadFiles() {},
+      async execute(command) {
+        if (command === "cat '/workspace/.makeademo/flow-spec.json'") {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: JSON.stringify(
+              attempts === 1
+                ? {
+                    ...flowSpec(),
+                    referencedActionIds: ["invented-action"],
+                  }
+                : flowSpec(),
+            ),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(input) {
+          attempts += 1;
+          prompts.push(input.prompt);
+          return { exitCode: 0, stderr: "", stdout: "planned" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+      workspaceProvider: {
+        async create() {
+          return { async destroy() {}, id: "workspace", workspace };
+        },
+      },
+    });
+    await harness.dependencies.createWorkspace({
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+    });
+
+    await expect(
+      harness.dependencies.planFlow({
+        actionCatalog: actionCatalog(),
+        appMap: appMap(),
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+      }),
+    ).resolves.toEqual(flowSpec());
+    expect(attempts).toBe(2);
+    expect(prompts[1]).toContain(
+      "unknown ActionCatalog action invented-action",
+    );
+  });
+
   it("fails Flow Planning immediately when its required artifact write is denied", async () => {
     let attempts = 0;
     const workspace: AgentHarnessWorkspace = {
       async destroy() {},
+      async uploadFiles() {},
       async execute(command) {
         if (command === "cat '/workspace/.makeademo/flow-spec.json'") {
           return { exitCode: 1, stderr: "No such file", stdout: "" };
@@ -97,6 +166,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         },
       },
       outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
       workspaceProvider: {
         async create() {
           return { async destroy() {}, id: "workspace", workspace };
@@ -126,6 +196,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
     const commands: string[] = [];
     const workspace: AgentHarnessWorkspace = {
       async destroy() {},
+      async uploadFiles() {},
       async execute(command) {
         commands.push(command);
         if (command.includes("git clone --depth 1")) {
@@ -148,6 +219,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
       artifactStore: { async writeJson() {} },
       openCodeRunner: repoPreparationRunner(),
       outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
     });
 
     await harness.dependencies.prepareRepo({
@@ -173,6 +245,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
     const commands: string[] = [];
     const workspace: AgentHarnessWorkspace = {
       async destroy() {},
+      async uploadFiles() {},
       async execute(command) {
         commands.push(command);
         if (command.includes("git clone --depth 1")) {
@@ -225,6 +298,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         },
       },
       outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
     });
 
     await expect(
@@ -244,12 +318,13 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
   });
 
-  it("clones submitted repos with the Daytona CA bundle when provider secrets hide Git CA config", async () => {
+  it("materializes the screened revision without reopening repository network access", async () => {
     const workspace = secretMountedDaytonaWorkspace();
     const harness = await createDefaultAgentHarnessDependencies({
       artifactStore: { async writeJson() {} },
       openCodeRunner: repoPreparationRunner(),
       outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
     });
 
     await expect(
@@ -265,7 +340,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
       opencodeSessionId: "session_prepare",
     });
 
-    expect(workspace.networkAccessRequests).toEqual([true]);
+    expect(workspace.networkAccessRequests).toEqual([]);
   });
 
   it("runs Repo Preparation repair when OpenCode succeeds without writing the manifest", async () => {
@@ -300,6 +375,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         },
       },
       outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
     });
 
     await expect(
@@ -340,6 +416,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         },
       },
       outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
     });
 
     await expect(
@@ -398,6 +475,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         },
       },
       outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
     });
 
     await expect(
@@ -451,6 +529,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         },
       },
       outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
     });
 
     await expect(
@@ -489,6 +568,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
     };
     const workspace: AgentHarnessWorkspace = {
       async destroy() {},
+      async uploadFiles() {},
       async execute(command) {
         if (command.includes("git clone --depth 1")) {
           return { exitCode: 0, stderr: "", stdout: "cloned\n" };
@@ -529,6 +609,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         },
       },
       outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
     });
 
     await expect(
@@ -577,6 +658,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
     const submittedNetworkRequests: boolean[] = [];
     const workspace: AgentHarnessWorkspace = {
       async destroy() {},
+      async uploadFiles() {},
       async execute(command) {
         if (command.includes("git clone --depth 1")) {
           return { exitCode: 0, stderr: "", stdout: "cloned\n" };
@@ -604,6 +686,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
       artifactStore: { async writeJson() {} },
       openCodeRunner: repoPreparationRunner(),
       outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
     });
 
     const preparation = await harness.dependencies.prepareRepo({
@@ -634,6 +717,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
     let cleanInstallAttempts = 0;
     const workspace: AgentHarnessWorkspace = {
       async destroy() {},
+      async uploadFiles() {},
       async execute() {
         return { exitCode: 0, stderr: "", stdout: "" };
       },
@@ -661,6 +745,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
       artifactStore: { async writeJson() {} },
       openCodeRunner: repoPreparationRunner(),
       outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
     });
 
     await expect(
@@ -695,6 +780,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
     const lifecycleCalls: unknown[] = [];
     const workspace = {
       async destroy() {},
+      async uploadFiles() {},
       async execute() {
         return { exitCode: 0, stderr: "", stdout: "" };
       },
@@ -718,6 +804,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
       artifactStore: { async writeJson() {} },
       openCodeRunner: repoPreparationRunner(),
       outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
     });
 
     await expect(
@@ -739,17 +826,77 @@ describe("createDefaultAgentHarnessDependencies", () => {
         start: {
           command: "npm run dev -- --host 0.0.0.0",
           cwd: "/workspace/repo",
-          env: { MAKEADEMO_OFFLINE: "1" },
+          env: {
+            MAKEADEMO_ALLOWED_RUNTIME_HOSTS: "127.0.0.1,localhost,::1,0.0.0.0",
+            MAKEADEMO_OFFLINE: "1",
+            NODE_OPTIONS:
+              "--require=/workspace/.makeademo/runtime-network-guard.cjs",
+          },
         },
       },
     ]);
     expect(shellCommands.join("\n")).not.toMatch(/nohup|app\.pid/);
   });
 
+  it("reports server-side runtime egress attempts even when the page still responds", async () => {
+    const commands: string[] = [];
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        return { exitCode: 0, stderr: "", stdout: "ok" };
+      },
+      async readSubmittedCodeAppStatus() {
+        return {
+          running: true,
+          stderr:
+            '[makeademo:network-blocked] {"direction":"outbound","host":"api.example.com","phase":"runtime","url":"https://api.example.com/data"}',
+          stdout: "",
+        };
+      },
+      async setSubmittedCodeNetworkAccess() {},
+      async startSubmittedCodeApp() {},
+      async stopSubmittedCodeApp() {},
+      async syncSubmittedCodeWorkspace() {},
+      async uploadFiles() {},
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.validatePreparation({
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).resolves.toMatchObject({
+      blockedNetworkAttempts: [
+        {
+          direction: "outbound",
+          host: "api.example.com",
+          phase: "runtime",
+          url: "https://api.example.com/data",
+        },
+      ],
+      failureClassification: "external network attempted",
+      status: "failed",
+    });
+    expect(commands.join("\n")).toContain("runtime-network-guard.cjs");
+  });
+
   it("classifies readiness-probe execution errors as harness failures without a shell retry loop", async () => {
     const commands: string[] = [];
     const workspace: AgentHarnessWorkspace = {
       async destroy() {},
+      async uploadFiles() {},
       async execute() {
         return { exitCode: 0, stderr: "", stdout: "" };
       },
@@ -774,6 +921,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
       artifactStore: { async writeJson() {} },
       openCodeRunner: repoPreparationRunner(),
       outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
     });
 
     await expect(
@@ -799,6 +947,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
       artifactStore: { async writeJson() {} },
       openCodeRunner: repoPreparationRunner(),
       outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
     });
     const captureWorkspaceDiff = harness.dependencies.captureWorkspaceDiff;
     expect(captureWorkspaceDiff).toBeDefined();
@@ -807,18 +956,20 @@ describe("createDefaultAgentHarnessDependencies", () => {
       captureWorkspaceDiff?.({
         workspace: {
           async destroy() {},
+          async uploadFiles() {},
           async execute() {
             return {
               exitCode: 0,
               stderr: "",
-              stdout: " M src/App.tsx\n?? new-file.ts\n",
+              stdout:
+                "/workspace/repo/src/App.tsx\0hash-after-app\0/workspace/repo/new-file.ts\0hash-after-new\0",
             };
           },
         },
       }),
     ).resolves.toEqual([
-      "/workspace/repo/src/App.tsx",
       "/workspace/repo/new-file.ts",
+      "/workspace/repo/src/App.tsx",
     ]);
   });
 
@@ -827,6 +978,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
     const stages: string[] = [];
     const workspace: AgentHarnessWorkspace = {
       async destroy() {},
+      async uploadFiles() {},
       async execute(command) {
         if (command.includes("git clone --depth 1")) {
           return { exitCode: 0, stderr: "", stdout: "cloned\n" };
@@ -863,6 +1015,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         },
       },
       outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
     });
 
     await expect(
@@ -886,6 +1039,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
     const stages: string[] = [];
     const workspace: AgentHarnessWorkspace = {
       async destroy() {},
+      async uploadFiles() {},
       async execute(command) {
         if (
           command.startsWith("cat '") &&
@@ -919,6 +1073,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         },
       },
       outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
     });
 
     await expect(
@@ -942,6 +1097,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
     const commands: string[] = [];
     const workspace: AgentHarnessWorkspace = {
       async destroy() {},
+      async uploadFiles() {},
       async execute(command) {
         commands.push(command);
         if (command === "cat '/workspace/.makeademo/demo-script.json'") {
@@ -961,13 +1117,23 @@ describe("createDefaultAgentHarnessDependencies", () => {
           expect(input.prompt).toContain(
             "/workspace/.makeademo/capture-sdk-contract.json",
           );
+          expect(input.prompt).toContain(
+            "Do not write demoPlaywrightScript; the backend compiles typed browser actions",
+          );
+          expect(input.prompt).toContain(
+            "playwright-recording, full-screen-text, and static-image",
+          );
           return { exitCode: 0, stderr: "", stdout: "written" };
         },
       },
       outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+      staticImageAssets: {
+        "architecture-v2.png": { sourcePath: "/tmp/architecture-v2.png" },
+      },
     });
 
-    await harness.dependencies.writeScript({
+    const candidate = await harness.dependencies.writeScript({
       actionCatalog: actionCatalog(),
       appMap: appMap(),
       demoBrief: { keyProductFeatures: ["dashboard"] },
@@ -978,6 +1144,11 @@ describe("createDefaultAgentHarnessDependencies", () => {
       workspace,
     });
 
+    expect(candidate).toMatchObject({
+      captureSdkVersion: "2026-07-10.1",
+      contractVersion: "2026-07-10.1",
+    });
+
     const contractWrite = commands.find((command) =>
       command.includes("capture-sdk-contract.json"),
     );
@@ -986,6 +1157,10 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
     expect(contractWrite).toContain("scene_main");
     expect(contractWrite).toContain("async ({ page, expect }) => {");
+    const demoScriptContractWrite = commands.find((command) =>
+      command.includes("demo-script-contract.json"),
+    );
+    expect(demoScriptContractWrite).toContain("architecture-v2.png");
   });
 
   it("gives runtime repairs complete browser evidence and unique artifact attempts", async () => {
@@ -993,6 +1168,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
     const prompts: string[] = [];
     const workspace: AgentHarnessWorkspace = {
       async destroy() {},
+      async uploadFiles() {},
       async execute(command) {
         if (
           command === "cat '/workspace/.makeademo/preparation-manifest.json'"
@@ -1024,6 +1200,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         },
       },
       outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
     });
     const repairPreparation = harness.dependencies.repairPreparation;
     expect(repairPreparation).toBeDefined();
@@ -1177,6 +1354,7 @@ function secretMountedDaytonaWorkspace(): AgentHarnessWorkspace & {
   return {
     networkAccessRequests,
     async destroy() {},
+    async uploadFiles() {},
     async execute(command) {
       if (command.includes("git clone --depth 1")) {
         const usesGitCa =
@@ -1230,6 +1408,27 @@ function repoPreparationRunner(): OpenCodeHarnessRunner {
   };
 }
 
+let testRepoSourceArchive: Promise<RepoSourceArchive> | undefined;
+
+function repoSourceArchive(): Promise<RepoSourceArchive> {
+  testRepoSourceArchive ??= (async () => {
+    const directory = join(
+      tmpdir(),
+      `makeademo-screened-source-${crypto.randomUUID()}`,
+    );
+    await mkdir(directory, { recursive: true });
+    const path = join(directory, "screened-repo.tar");
+    const contents = "screened repository archive";
+    await writeFile(path, contents);
+    return {
+      commitSha: "abc123def456",
+      path,
+      sha256: createHash("sha256").update(contents).digest("hex"),
+    };
+  })();
+  return testRepoSourceArchive;
+}
+
 function repairableRepoPreparationWorkspace(): AgentHarnessWorkspace & {
   writePreparationManifest(): void;
 } {
@@ -1241,6 +1440,7 @@ function repairableRepoPreparationWorkspace(): AgentHarnessWorkspace & {
       manifestWritten = true;
     },
     async destroy() {},
+    async uploadFiles() {},
     async execute(command) {
       if (command.includes("git clone --depth 1")) {
         return { exitCode: 0, stderr: "", stdout: "cloned\n" };
@@ -1283,6 +1483,7 @@ function schemaRepairableRepoPreparationWorkspace(): AgentHarnessWorkspace & {
       manifest = validManifest;
     },
     async destroy() {},
+    async uploadFiles() {},
     async execute(command) {
       if (command.includes("git clone --depth 1")) {
         return { exitCode: 0, stderr: "", stdout: "cloned\n" };

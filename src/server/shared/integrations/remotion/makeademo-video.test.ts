@@ -23,6 +23,14 @@ describe("MakeADemoVideo", () => {
           backgroundColor: "#000000",
           durationFrames: 30,
           sceneId: "scene-001",
+          text: {
+            color: "#ffffff",
+            content: "Demo",
+            fontFamily: "Inter",
+            position: "center",
+            size: "large",
+          },
+          textOverlays: [],
           type: "full-screen-text",
         },
       ],
@@ -53,11 +61,15 @@ describe("MakeADemoVideo", () => {
         {
           durationFrames: 30,
           sceneId: "scene-001",
+          sourcePublicPath: "scenes/scene-001.webm",
+          textOverlays: [],
           type: "playwright-recording",
         },
         {
           durationFrames: 45,
           sceneId: "scene-002",
+          sourcePublicPath: "scenes/scene-002.webm",
+          textOverlays: [],
           type: "playwright-recording",
         },
       ],
@@ -71,6 +83,50 @@ describe("MakeADemoVideo", () => {
     ).toMatchObject([
       { durationInFrames: 30, from: 0 },
       { durationInFrames: 45, from: 30 },
+    ]);
+  });
+
+  it("overlaps adjacent Scenes for a fade edge", () => {
+    const element = MakeADemoVideo({
+      compositionId: "MakeADemoVideo",
+      durationInFrames: 65,
+      fontAssets: {},
+      fps: 30,
+      height: 720,
+      outputPath: "final-video.mp4",
+      publicDir: "public",
+      scenes: [
+        {
+          durationFrames: 30,
+          sceneId: "scene-001",
+          sourcePublicPath: "scenes/scene-001.webm",
+          textOverlays: [],
+          type: "playwright-recording",
+        },
+        {
+          durationFrames: 45,
+          sceneId: "scene-002",
+          sourcePublicPath: "scenes/scene-002.webm",
+          textOverlays: [],
+          transitionIn: {
+            durationFrames: 10,
+            fromSceneId: "scene-001",
+            style: "fade",
+            toSceneId: "scene-002",
+          },
+          type: "playwright-recording",
+        },
+      ],
+      scriptId: "script-001",
+      title: "Demo",
+      width: 1280,
+    } satisfies CompositingRenderPlan);
+
+    expect(
+      findChildrenByType(element, Sequence).map(({ props }) => props),
+    ).toMatchObject([
+      { durationInFrames: 30, from: 0 },
+      { durationInFrames: 45, from: 20 },
     ]);
   });
 });

@@ -1,11 +1,14 @@
-import type { SceneDescription } from "./demo-script.schema";
+import type { BrowserAction } from "./browser-action-plan";
+import type { PlaywrightRecordingSceneDescription } from "./demo-script.schema";
 
 export type RecordSceneInput = {
   baseUrl: string;
   demoPlaywrightScript: string;
+  retainRawTake?: boolean;
   runDirectory: string;
-  scenes: SceneDescription[];
+  scenes: PlaywrightRecordingSceneDescription[];
   sectionId: string;
+  setupActions?: BrowserAction[];
 };
 
 export type RecordedScene = {

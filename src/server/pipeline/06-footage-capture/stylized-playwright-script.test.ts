@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -7,7 +8,7 @@ import { writeGeneratedCaptureSdkHarness } from "./capture-sdk-contract";
 import { prepareStylizedPlaywrightScript } from "./stylized-playwright-script";
 
 describe("prepareStylizedPlaywrightScript", () => {
-  it("keeps validation dry runs fast and free of recording-only behavior", () => {
+  it("keeps validation free of video and recording pauses", () => {
     const prepared = prepareStylizedPlaywrightScript(
       "await page.getByLabel(/message/i).fill('Show me the launch plan');\nawait page.getByRole('button', { name: /send/i }).click();",
       {
@@ -19,18 +20,248 @@ describe("prepareStylizedPlaywrightScript", () => {
     );
 
     expect(prepared).toContain(
-      "await page.getByLabel(/message/i).fill('Show me the launch plan');",
+      "await humanType(page, page.getByLabel(/message/i), 'Show me the launch plan');",
     );
     expect(prepared).toContain(
-      "await page.getByRole('button', { name: /send/i }).click();",
+      "await animatedClick(page, page.getByRole('button', { name: /send/i }));",
     );
     expect(prepared).not.toContain("recordVideo");
-    expect(prepared).not.toContain("humanType");
-    expect(prepared).not.toContain("animatedClick");
     expect(prepared).not.toContain("waitForTimeout(900)");
     expect(prepared).toContain("[makeademo:validation] script started");
     expect(prepared).toContain("[makeademo:validation] script failed");
+    expect(prepared).not.toContain("locator.first()");
   });
+
+  it("executes the same humanized browser actions during validation and recording", () => {
+    const script =
+      "await page.getByLabel(/message/i).fill('Show me the launch plan');\nawait page.getByRole('button', { name: /send/i }).click();";
+    const validation = prepareStylizedPlaywrightScript(script, {
+      baseUrl: "http://127.0.0.1:3000",
+      headed: false,
+      mode: "validation",
+      pauseAfterSceneMs: 0,
+    });
+    const recording = prepareStylizedPlaywrightScript(script, {
+      baseUrl: "http://127.0.0.1:3000",
+      headed: false,
+      mode: "recording",
+      pauseAfterSceneMs: 0,
+      videoDirectory: ".demo-capture-runs/run/playwright-videos",
+    });
+
+    for (const prepared of [validation, recording]) {
+      expect(prepared).toContain(
+        "await humanType(page, page.getByLabel(/message/i), 'Show me the launch plan');",
+      );
+      expect(prepared).toContain(
+        "await animatedClick(page, page.getByRole('button', { name: /send/i }));",
+      );
+    }
+    expect(validation).not.toContain("recordVideo");
+    expect(recording).toContain("recordVideo");
+  });
+
+  it("removes a multiline Capture SDK import as one complete declaration", () => {
+    const prepared = prepareStylizedPlaywrightScript(
+      [
+        "import {",
+        "  setup,",
+        "  scene,",
+        "} from './makeademo-capture-sdk';",
+        "await scene('scene_one', async ({ page, expect }) => {",
+        "  await expect(page.locator('main')).toBeVisible();",
+        "});",
+      ].join("\n"),
+      {
+        baseUrl: "http://127.0.0.1:3000",
+        headed: false,
+        mode: "validation",
+        pauseAfterSceneMs: 0,
+      },
+    );
+
+    expect(prepared).not.toContain("  setup,");
+    expect(prepared).not.toContain("  scene,");
+    expect(prepared).not.toContain("} from './makeademo-capture-sdk';");
+    expect(prepared).toContain(
+      'import { setup, scene, step } from "./makeademo-capture-sdk.js";',
+    );
+  });
+
+  it("binds the compiler step helper in validation and recording wrappers", () => {
+    const script = [
+      "import { setup, scene, step } from './makeademo-capture-sdk';",
+      "await scene('scene_one', async () => {",
+      "  await step('open-main', async () => undefined);",
+      "});",
+    ].join("\n");
+
+    for (const mode of ["validation", "recording"] as const) {
+      const prepared = prepareStylizedPlaywrightScript(script, {
+        baseUrl: "http://127.0.0.1:3000",
+        headed: false,
+        mode,
+        pauseAfterSceneMs: 0,
+        ...(mode === "recording"
+          ? { videoDirectory: ".demo-capture-runs/run/playwright-videos" }
+          : {}),
+      });
+
+      expect(prepared).toContain(
+        'import { setup, scene, step } from "./makeademo-capture-sdk.js";',
+      );
+      expect(prepared).toContain(
+        "await step('open-main', async () => undefined);",
+      );
+    }
+  });
+
+  it("blocks Service Workers in validation and recording browser contexts", () => {
+    for (const mode of ["validation", "recording"] as const) {
+      const prepared = prepareStylizedPlaywrightScript(
+        "await page.goto(baseUrl);",
+        {
+          baseUrl: "http://127.0.0.1:3000",
+          headed: false,
+          mode,
+          pauseAfterSceneMs: 0,
+          ...(mode === "recording"
+            ? { videoDirectory: ".demo-capture-runs/run/playwright-videos" }
+            : {}),
+        },
+      );
+
+      expect(prepared).toContain('serviceWorkers: "block"');
+    }
+  });
+
+  it("prevents Service Worker registration in the real validation browser runtime", async () => {
+    const requestedPaths: string[] = [];
+    const server = createServer((request, response) => {
+      requestedPaths.push(request.url ?? "");
+      response.writeHead(200, {
+        "content-type":
+          request.url === "/sw.js"
+            ? "text/javascript"
+            : "text/html; charset=utf-8",
+      });
+      response.end(
+        request.url === "/sw.js"
+          ? "self.addEventListener('fetch', () => undefined);"
+          : "<main>Service Worker test</main>",
+      );
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("Test server did not expose a TCP port");
+    }
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const runDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-service-worker-lockdown-test-"),
+    );
+    await symlink(
+      join(process.cwd(), "node_modules"),
+      join(runDirectory, "node_modules"),
+    );
+    const scriptPath = join(runDirectory, "demo-script.ts");
+    await writeGeneratedCaptureSdkHarness(runDirectory);
+    await writeFile(
+      scriptPath,
+      prepareStylizedPlaywrightScript(
+        [
+          "await page.goto(baseUrl);",
+          "const serviceWorkerState = await page.evaluate(async () => {",
+          "  try {",
+          "    const registration = await navigator.serviceWorker.register('/sw.js');",
+          "    await new Promise((resolve) => setTimeout(resolve, 200));",
+          "    return { active: Boolean(registration.active), controlled: Boolean(navigator.serviceWorker.controller) };",
+          "  } catch {",
+          "    return { active: false, controlled: false };",
+          "  }",
+          "});",
+          "if (serviceWorkerState.active || serviceWorkerState.controlled) throw new Error('Service Worker escaped lockdown');",
+        ].join("\n"),
+        {
+          baseUrl,
+          headed: false,
+          mode: "validation",
+          pauseAfterSceneMs: 0,
+        },
+      ),
+    );
+
+    try {
+      const result = await runPreparedScript(scriptPath);
+
+      expect(result, result.stderr).toMatchObject({ exitCode: 0 });
+      expect(requestedPaths).not.toContain("/sw.js");
+    } finally {
+      server.close();
+      await rm(runDirectory, { force: true, recursive: true });
+    }
+  }, 20_000);
+
+  it("allows same-app WebSockets while logging and closing external sockets", () => {
+    const prepared = prepareStylizedPlaywrightScript(
+      "await page.goto(baseUrl);",
+      {
+        baseUrl: "http://127.0.0.1:3000",
+        headed: false,
+        mode: "validation",
+        pauseAfterSceneMs: 0,
+      },
+    );
+
+    expect(prepared).toContain("await context.routeWebSocket(/.*/");
+    expect(prepared).toContain("isMakeADemoAllowedRuntimeWebSocket");
+    expect(prepared).toContain("webSocket.connectToServer()");
+    expect(prepared).toContain('resourceType: "websocket"');
+    expect(prepared).toContain(
+      'await webSocket.close({ code: 1008, reason: "External network access blocked by MakeADemo" });',
+    );
+  });
+
+  it("blocks an external WebSocket in the real validation browser runtime", async () => {
+    const runDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-websocket-lockdown-test-"),
+    );
+    await symlink(
+      join(process.cwd(), "node_modules"),
+      join(runDirectory, "node_modules"),
+    );
+    const scriptPath = join(runDirectory, "demo-script.ts");
+    await writeGeneratedCaptureSdkHarness(runDirectory);
+    await writeFile(
+      scriptPath,
+      prepareStylizedPlaywrightScript(
+        [
+          'await page.goto("data:text/html,<main>WebSocket test</main>");',
+          'await page.evaluate(() => { new WebSocket("wss://example.com/socket"); });',
+          "await page.waitForTimeout(100);",
+        ].join("\n"),
+        {
+          baseUrl: "http://127.0.0.1:3000",
+          headed: false,
+          mode: "validation",
+          pauseAfterSceneMs: 0,
+        },
+      ),
+    );
+
+    try {
+      const result = await runPreparedScript(scriptPath);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toContain("[makeademo:network-blocked]");
+      expect(result.stderr).toContain('"resourceType":"websocket"');
+      expect(result.stderr).toContain('"url":"wss://example.com/socket"');
+    } finally {
+      await rm(runDirectory, { force: true, recursive: true });
+    }
+  }, 20_000);
 
   it("executes Demo Script setup and scene helpers during validation", async () => {
     const runDirectory = await mkdtemp(
@@ -124,7 +355,7 @@ describe("prepareStylizedPlaywrightScript", () => {
     );
 
     expect(prepared).toContain(
-      'import { setup, scene } from "./makeademo-capture-sdk.js";',
+      'import { setup, scene, step } from "./makeademo-capture-sdk.js";',
     );
     expect(prepared).not.toContain("async function setup(callback)");
     expect(prepared).not.toContain("async function scene(id, callback)");

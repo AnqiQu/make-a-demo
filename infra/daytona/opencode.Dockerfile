@@ -17,7 +17,7 @@ COPY submitted-code-node-browser.Dockerfile /opt/makeademo/submitted-code-node-b
 COPY preload-submitted-code-image.sh /usr/local/bin/makeademo-preload-submitted-code-image
 RUN chmod +x /usr/local/bin/makeademo-preload-submitted-code-image
 
-RUN curl -fsSL https://bun.sh/install | bash -s "bun-v1.2.5" \
+RUN curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14" \
   && ln -sf /root/.bun/bin/bun /usr/local/bin/bun \
   && ln -sf /root/.bun/bin/bunx /usr/local/bin/bunx
 

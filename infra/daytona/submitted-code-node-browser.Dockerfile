@@ -5,7 +5,7 @@ RUN apt-get update \
   && update-ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL https://bun.sh/install | bash -s "bun-v1.2.5" \
+RUN curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14" \
   && ln -sf /root/.bun/bin/bun /usr/local/bin/bun \
   && ln -sf /root/.bun/bin/bunx /usr/local/bin/bunx
 

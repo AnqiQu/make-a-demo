@@ -1,3 +1,8 @@
+import {
+  type BrowserLocator,
+  readBrowserLocator,
+} from "../../pipeline/06-footage-capture/browser-action-plan";
+
 export const DEMO_SCRIPT_OUTPUT_PATH = "/workspace/.makeademo/demo-script.json";
 
 type PackageManager = "bun" | "npm" | "pnpm" | "unknown" | "yarn";
@@ -160,12 +165,27 @@ type ActionCatalogAction = {
     strategy: LocatorStrategy;
     value: string;
     name?: string;
+    reason?: string;
   };
+  locatorCandidates?: VerifiedLocatorCandidate[];
+  preferredLocatorCandidateId?: string;
   fallbackLocator?: string;
   evidence: string;
   expectedResult: string;
   confidence: number;
   risks: string[];
+};
+
+export type VerifiedLocatorCandidate = {
+  id: string;
+  locator: BrowserLocator;
+  observedAccessibleName?: string;
+  verification: {
+    matchCount: 1;
+    route: string;
+    targetHref?: string;
+    visible: true;
+  };
 };
 
 export type ActionCatalog = {
@@ -191,7 +211,10 @@ export type FlowSpec = {
 };
 
 export type DemoScriptContract = {
+  captureSdkVersion: string;
   contractVersion: string;
+  examples: unknown[];
+  jsonSchema: Record<string, unknown>;
   outputPath: typeof DEMO_SCRIPT_OUTPUT_PATH;
   requiredJsonShape: string[];
   allowedCaptureSdkActions: string[];
@@ -210,7 +233,10 @@ export type ScriptCandidate = {
   outputPath: typeof DEMO_SCRIPT_OUTPUT_PATH;
   scriptJsonContent: unknown;
   contractVersion: string;
-  captureSdkVersion?: string;
+  captureSdkVersion: string;
+  browserActionCompilerVersion: string;
+  bunRuntimeVersion: string;
+  playwrightRuntimeVersion: string;
   sourceFlowSpecId: string;
   sourceAppMapId: string;
   sourcePreparationManifestId: string;
@@ -490,6 +516,9 @@ export function readFlowSpec(value: unknown): FlowSpec {
 
 export function readDemoScriptContract(value: unknown): DemoScriptContract {
   const record = assertRecord(value, "DemoScriptContract");
+  if (!Array.isArray(record.examples) || record.examples.length === 0) {
+    throw new Error("examples must be a non-empty array");
+  }
   return {
     allowedCaptureSdkActions: readStringArray(
       record,
@@ -500,10 +529,13 @@ export function readDemoScriptContract(value: unknown): DemoScriptContract {
       record,
       "browserContextOwnership",
     ),
+    captureSdkVersion: readNonEmptyString(record, "captureSdkVersion"),
     contractVersion: readNonEmptyString(record, "contractVersion"),
+    examples: record.examples,
     forbiddenApis: readStringArray(record, "forbiddenApis"),
     forbiddenExternalUrls: readBoolean(record, "forbiddenExternalUrls"),
     forbiddenFields: readStringArray(record, "forbiddenFields"),
+    jsonSchema: assertRecord(record.jsonSchema, "jsonSchema"),
     networkRestrictions: readStringArray(record, "networkRestrictions"),
     outputPath: readDemoScriptOutputPath(record, "outputPath"),
     requiredAssertions: readStringArray(record, "requiredAssertions"),
@@ -517,10 +549,19 @@ export function readScriptCandidate(value: unknown): ScriptCandidate {
   const record = assertRecord(value, "ScriptCandidate");
   return {
     assumptions: readStringArray(record, "assumptions"),
-    ...optionalStringKey(record, "captureSdkVersion"),
+    browserActionCompilerVersion: readNonEmptyString(
+      record,
+      "browserActionCompilerVersion",
+    ),
+    bunRuntimeVersion: readNonEmptyString(record, "bunRuntimeVersion"),
+    captureSdkVersion: readNonEmptyString(record, "captureSdkVersion"),
     conformanceResult: readValidationReport(record.conformanceResult),
     contractVersion: readNonEmptyString(record, "contractVersion"),
     outputPath: readDemoScriptOutputPath(record, "outputPath"),
+    playwrightRuntimeVersion: readNonEmptyString(
+      record,
+      "playwrightRuntimeVersion",
+    ),
     scriptJsonContent: record.scriptJsonContent,
     sourceAppMapId: readNonEmptyString(record, "sourceAppMapId"),
     sourceFlowSpecId: readNonEmptyString(record, "sourceFlowSpecId"),
@@ -620,6 +661,32 @@ function readRoutes(value: unknown): AppMapRoute[] {
 function readAction(value: unknown, index: number): ActionCatalogAction {
   const path = `actions[${index}]`;
   const record = assertRecord(value, path);
+  const locatorCandidates =
+    record.locatorCandidates === undefined
+      ? undefined
+      : readLocatorCandidates(record.locatorCandidates, path);
+  const preferredLocatorCandidateId =
+    record.preferredLocatorCandidateId === undefined
+      ? undefined
+      : readNonEmptyString(record, "preferredLocatorCandidateId", path);
+  if (
+    locatorCandidates !== undefined &&
+    preferredLocatorCandidateId === undefined
+  ) {
+    throw new Error(
+      `${path}.preferredLocatorCandidateId is required with locatorCandidates`,
+    );
+  }
+  if (
+    preferredLocatorCandidateId !== undefined &&
+    !locatorCandidates?.some(
+      (candidate) => candidate.id === preferredLocatorCandidateId,
+    )
+  ) {
+    throw new Error(
+      `${path}.preferredLocatorCandidateId must reference locatorCandidates`,
+    );
+  }
   return {
     confidence: readConfidenceNumber(record, "confidence", path),
     evidence: readNonEmptyString(record, "evidence", path),
@@ -636,10 +703,77 @@ function readAction(value: unknown, index: number): ActionCatalogAction {
       ["assert", "click", "fill", "navigate", "select", "upload", "wait"],
       path,
     ),
+    ...(locatorCandidates === undefined ? {} : { locatorCandidates }),
     preferredLocator: readPreferredLocator(record.preferredLocator, path),
+    ...(preferredLocatorCandidateId === undefined
+      ? {}
+      : { preferredLocatorCandidateId }),
     risks: readStringArray(record, "risks", path),
     route: readNonEmptyString(record, "route", path),
   };
+}
+
+function readLocatorCandidates(
+  value: unknown,
+  parentPath: string,
+): VerifiedLocatorCandidate[] {
+  const candidates = readArray(
+    value,
+    `${parentPath}.locatorCandidates`,
+    (entry, index) => {
+      const path = `${parentPath}.locatorCandidates[${index}]`;
+      const record = assertRecord(entry, path);
+      const verificationPath = `${path}.verification`;
+      const verification = assertRecord(record.verification, verificationPath);
+      const matchCount = readNonNegativeNumber(
+        verification,
+        "matchCount",
+        verificationPath,
+      );
+      if (matchCount !== 1) {
+        throw new Error(`${verificationPath}.matchCount must be 1`);
+      }
+      const visible = readBoolean(verification, "visible", verificationPath);
+      if (!visible) {
+        throw new Error(`${verificationPath}.visible must be true`);
+      }
+      return {
+        id: readNonEmptyString(record, "id", path),
+        locator: readBrowserLocator(record.locator, `${path}.locator`),
+        ...(record.observedAccessibleName === undefined
+          ? {}
+          : {
+              observedAccessibleName: readNonEmptyString(
+                record,
+                "observedAccessibleName",
+                path,
+              ),
+            }),
+        verification: {
+          matchCount: 1 as const,
+          route: readNonEmptyString(verification, "route", verificationPath),
+          ...(verification.targetHref === undefined
+            ? {}
+            : {
+                targetHref: readNonEmptyString(
+                  verification,
+                  "targetHref",
+                  verificationPath,
+                ),
+              }),
+          visible: true as const,
+        },
+      };
+    },
+  );
+  if (candidates.length === 0) {
+    throw new Error(`${parentPath}.locatorCandidates must be non-empty`);
+  }
+  const candidateIds = new Set(candidates.map((candidate) => candidate.id));
+  if (candidateIds.size !== candidates.length) {
+    throw new Error(`${parentPath}.locatorCandidates ids must be unique`);
+  }
+  return candidates;
 }
 
 function readPreferredLocator(
@@ -666,6 +800,9 @@ function readPreferredLocator(
     ...(record.name === undefined
       ? {}
       : { name: readNonEmptyString(record, "name", path) }),
+    ...(record.reason === undefined
+      ? {}
+      : { reason: readNonEmptyString(record, "reason", path) }),
     strategy,
     value: readNonEmptyString(record, "value", path),
   };

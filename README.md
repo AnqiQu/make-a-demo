@@ -185,9 +185,9 @@ The primary local command runs the artifact-driven harness through final video o
 4. Let OpenCode prepare the ephemeral repo and emit a typed Preparation Manifest. OpenCode cannot run shell commands during this stage.
 5. Sync the prepared files into the submitted-code sandbox, open network access only for an allowlisted package-manager install, reseal the network, then build, start, and preflight the app.
 6. Explore the running app with backend-owned Playwright to produce a grounded App Map and Action Catalog.
-7. Plan a flow and write the capture-ready Demo Script with deny-by-default OpenCode permissions.
-8. Run static Capture SDK validation and a dynamic dry-run. Typed failures are fed to Script Repair or Repo Preparation Repair with bounded retries; preparation repairs regenerate all downstream artifacts.
-9. Reset the submitted-code runtime to clean deterministic state, record one continuous Playwright take, split it into Scenes, and composite the final video.
+7. Plan a grounded flow and write a declarative Demo Script containing backend-compilable Browser Actions plus optional compositor-native text or trusted-image Scenes.
+8. Compile Browser Actions into the versioned Capture SDK, then run static contract validation and a dynamic dry-run. Typed failures are fed to Script Repair or Repo Preparation Repair with bounded retries; preparation repairs regenerate all downstream artifacts.
+9. Reset the submitted-code runtime to clean deterministic state, record one continuous Playwright take for Browser Scenes, split it into clips, and composite those clips with synthetic Scenes in the original timeline order.
 
 Interactive run:
 

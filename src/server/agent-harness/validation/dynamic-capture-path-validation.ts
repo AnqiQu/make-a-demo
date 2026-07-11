@@ -9,8 +9,10 @@ type CapturePathValidationResult = {
     direction: "inbound" | "outbound";
     host: string;
     phase: "install" | "runtime";
+    url?: string;
   }>;
   browserUrl?: string;
+  failureClassification?: string;
   failureReason?: string;
   logs: string[];
   runDirectory?: string;
@@ -48,6 +50,10 @@ export async function validateDynamicCapturePath(
     (status === "passed"
       ? "Capture path dry-run passed."
       : "Capture path dry-run failed.");
+  const failureClassification =
+    status === "passed"
+      ? "none"
+      : (result.failureClassification ?? classifyFailure(logsSummary));
 
   return readValidationReport({
     artifactReferences: [
@@ -63,8 +69,7 @@ export async function validateDynamicCapturePath(
     ),
     browserObservations: result.logs.slice(0, 5),
     consoleErrors: [],
-    failureClassification:
-      status === "passed" ? "none" : classifyFailure(logsSummary),
+    failureClassification,
     logsSummary,
     networkAttempts: [],
     pageErrors: [],
@@ -78,7 +83,13 @@ export async function validateDynamicCapturePath(
     stderrExcerpts: result.stderrPath === undefined ? [] : [result.stderrPath],
     stdoutExcerpts: result.stdoutPath === undefined ? [] : [result.stdoutPath],
     suggestedRepairHints:
-      status === "passed" ? [] : ["Route this failure through RepairRouter."],
+      status === "passed"
+        ? []
+        : failureClassification === "locator failure"
+          ? [
+              "Re-run App Exploration to replace stale locator evidence with a browser-verified candidate.",
+            ]
+          : ["Route this failure through RepairRouter."],
     urlChecked: result.browserUrl ?? input.preparationManifest.baseUrl,
   });
 }
@@ -90,16 +101,27 @@ function normalizeNetworkAttempts(
     direction: attempt.direction,
     host: attempt.host,
     phase: attempt.phase === "install" ? "dependency-install" : attempt.phase,
+    ...(attempt.url === undefined ? {} : { url: attempt.url }),
   }));
 }
 
 function classifyFailure(reason: string): string {
+  if (/Capture Path Validation script timed out after \d+s/i.test(reason)) {
+    return "timing/state failure";
+  }
   if (
     /AgentHarnessArtifactTransferError|DaytonaTimeoutError|Operation timed out|artifact (?:upload|download) failed/i.test(
       reason,
     )
   ) {
     return "transient infrastructure failure";
+  }
+  if (
+    /CaptureRuntimeProtocolError|Capture Runtime Protocol Error|can be only used with Locator object|Capture SDK (?:assertion )?instrumentation/i.test(
+      reason,
+    )
+  ) {
+    return "harness/internal failure";
   }
   if (/locator/i.test(reason)) {
     return "locator failure";

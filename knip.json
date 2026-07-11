@@ -1,6 +1,6 @@
 {
   "entry": ["demo/app/main.tsx"],
-  "ignoreDependencies": ["@playwright/test", "@railway/cli"],
+  "ignoreDependencies": ["@railway/cli"],
   "ignore": [
     ".dependency-cruiser.graph.cjs",
     "scripts/filter-type-only-dot.mts",

@@ -1,7 +1,9 @@
 import { mkdtemp, readFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { CAPTURE_SDK_CONTRACT_VERSION } from "./capture-contract-versions";
 import {
   assertDemoScriptCaptureSdkContract,
   createCaptureSdkAgentContract,
@@ -10,10 +12,48 @@ import {
 } from "./capture-sdk-contract";
 import type { DemoScript } from "./demo-script.schema";
 
+const captureSdkGlobal = globalThis as typeof globalThis & {
+  __makeademoCaptureSdk?: unknown;
+};
+
 describe("Capture SDK Contract", () => {
+  it("does not require Capture SDK source for a synthetic-only Demo Script", () => {
+    const script: DemoScript = {
+      format: "16:9",
+      presentation: {
+        music: { enabled: false },
+        textOverlays: [],
+        transitions: [],
+      },
+      scenes: [
+        {
+          backgroundColor: "#101010",
+          durationSeconds: 2,
+          id: "title-card",
+          text: {
+            color: "#ffffff",
+            content: "A clear introduction",
+            font: "Inter",
+            position: "center",
+            size: "large",
+          },
+          type: "full-screen-text",
+        },
+      ],
+      scriptId: "script-001",
+      title: "Demo Script",
+      version: 1,
+    };
+
+    expect(() => assertDemoScriptCaptureSdkContract(script)).not.toThrow();
+  });
+
   it("provides the agent with a canonical callback-based SDK example", () => {
     const contract = createCaptureSdkAgentContract();
 
+    expect(contract.canonicalExample).toContain(
+      "import { setup, scene, step } from './makeademo-capture-sdk';",
+    );
     expect(contract.canonicalExample).toContain(
       "await setup(async ({ page, baseUrl, expect }) => {",
     );
@@ -21,8 +61,12 @@ describe("Capture SDK Contract", () => {
       "await scene('scene_main', async ({ page, expect }) => {",
     );
     expect(contract.canonicalExample).toContain(
-      "await expect(page.getByRole('heading', { name: 'Main content' })).toBeVisible();",
+      "await step('assert-main-content', async () => {",
     );
+    expect(contract.canonicalExample).toContain(
+      "  await expect(page.getByRole('heading', { name: 'Main content' })).toBeVisible();",
+    );
+    expect(contract.contractVersion).toBe(CAPTURE_SDK_CONTRACT_VERSION);
   });
 
   it("writes generated runtime, declaration, and instruction harness files", async () => {
@@ -48,6 +92,285 @@ describe("Capture SDK Contract", () => {
     expect(instructions).toContain("Do not use real-time network access");
     expect(instructions).toContain("fetch");
     expect(instructions).toContain("page.evaluate");
+    expect(instructions).toContain("toBeVisible or toBeInViewport");
+  });
+
+  it("emits structured step lifecycle markers within the active Scene", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "makeademo-sdk-"));
+    await writeGeneratedCaptureSdkHarness(workspace);
+    const captureSdk = await import(
+      `${pathToFileURL(join(workspace, "makeademo-capture-sdk.js")).href}?test=${Date.now()}`
+    );
+    const stepMarkers: Array<Record<string, unknown>> = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => {
+      if (args[0] === "[makeademo:step]") {
+        stepMarkers.push(JSON.parse(String(args[1])));
+      }
+    };
+    captureSdkGlobal.__makeademoCaptureSdk = {
+      context: {
+        baseUrl: "http://127.0.0.1:3000",
+        expect: () => ({}),
+        page: {},
+      },
+      startedAt: performance.now(),
+    };
+
+    try {
+      await captureSdk.scene("scene_one", async () => {
+        await captureSdk.step("click-submit", async () => undefined);
+      });
+
+      expect(stepMarkers).toEqual([
+        {
+          elapsedMs: expect.any(Number),
+          event: "started",
+          sceneId: "scene_one",
+          stepId: "click-submit",
+        },
+        {
+          elapsedMs: expect.any(Number),
+          event: "succeeded",
+          sceneId: "scene_one",
+          stepId: "click-submit",
+        },
+      ]);
+    } finally {
+      console.log = originalLog;
+      captureSdkGlobal.__makeademoCaptureSdk = undefined;
+    }
+  });
+
+  it("passes original Playwright subjects to expect while retaining action instrumentation", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "makeademo-sdk-"));
+    await writeGeneratedCaptureSdkHarness(workspace);
+    const captureSdk = await import(
+      `${pathToFileURL(join(workspace, "makeademo-capture-sdk.js")).href}?test=${Date.now()}`
+    );
+    const rawLocator = { locatorKind: "playwright" };
+    const actionMarkers: string[] = [];
+    const originalLog = console.log;
+
+    console.log = (...args: unknown[]) => {
+      actionMarkers.push(args.map(String).join(" "));
+    };
+    captureSdkGlobal.__makeademoCaptureSdk = {
+      context: {
+        baseUrl: "http://127.0.0.1:3000",
+        expect: (actual: unknown) => {
+          if (actual !== rawLocator) {
+            throw new Error("toBeVisible can be only used with Locator object");
+          }
+          return { toBeVisible: async () => undefined };
+        },
+        page: {
+          locator: () => rawLocator,
+        },
+      },
+      startedAt: performance.now(),
+    };
+
+    try {
+      await captureSdk.scene(
+        "scene_one",
+        async ({
+          expect: instrumentedExpect,
+          page,
+        }: {
+          expect: (actual: unknown) => { toBeVisible(): Promise<void> };
+          page: { locator(selector: string): unknown };
+        }) => {
+          await instrumentedExpect(page.locator("main")).toBeVisible();
+        },
+      );
+
+      expect(actionMarkers).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('"event":"started"'),
+          expect.stringContaining('"event":"succeeded"'),
+          expect.stringContaining(
+            '"label":"expect.toBeVisible(locator(main))"',
+          ),
+        ]),
+      );
+    } finally {
+      console.log = originalLog;
+      captureSdkGlobal.__makeademoCaptureSdk = undefined;
+    }
+  });
+
+  it("injects validation timeouts without replacing optional Playwright arguments", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "makeademo-sdk-"));
+    await writeGeneratedCaptureSdkHarness(workspace);
+    const captureSdk = await import(
+      `${pathToFileURL(join(workspace, "makeademo-capture-sdk.js")).href}?test=${Date.now()}`
+    );
+    const receivedArguments: unknown[][] = [];
+    captureSdkGlobal.__makeademoCaptureSdk = {
+      actionTimeoutMs: 1_234,
+      context: {
+        baseUrl: "http://127.0.0.1:3000",
+        expect: () => ({}),
+        page: {
+          waitForLoadState: (...args: unknown[]) => {
+            receivedArguments.push(args);
+          },
+        },
+      },
+      startedAt: performance.now(),
+    };
+
+    try {
+      await captureSdk.scene(
+        "scene_one",
+        async ({
+          page,
+        }: {
+          page: { waitForLoadState(): Promise<void> };
+        }) => {
+          await page.waitForLoadState();
+        },
+      );
+
+      expect(receivedArguments).toEqual([[undefined, { timeout: 1_234 }]]);
+    } finally {
+      captureSdkGlobal.__makeademoCaptureSdk = undefined;
+    }
+  });
+
+  it("keeps object-valued locator selections separate from timeout options", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "makeademo-sdk-"));
+    await writeGeneratedCaptureSdkHarness(workspace);
+    const captureSdk = await import(
+      `${pathToFileURL(join(workspace, "makeademo-capture-sdk.js")).href}?test=${Date.now()}`
+    );
+    const receivedArguments: unknown[][] = [];
+    const locator = {
+      selectOption: (...args: unknown[]) => {
+        receivedArguments.push(args);
+      },
+    };
+    captureSdkGlobal.__makeademoCaptureSdk = {
+      actionTimeoutMs: 1_234,
+      context: {
+        baseUrl: "http://127.0.0.1:3000",
+        expect: () => ({}),
+        page: { locator: () => locator },
+      },
+      startedAt: performance.now(),
+    };
+
+    try {
+      await captureSdk.scene(
+        "scene_one",
+        async ({
+          page,
+        }: {
+          page: {
+            locator(selector: string): {
+              selectOption(value: { label: string }): Promise<void>;
+            };
+          };
+        }) => {
+          await page.locator("select").selectOption({ label: "Pro" });
+        },
+      );
+
+      expect(receivedArguments).toEqual([
+        [{ label: "Pro" }, { timeout: 1_234 }],
+      ]);
+    } finally {
+      captureSdkGlobal.__makeademoCaptureSdk = undefined;
+    }
+  });
+
+  it("keeps object-valued page selections separate from timeout options", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "makeademo-sdk-"));
+    await writeGeneratedCaptureSdkHarness(workspace);
+    const captureSdk = await import(
+      `${pathToFileURL(join(workspace, "makeademo-capture-sdk.js")).href}?test=${Date.now()}`
+    );
+    const receivedArguments: unknown[][] = [];
+    captureSdkGlobal.__makeademoCaptureSdk = {
+      actionTimeoutMs: 1_234,
+      context: {
+        baseUrl: "http://127.0.0.1:3000",
+        expect: () => ({}),
+        page: {
+          selectOption: (...args: unknown[]) => {
+            receivedArguments.push(args);
+          },
+        },
+      },
+      startedAt: performance.now(),
+    };
+
+    try {
+      await captureSdk.scene(
+        "scene_one",
+        async ({
+          page,
+        }: {
+          page: {
+            selectOption(
+              selector: string,
+              value: { label: string },
+            ): Promise<void>;
+          };
+        }) => {
+          await page.selectOption("select", { label: "Pro" });
+        },
+      );
+
+      expect(receivedArguments).toEqual([
+        ["select", { label: "Pro" }, { timeout: 1_234 }],
+      ]);
+    } finally {
+      captureSdkGlobal.__makeademoCaptureSdk = undefined;
+    }
+  });
+
+  it("keeps the optional waitForFunction argument slot ahead of timeout options", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "makeademo-sdk-"));
+    await writeGeneratedCaptureSdkHarness(workspace);
+    const captureSdk = await import(
+      `${pathToFileURL(join(workspace, "makeademo-capture-sdk.js")).href}?test=${Date.now()}`
+    );
+    const receivedArguments: unknown[][] = [];
+    const predicate = () => true;
+    captureSdkGlobal.__makeademoCaptureSdk = {
+      actionTimeoutMs: 1_234,
+      context: {
+        baseUrl: "http://127.0.0.1:3000",
+        expect: () => ({}),
+        page: {
+          waitForFunction: (...args: unknown[]) => {
+            receivedArguments.push(args);
+          },
+        },
+      },
+      startedAt: performance.now(),
+    };
+
+    try {
+      await captureSdk.scene(
+        "scene_one",
+        async ({
+          page,
+        }: {
+          page: { waitForFunction(callback: () => boolean): Promise<void> };
+        }) => {
+          await page.waitForFunction(predicate);
+        },
+      );
+
+      expect(receivedArguments).toEqual([
+        [predicate, undefined, { timeout: 1_234 }],
+      ]);
+    } finally {
+      captureSdkGlobal.__makeademoCaptureSdk = undefined;
+    }
   });
 
   it("requires Demo Scripts to import both setup and scene from the SDK", () => {
@@ -61,6 +384,27 @@ describe("Capture SDK Contract", () => {
         demoScript("import { setup } from './makeademo-capture-sdk';"),
       ),
     ).toThrow("must import { setup, scene }");
+  });
+
+  it("accepts the compiler step helper alongside setup and scene", () => {
+    expect(() =>
+      assertDemoScriptCaptureSdkContract(
+        demoScript(
+          [
+            "import {",
+            "  setup,",
+            "  scene,",
+            "  step,",
+            "} from './makeademo-capture-sdk';",
+            "await scene('scene_one', async ({ page, expect }) => {",
+            "  await step('assert-main', async () => {",
+            "    await expect(page.locator('main')).toBeVisible();",
+            "  });",
+            "});",
+          ].join("\n"),
+        ),
+      ),
+    ).not.toThrow();
   });
 
   it("requires each Scene to include a visible Playwright assertion", () => {
@@ -118,6 +462,21 @@ describe("Capture SDK Contract", () => {
         ),
       ),
     ).not.toThrow();
+  });
+
+  it("does not treat text-only assertions as proof that a Scene is visible", () => {
+    expect(() =>
+      assertDemoScriptCaptureSdkContract(
+        demoScript(
+          [
+            "import { setup, scene } from './makeademo-capture-sdk';",
+            "await scene('scene_one', async ({ page, expect }) => {",
+            "  await expect(page.locator('main')).toContainText('Ready');",
+            "});",
+          ].join("\n"),
+        ),
+      ),
+    ).toThrow("visible Playwright assertion");
   });
 
   it("rejects generated Demo Scripts that use runtime network APIs", () => {
@@ -231,6 +590,25 @@ describe("Capture SDK Contract", () => {
     ).resolves.toBeUndefined();
   }, 20_000);
 
+  it("types compiler step callbacks through the generated SDK declarations", async () => {
+    const workspace = await sdkWorkspace();
+
+    await expect(
+      validateDemoScriptCaptureSdkTypes({
+        demoPlaywrightScript: [
+          "import { setup, scene, step } from './makeademo-capture-sdk';",
+          "await setup(async ({ page, baseUrl }) => { await page.goto(baseUrl); });",
+          "await scene('scene_one', async ({ page, expect }) => {",
+          "  await step('assert-main', async () => {",
+          "    await expect(page.locator('main')).toBeVisible();",
+          "  });",
+          "});",
+        ].join("\n"),
+        directory: workspace,
+      }),
+    ).resolves.toBeUndefined();
+  }, 20_000);
+
   it("rejects Demo Script code that misuses the SDK context types", async () => {
     const workspace = await sdkWorkspace();
 
@@ -288,6 +666,7 @@ function demoScript(demoPlaywrightScript: string): DemoScript {
         expectedVisibleOutcome: "Body is visible.",
         humanReadableDescription: "Show body.",
         id: "scene_one",
+        type: "playwright-recording",
       },
     ],
     scriptId: "script-001",

@@ -1,3 +1,4 @@
+import type { Readable } from "node:stream";
 import { readSupportingDocumentUpload } from "../../../pipeline/01-context-gathering/supporting-documents";
 
 export type SupportingDocumentUploadRequest = {
@@ -39,10 +40,19 @@ export type PutObjectInput = {
   key: string;
 };
 
+export type PutStreamObjectInput = {
+  body: Readable;
+  bucket: string;
+  contentLength: number;
+  contentType: string;
+  key: string;
+};
+
 export type R2UploadStorage = {
   bucket: string;
   createId?: () => string;
   putObject(input: PutObjectInput): Promise<void>;
+  putStreamObject?(input: PutStreamObjectInput): Promise<void>;
   presignGet(input: GetPresignerInput): Promise<string>;
   presignPut(input: PutPresignerInput): Promise<string>;
 };

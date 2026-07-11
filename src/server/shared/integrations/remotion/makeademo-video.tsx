@@ -39,8 +39,9 @@ export const MakeADemoVideo: React.FC<CompositingRenderPlan> = (plan) => {
         <Audio loop src={staticFile(plan.music.publicPath)} volume={0.75} />
       ) : null}
       {plan.scenes.map((scene) => {
-        const from = cursor;
-        cursor += scene.durationFrames;
+        const overlapFrames = scene.transitionIn?.durationFrames ?? 0;
+        const from = cursor - overlapFrames;
+        cursor = from + scene.durationFrames;
 
         return (
           <Sequence
@@ -72,8 +73,8 @@ const FontFaces: React.FC<{ plan: CompositingRenderPlan }> = ({ plan }) => {
 
 const SceneFrame: React.FC<{ scene: CompositingScene }> = ({ scene }) => {
   const frame = useCurrentFrame();
-  const opacity = scene.transition
-    ? calculateTransitionOpacity(frame, scene)
+  const opacity = scene.transitionIn
+    ? calculateTransitionInOpacity(frame, scene.transitionIn.durationFrames)
     : 1;
 
   return (
@@ -81,11 +82,11 @@ const SceneFrame: React.FC<{ scene: CompositingScene }> = ({ scene }) => {
       {scene.type === "full-screen-text" ? (
         <AbsoluteFill
           style={{
-            backgroundColor: scene.backgroundColor ?? "#000000",
+            backgroundColor: scene.backgroundColor,
           }}
         />
       ) : null}
-      {scene.type === "playwright-recording" && scene.sourcePublicPath ? (
+      {scene.type === "playwright-recording" ? (
         <OffthreadVideo
           muted
           src={staticFile(scene.sourcePublicPath)}
@@ -96,7 +97,7 @@ const SceneFrame: React.FC<{ scene: CompositingScene }> = ({ scene }) => {
           }}
         />
       ) : null}
-      {scene.type === "static-image" && scene.sourcePublicPath ? (
+      {scene.type === "static-image" ? (
         <Img
           alt={scene.alt}
           src={staticFile(scene.sourcePublicPath)}
@@ -107,7 +108,12 @@ const SceneFrame: React.FC<{ scene: CompositingScene }> = ({ scene }) => {
           }}
         />
       ) : null}
-      {scene.text ? <TextOverlay text={scene.text} /> : null}
+      {scene.type === "full-screen-text" ? (
+        <TextOverlay text={scene.text} />
+      ) : null}
+      {scene.textOverlays.map((text, index) => (
+        <TextOverlay key={`${scene.sceneId}-overlay-${index}`} text={text} />
+      ))}
     </AbsoluteFill>
   );
 };
@@ -171,30 +177,9 @@ function textSize(size: CompositingTextStyle["size"]) {
   return 34;
 }
 
-function calculateTransitionOpacity(frame: number, scene: CompositingScene) {
-  const transition = scene.transition;
-  if (!transition) {
-    return 1;
-  }
-
-  const fadeIn =
-    transition.in === "fade"
-      ? interpolate(frame, [0, transition.durationFrames], [0, 1], {
-          extrapolateLeft: "clamp",
-          extrapolateRight: "clamp",
-        })
-      : 1;
-  const fadeOutStart = Math.max(
-    0,
-    scene.durationFrames - transition.durationFrames,
-  );
-  const fadeOut =
-    transition.out === "fade"
-      ? interpolate(frame, [fadeOutStart, scene.durationFrames], [1, 0], {
-          extrapolateLeft: "clamp",
-          extrapolateRight: "clamp",
-        })
-      : 1;
-
-  return Math.min(fadeIn, fadeOut);
+function calculateTransitionInOpacity(frame: number, durationFrames: number) {
+  return interpolate(frame, [0, durationFrames], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
 }

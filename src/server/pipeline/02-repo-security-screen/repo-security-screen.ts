@@ -27,6 +27,7 @@ const lockfiles = new Set([
   "yarn.lock",
 ]);
 const privateKeyFilenames = new Set(["id_ed25519", "id_rsa"]);
+const privateKeyExtensions = new Set([".key", ".p12", ".pem", ".pfx"]);
 const safeEnvFileSuffixes = new Set(["example", "sample", "template"]);
 
 export function screenRepoSecurity(
@@ -81,7 +82,14 @@ export function screenRepoSecurity(
 
 function isCommittedSecretFile(path: string) {
   const filename = path.split("/").at(-1) ?? path;
-  if (privateKeyFilenames.has(filename)) {
+  const normalizedFilename = filename.toLowerCase();
+  const extension = normalizedFilename.slice(
+    normalizedFilename.lastIndexOf("."),
+  );
+  if (
+    privateKeyFilenames.has(normalizedFilename) ||
+    privateKeyExtensions.has(extension)
+  ) {
     return true;
   }
 

@@ -1,70 +1,41 @@
-# Demo Footage Capture
+# Footage Capture
 
-This directory contains Anqi's demo-local Footage Capture prototype. It consumes a unified Video Script-shaped JSON file and records one temporary Playwright video chunk per `playwright-recording` Scene.
+This module turns the browser portion of a validated Demo Script into captured Scene clips. It does not interpret agent-authored Playwright. The backend compiles grounded, typed Browser Actions into the versioned Capture SDK program used by both Capture Path Validation and Footage Capture.
 
-## Capture The Sample Script
+Demo Scripts may mix three Scene types:
 
-```bash
-bun run demo:capture-scenes
-```
+- `playwright-recording`: captured from the prepared app in one continuous browser take, then trimmed from backend-owned Scene markers.
+- `full-screen-text`: rendered directly by Compositing; no browser is launched for this Scene.
+- `static-image`: rendered directly by Compositing from a backend-registered asset ID; arbitrary paths and URLs are not accepted.
 
-The command starts `bun run demo` automatically if `http://localhost:3000` is not already reachable, records the sample `playwright-recording` scenes from `demo/data/milo_video_script_example.json`, and writes a manifest under `.demo-capture-runs/<runId>/capture-manifest.json`.
+Optional Setup Actions execute before visible browser footage. Browser and Setup Actions emit stable step IDs, while the Capture SDK emits Scene, action, assertion, network, and validation protocol events. Capture rejects missing, duplicated, nested, out-of-order, failed, or unexpected events and persists the complete normalized protocol plus stdout and stderr.
 
-The raw Scene chunks are temporary by design:
+Runtime Network Lockdown applies during validation and recording. Browser requests and WebSockets may only target the prepared app origin, Service Workers are blocked, and any attempted external access is a hard validation failure.
 
-```text
-.demo-capture-runs/<runId>/raw-scenes/<sceneId>.webm
-```
-
-During capture, the recorder styles common Playwright interactions for video:
-
-- `locator.fill("text")` is rewritten to click the target and type at about 80 WPM.
-- `locator.click()` is rewritten so a visible pointer starts from the center of the screen, moves to the target, and clicks.
-- `locator.hover()` is rewritten so the visible pointer moves to the target before hovering.
-- Transcript `scrollTop` changes are rewritten as animated scrolls with subtle floating chevrons.
-
-The future Remotion stitching step should consume the manifest during the same run, render the final video, then delete the temporary run directory unless the manifest has `keepTemp: true`.
-
-## Composite The Final Video
-
-After capture prints a manifest path, pass that manifest to the Remotion Compositing command:
-
-```bash
-bun run demo:composite-video -- --capture-manifest .demo-capture-runs/<runId>/capture-manifest.json
-```
-
-The command stages captured Scene videos, static images, approved fonts, and the approved background music bed under `.demo-composite-renders/<runId>/public`, renders `final-video.mp4`, and writes:
+Captured output is written beneath the run directory:
 
 ```text
-.demo-composite-renders/<runId>/final-video.mp4
-.demo-composite-renders/<runId>/composite-manifest.json
-.demo-composite-renders/<runId>/render-plan.json
+capture/
+  capture-manifest.json
+  scene-markers.jsonl
+  stdout.log
+  stderr.log
+  raw-scenes/continuous-take.webm
+  scene-clips/<sceneId>.webm
 ```
 
-The composite manifest includes a `file://` view URL for local testing.
+Synthetic-only scripts produce an empty Capture Manifest and proceed directly to Compositing. Mixed scripts retain the original Demo Script order when captured clips and compositor-native Scenes are assembled.
 
-## Development Options
+Compositing can reuse a preinstalled Chromium binary by setting `MAKEADEMO_REMOTION_BROWSER_EXECUTABLE`, avoiding a render-time browser download. The renderer smoke test exercises a real one-frame Remotion render with the pinned Playwright browser.
 
-Run with a visible browser:
+Run the complete interactive pipeline with:
 
 ```bash
-bun run demo:capture-scenes -- --headed
+bun run pipeline:run
 ```
 
-Pause after each scene before the browser closes:
+The run requires the linked Daytona parent and submitted-code snapshots described in the repository README. After changing a Daytona image or the generated capture runtime, verify the sealed submitted-code toolchain with:
 
 ```bash
-bun run demo:capture-scenes -- --headed --pause-after-scene 1000
-```
-
-Mark the temporary chunks for preservation after future compositing cleanup:
-
-```bash
-bun run demo:capture-scenes -- --keep-temp
-```
-
-Use a different script package:
-
-```bash
-bun run demo:capture-scenes -- --script demo/data/milo_video_script_example.json
+bun run verify:daytona-image
 ```

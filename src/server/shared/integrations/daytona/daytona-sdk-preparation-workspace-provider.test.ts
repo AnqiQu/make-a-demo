@@ -1113,7 +1113,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         {
           executeSessionCommand: {
             command: expect.stringContaining(
-              "cd '/workspace/repo with spaces' && env 'DEMO_MODE=customer'\\''s demo' sh -lc 'npm run dev -- --host 0.0.0.0'",
+              "mkdir -p '/workspace/.makeademo/runtime-tmp' && cd '/workspace/repo with spaces' && env 'DEMO_MODE=customer'\\''s demo' 'TMPDIR=/workspace/.makeademo/runtime-tmp' sh -lc 'npm run dev -- --host 0.0.0.0'",
             ),
             runAsync: true,
             sandbox: "submitted_sandbox",
@@ -1298,14 +1298,14 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         call.executeCommand.command.includes("tar -xzf"),
     )?.executeCommand.command;
     expect(restoreCommand).toEqual(expect.stringContaining("node_modules"));
-    expect(restoreCommand).toEqual(expect.stringContaining(".vite"));
-    expect(restoreCommand).toEqual(expect.stringContaining(".turbo"));
+    expect(restoreCommand).not.toContain(".vite");
+    expect(restoreCommand).not.toContain(".turbo");
     expect(restoreCommand).toEqual(expect.stringContaining(".npm"));
     expect(restoreCommand).toEqual(expect.stringContaining(".pnpm-store"));
     expect(restoreCommand).toEqual(expect.stringContaining(".yarn/cache"));
-    expect(restoreCommand).toEqual(expect.stringContaining(".next/cache"));
+    expect(restoreCommand).not.toContain(".next/cache");
     expect(restoreCommand).toEqual(expect.stringContaining(".bun"));
-    expect(restoreCommand).toEqual(expect.stringContaining(".cache"));
+    expect(restoreCommand).not.toContain("-name .cache");
     expect(restoreCommand).toEqual(
       expect.stringContaining(
         '{ cp -a "$preserved"/. /workspace/ 2>/dev/null || true; }',
@@ -1366,7 +1366,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     );
   });
 
-  it("restores submitted-code workspace through a POSIX shell while preserving caches and excluding MakeADemo artifacts", async () => {
+  it("restores submitted-code workspace while preserving dependencies but removing mutable runtime caches", async () => {
     const root = await mkdtemp(join(tmpdir(), "makeademo-daytona-shell-"));
     const parentWorkspace = join(root, "parent");
     const submittedWorkspace = join(root, "submitted");
@@ -1374,6 +1374,9 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     await mkdir(join(parentWorkspace, ".makeademo"), { recursive: true });
     await mkdir(join(parentWorkspace, "node_modules"), { recursive: true });
     await mkdir(join(submittedWorkspace, "node_modules"), { recursive: true });
+    await mkdir(join(submittedWorkspace, ".next", "cache"), {
+      recursive: true,
+    });
     await writeFile(join(parentWorkspace, "package.json"), "prepared app");
     await writeFile(
       join(parentWorkspace, ".makeademo", "capture.webm"),
@@ -1388,6 +1391,10 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       "keep me",
     );
     await writeFile(join(submittedWorkspace, "stale.txt"), "remove me");
+    await writeFile(
+      join(submittedWorkspace, ".next", "cache", "stale-state"),
+      "remove me",
+    );
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
       client: fakeLocalShellLinkedClient(calls, {
         parentWorkspace,
@@ -1414,6 +1421,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         join(submittedWorkspace, "node_modules", "prepared-cache.txt"),
       );
       await expectPathMissing(join(submittedWorkspace, ".makeademo"));
+      await expectPathMissing(join(submittedWorkspace, ".next"));
       await expectPathMissing(join(submittedWorkspace, "stale.txt"));
     } finally {
       await rm(root, { force: true, recursive: true });
@@ -1522,6 +1530,26 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       { delete: "parent_sandbox" },
     ]);
   });
+
+  it("retries only the Daytona sandbox deletions that previously failed", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls, {
+        submittedDeleteFailuresBeforeSuccess: 1,
+      }),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await expect(handle.destroy()).rejects.toThrow("transient delete failure");
+    await expect(handle.destroy()).resolves.toBeUndefined();
+
+    expect(calls.filter((call) => "delete" in Object(call))).toEqual([
+      { delete: "submitted_sandbox" },
+      { delete: "parent_sandbox" },
+      { delete: "submitted_sandbox" },
+    ]);
+  });
 });
 
 function fakeLinkedClient(
@@ -1533,6 +1561,7 @@ function fakeLinkedClient(
     failSubmittedRestore?: boolean;
     missingSubmittedSandboxOnDelete?: boolean;
     remoteCleanupNeverResolves?: boolean;
+    submittedDeleteFailuresBeforeSuccess?: number;
     submittedUploadFailuresBeforeSuccess?: number;
   } = {},
 ) {
@@ -1548,6 +1577,7 @@ function fakeLinkedClient(
     "child ok",
     options,
   );
+  let submittedDeleteFailures = 0;
 
   return {
     async create(input: unknown) {
@@ -1565,6 +1595,14 @@ function fakeLinkedClient(
     async delete(input: { id?: string; name?: string }) {
       const sandboxId = input.id ?? input.name;
       calls.push({ delete: sandboxId });
+      if (
+        sandboxId === "submitted_sandbox" &&
+        submittedDeleteFailures <
+          (options.submittedDeleteFailuresBeforeSuccess ?? 0)
+      ) {
+        submittedDeleteFailures += 1;
+        throw new Error("transient delete failure");
+      }
       if (
         options.missingSubmittedSandboxOnDelete === true &&
         sandboxId === "submitted_sandbox"

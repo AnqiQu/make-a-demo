@@ -1,9 +1,52 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createRecordingPipelineObserver } from "./pipeline-observer";
 import { processNextProjectDemoGenerationJob } from "./project-demo-generation-queue";
 
 describe("processNextProjectDemoGenerationJob", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("renews the processing lease and uses the same token for completion", async () => {
+    vi.useFakeTimers();
+    const renewed: string[] = [];
+    let finishPipeline!: () => void;
+    const pipelineGate = new Promise<void>((resolve) => {
+      finishPipeline = resolve;
+    });
+
+    const processing = processNextProjectDemoGenerationJob(
+      {
+        async claimNextQueuedProject() {
+          return queuedProjectJob();
+        },
+        async markProjectCompleted(input) {
+          expect(input).toMatchObject({ leaseToken: "lease-1" });
+        },
+        async markProjectFailed() {
+          throw new Error("project should not fail");
+        },
+        async renewProjectLease(input) {
+          renewed.push(input.leaseToken);
+          return true;
+        },
+      },
+      {
+        async runFullPipeline() {
+          await pipelineGate;
+          return { generatedDemoUrl: "r2://demo/final.mp4" };
+        },
+      },
+      { leaseHeartbeatIntervalMs: 5 },
+    );
+
+    await vi.advanceTimersByTimeAsync(16);
+    finishPipeline();
+    await expect(processing).resolves.toMatchObject({ status: "completed" });
+    expect(renewed).toEqual(["lease-1", "lease-1", "lease-1"]);
+  });
+
   it("claims one queued Project and completes it only after the reviewed full pipeline stores the video", async () => {
     const calls: string[] = [];
     const store = {
@@ -18,6 +61,7 @@ describe("processNextProjectDemoGenerationJob", () => {
         calls.push("complete");
         expect(input).toEqual({
           generatedDemoUrl: "r2://owlet/demo-videos/demo-request-1/final.mp4",
+          leaseToken: "lease-1",
           projectId: "project-1",
         });
       },
@@ -62,6 +106,7 @@ describe("processNextProjectDemoGenerationJob", () => {
         expect(input).toEqual({
           generatedDemoUrl:
             "r2://owlet/demo-videos/demo-request-1/full/final.mp4",
+          leaseToken: "lease-1",
           projectId: "project-1",
         });
       },
@@ -154,6 +199,7 @@ describe("processNextProjectDemoGenerationJob", () => {
         calls.push("fail");
         expect(input).toEqual({
           error: "renderer failed",
+          leaseToken: "lease-1",
           projectId: "project-1",
         });
       },
@@ -205,6 +251,7 @@ function queuedProjectJob() {
     },
     demoRequestId: "demo-request-1",
     normalizedSupportingDocuments: [],
+    leaseToken: "lease-1",
     projectId: "project-1",
     repoUrl: "https://github.com/example/app",
     workspaceId: "project-1",

@@ -1,19 +1,13 @@
 import { spawn } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { CAPTURE_SDK_CONTRACT_VERSION } from "./capture-contract-versions";
 import type { DemoScript } from "./demo-script.schema";
 
 const SDK_IMPORT_PATTERN =
-  /import\s+\{\s*(?:scene\s*,\s*setup|setup\s*,\s*scene)\s*\}\s+from\s+['"]\.\/makeademo-capture-sdk['"];?/;
-const visibleAssertionMatchers = [
-  "toBeInViewport",
-  "toBeVisible",
-  "toContainText",
-  "toHaveCount",
-  "toHaveText",
-  "toHaveTitle",
-  "toHaveURL",
-] as const;
+  /^\s*import\s+\{([^}]*)\}\s+from\s+['"]\.\/makeademo-capture-sdk['"];?/;
+const captureSdkImportNames = new Set(["scene", "setup", "step"]);
+const visibleAssertionMatchers = ["toBeInViewport", "toBeVisible"] as const;
 const visibleAssertionMatcherSet = new Set<string>(visibleAssertionMatchers);
 
 const forbiddenCaptureControlPatterns: Array<[RegExp, string]> = [
@@ -74,15 +68,14 @@ const forbiddenHostRuntimePattern =
   /\b(?:import|require)\b|\b(?:Bun|Deno|process)\s*\.|\b(?:eval|Function)\s*\(/;
 
 /**
- * Returns the backend-owned Capture SDK instructions supplied to Script
- * Writing and Script Repair. The canonical example is executable contract
- * syntax, but agents must ground its Scene IDs and locators in durable app
- * artifacts.
+ * Returns the backend-owned Capture SDK runtime contract. Script Writing uses
+ * typed browser actions; this artifact explains the generated execution layer
+ * and is not a template for agent-authored source.
  */
 export function createCaptureSdkAgentContract() {
   return {
     canonicalExample: [
-      "import { setup, scene } from './makeademo-capture-sdk';",
+      "import { setup, scene, step } from './makeademo-capture-sdk';",
       "",
       "await setup(async ({ page, baseUrl, expect }) => {",
       "  await page.goto(baseUrl);",
@@ -90,10 +83,12 @@ export function createCaptureSdkAgentContract() {
       "});",
       "",
       "await scene('scene_main', async ({ page, expect }) => {",
-      "  await expect(page.getByRole('heading', { name: 'Main content' })).toBeVisible();",
+      "  await step('assert-main-content', async () => {",
+      "    await expect(page.getByRole('heading', { name: 'Main content' })).toBeVisible();",
+      "  });",
       "});",
     ].join("\n"),
-    contractVersion: "2026-07-10",
+    contractVersion: CAPTURE_SDK_CONTRACT_VERSION,
     declarations: declarationSource(),
     instructions: instructionsSource(),
     visibleAssertionMatchers,
@@ -101,29 +96,34 @@ export function createCaptureSdkAgentContract() {
 }
 
 /**
- * Validates agent-authored Demo Script code against the generated Capture SDK
- * contract. The agent may import and call setup/scene, but must not own
+ * Validates backend-compiled Demo Script code against the generated Capture
+ * SDK contract. The compiler may emit setup/scene/step calls, but cannot own
  * browser recording, marker emission, output paths, capture timestamps, or
  * runtime network behavior.
  */
 export function assertDemoScriptCaptureSdkContract(script: DemoScript): void {
-  if (!SDK_IMPORT_PATTERN.test(script.demoPlaywrightScript)) {
+  const browserScenes = script.scenes.filter(
+    (scene) => scene.type === "playwright-recording",
+  );
+  if (browserScenes.length === 0) {
+    return;
+  }
+  const source = script.demoPlaywrightScript;
+  if (source === undefined || !hasRequiredCaptureSdkImport(source)) {
     throw new Error(
       "Demo Script must import { setup, scene } from './makeademo-capture-sdk'.",
     );
   }
 
   for (const [pattern, reason] of forbiddenCaptureControlPatterns) {
-    if (pattern.test(script.demoPlaywrightScript)) {
+    if (pattern.test(source)) {
       throw new Error(
         `Demo Script violates the Capture SDK Contract: ${reason}.`,
       );
     }
   }
 
-  const networkSource = stripCommentsAndStringLiterals(
-    script.demoPlaywrightScript,
-  );
+  const networkSource = stripCommentsAndStringLiterals(source);
   for (const [pattern, reason] of forbiddenRuntimeNetworkPatterns) {
     if (pattern.test(networkSource)) {
       throw new Error(
@@ -132,7 +132,7 @@ export function assertDemoScriptCaptureSdkContract(script: DemoScript): void {
     }
   }
   for (const [pattern, reason] of forbiddenNetworkImportPatterns) {
-    if (pattern.test(script.demoPlaywrightScript)) {
+    if (pattern.test(source)) {
       throw new Error(
         `Demo Script violates the Capture SDK Contract: ${reason}.`,
       );
@@ -140,7 +140,7 @@ export function assertDemoScriptCaptureSdkContract(script: DemoScript): void {
   }
 
   const hostRuntimeSource = stripCommentsAndStringLiterals(
-    script.demoPlaywrightScript.replace(SDK_IMPORT_PATTERN, ""),
+    source.replace(SDK_IMPORT_PATTERN, ""),
   );
   if (forbiddenHostRuntimePattern.test(hostRuntimeSource)) {
     throw new Error(
@@ -148,9 +148,7 @@ export function assertDemoScriptCaptureSdkContract(script: DemoScript): void {
     );
   }
 
-  const bypassSource = stripCommentsAndStringLiterals(
-    script.demoPlaywrightScript,
-  );
+  const bypassSource = stripCommentsAndStringLiterals(source);
   for (const [pattern, reason] of forbiddenAppBypassPatterns) {
     if (pattern.test(bypassSource)) {
       throw new Error(
@@ -159,11 +157,8 @@ export function assertDemoScriptCaptureSdkContract(script: DemoScript): void {
     }
   }
 
-  for (const scene of script.scenes) {
-    const sceneBody = readSceneCallbackSource(
-      script.demoPlaywrightScript,
-      scene.id,
-    );
+  for (const scene of browserScenes) {
+    const sceneBody = readSceneCallbackSource(source, scene.id);
     if (sceneBody === undefined) {
       throw new Error(
         `Demo Script must call scene(${JSON.stringify(scene.id)}, ...).`,
@@ -175,6 +170,24 @@ export function assertDemoScriptCaptureSdkContract(script: DemoScript): void {
       );
     }
   }
+}
+
+function hasRequiredCaptureSdkImport(source: string) {
+  const match = SDK_IMPORT_PATTERN.exec(source);
+  if (match?.[1] === undefined) {
+    return false;
+  }
+  const names = match[1]
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+  const uniqueNames = new Set(names);
+  return (
+    names.length === uniqueNames.size &&
+    names.every((name) => captureSdkImportNames.has(name)) &&
+    uniqueNames.has("setup") &&
+    uniqueNames.has("scene")
+  );
 }
 
 function hasVisiblePlaywrightAssertion(source: string) {
@@ -334,7 +347,9 @@ function runtimeSource() {
   return `export async function setup() {
   const sdk = readMakeADemoCaptureSdk();
   const callback = arguments[0];
-  await callback(createInstrumentedContext(sdk, 'setup'));
+  await runWithActiveScene(sdk, 'setup', () =>
+    callback(createInstrumentedContext(sdk, 'setup')),
+  );
 }
 
 export async function scene() {
@@ -344,7 +359,9 @@ export async function scene() {
   // Generated protocol: parent validators/recorders parse these stdout markers for Scene timing.
   console.log('[makeademo:scene]', JSON.stringify({ elapsedMs: elapsedMs(sdk), event: 'started', sceneId: id }));
   try {
-    await callback(createInstrumentedContext(sdk, id));
+    await runWithActiveScene(sdk, id, () =>
+      callback(createInstrumentedContext(sdk, id)),
+    );
     console.log('[makeademo:scene]', JSON.stringify({ elapsedMs: elapsedMs(sdk), event: 'succeeded', sceneId: id }));
   } catch (error) {
     console.log('[makeademo:scene]', JSON.stringify({
@@ -354,6 +371,54 @@ export async function scene() {
       sceneId: id,
     }));
     throw error;
+  }
+}
+
+export async function step() {
+  const sdk = readMakeADemoCaptureSdk();
+  const stepId = arguments[0];
+  const callback = arguments[1];
+  const sceneId = sdk.activeSceneId;
+  if (typeof sceneId !== 'string') {
+    throw new Error('MakeADemo Capture SDK step() must run inside setup() or scene().');
+  }
+
+  console.log('[makeademo:step]', JSON.stringify({
+    elapsedMs: elapsedMs(sdk),
+    event: 'started',
+    stepId,
+    sceneId,
+  }));
+  try {
+    const result = await callback();
+    console.log('[makeademo:step]', JSON.stringify({
+      elapsedMs: elapsedMs(sdk),
+      event: 'succeeded',
+      stepId,
+      sceneId,
+    }));
+    return result;
+  } catch (error) {
+    console.log('[makeademo:step]', JSON.stringify({
+      elapsedMs: elapsedMs(sdk),
+      event: 'failed',
+      message: error instanceof Error ? error.message : String(error),
+      stepId,
+      sceneId,
+    }));
+    throw error;
+  }
+}
+
+async function runWithActiveScene(sdk, sceneId, callback) {
+  if (sdk.activeSceneId !== undefined) {
+    throw new Error('MakeADemo Capture SDK setup() and scene() calls must not be nested or concurrent.');
+  }
+  sdk.activeSceneId = sceneId;
+  try {
+    return await callback();
+  } finally {
+    delete sdk.activeSceneId;
   }
 }
 
@@ -458,9 +523,10 @@ const makeADemoExpectAssertionMethods = new Set([
   'toHaveURL',
   'toHaveValue',
 ]);
+const makeADemoRawInstrumentedObjects = new WeakMap();
 
 function instrumentPage(page, sdk, sceneId, timeoutMs) {
-  return new Proxy(page, {
+  return rememberInstrumentedObject(page, new Proxy(page, {
     get(target, property, receiver) {
       const value = Reflect.get(target, property, receiver);
       if (typeof property !== 'string' || typeof value !== 'function') {
@@ -483,21 +549,24 @@ function instrumentPage(page, sdk, sceneId, timeoutMs) {
           callback: () =>
             property === 'waitForTimeout'
               ? runBoundedWaitForTimeout(value, target, args, timeoutMs)
-              : value.apply(target, withTimeoutOptions(args, timeoutMs)),
+              : value.apply(
+                  target,
+                  withPageActionTimeoutOptions(property, args, timeoutMs),
+                ),
           label: \`page.\${property}(\${formatActionArguments(args)})\`,
           sceneId,
           sdk,
           timeoutMs,
         });
     },
-  });
+  }));
 }
 
 function instrumentLocator(locator, sdk, sceneId, source, sourceArguments, timeoutMs) {
   const sourceLabel = sourceArguments.length > 0
     ? \`\${source}(\${sourceArguments})\`
     : source;
-  return new Proxy(locator, {
+  return rememberInstrumentedObject(locator, new Proxy(locator, {
     get(target, property, receiver) {
       if (property === '__makeademoDescription') {
         return sourceLabel;
@@ -528,19 +597,23 @@ function instrumentLocator(locator, sdk, sceneId, source, sourceArguments, timeo
 
       return (...args) =>
         runInstrumentedStep({
-          callback: () => value.apply(target, withTimeoutOptions(args, timeoutMs)),
+          callback: () =>
+            value.apply(
+              target,
+              withLocatorActionTimeoutOptions(property, args, timeoutMs),
+            ),
           label: \`locator.\${property}(\${[sourceLabel, formatActionArguments(args)].filter(Boolean).join(', ')})\`,
           sceneId,
           sdk,
           timeoutMs,
         });
     },
-  });
+  }));
 }
 
 function instrumentExpect(playwrightExpect, sdk, sceneId, timeoutMs) {
   return (actual, ...args) => {
-    const assertion = playwrightExpect(actual, ...args);
+    const assertion = playwrightExpect(unwrapInstrumentedObject(actual), ...args);
     return new Proxy(assertion, {
       get(target, property, receiver) {
         const value = Reflect.get(target, property, receiver);
@@ -563,6 +636,18 @@ function instrumentExpect(playwrightExpect, sdk, sceneId, timeoutMs) {
       },
     });
   };
+}
+
+function rememberInstrumentedObject(raw, instrumented) {
+  makeADemoRawInstrumentedObjects.set(instrumented, raw);
+  return instrumented;
+}
+
+function unwrapInstrumentedObject(value) {
+  if ((typeof value !== 'object' || value === null) && typeof value !== 'function') {
+    return value;
+  }
+  return makeADemoRawInstrumentedObjects.get(value) ?? value;
 }
 
 async function runInstrumentedStep(input) {
@@ -610,6 +695,42 @@ function withTimeoutOptions(args, timeoutMs) {
   }
 
   return [...nextArgs, { timeout: timeoutMs }];
+}
+
+function withPageActionTimeoutOptions(property, args, timeoutMs) {
+  if (property === 'waitForLoadState') {
+    return withTimeoutAtOptionsIndex(args, timeoutMs, 1);
+  }
+  if (property === 'selectOption') {
+    return withTimeoutAtOptionsIndex(args, timeoutMs, 2);
+  }
+  if (property === 'waitForFunction') {
+    return withTimeoutAtOptionsIndex(args, timeoutMs, 2);
+  }
+  return withTimeoutOptions(args, timeoutMs);
+}
+
+function withLocatorActionTimeoutOptions(property, args, timeoutMs) {
+  if (property === 'selectOption') {
+    return withTimeoutAtOptionsIndex(args, timeoutMs, 1);
+  }
+  return withTimeoutOptions(args, timeoutMs);
+}
+
+function withTimeoutAtOptionsIndex(args, timeoutMs, optionsIndex) {
+  if (timeoutMs === undefined) {
+    return args;
+  }
+
+  const nextArgs = [...args];
+  while (nextArgs.length < optionsIndex) {
+    nextArgs.push(undefined);
+  }
+  const existingOptions = nextArgs[optionsIndex];
+  nextArgs[optionsIndex] = isPlainObject(existingOptions)
+    ? { ...existingOptions, timeout: existingOptions.timeout ?? timeoutMs }
+    : { timeout: timeoutMs };
+  return nextArgs;
 }
 
 function runBoundedWaitForTimeout(waitForTimeout, target, args, timeoutMs) {
@@ -689,13 +810,19 @@ export declare function scene(
   id: string,
   callback: (context: MakeADemoSceneContext) => Promise<void> | void,
 ): Promise<void>;
+
+/** Executes one compiler-identified Browser Action inside the active setup or Scene scope. */
+export declare function step<Result>(
+  id: string,
+  callback: () => Promise<Result> | Result,
+): Promise<Result>;
 `;
 }
 
 function instructionsSource() {
   return `# MakeADemo Capture SDK Contract
 
-Import setup and scene from './makeademo-capture-sdk'. Put off-camera login, seeding, and navigation in setup. Put each on-camera product moment in scene(id, async ({ page, baseUrl, expect }) => { ... }). Each scene must assert a visible outcome with Playwright expect before it ends.
+Import setup, scene, and step from './makeademo-capture-sdk'. Put off-camera login, seeding, and navigation in setup. Put each on-camera product moment in scene(id, async ({ page, baseUrl, expect }) => { ... }). Wrap every compiler-identified Browser Action in step(actionId, async () => { ... }) so failures retain their durable Action ID. Each scene must prove a visible outcome with Playwright toBeVisible or toBeInViewport before it ends; text, URL, title, and count assertions may supplement but cannot replace that visibility proof.
 
 Do not launch browsers, create contexts, configure recordVideo, write marker logs, print [makeademo:scene] lines, or provide timestamps/durations.
 

@@ -21,6 +21,7 @@ describe("Daytona OpenCode prepared image", () => {
     );
     expect(dockerfile).toContain("ln -s /etc/ssl/certs/ca-certificates.crt");
     expect(dockerfile).toContain("test -f /etc/openshell-tls/ca-bundle.pem");
+    expect(dockerfile).toContain("bun-v1.3.14");
     expect(dockerfile).toContain(
       "git config --system http.sslCAInfo /etc/openshell-tls/ca-bundle.pem",
     );
@@ -38,7 +39,7 @@ describe("Daytona OpenCode prepared image", () => {
     expect(dockerfile).toContain("git");
     expect(dockerfile).toContain("unzip");
     expect(dockerfile).toContain("update-ca-certificates");
-    expect(dockerfile).toContain("bun-v1.2.5");
+    expect(dockerfile).toContain("bun-v1.3.14");
     expect(dockerfile).toContain("pnpm@10.12.1");
     expect(dockerfile).toContain("yarn@1.22.22");
     expect(dockerfile).toContain("mcr.microsoft.com/playwright:v1.60.0-noble");

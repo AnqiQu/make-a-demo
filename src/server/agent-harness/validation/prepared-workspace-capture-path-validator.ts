@@ -1,23 +1,43 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import {
+  CAPTURE_COMMAND_SHUTDOWN_GRACE_SECONDS,
+  CAPTURE_COMMAND_TIMEOUT_MS,
+  CAPTURE_SCRIPT_TIMEOUT_SECONDS,
+} from "../../pipeline/06-footage-capture/capture-execution-budget";
+import {
+  CaptureBrowserActionFailureError,
+  type CaptureRuntimeProtocol,
+  CaptureRuntimeProtocolError,
+  CaptureScriptProtocolViolationError,
+  readCaptureRuntimeProtocol,
+  readCaptureValidationFailure,
+  readSuccessfulCaptureSceneRanges,
+} from "../../pipeline/06-footage-capture/capture-runtime-protocol";
+import {
   validateDemoScriptCaptureSdkTypes,
   writeGeneratedCaptureSdkHarness,
 } from "../../pipeline/06-footage-capture/capture-sdk-contract";
 import { prepareStylizedPlaywrightScript } from "../../pipeline/06-footage-capture/stylized-playwright-script";
+import { uploadSubmittedCodeArchive } from "../daytona/submitted-code-artifact-archive";
 import { executeSubmittedCode } from "../daytona/submitted-code-execution";
 import type { AgentHarnessWorkspaceHandle } from "../daytona/workspace.interface";
-
-const capturePathCommandTimeoutMs = 130_000;
-const capturePathScriptTimeoutSeconds = 120;
 
 export type PreparedWorkspaceCapturePathResult = {
   blockedNetworkAttempts: Array<{
     direction: "outbound";
     host: string;
     phase: "runtime";
+    resourceType?: string;
+    url?: string;
   }>;
   browserUrl: string;
+  failureClassification?:
+    | "assertion failure"
+    | "harness/internal failure"
+    | "locator failure"
+    | "timing/state failure"
+    | "script contract failure";
   failureReason?: string;
   logs: string[];
   runDirectory: string;
@@ -37,19 +57,13 @@ export type PreparedWorkspaceCapturePathResult = {
 export async function validatePreparedWorkspaceCapturePath(input: {
   baseUrl: string;
   demoPlaywrightScript: string;
+  expectedStepIdsByScene?: Readonly<Record<string, readonly string[]>>;
   localRunDirectory: string;
   onEvent?: (entry: Record<string, unknown>) => Promise<void>;
+  sceneIds: string[];
   workspace: AgentHarnessWorkspaceHandle;
 }): Promise<PreparedWorkspaceCapturePathResult> {
   const workspace = input.workspace.workspace;
-  const uploadSubmittedCodeFiles =
-    workspace.uploadSubmittedCodeFiles?.bind(workspace);
-  if (uploadSubmittedCodeFiles === undefined) {
-    throw new Error(
-      "Capture Path Validation requires submitted-code artifact upload support.",
-    );
-  }
-
   await mkdir(input.localRunDirectory, { recursive: true });
   await writeGeneratedCaptureSdkHarness(input.localRunDirectory);
   await validateDemoScriptCaptureSdkTypes({
@@ -72,41 +86,27 @@ export async function validatePreparedWorkspaceCapturePath(input: {
     }),
   );
 
-  await executeSubmittedCode(
-    workspace,
-    `mkdir -p ${shellQuote(remoteRunDirectory)}`,
-    { timeoutMs: 30_000 },
-  );
   await runObservedOperation(input, "artifact-upload", () =>
-    uploadSubmittedCodeFiles([
-      {
-        destinationPath: `${remoteRunDirectory}/makeademo-capture-sdk.js`,
-        sourcePath: join(input.localRunDirectory, "makeademo-capture-sdk.js"),
-      },
-      {
-        destinationPath: `${remoteRunDirectory}/makeademo-capture-sdk.d.ts`,
-        sourcePath: join(input.localRunDirectory, "makeademo-capture-sdk.d.ts"),
-      },
-      {
-        destinationPath: `${remoteRunDirectory}/makeademo-capture-sdk.instructions.md`,
-        sourcePath: join(
-          input.localRunDirectory,
-          "makeademo-capture-sdk.instructions.md",
-        ),
-      },
-      {
-        destinationPath: `${remoteRunDirectory}/demo-script.contract.ts`,
-        sourcePath: join(input.localRunDirectory, "demo-script.contract.ts"),
-      },
-      { destinationPath: remoteScriptPath, sourcePath: localScriptPath },
-    ]),
+    uploadSubmittedCodeArchive({
+      archiveName: "capture-inputs.tgz",
+      entries: [
+        "makeademo-capture-sdk.js",
+        "makeademo-capture-sdk.d.ts",
+        "makeademo-capture-sdk.instructions.md",
+        "demo-script.contract.ts",
+        "demo-script.ts",
+      ],
+      localDirectory: input.localRunDirectory,
+      remoteDirectory: remoteRunDirectory,
+      workspace,
+    }),
   );
 
-  const result = await runObservedOperation(input, "script-execution", () =>
+  const result = await runObservedCommand(input, "script-execution", () =>
     executeSubmittedCode(
       workspace,
-      `cd ${shellQuote(remoteRunDirectory)} && NODE_PATH="$(npm root -g)" timeout -k 5s ${capturePathScriptTimeoutSeconds}s bun ${shellQuote(remoteScriptPath)}`,
-      { timeoutMs: capturePathCommandTimeoutMs },
+      `cd ${shellQuote(remoteRunDirectory)} && NODE_PATH="$(npm root -g)" timeout -k ${CAPTURE_COMMAND_SHUTDOWN_GRACE_SECONDS}s ${CAPTURE_SCRIPT_TIMEOUT_SECONDS}s bun ${shellQuote(remoteScriptPath)}`,
+      { timeoutMs: CAPTURE_COMMAND_TIMEOUT_MS },
     ),
   );
   await Promise.all([
@@ -114,8 +114,21 @@ export async function validatePreparedWorkspaceCapturePath(input: {
     writeFile(localStderrPath, result.stderr),
   ]);
 
-  const blockedNetworkAttempts = readBlockedNetworkAttempts(result.stderr);
-  const validationFailure = readValidationFailure(result.stderr);
+  let protocol: CaptureRuntimeProtocol;
+  try {
+    protocol = readCaptureRuntimeProtocol(result);
+  } catch (error) {
+    return createProtocolFailureResult({
+      error,
+      input,
+      localStderrPath,
+      localStdoutPath,
+      remoteScriptPath,
+      result,
+    });
+  }
+  const blockedNetworkAttempts = protocol.blockedNetworkAttempts;
+  const validationFailure = readCaptureValidationFailure(protocol);
   const screenshotArtifactId = await downloadFailureScreenshotBestEffort({
     failure: validationFailure,
     input,
@@ -143,19 +156,176 @@ export async function validatePreparedWorkspaceCapturePath(input: {
       status: "failed",
     };
   }
+  if (
+    result.exitCode !== 0 &&
+    protocol.runtimeEvents.some((event) => event.event === "failed")
+  ) {
+    try {
+      readSuccessfulCaptureSceneRanges({
+        ...(input.expectedStepIdsByScene === undefined
+          ? {}
+          : { expectedStepIdsByScene: input.expectedStepIdsByScene }),
+        protocol,
+        sceneIds: input.sceneIds,
+      });
+    } catch (error) {
+      return {
+        ...common,
+        failureClassification: classifyCaptureFailure(error),
+        failureReason: formatProtocolFailure(error),
+        status: "failed",
+      };
+    }
+  }
   if (result.exitCode !== 0) {
     return {
       ...common,
       failureReason:
         validationFailure?.message ??
         (result.exitCode === 124 || result.exitCode === 137
-          ? `Capture Path Validation script timed out after ${capturePathScriptTimeoutSeconds}s.`
-          : `Capture Path Validation script failed with exit code ${result.exitCode}.`),
+          ? `Capture Path Validation script timed out after ${CAPTURE_SCRIPT_TIMEOUT_SECONDS}s.`
+          : formatProcessExitFailure(result)),
+      status: "failed",
+    };
+  }
+
+  try {
+    readSuccessfulCaptureSceneRanges({
+      ...(input.expectedStepIdsByScene === undefined
+        ? {}
+        : { expectedStepIdsByScene: input.expectedStepIdsByScene }),
+      protocol,
+      sceneIds: input.sceneIds,
+    });
+  } catch (error) {
+    return {
+      ...common,
+      failureClassification: classifyCaptureFailure(error),
+      failureReason: formatProtocolFailure(error),
       status: "failed",
     };
   }
 
   return { ...common, status: "succeeded" };
+}
+
+function formatProcessExitFailure(result: {
+  exitCode: number;
+  stderr: string;
+  stdout: string;
+}): string {
+  const summary = `Capture Path Validation script failed with exit code ${result.exitCode}.`;
+  const diagnostic = [result.stderr.trim(), result.stdout.trim()]
+    .filter(Boolean)
+    .join("\n")
+    .slice(-2_000);
+  return diagnostic.length === 0 ? summary : `${summary} ${diagnostic}`;
+}
+
+function createProtocolFailureResult(input: {
+  error: unknown;
+  input: {
+    baseUrl: string;
+    localRunDirectory: string;
+  };
+  localStderrPath: string;
+  localStdoutPath: string;
+  remoteScriptPath: string;
+  result: { stderr: string; stdout: string };
+}): PreparedWorkspaceCapturePathResult {
+  return {
+    blockedNetworkAttempts: [],
+    browserUrl: input.input.baseUrl,
+    failureClassification: "harness/internal failure",
+    failureReason: formatProtocolFailure(input.error),
+    logs: [input.result.stdout, input.result.stderr].filter(
+      (output) => output.trim().length > 0,
+    ),
+    runDirectory: input.input.localRunDirectory,
+    scriptPath: input.remoteScriptPath,
+    status: "failed",
+    stderrPath: input.localStderrPath,
+    stdoutPath: input.localStdoutPath,
+    warnings: [],
+  };
+}
+
+function formatProtocolFailure(error: unknown) {
+  if (error instanceof CaptureScriptProtocolViolationError) {
+    return `Capture Script Protocol Violation: ${error.message}`;
+  }
+  if (error instanceof CaptureRuntimeProtocolError) {
+    return `Capture Runtime Protocol Error: ${error.message}`;
+  }
+  return formatErrorDiagnostic(error);
+}
+
+function classifyCaptureFailure(
+  error: unknown,
+): NonNullable<PreparedWorkspaceCapturePathResult["failureClassification"]> {
+  if (error instanceof CaptureBrowserActionFailureError) {
+    const evidence = `${error.label ?? ""} ${error.message}`;
+    if (
+      /locator|getBy|waiting for|strict mode|timed out|timeout/i.test(evidence)
+    ) {
+      return "locator failure";
+    }
+    if (/expect|assert/i.test(evidence)) {
+      return "assertion failure";
+    }
+    return "timing/state failure";
+  }
+  return error instanceof CaptureScriptProtocolViolationError
+    ? "script contract failure"
+    : "harness/internal failure";
+}
+
+async function runObservedCommand(
+  input: {
+    onEvent?: (entry: Record<string, unknown>) => Promise<void>;
+    workspace: AgentHarnessWorkspaceHandle;
+  },
+  operation: string,
+  run: () => Promise<{
+    exitCode: number;
+    stderr: string;
+    stdout: string;
+  }>,
+) {
+  const startedAt = Date.now();
+  await emitValidationEventBestEffort(input, {
+    event: `capture-path-validation.${operation}.started`,
+    level: "info",
+    operation,
+  });
+  try {
+    const result = await run();
+    const durationMs = Date.now() - startedAt;
+    await emitValidationEventBestEffort(input, {
+      durationMs,
+      event: `capture-path-validation.${operation}.completed`,
+      exitCode: result.exitCode,
+      level: result.exitCode === 0 ? "info" : "error",
+      operation,
+    });
+    await emitValidationEventBestEffort(input, {
+      durationMs,
+      event: `capture-path-validation.${operation}.${result.exitCode === 0 ? "succeeded" : "failed"}`,
+      exitCode: result.exitCode,
+      level: result.exitCode === 0 ? "info" : "error",
+      operation,
+    });
+    return result;
+  } catch (error) {
+    await emitValidationEventBestEffort(input, {
+      durationMs: Date.now() - startedAt,
+      error: formatErrorDiagnostic(error),
+      event: `capture-path-validation.${operation}.failed`,
+      level: "error",
+      operation,
+    });
+    throw error;
+  }
 }
 
 async function runObservedOperation<T>(
@@ -213,37 +383,8 @@ async function emitValidationEventBestEffort(
   ]);
 }
 
-function readValidationFailure(
-  stderr: string,
-): { message: string; screenshotPath?: string } | undefined {
-  const prefix = "[makeademo:validation] script failed ";
-  for (const line of stderr.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith(prefix)) {
-      continue;
-    }
-    try {
-      const value = JSON.parse(trimmed.slice(prefix.length)) as unknown;
-      if (
-        typeof value === "object" &&
-        value !== null &&
-        typeof Reflect.get(value, "message") === "string"
-      ) {
-        const screenshotPath = Reflect.get(value, "screenshotPath");
-        return {
-          message: Reflect.get(value, "message") as string,
-          ...(typeof screenshotPath === "string" ? { screenshotPath } : {}),
-        };
-      }
-    } catch {
-      return { message: trimmed.slice(prefix.length) };
-    }
-  }
-  return undefined;
-}
-
 async function downloadFailureScreenshotBestEffort(input: {
-  failure: { message: string; screenshotPath?: string } | undefined;
+  failure: { message?: string; screenshotPath?: string } | undefined;
   input: {
     localRunDirectory: string;
     onEvent?: (entry: Record<string, unknown>) => Promise<void>;
@@ -272,29 +413,6 @@ async function downloadFailureScreenshotBestEffort(input: {
   } catch {
     return undefined;
   }
-}
-
-function readBlockedNetworkAttempts(stderr: string) {
-  return stderr
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith("[makeademo:network-blocked] "))
-    .map((line) =>
-      JSON.parse(line.slice("[makeademo:network-blocked] ".length)),
-    )
-    .filter(
-      (value) =>
-        typeof value === "object" &&
-        value !== null &&
-        value.direction === "outbound" &&
-        value.phase === "runtime" &&
-        typeof value.host === "string",
-    )
-    .map((value) => ({
-      direction: "outbound" as const,
-      host: value.host as string,
-      phase: "runtime" as const,
-    }));
 }
 
 function shellQuote(value: string): string {

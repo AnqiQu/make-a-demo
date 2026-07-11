@@ -8,21 +8,27 @@ export type PrepareStylizedPlaywrightScriptInput = {
 
 const humanTypingDelayMs = 100;
 const validationActionTimeoutMs = 10_000;
+const captureSdkImportDeclarationPattern =
+  /^[ \t]*import[ \t\r\n]+\{[^}]*\}[ \t\r\n]+from[ \t\r\n]+(['"])\.\/makeademo-capture-sdk(?:\.js)?\1[ \t]*;?[ \t]*(?:\r?\n|$)/gm;
 
 export function prepareStylizedPlaywrightScript(
   script: string,
   input: PrepareStylizedPlaywrightScriptInput,
 ) {
   const demoScript = removeCaptureSdkImportsFromBody(script);
+  const stylizedDemoScript = stylizeBrowserActions(demoScript);
   if ((input.mode ?? "recording") === "validation") {
-    return prepareValidationPlaywrightScript(demoScript, input);
+    return prepareValidationPlaywrightScript(stylizedDemoScript, input);
   }
 
-  if (!demoScript.includes("chromium.launch")) {
-    return wrapActionBody(stylizeBrowserActions(demoScript), input);
+  if (!stylizedDemoScript.includes("chromium.launch")) {
+    return wrapActionBody(stylizedDemoScript, input);
   }
 
-  let prepared = demoScript.replaceAll("http://localhost:3000", input.baseUrl);
+  let prepared = stylizedDemoScript.replaceAll(
+    "http://localhost:3000",
+    input.baseUrl,
+  );
   prepared = prepared.replace(
     /dir:\s*(['"`])[^'"`]+?\1/,
     `dir: ${JSON.stringify(input.videoDirectory)}`,
@@ -35,7 +41,6 @@ export function prepareStylizedPlaywrightScript(
     );
   }
 
-  prepared = stylizeBrowserActions(prepared);
   prepared = injectRecordingHelpers(prepared);
 
   if (input.pauseAfterSceneMs > 0) {
@@ -59,13 +64,14 @@ function wrapActionBody(
       : "";
 
   return `import { chromium, expect } from "@playwright/test";
-import { setup, scene } from "./makeademo-capture-sdk.js";
+import { setup, scene, step } from "./makeademo-capture-sdk.js";
 
 ${recordingHelperSource()}
 
 const baseUrl = ${JSON.stringify(input.baseUrl)};
 const browser = await chromium.launch(${launchOptions});
 const context = await browser.newContext({
+  serviceWorkers: "block",
   viewport: { width: 1280, height: 720 },
   recordVideo: {
     dir: ${JSON.stringify(input.videoDirectory)},
@@ -88,6 +94,7 @@ ${indentScriptBody(script)}
 void expect;
 void setup;
 void scene;
+void step;
 `;
 }
 
@@ -102,11 +109,14 @@ function prepareValidationPlaywrightScript(
   const launchOptions = input.headed ? "{ headless: false }" : "";
 
   return `import { chromium, expect } from "@playwright/test";
-import { setup, scene } from "./makeademo-capture-sdk.js";
+import { setup, scene, step } from "./makeademo-capture-sdk.js";
+
+${recordingHelperSource()}
 
 const baseUrl = ${JSON.stringify(input.baseUrl)};
 const browser = await chromium.launch(${launchOptions});
 const context = await browser.newContext({
+  serviceWorkers: "block",
   viewport: { width: 1280, height: 720 },
 });
 ${runtimeNetworkLockdownSource()}
@@ -148,6 +158,7 @@ ${indentScriptBody(script)}
 void expect;
 void setup;
 void scene;
+void step;
 `;
 }
 
@@ -194,6 +205,24 @@ await context.route("**/*", async (route) => {
   await route.abort("blockedbyclient");
 });
 
+await context.routeWebSocket(/.*/, async (webSocket) => {
+  const requestUrl = webSocket.url();
+  if (isMakeADemoAllowedRuntimeWebSocket(requestUrl)) {
+    webSocket.connectToServer();
+    return;
+  }
+
+  // Generated protocol: parent validation/capture parses blocked-network markers from stderr.
+  console.error("[makeademo:network-blocked]", JSON.stringify({
+    direction: "outbound",
+    host: new URL(requestUrl).host,
+    phase: "runtime",
+    resourceType: "websocket",
+    url: requestUrl,
+  }));
+  await webSocket.close({ code: 1008, reason: "External network access blocked by MakeADemo" });
+});
+
 function isMakeADemoAllowedRuntimeRequest(requestUrl) {
   const parsedUrl = new URL(requestUrl);
   if (parsedUrl.protocol === "about:" || parsedUrl.protocol === "blob:" || parsedUrl.protocol === "data:") {
@@ -202,14 +231,21 @@ function isMakeADemoAllowedRuntimeRequest(requestUrl) {
 
   return parsedUrl.origin === makeADemoAllowedRuntimeOrigin;
 }
+
+function isMakeADemoAllowedRuntimeWebSocket(requestUrl) {
+  const parsedUrl = new URL(requestUrl);
+  if (parsedUrl.protocol !== "ws:" && parsedUrl.protocol !== "wss:") {
+    return false;
+  }
+
+  parsedUrl.protocol = parsedUrl.protocol === "ws:" ? "http:" : "https:";
+  return parsedUrl.origin === makeADemoAllowedRuntimeOrigin;
+}
 `;
 }
 
 function removeCaptureSdkImportsFromBody(script: string) {
-  return script
-    .split("\n")
-    .filter((line) => !/from\s+['"].*makeademo-capture-sdk['"]/.test(line))
-    .join("\n");
+  return script.replace(captureSdkImportDeclarationPattern, "");
 }
 
 function injectRecordingHelpers(script: string) {
@@ -272,7 +308,7 @@ function recordingHelperSource() {
   return `const humanTypingDelayMs = ${humanTypingDelayMs};
 
 async function animatedClick(page, locator) {
-  const target = locator.first();
+  const target = locator;
   await target.scrollIntoViewIfNeeded();
   const box = await target.boundingBox();
 
@@ -292,7 +328,7 @@ async function animatedClick(page, locator) {
 }
 
 async function animatedHover(page, locator) {
-  const target = locator.first();
+  const target = locator;
   await target.scrollIntoViewIfNeeded();
   const box = await target.boundingBox();
 
@@ -311,14 +347,14 @@ async function animatedHover(page, locator) {
 }
 
 async function humanType(page, locator, text) {
-  const target = locator.first();
+  const target = locator;
   await animatedClick(page, target);
   await target.fill("");
   await target.pressSequentially(String(text), { delay: humanTypingDelayMs });
 }
 
 async function animatedScrollTo(page, locator, position) {
-  const target = locator.first();
+  const target = locator;
   await target.scrollIntoViewIfNeeded();
   const box = await target.boundingBox();
 

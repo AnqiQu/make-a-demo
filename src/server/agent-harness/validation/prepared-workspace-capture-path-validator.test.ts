@@ -39,6 +39,8 @@ describe("validatePreparedWorkspaceCapturePath", () => {
               stdout: [
                 '[makeademo:validation] script started {"baseUrl":"http://127.0.0.1:3000"}',
                 '[makeademo:scene] {"elapsedMs":10,"event":"started","sceneId":"scene-main"}',
+                '[makeademo:action] {"elapsedMs":12,"event":"started","label":"expect.toBeVisible(locator(main))","sceneId":"scene-main"}',
+                '[makeademo:action] {"elapsedMs":18,"event":"succeeded","label":"expect.toBeVisible(locator(main))","sceneId":"scene-main"}',
                 '[makeademo:scene] {"elapsedMs":20,"event":"succeeded","sceneId":"scene-main"}',
                 '[makeademo:validation] script succeeded {"title":"Demo","url":"http://127.0.0.1:3000/"}',
               ].join("\n"),
@@ -70,16 +72,17 @@ describe("validatePreparedWorkspaceCapturePath", () => {
         "await scene('scene-main', async ({ page, expect }) => { await expect(page.locator('body')).toBeVisible(); });",
       ].join("\n"),
       localRunDirectory,
+      sceneIds: ["scene-main"],
       workspace,
     });
 
     expect(result.status).toBe("succeeded");
     expect(genericUploadCalled).toBe(false);
-    expect(uploadedDestinations).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("makeademo-capture-sdk.js"),
-        expect.stringContaining("demo-script.ts"),
-      ]),
+    expect(uploadedDestinations).toEqual([
+      expect.stringMatching(/capture-inputs\.tgz$/),
+    ]);
+    expect(submittedCommands.map(({ command }) => command).join("\n")).toMatch(
+      /tar -xzf .*capture-inputs\.tgz.*capture-path-validation-runs/s,
     );
     expect(
       submittedCommands.map(({ command }) => command).join("\n"),
@@ -89,7 +92,10 @@ describe("validatePreparedWorkspaceCapturePath", () => {
     ).not.toContain("recordVideo");
     expect(
       submittedCommands.find(({ command }) => command.includes("bun ")),
-    ).toMatchObject({ timeoutMs: 130_000 });
+    ).toMatchObject({
+      command: expect.stringContaining("timeout -k 10s 210s"),
+      timeoutMs: 220_000,
+    });
     expect(await readFile(result.stdoutPath as string, "utf8")).toContain(
       "[makeademo:validation] script succeeded",
     );
@@ -103,7 +109,139 @@ describe("validatePreparedWorkspaceCapturePath", () => {
     );
   });
 
+  it("fails a successful process that did not prove a visible assertion in every declared Scene", async () => {
+    const localRunDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-capture-validation-test-"),
+    );
+    const workspace: AgentHarnessWorkspaceHandle = {
+      async destroy() {},
+      id: "agent_sandbox",
+      workspace: {
+        async destroy() {},
+        async execute() {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async executeSubmittedCode(command) {
+          if (command.includes("bun ")) {
+            return {
+              exitCode: 0,
+              stderr: "",
+              stdout: [
+                '[makeademo:validation] script started {"baseUrl":"http://127.0.0.1:3000"}',
+                '[makeademo:scene] {"elapsedMs":10,"event":"started","sceneId":"scene-main"}',
+                '[makeademo:scene] {"elapsedMs":20,"event":"succeeded","sceneId":"scene-main"}',
+                '[makeademo:validation] script succeeded {"title":"Demo","url":"http://127.0.0.1:3000/"}',
+              ].join("\n"),
+            };
+          }
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async uploadSubmittedCodeFiles() {},
+      },
+    };
+
+    const result = await validatePreparedWorkspaceCapturePath({
+      baseUrl: "http://127.0.0.1:3000",
+      demoPlaywrightScript: [
+        "import { setup, scene } from './makeademo-capture-sdk';",
+        "await setup(async ({ page, baseUrl }) => { await page.goto(baseUrl); });",
+        "await scene('scene-main', async ({ page, expect }) => { await expect(page.locator('main')).toBeVisible(); });",
+      ].join("\n"),
+      localRunDirectory,
+      sceneIds: ["scene-main"],
+      workspace,
+    });
+
+    expect(result).toMatchObject({
+      failureClassification: "script contract failure",
+      failureReason:
+        "Capture Script Protocol Violation: Scene scene-main did not emit a successful visible Playwright assertion.",
+      status: "failed",
+    });
+  });
+
   it("preserves the generated browser failure as repair evidence", async () => {
+    const localRunDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-capture-validation-test-"),
+    );
+    const validationEvents: string[] = [];
+    const workspace: AgentHarnessWorkspaceHandle = {
+      async destroy() {},
+      id: "agent_sandbox",
+      workspace: {
+        async destroy() {},
+        async execute() {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async executeSubmittedCode(command) {
+          if (command.includes("bun ")) {
+            return {
+              exitCode: 1,
+              stderr: "",
+              stdout: [
+                '[makeademo:validation] script started {"baseUrl":"http://127.0.0.1:3000"}',
+                '[makeademo:scene] {"elapsedMs":1,"event":"started","sceneId":"scene-main"}',
+                '[makeademo:step] {"elapsedMs":2,"event":"started","sceneId":"scene-main","stepId":"click-dashboard"}',
+                '[makeademo:action] {"elapsedMs":3,"event":"started","label":"locator.click(getByRole(link))","sceneId":"scene-main"}',
+                '[makeademo:action] {"elapsedMs":10003,"event":"failed","label":"locator.click(getByRole(link))","message":"locator click timed out","sceneId":"scene-main"}',
+                '[makeademo:step] {"elapsedMs":10004,"event":"failed","message":"locator click timed out","sceneId":"scene-main","stepId":"click-dashboard"}',
+                '[makeademo:scene] {"elapsedMs":10005,"event":"failed","message":"locator click timed out","sceneId":"scene-main"}',
+                '[makeademo:validation] script failed {"message":"locator click timed out","screenshotPath":"/workspace/.makeademo/capture-path-validation-runs/run/makeademo-validation-failure.png","url":"http://127.0.0.1:3000/"}',
+              ].join("\n"),
+            };
+          }
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async downloadSubmittedCodeFiles(files) {
+          await Promise.all(
+            files.map((file) => writeFile(file.destinationPath, "png")),
+          );
+        },
+        async uploadSubmittedCodeFiles() {},
+        async writeSandboxLog(entry) {
+          if (typeof entry.event === "string") {
+            validationEvents.push(entry.event);
+          }
+        },
+      },
+    };
+
+    const result = await validatePreparedWorkspaceCapturePath({
+      baseUrl: "http://127.0.0.1:3000",
+      demoPlaywrightScript: [
+        "import { setup, scene } from './makeademo-capture-sdk';",
+        "await setup(async ({ page, baseUrl }) => { await page.goto(baseUrl); });",
+        "await scene('scene-main', async ({ page, expect }) => { await expect(page.locator('main')).toBeVisible(); });",
+      ].join("\n"),
+      localRunDirectory,
+      sceneIds: ["scene-main"],
+      workspace,
+    });
+
+    expect(result).toMatchObject({
+      failureClassification: "locator failure",
+      failureReason: expect.stringContaining("click-dashboard"),
+      status: "failed",
+    });
+    expect(result.logs.join("\n")).toContain("locator click timed out");
+    expect(await readFile(result.stdoutPath, "utf8")).toContain(
+      "[makeademo:validation] script failed",
+    );
+    expect(validationEvents).toContain(
+      "capture-path-validation.script-execution.failed",
+    );
+    expect(validationEvents).not.toContain(
+      "capture-path-validation.script-execution.succeeded",
+    );
+    expect(result.screenshotArtifactId).toContain(
+      "makeademo-validation-failure.png",
+    );
+    await expect(
+      readFile(result.screenshotArtifactId as string, "utf8"),
+    ).resolves.toBe("png");
+  });
+
+  it("includes raw process diagnostics when execution fails before protocol markers", async () => {
     const localRunDirectory = await mkdtemp(
       join(tmpdir(), "makeademo-capture-validation-test-"),
     );
@@ -119,18 +257,11 @@ describe("validatePreparedWorkspaceCapturePath", () => {
           if (command.includes("bun ")) {
             return {
               exitCode: 1,
-              stderr:
-                '[makeademo:validation] script failed {"message":"locator click timed out","screenshotPath":"/workspace/.makeademo/capture-path-validation-runs/run/makeademo-validation-failure.png","url":"http://127.0.0.1:3000/"}',
-              stdout:
-                '[makeademo:validation] script started {"baseUrl":"http://127.0.0.1:3000"}',
+              stderr: "SyntaxError: Unexpected token at demo-script.ts:17",
+              stdout: "",
             };
           }
           return { exitCode: 0, stderr: "", stdout: "" };
-        },
-        async downloadSubmittedCodeFiles(files) {
-          await Promise.all(
-            files.map((file) => writeFile(file.destinationPath, "png")),
-          );
         },
         async uploadSubmittedCodeFiles() {},
       },
@@ -144,22 +275,15 @@ describe("validatePreparedWorkspaceCapturePath", () => {
         "await scene('scene-main', async ({ page, expect }) => { await expect(page.locator('main')).toBeVisible(); });",
       ].join("\n"),
       localRunDirectory,
+      sceneIds: ["scene-main"],
       workspace,
     });
 
     expect(result).toMatchObject({
-      failureReason: "locator click timed out",
+      failureReason: expect.stringContaining(
+        "SyntaxError: Unexpected token at demo-script.ts:17",
+      ),
       status: "failed",
     });
-    expect(result.logs.join("\n")).toContain("locator click timed out");
-    expect(await readFile(result.stderrPath, "utf8")).toContain(
-      "[makeademo:validation] script failed",
-    );
-    expect(result.screenshotArtifactId).toContain(
-      "makeademo-validation-failure.png",
-    );
-    await expect(
-      readFile(result.screenshotArtifactId as string, "utf8"),
-    ).resolves.toBe("png");
   });
 });

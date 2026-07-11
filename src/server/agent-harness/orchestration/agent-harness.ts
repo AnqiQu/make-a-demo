@@ -1,9 +1,11 @@
+import type { SubmittedAppExplorationResult } from "../app-explorer/submitted-app-explorer";
 import type { AgentHarnessWorkspace } from "../daytona/workspace.interface";
 import type { OpenCodeHarnessRunner } from "../opencode/opencode-harness";
 import {
   classifyRepairRoute,
   readRepairBudgetDecision,
 } from "../repair/repair-router";
+import type { PreparationWorkspaceDiff } from "../repo-preparation/preparation-workspace-diff";
 import { profileRepo } from "../repo-profiler/repo-profiler";
 import { screenStaticRepoSecurity } from "../repo-security/static-repo-security";
 import {
@@ -27,6 +29,10 @@ import {
   readValidationReport,
 } from "../schemas/artifacts";
 import { assertScriptWritingChangesAllowed } from "../script-generation/read-only-boundary";
+import {
+  PreparationFallbackRequiredError,
+  createPreparationFallbackArtifact,
+} from "./preparation-fallback";
 
 export type AgentHarnessPipelineInput = {
   commitSha?: string;
@@ -56,6 +62,9 @@ export type AgentHarnessPipelineDependencies = {
   captureWorkspaceDiff?: (input: {
     workspace: AgentHarnessWorkspace;
   }) => Promise<string[]>;
+  capturePreparationWorkspaceDiff?: (input: {
+    workspace: AgentHarnessWorkspace;
+  }) => Promise<PreparationWorkspaceDiff>;
   createWorkspace(input: {
     repoProfile: RepoProfile;
     runPlan: RunPlan;
@@ -64,7 +73,7 @@ export type AgentHarnessPipelineDependencies = {
    * Recreates a clean, network-locked submitted-code runtime after the
    * validation dry-run so Footage Capture cannot inherit mutated app state.
    */
-  resetCaptureRuntime?(input: {
+  resetCaptureRuntime(input: {
     preparationManifest: PreparationManifest;
     repoProfile: RepoProfile;
     runPlan: RunPlan;
@@ -79,11 +88,7 @@ export type AgentHarnessPipelineDependencies = {
     preparationValidation: ValidationReport;
     repoProfile: RepoProfile;
     workspace: AgentHarnessWorkspace;
-  }): Promise<{
-    actionCatalog: ActionCatalog;
-    appMap: AppMap;
-    validationReport: ValidationReport;
-  }>;
+  }): Promise<SubmittedAppExplorationResult>;
   planFlow(input: {
     actionCatalog: ActionCatalog;
     appMap: AppMap;
@@ -133,6 +138,7 @@ export type AgentHarnessPipelineDependencies = {
     workspace: AgentHarnessWorkspace;
   }): Promise<ValidationReport>;
   validateScriptContract(input: {
+    actionCatalog: ActionCatalog;
     contractOutputPath: typeof DEMO_SCRIPT_OUTPUT_PATH;
     flowSpec: FlowSpec;
     preparationManifest: PreparationManifest;
@@ -156,6 +162,7 @@ export type AgentHarnessPipelineResult = {
   flowSpec?: FlowSpec;
   pipelineRunManifest: PipelineRunManifest;
   preparationManifest?: PreparationManifest;
+  preparationWorkspaceDiff?: PreparationWorkspaceDiff;
   repoProfile?: RepoProfile;
   runPlan?: RunPlan;
   scriptCandidate?: ScriptCandidate;
@@ -185,7 +192,10 @@ const artifactPaths = {
   demoScript: DEMO_SCRIPT_OUTPUT_PATH,
   flowSpec: "/workspace/.makeademo/flow-spec.json",
   pipelineRunManifest: "/workspace/.makeademo/pipeline-run-manifest.json",
+  preparationFallback: "/workspace/.makeademo/preparation-fallback.json",
   preparationManifest: "/workspace/.makeademo/preparation-manifest.json",
+  preparationWorkspaceDiff:
+    "/workspace/.makeademo/preparation-workspace-diff.json",
   preparationPreflight:
     "/workspace/.makeademo/preparation-preflight-validation-report.json",
   repoProfile: "/workspace/.makeademo/repo-profile.json",
@@ -212,6 +222,9 @@ export async function runAgentHarnessPipeline(
   const stageTimings: PipelineRunManifest["stageTimings"] = [];
   const validationReports: ValidationReport[] = [];
   const opencodeSessionIds: string[] = [];
+  let completedResult: AgentHarnessPipelineResult | undefined;
+  let cleanupFailure: unknown;
+  let primaryError: unknown;
   let workspace: AgentHarnessWorkspace | undefined;
 
   const security = runStage(
@@ -235,38 +248,59 @@ export async function runAgentHarnessPipeline(
       unsupportedOrFailureReason: security.rejections.join("; "),
       workspace,
     });
-    return {
+    completedResult = {
       pipelineRunManifest,
       status: "security-rejected",
       validationReports,
     };
   }
 
-  const repoProfile = await writeArtifact(
-    dependencies,
-    artifactPaths.repoProfile,
-    profileRepo({
-      ...optionalString("commitSha", input.commitSha),
-      files: input.files,
-      repoUrl: input.repoUrl,
-      ...(input.rootDir === undefined ? {} : { rootDir: input.rootDir }),
-    }),
-  );
+  let repoProfile: RepoProfile;
+  let runPlan: RunPlan;
+  try {
+    repoProfile = await writeArtifact(
+      dependencies,
+      artifactPaths.repoProfile,
+      profileRepo({
+        ...optionalString("commitSha", input.commitSha),
+        files: input.files,
+        repoUrl: input.repoUrl,
+        ...(input.rootDir === undefined ? {} : { rootDir: input.rootDir }),
+      }),
+    );
 
-  const runPlan = await runAsyncStage(
-    "run-plan-synthesis",
-    stageStatuses,
-    stageTimings,
-    async () =>
-      readRunPlan(
-        await dependencies.synthesizeRunPlan({
-          repoProfile,
-        }),
-      ),
-  );
-  await writeArtifact(dependencies, artifactPaths.runPlan, runPlan);
+    runPlan = await runAsyncStage(
+      "run-plan-synthesis",
+      stageStatuses,
+      stageTimings,
+      async () =>
+        readRunPlan(
+          await dependencies.synthesizeRunPlan({
+            repoProfile,
+          }),
+        ),
+    );
+    await writeArtifact(dependencies, artifactPaths.runPlan, runPlan);
+    workspace = await dependencies.createWorkspace({ repoProfile, runPlan });
+  } catch (error) {
+    stageStatuses["agent-harness"] = "failed";
+    try {
+      await persistRunManifest({
+        dependencies,
+        input,
+        opencodeSessionIds,
+        stageStatuses,
+        stageTimings,
+        status: "failed",
+        unsupportedOrFailureReason: readErrorMessage(error),
+        workspace,
+      });
+    } catch (manifestError) {
+      attachSecondaryError(error, "failureManifestError", manifestError);
+    }
+    throw error;
+  }
 
-  workspace = await dependencies.createWorkspace({ repoProfile, runPlan });
   try {
     const preparation = await runAsyncStage(
       "repo-preparation",
@@ -310,6 +344,7 @@ export async function runAgentHarnessPipeline(
       workspace: requireWorkspace(workspace),
     });
     preparationManifest = preparationState.preparationManifest;
+    let preparationWorkspaceDiff = preparationState.preparationWorkspaceDiff;
     let preparationValidation = preparationState.preparationValidation;
     opencodeSessionIds.push(...preparationState.opencodeSessionIds);
 
@@ -334,16 +369,6 @@ export async function runAgentHarnessPipeline(
               workspace: requireWorkspace(workspace),
             }),
         );
-        appMap = await writeArtifact(
-          dependencies,
-          artifactPaths.appMap,
-          readAppMap(exploration.appMap),
-        );
-        actionCatalog = await writeArtifact(
-          dependencies,
-          artifactPaths.actionCatalog,
-          readActionCatalog(exploration.actionCatalog),
-        );
         const explorationAttempt = nextValidationAttempt(
           validationAttemptCounts,
           "app-exploration",
@@ -367,6 +392,21 @@ export async function runAgentHarnessPipeline(
           ),
         ]);
         if (explorationValidation.status === "passed") {
+          if (exploration.kind !== "artifacts") {
+            throw new Error(
+              "App Exploration reported success without grounded AppMap and ActionCatalog artifacts.",
+            );
+          }
+          appMap = await writeArtifact(
+            dependencies,
+            artifactPaths.appMap,
+            readAppMap(exploration.appMap),
+          );
+          actionCatalog = await writeArtifact(
+            dependencies,
+            artifactPaths.actionCatalog,
+            readActionCatalog(exploration.actionCatalog),
+          );
           break;
         }
 
@@ -386,6 +426,7 @@ export async function runAgentHarnessPipeline(
           workspace: requireWorkspace(workspace),
         });
         preparationManifest = preparationState.preparationManifest;
+        preparationWorkspaceDiff = preparationState.preparationWorkspaceDiff;
         preparationValidation = preparationState.preparationValidation;
         opencodeSessionIds.push(...preparationState.opencodeSessionIds);
       }
@@ -452,6 +493,7 @@ export async function runAgentHarnessPipeline(
           stageTimings,
           () =>
             dependencies.validateScriptContract({
+              actionCatalog,
               contractOutputPath: DEMO_SCRIPT_OUTPUT_PATH,
               flowSpec,
               preparationManifest,
@@ -531,9 +573,81 @@ export async function runAgentHarnessPipeline(
             workspace: requireWorkspace(workspace),
           });
           preparationManifest = preparationState.preparationManifest;
+          preparationWorkspaceDiff = preparationState.preparationWorkspaceDiff;
           preparationValidation = preparationState.preparationValidation;
           opencodeSessionIds.push(...preparationState.opencodeSessionIds);
           continue pipelineAttempt;
+        }
+
+        if (capturePathValidation.failureClassification === "locator failure") {
+          const regrounding = await runAsyncStage(
+            "locator-regrounding",
+            stageStatuses,
+            stageTimings,
+            () =>
+              dependencies.exploreApp({
+                actionCatalogPath: artifactPaths.actionCatalog,
+                appMapPath: artifactPaths.appMap,
+                demoBrief: input.demoBrief,
+                preparationManifest,
+                preparationValidation,
+                repoProfile,
+                workspace: requireWorkspace(workspace),
+              }),
+          );
+          const regroundingAttempt = nextValidationAttempt(
+            validationAttemptCounts,
+            "locator-regrounding",
+          );
+          const regroundingValidation = readValidationReport({
+            ...regrounding.validationReport,
+            retryCount: captureRepairAttempts,
+          });
+          validationReports.push(regroundingValidation);
+          await Promise.all([
+            writeArtifact(
+              dependencies,
+              artifactPaths.appExplorationValidation,
+              regroundingValidation,
+            ),
+            writeArtifact(
+              dependencies,
+              `${artifactPaths.validationAttempts}/locator-regrounding/attempt-${regroundingAttempt}.json`,
+              regroundingValidation,
+            ),
+          ]);
+          assertValidationPassed(regroundingValidation);
+          if (regrounding.kind !== "artifacts") {
+            throw new Error(
+              "Locator re-grounding passed without AppMap and ActionCatalog artifacts.",
+            );
+          }
+          appMap = await writeArtifact(
+            dependencies,
+            artifactPaths.appMap,
+            readAppMap(regrounding.appMap),
+          );
+          actionCatalog = await writeArtifact(
+            dependencies,
+            artifactPaths.actionCatalog,
+            readActionCatalog(regrounding.actionCatalog),
+          );
+          flowSpec = await runAsyncStage(
+            "flow-replanning",
+            stageStatuses,
+            stageTimings,
+            async () =>
+              readFlowSpec(
+                await dependencies.planFlow({
+                  actionCatalog,
+                  appMap,
+                  demoBrief: input.demoBrief,
+                  preparationManifest,
+                  repoProfile,
+                }),
+              ),
+          );
+          await writeArtifact(dependencies, artifactPaths.flowSpec, flowSpec);
         }
 
         scriptCandidate = await repairScriptCandidate({
@@ -560,25 +674,23 @@ export async function runAgentHarnessPipeline(
         );
       }
 
-      if (dependencies.resetCaptureRuntime !== undefined) {
-        const resetValidation = await runValidationStage(
-          "capture-runtime-reset",
-          dependencies,
-          artifactPaths.captureRuntimeReset,
-          validationReports,
-          stageStatuses,
-          stageTimings,
-          () =>
-            dependencies.resetCaptureRuntime?.({
-              preparationManifest,
-              repoProfile,
-              runPlan,
-              workspace: requireWorkspace(workspace),
-            }) as Promise<ValidationReport>,
-          validationAttemptCounts,
-        );
-        assertValidationPassed(resetValidation);
-      }
+      const resetValidation = await runValidationStage(
+        "capture-runtime-reset",
+        dependencies,
+        artifactPaths.captureRuntimeReset,
+        validationReports,
+        stageStatuses,
+        stageTimings,
+        () =>
+          dependencies.resetCaptureRuntime({
+            preparationManifest,
+            repoProfile,
+            runPlan,
+            workspace: requireWorkspace(workspace),
+          }),
+        validationAttemptCounts,
+      );
+      assertValidationPassed(resetValidation);
       break;
     }
 
@@ -598,6 +710,9 @@ export async function runAgentHarnessPipeline(
       flowSpec,
       pipelineRunManifest,
       preparationManifest,
+      ...(preparationWorkspaceDiff === undefined
+        ? {}
+        : { preparationWorkspaceDiff }),
       repoProfile,
       runPlan,
       scriptCandidate,
@@ -614,23 +729,142 @@ export async function runAgentHarnessPipeline(
       opencodeSessionIds.push(failedSessionId);
     }
     stageStatuses["agent-harness"] = "failed";
-    await persistRunManifest({
-      dependencies,
-      input,
-      opencodeSessionIds,
-      stageStatuses,
-      stageTimings,
-      status: "failed",
-      unsupportedOrFailureReason:
-        error instanceof Error ? error.message : String(error),
-      workspace,
-    });
-    throw error;
+    const preparationFailedStage = readPreparationFailedStage(stageStatuses);
+    let surfacedError = error;
+    if (preparationFailedStage !== undefined) {
+      const fallback = createPreparationFallbackArtifact({
+        ...(input.commitSha === undefined
+          ? {}
+          : { commitSha: input.commitSha }),
+        error,
+        failedStage: preparationFailedStage,
+        repoUrl: input.repoUrl,
+        runId: input.runId,
+        validationReports,
+      });
+      surfacedError = new PreparationFallbackRequiredError(
+        readErrorMessage(error),
+        fallback,
+        error,
+      );
+      try {
+        await writeArtifact(
+          dependencies,
+          artifactPaths.preparationFallback,
+          fallback,
+        );
+      } catch (fallbackArtifactError) {
+        attachSecondaryError(
+          surfacedError,
+          "fallbackArtifactError",
+          fallbackArtifactError,
+        );
+      }
+    }
+    primaryError = surfacedError;
+    try {
+      await persistRunManifest({
+        dependencies,
+        input,
+        opencodeSessionIds,
+        stageStatuses,
+        stageTimings,
+        status: "failed",
+        unsupportedOrFailureReason: readErrorMessage(surfacedError),
+        workspace,
+      });
+    } catch (manifestError) {
+      attachSecondaryError(
+        surfacedError,
+        "failureManifestError",
+        manifestError,
+      );
+    }
   } finally {
     if (options.destroyWorkspaceOnCompletion !== false) {
-      await workspace?.destroy();
+      try {
+        await workspace?.destroy();
+      } catch (cleanupError) {
+        if (primaryError === undefined) {
+          cleanupFailure = cleanupError;
+        } else {
+          stageStatuses["workspace-cleanup"] = "failed";
+          attachCleanupError(primaryError, cleanupError);
+          const primaryMessage = readErrorMessage(primaryError);
+          const cleanupMessage = readErrorMessage(cleanupError);
+          try {
+            await persistRunManifest({
+              dependencies,
+              input,
+              opencodeSessionIds,
+              stageStatuses,
+              stageTimings,
+              status: "failed",
+              unsupportedOrFailureReason: `${primaryMessage}; workspace cleanup failed: ${cleanupMessage}`,
+              workspace,
+            });
+          } catch (manifestError) {
+            attachSecondaryError(
+              primaryError,
+              "cleanupManifestError",
+              manifestError,
+            );
+          }
+        }
+      }
     }
   }
+
+  if (primaryError !== undefined) {
+    throw primaryError;
+  }
+  if (cleanupFailure !== undefined) {
+    throw cleanupFailure;
+  }
+  if (completedResult === undefined) {
+    throw new Error("Agent harness finished without a result.");
+  }
+  return completedResult;
+}
+
+function readPreparationFailedStage(
+  stageStatuses: Record<string, string>,
+): string | undefined {
+  return Object.entries(stageStatuses)
+    .reverse()
+    .find(
+      ([stage, status]) =>
+        status === "failed" &&
+        (stage === "repo-preparation" ||
+          stage === "preparation-preflight" ||
+          stage === "app-exploration"),
+    )?.[0];
+}
+
+function attachCleanupError(primaryError: unknown, cleanupError: unknown) {
+  attachSecondaryError(primaryError, "cleanupError", cleanupError);
+}
+
+function attachSecondaryError(
+  primaryError: unknown,
+  key: string,
+  secondaryError: unknown,
+) {
+  if (
+    (typeof primaryError !== "object" || primaryError === null) &&
+    typeof primaryError !== "function"
+  ) {
+    return;
+  }
+  try {
+    Reflect.set(primaryError, key, secondaryError);
+  } catch {
+    // Preserve the primary pipeline error even when it is non-extensible.
+  }
+}
+
+function readErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function readFailedOpenCodeSessionId(error: unknown): string | undefined {
@@ -765,6 +999,7 @@ async function ensureValidPreparation(input: {
   opencodeSessionIds: string[];
   preparationManifest: PreparationManifest;
   preparationValidation: ValidationReport;
+  preparationWorkspaceDiff?: PreparationWorkspaceDiff;
 }> {
   let preparationManifest = input.preparationManifest;
   let failure = input.initialFailure;
@@ -799,6 +1034,17 @@ async function ensureValidPreparation(input: {
       );
     }
 
+    const preparationWorkspaceDiff =
+      input.dependencies.capturePreparationWorkspaceDiff === undefined
+        ? undefined
+        : await writeArtifact(
+            input.dependencies,
+            artifactPaths.preparationWorkspaceDiff,
+            await input.dependencies.capturePreparationWorkspaceDiff({
+              workspace: input.workspace,
+            }),
+          );
+
     const preparationValidation = await runValidationStage(
       "preparation-preflight",
       input.dependencies,
@@ -821,6 +1067,9 @@ async function ensureValidPreparation(input: {
         opencodeSessionIds,
         preparationManifest,
         preparationValidation,
+        ...(preparationWorkspaceDiff === undefined
+          ? {}
+          : { preparationWorkspaceDiff }),
       };
     }
     failure = preparationValidation;

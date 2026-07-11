@@ -3,9 +3,11 @@ import { join } from "node:path";
 import { captureScenesFromScript } from "../../pipeline/06-footage-capture/capture-scenes";
 import type { CaptureManifest } from "../../pipeline/06-footage-capture/capture-scenes";
 import {
+  type CompositeVideoFromScriptInput,
   type CompositedVideoManifest,
   compositeVideoFromScript,
 } from "../../pipeline/07-compositing/composite-video";
+import { createGitHubAppIntegrationFromEnv } from "../../shared/integrations/github/github-app";
 import {
   type PipelineEventLogger,
   createFilePipelineLogSink,
@@ -27,10 +29,16 @@ import {
   LocalJsonArtifactStore,
   writeJsonFile,
 } from "./local-json-artifact-store";
-import { type RepoSnapshot, readGithubRepoSnapshot } from "./repo-snapshot";
+import {
+  type GithubInstallationTokenProvider,
+  type RepoSnapshot,
+  type RepoSourceArchive,
+  readGithubRepoSnapshot,
+} from "./repo-snapshot";
 
 export type DefaultDemoPipelineInput = {
   demoLengthSeconds: number;
+  githubInstallationId?: string;
   importantFeatures: string[];
   normalizedSupportingDocuments?: Array<Record<string, unknown>>;
   productSummary?: string;
@@ -56,11 +64,15 @@ export type DefaultDemoPipelineOptions = {
     artifactStore: LocalJsonArtifactStore;
     logger: PipelineEventLogger;
     outputRoot: string;
+    repoSourceArchive: RepoSourceArchive;
+    staticImageAssets?: CompositeVideoFromScriptInput["staticImageAssets"];
   }) => Promise<DefaultHarnessDependencies>;
+  installationTokenProvider?: GithubInstallationTokenProvider;
   outputRoot?: string;
   readRepoSnapshot?: typeof readGithubRepoSnapshot;
   runHarnessPipeline?: typeof runAgentHarnessPipeline;
   runId?: string;
+  staticImageAssets?: CompositeVideoFromScriptInput["staticImageAssets"];
 };
 
 const defaultOutputRoot = ".makeademo-terminal-runs";
@@ -98,13 +110,30 @@ export async function runDefaultDemoPipeline(
   });
   await writeJsonFile(join(runDirectory, "input.json"), input);
 
+  const installationTokenProvider =
+    input.githubInstallationId === undefined
+      ? undefined
+      : (options.installationTokenProvider ??
+        createGitHubAppIntegrationFromEnv());
   const repoSnapshot = await (
     options.readRepoSnapshot ?? readGithubRepoSnapshot
-  )({
-    log,
-    repoUrl: input.repoUrl,
-    runDirectory,
-  });
+  )(
+    {
+      ...(input.githubInstallationId === undefined
+        ? {}
+        : { githubInstallationId: input.githubInstallationId }),
+      log,
+      repoUrl: input.repoUrl,
+      runDirectory,
+    },
+    {
+      ...(installationTokenProvider === undefined
+        ? {}
+        : {
+            installationTokenProvider,
+          }),
+    },
+  );
   await writeRepoSnapshotSummary(runDirectory, repoSnapshot);
 
   const artifactStore = new LocalJsonArtifactStore(artifactDirectory, log);
@@ -114,8 +143,15 @@ export async function runDefaultDemoPipeline(
     artifactStore,
     logger,
     outputRoot: runDirectory,
+    repoSourceArchive: repoSnapshot.sourceArchive,
+    ...(options.staticImageAssets === undefined
+      ? {}
+      : { staticImageAssets: options.staticImageAssets }),
   });
   const workspaceHandle = () => harnessDependencies.getWorkspaceHandle();
+  let cleanupFailure: unknown;
+  let completedResult: DefaultDemoPipelineResult | undefined;
+  let primaryFailure: unknown;
 
   try {
     const pipelineResult = await (
@@ -169,6 +205,9 @@ export async function runDefaultDemoPipeline(
       compositeVideo: options.compositeVideo ?? compositeVideoFromScript,
       runDirectory,
       scriptPath,
+      ...(options.staticImageAssets === undefined
+        ? {}
+        : { staticImageAssets: options.staticImageAssets }),
     });
     if (compositeManifest.outputVideoPath === undefined) {
       throw new Error("Compositing did not retain a local final video.");
@@ -177,16 +216,7 @@ export async function runDefaultDemoPipeline(
     const pipelineManifestPath = artifactStore.resolveArtifactPath(
       "/workspace/.makeademo/pipeline-run-manifest.json",
     );
-    await log("pipeline.succeeded", {
-      captureManifestPath: captureManifest.manifestPath,
-      compositeManifestPath: compositeManifest.manifestPath,
-      finalVideoPath: compositeManifest.outputVideoPath,
-      pipelineManifestPath,
-      scriptPath,
-    });
-    await logger.flush();
-
-    return {
+    completedResult = {
       artifactDirectory,
       captureManifestPath: captureManifest.manifestPath,
       compositeManifestPath: compositeManifest.manifestPath,
@@ -197,6 +227,7 @@ export async function runDefaultDemoPipeline(
       scriptPath,
     };
   } catch (error) {
+    primaryFailure = error;
     try {
       await logger.error({
         error: error instanceof Error ? error.message : String(error),
@@ -206,10 +237,8 @@ export async function runDefaultDemoPipeline(
     } catch {
       // Preserve the pipeline failure when observability is unavailable.
     }
-    throw error;
   } finally {
     const handle = workspaceHandle();
-    let cleanupFailure: unknown;
     try {
       await persistSandboxLogs(handle, runDirectory, logger);
     } catch (error) {
@@ -221,6 +250,7 @@ export async function runDefaultDemoPipeline(
       cleanupFailure ??= error;
     }
     if (cleanupFailure !== undefined) {
+      attachCleanupFailure(primaryFailure, cleanupFailure);
       try {
         await logger.warn({
           error:
@@ -234,6 +264,42 @@ export async function runDefaultDemoPipeline(
         // Preserve the primary pipeline or cleanup failure.
       }
     }
+  }
+
+  if (primaryFailure !== undefined) {
+    throw primaryFailure;
+  }
+  if (cleanupFailure !== undefined) {
+    throw cleanupFailure;
+  }
+  if (completedResult === undefined) {
+    throw new Error("Default demo pipeline finished without a result.");
+  }
+  await log("pipeline.succeeded", {
+    captureManifestPath: completedResult.captureManifestPath,
+    compositeManifestPath: completedResult.compositeManifestPath,
+    finalVideoPath: completedResult.finalVideoPath,
+    pipelineManifestPath: completedResult.pipelineManifestPath,
+    scriptPath: completedResult.scriptPath,
+  });
+  await logger.flush();
+  return completedResult;
+}
+
+function attachCleanupFailure(
+  primaryFailure: unknown,
+  cleanupFailure: unknown,
+): void {
+  if (
+    (typeof primaryFailure !== "object" || primaryFailure === null) &&
+    typeof primaryFailure !== "function"
+  ) {
+    return;
+  }
+  try {
+    Reflect.set(primaryFailure, "cleanupError", cleanupFailure);
+  } catch {
+    // The primary error remains authoritative when it is non-extensible.
   }
 }
 
@@ -276,7 +342,8 @@ async function runFootageCapture(input: {
     baseUrl:
       input.pipelineResult.preparationManifest?.baseUrl ??
       "http://127.0.0.1:3000",
-    keepTemp: true,
+    keepTemp: false,
+    captureRuntimeReset: readCaptureRuntimeResetProof(input.pipelineResult),
     preparationWorkspace: input.workspaceHandle,
     runId: "capture",
     scriptPackage: input.scriptPackage,
@@ -284,11 +351,37 @@ async function runFootageCapture(input: {
   });
 }
 
+function readCaptureRuntimeResetProof(
+  pipelineResult: AgentHarnessPipelineResult,
+) {
+  const report = [...pipelineResult.validationReports]
+    .reverse()
+    .find((candidate) => candidate.stage === "capture-runtime-reset");
+  if (report?.status !== "passed") {
+    throw new Error(
+      "Default demo pipeline cannot capture without a passed capture-runtime-reset report.",
+    );
+  }
+  const artifactPath =
+    pipelineResult.pipelineRunManifest.artifactPaths.captureRuntimeReset;
+  if (artifactPath === undefined || artifactPath.trim().length === 0) {
+    throw new Error(
+      "Passed capture-runtime-reset report is missing its durable artifact path.",
+    );
+  }
+  return {
+    artifactPath,
+    stage: "capture-runtime-reset" as const,
+    status: "passed" as const,
+  };
+}
+
 async function runCompositing(input: {
   captureManifest: CaptureManifest;
   compositeVideo: typeof compositeVideoFromScript;
   runDirectory: string;
   scriptPath: string;
+  staticImageAssets?: CompositeVideoFromScriptInput["staticImageAssets"];
 }): Promise<CompositedVideoManifest> {
   return await input.compositeVideo({
     captureManifestPath: input.captureManifest.manifestPath,
@@ -297,6 +390,9 @@ async function runCompositing(input: {
     retainLocalOutput: true,
     runId: "composite",
     scriptPath: input.scriptPath,
+    ...(input.staticImageAssets === undefined
+      ? {}
+      : { staticImageAssets: input.staticImageAssets }),
   });
 }
 
@@ -322,6 +418,7 @@ async function writeRepoSnapshotSummary(
       textBytes: file.text?.length ?? 0,
     })),
     repoStats: repoSnapshot.repoStats,
+    sourceArchive: repoSnapshot.sourceArchive,
   });
 }
 

@@ -8,20 +8,33 @@ export type CompositingTextStyle = {
 
 export type CompositingTransition = {
   durationFrames: number;
-  in: "cut" | "fade";
-  out: "cut" | "fade";
+  fromSceneId: string;
+  style: "fade";
+  toSceneId: string;
 };
 
-export type CompositingScene = {
-  alt?: string;
-  backgroundColor?: string;
+type CompositingSceneBase = {
   durationFrames: number;
   sceneId: string;
-  sourcePublicPath?: string;
-  text?: CompositingTextStyle;
-  transition?: CompositingTransition;
-  type: "full-screen-text" | "playwright-recording" | "static-image";
+  textOverlays: CompositingTextStyle[];
+  transitionIn?: CompositingTransition;
 };
+
+export type CompositingScene =
+  | (CompositingSceneBase & {
+      sourcePublicPath: string;
+      type: "playwright-recording";
+    })
+  | (CompositingSceneBase & {
+      backgroundColor: string;
+      text: CompositingTextStyle;
+      type: "full-screen-text";
+    })
+  | (CompositingSceneBase & {
+      alt: string;
+      sourcePublicPath: string;
+      type: "static-image";
+    });
 
 export type CompositingFontAsset = {
   family: string;

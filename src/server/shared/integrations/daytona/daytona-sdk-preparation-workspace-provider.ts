@@ -150,6 +150,7 @@ const makeADemoArtifactDirectory = "/tmp/makeademo";
 const workspaceMakeADemoDirectory = "/workspace/.makeademo";
 const sandboxAuditLogPath = `${makeADemoArtifactDirectory}/sandbox-log.jsonl`;
 const workspaceSandboxAuditLogPath = `${workspaceMakeADemoDirectory}/sandbox-log.jsonl`;
+const submittedCodeRuntimeTempDirectory = `${workspaceMakeADemoDirectory}/runtime-tmp`;
 
 export async function createDaytonaSdkPreparationWorkspaceHandle(input: {
   apiKey?: string;
@@ -372,31 +373,46 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     });
   }
 
-  private destroyed = false;
+  private agentSandboxDeleted = false;
+  private submittedCodeSandboxDeleted = false;
 
   async destroy(): Promise<void> {
-    if (this.destroyed) {
+    if (
+      this.agentSandboxDeleted &&
+      (this.submittedCodeSandbox === undefined ||
+        this.submittedCodeSandboxDeleted)
+    ) {
       return;
     }
     await this.cancelActiveCommands();
     const failures: unknown[] = [];
-    if (this.submittedCodeSandbox !== undefined) {
+    if (
+      this.submittedCodeSandbox !== undefined &&
+      !this.submittedCodeSandboxDeleted
+    ) {
       try {
         await this.client.delete(this.submittedCodeSandbox);
+        this.submittedCodeSandboxDeleted = true;
       } catch (error) {
-        if (!isDaytonaNotFoundError(error)) {
+        if (isDaytonaNotFoundError(error)) {
+          this.submittedCodeSandboxDeleted = true;
+        } else {
           failures.push(error);
         }
       }
     }
-    try {
-      await this.client.delete(this.sandbox);
-    } catch (error) {
-      if (!isDaytonaNotFoundError(error)) {
-        failures.push(error);
+    if (!this.agentSandboxDeleted) {
+      try {
+        await this.client.delete(this.sandbox);
+        this.agentSandboxDeleted = true;
+      } catch (error) {
+        if (isDaytonaNotFoundError(error)) {
+          this.agentSandboxDeleted = true;
+        } else {
+          failures.push(error);
+        }
       }
     }
-    this.destroyed = true;
     if (failures.length === 1) {
       throw failures[0];
     }
@@ -1251,10 +1267,12 @@ function createManagedAppCommand(
       }
       return shellQuote(`${name}=${value}`);
     });
-  const environmentPrefix =
-    environment.length === 0 ? "" : `env ${environment.join(" ")} `;
+  const runtimeEnvironment = [
+    ...environment,
+    shellQuote(`TMPDIR=${submittedCodeRuntimeTempDirectory}`),
+  ];
 
-  return `cd ${shellQuote(input.cwd)} && ${environmentPrefix}sh -lc ${shellQuote(input.command)}`;
+  return `mkdir -p ${shellQuote(submittedCodeRuntimeTempDirectory)} && cd ${shellQuote(input.cwd)} && env ${runtimeEnvironment.join(" ")} sh -lc ${shellQuote(input.command)}`;
 }
 
 function shellQuote(value: string): string {
@@ -1323,14 +1341,10 @@ function createSubmittedCodeWorkspaceExtractCommand(
 ): string {
   const preservedWorkspacePaths = [
     "-name node_modules",
-    "-name .vite",
-    "-name .turbo",
     "-name .npm",
     "-name .pnpm-store",
     "-path '*/.yarn/cache'",
-    "-path '*/.next/cache'",
     "-name .bun",
-    "-name .cache",
   ].join(" -o ");
 
   return `sh -lc ${shellQuote(

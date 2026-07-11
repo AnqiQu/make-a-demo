@@ -63,4 +63,27 @@ describe("screenStaticRepoSecurity", () => {
       ]),
     );
   });
+
+  it("rejects common private-key container extensions even when contents are binary", () => {
+    const result = screenStaticRepoSecurity({
+      files: [
+        { path: "package.json", text: "{}" },
+        { path: "bun.lock", text: "" },
+        { path: "certs/client.pem" },
+        { path: "certs/client.key" },
+        { path: "certs/signing.p12" },
+        { path: "certs/signing.pfx" },
+      ],
+      repoStats: { fileCount: 6, sizeBytes: 1_024 },
+    });
+
+    expect(result.rejections).toEqual(
+      expect.arrayContaining([
+        "repo contains private key material in certs/client.pem",
+        "repo contains private key material in certs/client.key",
+        "repo contains private key material in certs/signing.p12",
+        "repo contains private key material in certs/signing.pfx",
+      ]),
+    );
+  });
 });

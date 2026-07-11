@@ -1,5 +1,12 @@
 import { sql } from "drizzle-orm";
-import { jsonb, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import {
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+} from "drizzle-orm/pg-core";
 
 export const users = pgTable("users", {
   createdAt: timestamp("created_at", { withTimezone: true })
@@ -11,12 +18,21 @@ export const users = pgTable("users", {
 });
 
 export const projects = pgTable("projects", {
+  attemptCount: integer("attempt_count").notNull().default(0),
   context: jsonb("context").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),
   githubInstallationId: text("github_installation_id"),
   id: uuid("id").defaultRandom().primaryKey(),
+  lastError: text("last_error"),
+  processingLeaseExpiresAt: timestamp("processing_lease_expires_at", {
+    withTimezone: true,
+  }),
+  processingLeaseToken: text("processing_lease_token"),
+  processingStartedAt: timestamp("processing_started_at", {
+    withTimezone: true,
+  }),
   repoUrl: text("repo_url").notNull(),
   repoVisibility: text("repo_visibility").notNull(),
   status: text("status").notNull().default("queued"),

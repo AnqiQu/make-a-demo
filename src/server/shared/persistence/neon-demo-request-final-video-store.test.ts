@@ -42,6 +42,7 @@ describe("NeonDemoRequestFinalVideoStore", () => {
             expectedVisibleOutcome: "The article feed is visible.",
             humanReadableDescription: "Show article feed.",
             id: "scene_article_feed",
+            type: "playwright-recording",
           },
         ],
         scriptId: "script_test",

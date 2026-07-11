@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentHarnessWorkspaceHandle } from "../../agent-harness/daytona/workspace.interface";
 import { assertDemoScriptCaptureSdkContract } from "./capture-sdk-contract";
+import { createDemoScriptDigest } from "./demo-script-identity";
 import { type DemoScript, parseDemoScript } from "./demo-script.schema";
 import { PreparedWorkspacePlaywrightSceneRecorder } from "./playwright-scene-recorder";
 import type { SceneRecorder } from "./scene-recorder.interface";
@@ -15,6 +16,7 @@ type CapturedSceneManifestEntry = {
 
 export type CaptureManifest = {
   baseUrl: string;
+  captureRuntimeResetArtifactPath?: string;
   createdAt: string;
   keepTemp: boolean;
   qualityFindings: string[];
@@ -22,15 +24,23 @@ export type CaptureManifest = {
   runDirectory: string;
   runId: string;
   scenes: CapturedSceneManifestEntry[];
+  scriptDigest?: string;
   scriptId: string;
   markerLogPath?: string;
   rawTakePath?: string;
+  stderrLogPath?: string;
+  stdoutLogPath?: string;
   temporary: true;
   title: string;
 };
 
 export type CaptureScenesFromScriptInput = {
   baseUrl: string;
+  captureRuntimeReset?: {
+    artifactPath: string;
+    stage: "capture-runtime-reset";
+    status: "passed";
+  };
   keepTemp?: boolean;
   preparationWorkspace?: AgentHarnessWorkspaceHandle;
   recorder?: SceneRecorder;
@@ -51,33 +61,76 @@ export async function captureScenesFromScript(
   await mkdir(rawScenesDirectory, { recursive: true });
 
   const scriptPackage = await readScriptPackage(input);
-  assertDemoScriptCaptureSdkContract(scriptPackage);
-  const recorder = input.recorder ?? createPreparedWorkspaceRecorder(input);
+  const scriptDigest = createDemoScriptDigest(scriptPackage);
+  const browserScenes = scriptPackage.scenes.filter(
+    (scene) => scene.type === "playwright-recording",
+  );
+  if (browserScenes.length > 0) {
+    assertDemoScriptCaptureSdkContract({
+      ...scriptPackage,
+      scenes: browserScenes,
+    });
+  }
   const scenes: CapturedSceneManifestEntry[] = [];
 
   try {
-    const recordedScenes = await recorder.recordScenes({
-      baseUrl: input.baseUrl,
-      demoPlaywrightScript: scriptPackage.demoPlaywrightScript,
-      runDirectory,
-      scenes: scriptPackage.scenes,
-      sectionId: "demo-script",
-    });
+    if (browserScenes.length > 0) {
+      const recorder = input.recorder ?? createPreparedWorkspaceRecorder(input);
+      if (
+        input.recorder === undefined &&
+        (input.captureRuntimeReset?.stage !== "capture-runtime-reset" ||
+          input.captureRuntimeReset.status !== "passed" ||
+          input.captureRuntimeReset.artifactPath.trim().length === 0)
+      ) {
+        throw new Error(
+          "Footage Capture requires a passed capture-runtime-reset proof",
+        );
+      }
+      if (scriptPackage.demoPlaywrightScript === undefined) {
+        throw new Error(
+          "Footage Capture requires compiled Playwright source for browser Scenes.",
+        );
+      }
+      const recordedScenes = await recorder.recordScenes({
+        baseUrl: input.baseUrl,
+        demoPlaywrightScript: scriptPackage.demoPlaywrightScript,
+        retainRawTake: keepTemp,
+        runDirectory,
+        scenes: browserScenes,
+        sectionId: "demo-script",
+        ...(scriptPackage.setupActions === undefined
+          ? {}
+          : { setupActions: scriptPackage.setupActions }),
+      });
 
-    scenes.push(...recordedScenes);
+      scenes.push(...recordedScenes);
+    }
 
     const manifestPath = join(runDirectory, "capture-manifest.json");
     const manifest: CaptureManifest = {
       baseUrl: input.baseUrl,
+      ...(input.captureRuntimeReset === undefined
+        ? {}
+        : {
+            captureRuntimeResetArtifactPath:
+              input.captureRuntimeReset.artifactPath,
+          }),
       createdAt: new Date().toISOString(),
       keepTemp,
       manifestPath,
       runDirectory,
       runId,
       scenes,
+      scriptDigest,
       scriptId: scriptPackage.scriptId,
-      markerLogPath: join(runDirectory, "scene-markers.jsonl"),
-      ...(keepTemp
+      ...(browserScenes.length === 0
+        ? {}
+        : {
+            markerLogPath: join(runDirectory, "scene-markers.jsonl"),
+            stderrLogPath: join(runDirectory, "stderr.log"),
+            stdoutLogPath: join(runDirectory, "stdout.log"),
+          }),
+      ...(keepTemp && browserScenes.length > 0
         ? {
             rawTakePath: join(
               runDirectory,

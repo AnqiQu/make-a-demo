@@ -10,6 +10,7 @@ import type {
   GetPresignerInput,
   PutObjectInput,
   PutPresignerInput,
+  PutStreamObjectInput,
   R2UploadStorage,
 } from "./r2-upload-presigner";
 
@@ -32,6 +33,17 @@ export function createR2UploadPresignerFromEnv(): R2UploadStorage &
         new PutObjectCommand({
           Body: input.body,
           Bucket: input.bucket,
+          ContentType: input.contentType,
+          Key: input.key,
+        }),
+      );
+    },
+    async putStreamObject(input: PutStreamObjectInput) {
+      await client.send(
+        new PutObjectCommand({
+          Body: input.body,
+          Bucket: input.bucket,
+          ContentLength: input.contentLength,
           ContentType: input.contentType,
           Key: input.key,
         }),

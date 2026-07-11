@@ -42,7 +42,72 @@ describe("agent harness artifact schemas", () => {
     expect(flowSpec.referencedActionIds).toEqual(["open-dashboard"]);
     expect(contract.outputPath).toBe(DEMO_SCRIPT_OUTPUT_PATH);
     expect(scriptCandidate.sourceFlowSpecId).toBe("flow_001");
+    expect(scriptCandidate.browserActionCompilerVersion).toBe("2026-07-10.1");
+    expect(scriptCandidate.bunRuntimeVersion).toBe("1.3.14");
+    expect(scriptCandidate.playwrightRuntimeVersion).toBe("1.60.0");
     expect(pipelineRunManifest.stageStatuses["script-writing"]).toBe("passed");
+  });
+
+  it("preserves the reason when a non-semantic action locator is parsed again", () => {
+    const catalog = validActionCatalog();
+    const parsed = readActionCatalog({
+      ...catalog,
+      actions: catalog.actions.map((action, index) =>
+        index === 0
+          ? {
+              ...action,
+              preferredLocator: {
+                reason:
+                  "Navigation targets the observed page body rather than an element.",
+                strategy: "css",
+                value: "body",
+              },
+            }
+          : action,
+      ),
+    });
+    const reparsed = readActionCatalog(parsed);
+
+    expect(reparsed.actions[0]?.preferredLocator.reason).toBe(
+      "Navigation targets the observed page body rather than an element.",
+    );
+  });
+
+  it("rejects an Action Catalog preferred locator that lacks verified evidence", () => {
+    const catalog = validActionCatalog();
+    const action = catalog.actions[0];
+    if (action === undefined) {
+      throw new Error("Expected an Action Catalog fixture");
+    }
+
+    expect(() =>
+      readActionCatalog({
+        ...catalog,
+        actions: [
+          {
+            ...action,
+            locatorCandidates: [
+              {
+                id: "open-dashboard-locator-1",
+                locator: {
+                  name: "Open dashboard",
+                  role: "button",
+                  strategy: "role",
+                },
+                verification: {
+                  matchCount: 1,
+                  route: "/",
+                  visible: true,
+                },
+              },
+            ],
+            preferredLocatorCandidateId: "missing-locator",
+          },
+        ],
+      }),
+    ).toThrow(
+      "actions[0].preferredLocatorCandidateId must reference locatorCandidates",
+    );
   });
 
   it("rejects artifacts that would break downstream validation boundaries", () => {
@@ -78,6 +143,12 @@ describe("agent harness artifact schemas", () => {
       }),
     ).toThrow("outputPath must be /workspace/.makeademo/demo-script.json");
 
+    const { captureSdkVersion: _captureSdkVersion, ...unversionedCandidate } =
+      validScriptCandidate();
+    expect(() => readScriptCandidate(unversionedCandidate)).toThrow(
+      "captureSdkVersion must be a non-empty string",
+    );
+
     expect(() => readFlowSpec({ ...validFlowSpec(), steps: [] })).toThrow(
       "steps must be a non-empty array",
     );
@@ -92,6 +163,17 @@ describe("agent harness artifact schemas", () => {
       }),
     ).toThrow(
       "PreparationManifest validation failed: localDemoModeChanges must be an array; scriptGenerationContext must be an array",
+    );
+  });
+
+  it("rejects Script Candidates without the compiler and runtime versions that produced them", () => {
+    const {
+      browserActionCompilerVersion: _browserActionCompilerVersion,
+      ...candidateWithoutCompilerVersion
+    } = validScriptCandidate();
+
+    expect(() => readScriptCandidate(candidateWithoutCompilerVersion)).toThrow(
+      "browserActionCompilerVersion must be a non-empty string",
     );
   });
 });
@@ -276,10 +358,13 @@ function validDemoScriptContract() {
     allowedCaptureSdkActions: ["setup", "scene", "page.goto", "locator.click"],
     baseUrlBinding: "Capture SDK context baseUrl",
     browserContextOwnership: "MakeADemo owns browser and context",
+    captureSdkVersion: "2026-07-10.1",
     contractVersion: "2026-07-08",
+    examples: [{ scriptId: "script_001" }],
     forbiddenApis: ["fetch", "XMLHttpRequest", "WebSocket"],
     forbiddenExternalUrls: true,
     forbiddenFields: ["durationSeconds"],
+    jsonSchema: { type: "object" },
     networkRestrictions: ["runtime network blocked"],
     outputPath: DEMO_SCRIPT_OUTPUT_PATH,
     requiredAssertions: ["visible Playwright assertion per scene"],
@@ -293,9 +378,12 @@ function validScriptCandidate() {
   return {
     assumptions: ["dashboard available"],
     captureSdkVersion: "generated",
+    browserActionCompilerVersion: "2026-07-10.1",
+    bunRuntimeVersion: "1.3.14",
     conformanceResult: validValidationReport(),
     contractVersion: "2026-07-08",
     outputPath: DEMO_SCRIPT_OUTPUT_PATH,
+    playwrightRuntimeVersion: "1.60.0",
     scriptJsonContent: { scriptId: "script_001" },
     sourceAppMapId: "appmap_001",
     sourceFlowSpecId: "flow_001",

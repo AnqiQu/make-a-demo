@@ -24,6 +24,15 @@ describe("runAgentHarnessPipeline", () => {
             artifacts[path] = value;
           },
         },
+        async capturePreparationWorkspaceDiff() {
+          calls.push("preparation-diff");
+          return {
+            changedPaths: ["/workspace/repo/src/demo.ts"],
+            patch: "diff --git a/src/demo.ts b/src/demo.ts",
+            patchSha256: `sha256:${"a".repeat(64)}`,
+            sourceCommitSha: "abc123def456",
+          };
+        },
         async createWorkspace() {
           calls.push("workspace");
           return workspace();
@@ -33,6 +42,7 @@ describe("runAgentHarnessPipeline", () => {
             `explore:${preparationManifest.id}:${preparationValidation.status}`,
           );
           return {
+            kind: "artifacts" as const,
             actionCatalog: actionCatalog(),
             appMap: appMap(),
             validationReport: report("app-exploration", "passed"),
@@ -83,6 +93,7 @@ describe("runAgentHarnessPipeline", () => {
       "run-plan:bun",
       "workspace",
       "prepare:bun:bun install --frozen-lockfile",
+      "preparation-diff",
       "preflight:http://127.0.0.1:3000",
       "explore:prep_001:passed",
       "flow:appmap_001:actions_001",
@@ -102,6 +113,12 @@ describe("runAgentHarnessPipeline", () => {
     });
     expect(artifacts["/workspace/.makeademo/repo-profile.json"]).toMatchObject({
       packageManager: "bun",
+    });
+    expect(
+      artifacts["/workspace/.makeademo/preparation-workspace-diff.json"],
+    ).toMatchObject({
+      changedPaths: ["/workspace/repo/src/demo.ts"],
+      sourceCommitSha: "abc123def456",
     });
     expect(
       artifacts["/workspace/.makeademo/pipeline-run-manifest.json"],
@@ -141,6 +158,7 @@ describe("runAgentHarnessPipeline", () => {
           },
           async exploreApp() {
             return {
+              kind: "artifacts" as const,
               actionCatalog: actionCatalog(),
               appMap: appMap(),
               validationReport: report("app-exploration", "passed"),
@@ -151,6 +169,9 @@ describe("runAgentHarnessPipeline", () => {
           },
           async prepareRepo() {
             return { manifest: preparationManifest() };
+          },
+          async resetCaptureRuntime() {
+            return report("capture-runtime-reset", "passed");
           },
           async synthesizeRunPlan() {
             return runPlan();
@@ -207,6 +228,9 @@ describe("runAgentHarnessPipeline", () => {
               opencodeSessionId: "session_failed_prepare",
             });
           },
+          async resetCaptureRuntime() {
+            return report("capture-runtime-reset", "passed");
+          },
           async synthesizeRunPlan() {
             return runPlan();
           },
@@ -237,11 +261,94 @@ describe("runAgentHarnessPipeline", () => {
       },
       unsupportedOrFailureReason: "Repo clone failed.",
     });
+    expect(
+      artifacts["/workspace/.makeademo/preparation-fallback.json"],
+    ).toMatchObject({
+      blockers: [{ summary: "Repo clone failed." }],
+      failedStage: "repo-preparation",
+      repoUrl: "https://github.com/example/app",
+      runId: "run_003",
+    });
+  });
+
+  it("preserves the pipeline failure and durably records a teardown failure", async () => {
+    const artifacts: Record<string, unknown> = {};
+    let caught: unknown;
+
+    try {
+      await runAgentHarnessPipeline(
+        {
+          demoBrief: { keyProductFeatures: ["dashboard"] },
+          files: [{ path: "package.json", text: "{}" }],
+          repoStats: { fileCount: 1, sizeBytes: 2 },
+          repoUrl: "https://github.com/example/app",
+          runId: "run_teardown_failure",
+        },
+        {
+          artifactStore: {
+            async writeJson(path, value) {
+              artifacts[path] = value;
+            },
+          },
+          async createWorkspace() {
+            return {
+              ...workspace(),
+              async destroy() {
+                throw new Error("Daytona delete failed");
+              },
+            };
+          },
+          async exploreApp() {
+            throw new Error("should not explore");
+          },
+          async planFlow() {
+            throw new Error("should not plan");
+          },
+          async prepareRepo() {
+            throw new Error("Repo clone failed");
+          },
+          async resetCaptureRuntime() {
+            return report("capture-runtime-reset", "passed");
+          },
+          async synthesizeRunPlan() {
+            return runPlan();
+          },
+          async validateCapturePath() {
+            throw new Error("should not validate capture");
+          },
+          async validatePreparation() {
+            throw new Error("should not validate preparation");
+          },
+          async validateScriptContract() {
+            throw new Error("should not validate script");
+          },
+          async writeScript() {
+            throw new Error("should not write script");
+          },
+        },
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toBe("Repo clone failed");
+    expect(Reflect.get(caught as object, "cleanupError")).toMatchObject({
+      message: "Daytona delete failed",
+    });
+    expect(
+      artifacts["/workspace/.makeademo/pipeline-run-manifest.json"],
+    ).toMatchObject({
+      unsupportedOrFailureReason:
+        "Repo clone failed; workspace cleanup failed: Daytona delete failed",
+    });
   });
 
   it("feeds failed capture validation back through Script Repair and retries", async () => {
     const calls: string[] = [];
     let captureAttempts = 0;
+    let explorationAttempts = 0;
+    let flowAttempts = 0;
 
     const result = await runAgentHarnessPipeline(
       {
@@ -259,13 +366,18 @@ describe("runAgentHarnessPipeline", () => {
           return workspace();
         },
         async exploreApp() {
+          explorationAttempts += 1;
+          calls.push(`explore:${explorationAttempts}`);
           return {
+            kind: "artifacts" as const,
             actionCatalog: actionCatalog(),
             appMap: appMap(),
             validationReport: report("app-exploration", "passed"),
           };
         },
         async planFlow() {
+          flowAttempts += 1;
+          calls.push(`flow:${flowAttempts}`);
           return flowSpec();
         },
         async prepareRepo() {
@@ -274,6 +386,9 @@ describe("runAgentHarnessPipeline", () => {
         async repairScript({ failureReport }) {
           calls.push(`repair:${failureReport.logsSummary}`);
           return scriptCandidate();
+        },
+        async resetCaptureRuntime() {
+          return report("capture-runtime-reset", "passed");
         },
         async synthesizeRunPlan() {
           return runPlan();
@@ -304,8 +419,12 @@ describe("runAgentHarnessPipeline", () => {
 
     expect(result.status).toBe("passed");
     expect(calls).toEqual([
+      "explore:1",
+      "flow:1",
       "static",
       "dynamic:1",
+      "explore:2",
+      "flow:2",
       "repair:Dashboard locator did not resolve",
       "static",
       "dynamic:2",
@@ -353,6 +472,7 @@ describe("runAgentHarnessPipeline", () => {
         async exploreApp({ preparationManifest: manifest }) {
           calls.push(`explore:${manifest.id}`);
           return {
+            kind: "artifacts" as const,
             actionCatalog: actionCatalog(),
             appMap: appMap(),
             validationReport: report("app-exploration", "passed"),
@@ -369,6 +489,9 @@ describe("runAgentHarnessPipeline", () => {
           return {
             manifest: { ...preparationManifest(), id: "prep_repaired" },
           };
+        },
+        async resetCaptureRuntime() {
+          return report("capture-runtime-reset", "passed");
         },
         async synthesizeRunPlan() {
           return runPlan();
@@ -440,6 +563,7 @@ describe("runAgentHarnessPipeline", () => {
           },
           async exploreApp() {
             return {
+              kind: "artifacts" as const,
               actionCatalog: actionCatalog(),
               appMap: appMap(),
               validationReport: report("app-exploration", "passed"),
@@ -453,6 +577,9 @@ describe("runAgentHarnessPipeline", () => {
           },
           async repairScript() {
             return scriptCandidate();
+          },
+          async resetCaptureRuntime() {
+            return report("capture-runtime-reset", "passed");
           },
           async synthesizeRunPlan() {
             return runPlan();
@@ -477,7 +604,7 @@ describe("runAgentHarnessPipeline", () => {
     ).rejects.toThrow("Script Writing modified disallowed workspace paths");
   });
 
-  it("repairs preparation and re-explores when browser exploration finds external network", async () => {
+  it("repairs preparation and re-explores when no grounded browser route is discovered", async () => {
     let explorationAttempts = 0;
     const calls: string[] = [];
 
@@ -499,18 +626,21 @@ describe("runAgentHarnessPipeline", () => {
         async exploreApp({ preparationManifest: manifest }) {
           explorationAttempts += 1;
           calls.push(`explore:${manifest.id}`);
-          return {
-            actionCatalog: actionCatalog(),
-            appMap: appMap(),
-            validationReport:
-              explorationAttempts === 1
-                ? {
-                    ...report("app-exploration", "failed"),
-                    failureClassification: "external network required",
-                    logsSummary: "Blocked api.example.com",
-                  }
-                : report("app-exploration", "passed"),
-          };
+          return explorationAttempts === 1
+            ? {
+                kind: "repairable-failure" as const,
+                validationReport: {
+                  ...report("app-exploration", "failed"),
+                  failureClassification: "app route not discoverable",
+                  logsSummary: "No browser routes were discovered",
+                },
+              }
+            : {
+                kind: "artifacts" as const,
+                actionCatalog: actionCatalog(),
+                appMap: appMap(),
+                validationReport: report("app-exploration", "passed"),
+              };
         },
         async planFlow() {
           return flowSpec();
@@ -523,6 +653,9 @@ describe("runAgentHarnessPipeline", () => {
           return {
             manifest: { ...preparationManifest(), id: "prep_network_fixed" },
           };
+        },
+        async resetCaptureRuntime() {
+          return report("capture-runtime-reset", "passed");
         },
         async synthesizeRunPlan() {
           return runPlan();
@@ -579,6 +712,7 @@ describe("runAgentHarnessPipeline", () => {
         async exploreApp() {
           explorationAttempts += 1;
           return {
+            kind: "artifacts" as const,
             actionCatalog: actionCatalog(),
             appMap: appMap(),
             validationReport:
@@ -605,6 +739,9 @@ describe("runAgentHarnessPipeline", () => {
               id: `prep_repaired_${repairStages.length}`,
             },
           };
+        },
+        async resetCaptureRuntime() {
+          return report("capture-runtime-reset", "passed");
         },
         async synthesizeRunPlan() {
           return runPlan();
@@ -667,6 +804,7 @@ describe("runAgentHarnessPipeline", () => {
         },
         async exploreApp() {
           return {
+            kind: "artifacts" as const,
             actionCatalog: actionCatalog(),
             appMap: appMap(),
             validationReport: report("app-exploration", "passed"),
@@ -681,6 +819,9 @@ describe("runAgentHarnessPipeline", () => {
         async repairScript({ failureReport }) {
           repairStages.push(failureReport.stage);
           return scriptCandidate();
+        },
+        async resetCaptureRuntime() {
+          return report("capture-runtime-reset", "passed");
         },
         async synthesizeRunPlan() {
           return runPlan();
@@ -745,6 +886,7 @@ describe("runAgentHarnessPipeline", () => {
         async exploreApp({ preparationManifest: manifest }) {
           calls.push(`explore:${manifest.id}`);
           return {
+            kind: "artifacts" as const,
             actionCatalog: actionCatalog(),
             appMap: appMap(),
             validationReport: report("app-exploration", "passed"),
@@ -762,6 +904,9 @@ describe("runAgentHarnessPipeline", () => {
           return {
             manifest: { ...preparationManifest(), id: "prep_capture_fixed" },
           };
+        },
+        async resetCaptureRuntime() {
+          return report("capture-runtime-reset", "passed");
         },
         async synthesizeRunPlan() {
           return runPlan();
@@ -956,9 +1101,13 @@ function flowSpec() {
 function scriptCandidate() {
   return {
     assumptions: [],
+    browserActionCompilerVersion: "2026-07-10.1",
+    bunRuntimeVersion: "1.3.14",
+    captureSdkVersion: "2026-07-10.1",
     conformanceResult: report("static-script-contract-validation", "passed"),
     contractVersion: "2026-07-08",
     outputPath: DEMO_SCRIPT_OUTPUT_PATH as typeof DEMO_SCRIPT_OUTPUT_PATH,
+    playwrightRuntimeVersion: "1.60.0",
     scriptJsonContent: { scriptId: "script_001" },
     sourceAppMapId: "appmap_001",
     sourceFlowSpecId: "flow_001",

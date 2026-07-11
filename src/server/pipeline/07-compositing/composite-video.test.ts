@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { CaptureManifest } from "../06-footage-capture/capture-scenes";
+import { createDemoScriptDigest } from "../06-footage-capture/demo-script-identity";
+import { parseDemoScript } from "../06-footage-capture/demo-script.schema";
 import type { DemoScript } from "../06-footage-capture/demo-script.schema";
 import type { FinalVideoEmailNotifier } from "../final-output/final-video-email-notifier.interface";
 import {
@@ -19,6 +21,150 @@ import type {
 } from "./video-renderer.interface";
 
 describe("compositeVideoFromScript", () => {
+  it("merges captured and synthetic Scenes in Demo Script order", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "makeademo-composite-test-"),
+    );
+    const capturedScenePath = join(workspace, "scene-dashboard.webm");
+    const staticImagePath = join(workspace, "architecture.png");
+    const captureManifestPath = join(workspace, "capture-manifest.json");
+    await writeFile(capturedScenePath, "captured dashboard");
+    await writeFile(staticImagePath, "static architecture");
+    await writeFile(
+      captureManifestPath,
+      JSON.stringify(
+        makeCaptureManifest({
+          manifestPath: captureManifestPath,
+          runDirectory: workspace,
+          scenes: [
+            {
+              durationSeconds: 1,
+              sceneId: "dashboard",
+              sectionId: "demo-script",
+              videoPath: capturedScenePath,
+            },
+          ],
+        }),
+      ),
+    );
+
+    let renderPlan: CompositingRenderPlan | undefined;
+    await compositeVideoFromScript({
+      captureManifestPath,
+      outputRoot: join(workspace, "renders"),
+      renderer: {
+        async renderVideo(input) {
+          renderPlan = input;
+          await writeFile(input.outputPath, "rendered mp4");
+        },
+      },
+      runId: "mixed-scenes",
+      scriptPackage: {
+        demoPlaywrightScript:
+          "await scene('dashboard', async ({ page, expect }) => { await expect(page.locator('main')).toBeVisible(); });",
+        format: "16:9",
+        presentation: {
+          textOverlays: [
+            {
+              content: "First overlay",
+              font: "Inter",
+              position: "top-left",
+              sceneId: "dashboard",
+              size: "small",
+            },
+            {
+              content: "Second overlay",
+              font: "Inter",
+              position: "bottom-left",
+              sceneId: "dashboard",
+              size: "medium",
+            },
+          ],
+          transitions: [
+            {
+              durationSeconds: 0.5,
+              fromSceneId: "dashboard",
+              style: "fade",
+              toSceneId: "title-card",
+            },
+          ],
+        },
+        scenes: [
+          {
+            expectedVisibleOutcome: "The dashboard is visible.",
+            id: "dashboard",
+            type: "playwright-recording",
+          },
+          {
+            backgroundColor: "#101828",
+            durationSeconds: 2,
+            id: "title-card",
+            text: {
+              color: "#ffffff",
+              content: "Everything in one place",
+              font: "Inter",
+              position: "center",
+              size: "large",
+            },
+            type: "full-screen-text",
+          },
+          {
+            alt: "Product architecture diagram",
+            assetId: "architecture",
+            durationSeconds: 1,
+            id: "architecture",
+            type: "static-image",
+          },
+        ],
+        scriptId: "script-001",
+        title: "Generated Demo",
+        version: 1,
+      },
+      staticImageAssets: {
+        architecture: { sourcePath: staticImagePath },
+      },
+    });
+
+    expect(renderPlan?.durationInFrames).toBe(105);
+    expect(renderPlan?.scenes).toEqual([
+      expect.objectContaining({
+        durationFrames: 30,
+        sceneId: "dashboard",
+        sourcePublicPath: "scenes/dashboard.webm",
+        textOverlays: [
+          expect.objectContaining({ content: "First overlay" }),
+          expect.objectContaining({ content: "Second overlay" }),
+        ],
+        type: "playwright-recording",
+      }),
+      expect.objectContaining({
+        backgroundColor: "#101828",
+        durationFrames: 60,
+        sceneId: "title-card",
+        text: expect.objectContaining({ content: "Everything in one place" }),
+        textOverlays: [],
+        transitionIn: {
+          durationFrames: 15,
+          fromSceneId: "dashboard",
+          style: "fade",
+          toSceneId: "title-card",
+        },
+        type: "full-screen-text",
+      }),
+      expect.objectContaining({
+        alt: "Product architecture diagram",
+        durationFrames: 30,
+        sceneId: "architecture",
+        sourcePublicPath: "scenes/architecture.png",
+        textOverlays: [],
+        type: "static-image",
+      }),
+    ]);
+    await expect(
+      stat(join(renderPlan?.publicDir ?? "", "scenes/architecture.png")),
+    ).resolves.toBeTruthy();
+  });
+
   it("stages Demo Script scenes using captured clip durations and presentation metadata", async () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "makeademo-composite-test-"),
@@ -79,7 +225,7 @@ describe("compositeVideoFromScript", () => {
 
     expect(renderPlan).toMatchObject({
       compositionId: "MakeADemoVideo",
-      durationInFrames: 121,
+      durationInFrames: 112,
       fps: 30,
       height: 720,
       outputPath: join(outputRoot, "composite-001", "final-video.mp4"),
@@ -92,19 +238,26 @@ describe("compositeVideoFromScript", () => {
         durationFrames: 38,
         sceneId: "scene-feed",
         sourcePublicPath: "scenes/scene-feed.webm",
-        text: {
-          content: "Browse the live feed",
-          fontFamily: "Inter",
-          position: "top-left",
-          size: "medium",
-        },
+        textOverlays: [
+          {
+            content: "Browse the live feed",
+            fontFamily: "Inter",
+            position: "top-left",
+            size: "medium",
+          },
+        ],
         type: "playwright-recording",
       },
       {
         durationFrames: 83,
         sceneId: "scene-editor",
-        sourcePublicPath: "scenes/scene-editor.webm",
-        transition: { durationFrames: 9, in: "fade", out: "fade" },
+        textOverlays: [],
+        transitionIn: {
+          durationFrames: 9,
+          fromSceneId: "scene-feed",
+          style: "fade",
+          toSceneId: "scene-editor",
+        },
         type: "playwright-recording",
       },
     ]);
@@ -138,6 +291,156 @@ describe("compositeVideoFromScript", () => {
     expect(JSON.parse(await readFile(manifest.manifestPath, "utf8"))).toEqual(
       manifest,
     );
+  });
+
+  it("does not publish a rendered Draft Composite without an explicit accepted review", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "makeademo-composite-test-"),
+    );
+    const scriptPath = join(workspace, "demo-script.json");
+    const captureManifestPath = join(workspace, "capture-manifest.json");
+    const capturedScenePath = join(workspace, "scene-feed.webm");
+    let storageWasCalled = false;
+    await writeFile(capturedScenePath, "captured scene");
+    await writeFile(scriptPath, JSON.stringify(makeDemoScript()));
+    await writeFile(
+      captureManifestPath,
+      JSON.stringify(
+        makeCaptureManifest({
+          manifestPath: captureManifestPath,
+          runDirectory: workspace,
+          scenes: [
+            {
+              durationSeconds: 2,
+              sceneId: "scene-feed",
+              sectionId: "demo-script",
+              videoPath: capturedScenePath,
+            },
+          ],
+        }),
+      ),
+    );
+
+    await expect(
+      compositeVideoFromScript({
+        captureManifestPath,
+        demoRequestId: "demo-request-001",
+        demoRequestStore: {
+          async linkFinalVideo() {
+            throw new Error("unreviewed Draft Composite must not be linked");
+          },
+          async markFinalVideoEmailSent() {},
+        },
+        finalVideoStorage: {
+          async storeFinalVideo() {
+            storageWasCalled = true;
+            throw new Error("unreviewed Draft Composite must not be stored");
+          },
+        },
+        outputRoot: join(workspace, "renders"),
+        renderer: {
+          async renderVideo(input) {
+            await writeFile(input.outputPath, "rendered mp4");
+          },
+        },
+        runId: "composite-unreviewed",
+        scriptPath,
+      }),
+    ).rejects.toThrow(
+      "Draft Composite review is required before final publication",
+    );
+    expect(storageWasCalled).toBe(false);
+  });
+
+  it("persists a typed rejected Draft Composite review without publishing it", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "makeademo-composite-test-"),
+    );
+    const outputRoot = join(workspace, "renders");
+    const captureManifestPath = join(workspace, "capture-manifest.json");
+    const reviewArtifactPath = join(
+      outputRoot,
+      "composite-rejected",
+      "draft-composite-review.json",
+    );
+    let storageWasCalled = false;
+    await writeFile(
+      captureManifestPath,
+      JSON.stringify(
+        makeCaptureManifest({
+          manifestPath: captureManifestPath,
+          runDirectory: workspace,
+          scenes: [],
+        }),
+      ),
+    );
+
+    await expect(
+      compositeVideoFromScript({
+        captureManifestPath,
+        demoRequestId: "demo-request-001",
+        demoRequestStore: {
+          async linkFinalVideo() {
+            throw new Error("rejected Draft Composite must not be linked");
+          },
+          async markFinalVideoEmailSent() {},
+        },
+        draftCompositeReviewer: {
+          async reviewDraftComposite() {
+            return {
+              findings: ["The final card is unreadably brief."],
+              status: "rejected",
+              warnings: [],
+            };
+          },
+        },
+        finalVideoStorage: {
+          async storeFinalVideo() {
+            storageWasCalled = true;
+            throw new Error("rejected Draft Composite must not be stored");
+          },
+        },
+        outputRoot,
+        renderer: {
+          async renderVideo(input) {
+            await writeFile(input.outputPath, "rendered mp4");
+          },
+        },
+        runId: "composite-rejected",
+        scriptPackage: {
+          format: "16:9",
+          presentation: {},
+          scenes: [
+            {
+              backgroundColor: "#101828",
+              durationSeconds: 2,
+              id: "title-card",
+              text: {
+                color: "#ffffff",
+                content: "Demo complete",
+                font: "Inter",
+                position: "center",
+                size: "large",
+              },
+              type: "full-screen-text",
+            },
+          ],
+          scriptId: "script-001",
+          title: "Generated Demo",
+          version: 1,
+        },
+      }),
+    ).rejects.toMatchObject({
+      name: "DraftCompositeReviewRejectedError",
+      reviewArtifactPath,
+    });
+    expect(storageWasCalled).toBe(false);
+    await expect(
+      readFile(reviewArtifactPath, "utf8").then((value) => JSON.parse(value)),
+    ).resolves.toMatchObject({
+      findings: ["The final card is unreadably brief."],
+      status: "rejected",
+    });
   });
 
   it("uploads the final video and links it to the Demo Request without retaining local output", async () => {
@@ -182,8 +485,12 @@ describe("compositeVideoFromScript", () => {
     const storage: FinalVideoStorage = {
       async storeFinalVideo(input) {
         const key = `demo-videos/${input.demoRequestId}/${input.runId}/final-video.mp4`;
+        expect(input.body).not.toBeInstanceOf(Uint8Array);
+        expect(input.contentLength).toBe(12);
         storedVideos.push({
-          body: new TextDecoder().decode(input.body),
+          body: await readStreamBody(
+            input.body as unknown as AsyncIterable<Uint8Array>,
+          ),
           demoRequestId: input.demoRequestId,
           key,
           scriptId: input.scriptId,
@@ -208,6 +515,7 @@ describe("compositeVideoFromScript", () => {
       captureManifestPath,
       demoRequestId: "demo-request-001",
       demoRequestStore: demoRequests,
+      draftCompositeReviewer: acceptedDraftCompositeReviewer(),
       finalVideoStorage: storage,
       outputRoot,
       renderer: {
@@ -281,6 +589,7 @@ describe("compositeVideoFromScript", () => {
         },
         async markFinalVideoEmailSent() {},
       },
+      draftCompositeReviewer: acceptedDraftCompositeReviewer(),
       finalVideoStorage: {
         async storeFinalVideo() {
           return {
@@ -364,6 +673,7 @@ describe("compositeVideoFromScript", () => {
       captureManifestPath,
       demoRequestId: "demo-request-001",
       demoRequestStore: demoRequests,
+      draftCompositeReviewer: acceptedDraftCompositeReviewer(),
       finalVideoEmailNotifier: emailNotifier,
       finalVideoStorage: {
         async storeFinalVideo() {
@@ -397,6 +707,47 @@ describe("compositeVideoFromScript", () => {
     expect(markedEmails).toEqual([
       { demoRequestId: "demo-request-001", sentAt: expect.any(String) },
     ]);
+  });
+
+  it("rejects captured footage when the accepted Demo Script content changed without changing its scriptId", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "makeademo-composite-test-"),
+    );
+    const captureManifestPath = join(workspace, "capture-manifest.json");
+    const capturedScenePath = join(workspace, "scene-feed.webm");
+    const acceptedScript = parseDemoScript(makeDemoScript());
+    await writeFile(capturedScenePath, "captured scene");
+    await writeFile(
+      captureManifestPath,
+      JSON.stringify({
+        ...makeCaptureManifest({
+          manifestPath: captureManifestPath,
+          runDirectory: workspace,
+          scenes: [
+            {
+              durationSeconds: 2,
+              sceneId: "scene-feed",
+              sectionId: "demo-script",
+              videoPath: capturedScenePath,
+            },
+          ],
+        }),
+        scriptDigest: createDemoScriptDigest(acceptedScript),
+      }),
+    );
+
+    await expect(
+      compositeVideoFromScript({
+        captureManifestPath,
+        outputRoot: join(workspace, "renders"),
+        renderer: {
+          async renderVideo() {
+            throw new Error("renderer must not run for stale captured footage");
+          },
+        },
+        scriptPackage: { ...acceptedScript, title: "Changed after capture" },
+      }),
+    ).rejects.toThrow("capture manifest Demo Script digest does not match");
   });
 
   it("rejects a Demo Script when captured footage is missing for a declared Scene", async () => {
@@ -487,6 +838,256 @@ describe("compositeVideoFromScript", () => {
 
     expect(renderWasCalled).toBe(false);
   });
+
+  it("rejects fades that are not shorter than both adjacent Scenes", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "makeademo-composite-test-"),
+    );
+    const captureManifestPath = join(workspace, "capture-manifest.json");
+    const firstScenePath = join(workspace, "scene-feed.webm");
+    const secondScenePath = join(workspace, "scene-editor.webm");
+    await writeFile(firstScenePath, "first scene");
+    await writeFile(secondScenePath, "second scene");
+    await writeFile(
+      captureManifestPath,
+      JSON.stringify(
+        makeCaptureManifest({
+          manifestPath: captureManifestPath,
+          runDirectory: workspace,
+          scenes: [
+            {
+              durationSeconds: 1,
+              sceneId: "scene-feed",
+              sectionId: "demo-script",
+              videoPath: firstScenePath,
+            },
+            {
+              durationSeconds: 1,
+              sceneId: "scene-editor",
+              sectionId: "demo-script",
+              videoPath: secondScenePath,
+            },
+          ],
+        }),
+      ),
+    );
+    const script = makeDemoScript({
+      sceneIds: ["scene-feed", "scene-editor"],
+    });
+
+    await expect(
+      compositeVideoFromScript({
+        captureManifestPath,
+        outputRoot: join(workspace, "renders"),
+        renderer: {
+          async renderVideo() {
+            throw new Error("renderer must not run");
+          },
+        },
+        scriptPackage: {
+          ...script,
+          presentation: {
+            ...script.presentation,
+            transitions: [
+              {
+                durationSeconds: 1,
+                fromSceneId: "scene-feed",
+                style: "fade",
+                toSceneId: "scene-editor",
+              },
+            ],
+          },
+        },
+      }),
+    ).rejects.toThrow(
+      "fade transition scene-feed -> scene-editor must be shorter than both adjacent Scenes",
+    );
+  });
+
+  it("rejects captured durations that round down to zero frames", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "makeademo-composite-test-"),
+    );
+    const captureManifestPath = join(workspace, "capture-manifest.json");
+    const capturedScenePath = join(workspace, "scene-feed.webm");
+    await writeFile(capturedScenePath, "captured scene");
+    await writeFile(
+      captureManifestPath,
+      JSON.stringify(
+        makeCaptureManifest({
+          manifestPath: captureManifestPath,
+          runDirectory: workspace,
+          scenes: [
+            {
+              durationSeconds: 0.001,
+              sceneId: "scene-feed",
+              sectionId: "demo-script",
+              videoPath: capturedScenePath,
+            },
+          ],
+        }),
+      ),
+    );
+
+    await expect(
+      compositeVideoFromScript({
+        captureManifestPath,
+        outputRoot: join(workspace, "renders"),
+        renderer: {
+          async renderVideo() {
+            throw new Error("renderer must not run");
+          },
+        },
+        scriptPackage: makeDemoScript(),
+      }),
+    ).rejects.toThrow(
+      "duration 0.001 seconds must produce at least one frame at 30 fps",
+    );
+  });
+
+  it("rejects captured durations that cannot produce a safe integer frame count", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "makeademo-composite-test-"),
+    );
+    const captureManifestPath = join(workspace, "capture-manifest.json");
+    const capturedScenePath = join(workspace, "scene-feed.webm");
+    await writeFile(capturedScenePath, "captured scene");
+    await writeFile(
+      captureManifestPath,
+      JSON.stringify(
+        makeCaptureManifest({
+          manifestPath: captureManifestPath,
+          runDirectory: workspace,
+          scenes: [
+            {
+              durationSeconds: Number.MAX_SAFE_INTEGER,
+              sceneId: "scene-feed",
+              sectionId: "demo-script",
+              videoPath: capturedScenePath,
+            },
+          ],
+        }),
+      ),
+    );
+
+    await expect(
+      compositeVideoFromScript({
+        captureManifestPath,
+        outputRoot: join(workspace, "renders"),
+        renderer: {
+          async renderVideo() {
+            throw new Error("renderer must not run");
+          },
+        },
+        scriptPackage: makeDemoScript(),
+      }),
+    ).rejects.toThrow("must produce a safe integer frame count at 30 fps");
+  });
+
+  it("rejects final videos that exceed the total duration budget", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "makeademo-composite-test-"),
+    );
+    const captureManifestPath = join(workspace, "capture-manifest.json");
+    const capturedScenePath = join(workspace, "scene-feed.webm");
+    await writeFile(capturedScenePath, "captured scene");
+    await writeFile(
+      captureManifestPath,
+      JSON.stringify(
+        makeCaptureManifest({
+          manifestPath: captureManifestPath,
+          runDirectory: workspace,
+          scenes: [
+            {
+              durationSeconds: 181,
+              sceneId: "scene-feed",
+              sectionId: "demo-script",
+              videoPath: capturedScenePath,
+            },
+          ],
+        }),
+      ),
+    );
+
+    await expect(
+      compositeVideoFromScript({
+        captureManifestPath,
+        outputRoot: join(workspace, "renders"),
+        projectRoot: workspace,
+        renderer: {
+          async renderVideo() {
+            throw new Error("renderer must not run");
+          },
+        },
+        scriptPackage: makeDemoScript(),
+      }),
+    ).rejects.toThrow("Demo video must be at most 180 seconds (5400 frames)");
+  });
+
+  it("rejects chained fades that consume an interior Scene", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "makeademo-composite-test-"),
+    );
+    const captureManifestPath = join(workspace, "capture-manifest.json");
+    const sceneIds = ["scene-first", "scene-middle", "scene-last"];
+    const capturedScenes = await Promise.all(
+      sceneIds.map(async (sceneId) => {
+        const videoPath = join(workspace, `${sceneId}.webm`);
+        await writeFile(videoPath, sceneId);
+        return {
+          durationSeconds: 1,
+          sceneId,
+          sectionId: "demo-script",
+          videoPath,
+        };
+      }),
+    );
+    await writeFile(
+      captureManifestPath,
+      JSON.stringify(
+        makeCaptureManifest({
+          manifestPath: captureManifestPath,
+          runDirectory: workspace,
+          scenes: capturedScenes,
+        }),
+      ),
+    );
+    const script = makeDemoScript({ sceneIds });
+
+    await expect(
+      compositeVideoFromScript({
+        captureManifestPath,
+        outputRoot: join(workspace, "renders"),
+        renderer: {
+          async renderVideo() {
+            throw new Error("renderer must not run");
+          },
+        },
+        scriptPackage: {
+          ...script,
+          presentation: {
+            ...script.presentation,
+            transitions: [
+              {
+                durationSeconds: 0.6,
+                fromSceneId: "scene-first",
+                style: "fade",
+                toSceneId: "scene-middle",
+              },
+              {
+                durationSeconds: 0.6,
+                fromSceneId: "scene-middle",
+                style: "fade",
+                toSceneId: "scene-last",
+              },
+            ],
+          },
+        },
+      }),
+    ).rejects.toThrow(
+      "fade transitions into and out of Scene scene-middle must total less than its duration",
+    );
+  });
 });
 
 function makeDemoScript(input: { sceneIds?: string[] } = {}): DemoScript {
@@ -524,6 +1125,7 @@ function makeDemoScript(input: { sceneIds?: string[] } = {}): DemoScript {
       expectedVisibleOutcome: `${sceneId} is visible`,
       humanReadableDescription: `Show ${sceneId}`,
       id: sceneId,
+      type: "playwright-recording" as const,
     })),
     scriptId: "script-001",
     title: "Generated Demo",
@@ -549,4 +1151,31 @@ function makeCaptureManifest(input: {
     temporary: true,
     title: "Generated Demo",
   };
+}
+
+function acceptedDraftCompositeReviewer() {
+  return {
+    async reviewDraftComposite() {
+      return {
+        findings: [],
+        status: "accepted" as const,
+        warnings: [],
+      };
+    },
+  };
+}
+
+async function readStreamBody(body: AsyncIterable<Uint8Array>) {
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of body) {
+    chunks.push(chunk);
+  }
+  const size = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
+  const combined = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(combined);
 }

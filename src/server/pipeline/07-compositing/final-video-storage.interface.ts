@@ -1,9 +1,13 @@
+import type { Readable } from "node:stream";
+
 export type FinalVideoUploadInput = {
-  body: Uint8Array;
+  body: Readable;
+  contentLength: number;
   contentType: "video/mp4";
   demoRequestId: string;
   fileName: "final-video.mp4";
   runId: string;
+  scriptDigest: string;
   scriptId: string;
 };
 
@@ -14,8 +18,11 @@ export type StoredFinalVideo = {
 
 /**
  * Stores the final Compositing video in durable video storage.
- * Implementations must store the bytes under a Demo Request-scoped key and
- * return the canonical private URL that downstream persistence should record.
+ * Implementations must consume the body as a stream, use the Demo Request and
+ * Script digest as an idempotent object identity, and return the canonical
+ * private URL that downstream persistence should record. Retrying the same
+ * accepted Script must replace or reuse the same object rather than orphaning
+ * another upload.
  */
 export interface FinalVideoStorage {
   storeFinalVideo(input: FinalVideoUploadInput): Promise<StoredFinalVideo>;

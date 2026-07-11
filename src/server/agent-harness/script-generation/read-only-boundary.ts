@@ -5,44 +5,39 @@ const allowedMakeADemoFiles = new Set([
   "/workspace/.makeademo/static-script-contract-validation.json",
 ]);
 
-const disallowedWorkspacePathPatterns = [
-  /^\/workspace\/package\.json$/,
-  /^\/workspace\/(?:bun\.lock|bun\.lockb|package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/,
-  /^\/workspace\/(?:src|app|pages|routes|components|fixtures|mocks)\//,
-  /^\/workspace\/\.env(?:\.|$)/,
-  /^\/workspace\/[^/]*(?:config|\.config)\.(?:cjs|js|json|mjs|ts|tsx)$/,
-];
+/**
+ * A path-to-content-fingerprint snapshot of the submitted workspace. Callers
+ * must fingerprint both tracked and untracked files so changes to files that
+ * were already dirty before Script Writing remain observable.
+ */
+export type ScriptWritingContentSnapshot = Readonly<Record<string, string>>;
+
+/**
+ * Returns paths whose content identity was added, removed, or changed between
+ * the Script Writing boundaries. Fingerprints are opaque to this module.
+ */
+export function findScriptWritingContentChanges(input: {
+  after: ScriptWritingContentSnapshot;
+  before: ScriptWritingContentSnapshot;
+}): string[] {
+  const paths = new Set([
+    ...Object.keys(input.before),
+    ...Object.keys(input.after),
+  ]);
+  return [...paths]
+    .filter((path) => input.before[path] !== input.after[path])
+    .sort();
+}
 
 export function assertScriptWritingChangesAllowed(
   changedPaths: string[],
 ): void {
-  const disallowed = changedPaths.filter((path) => !isAllowedPath(path));
+  const disallowed = changedPaths.filter(
+    (path) => !allowedMakeADemoFiles.has(path),
+  );
   if (disallowed.length > 0) {
     throw new Error(
       `Script Writing modified disallowed workspace paths: ${disallowed.join(", ")}`,
     );
   }
-}
-
-function isAllowedPath(path: string): boolean {
-  if (allowedMakeADemoFiles.has(path)) {
-    return true;
-  }
-
-  if (
-    path.startsWith("/workspace/.makeademo/") &&
-    /(?:script|contract|validation|candidate|report|demo-script)[^/]*\.json$/.test(
-      path,
-    )
-  ) {
-    return true;
-  }
-
-  const submittedRepoPath = path.replace(
-    /^\/workspace\/repo(?=\/)/,
-    "/workspace",
-  );
-  return !disallowedWorkspacePathPatterns.some((pattern) =>
-    pattern.test(submittedRepoPath),
-  );
 }

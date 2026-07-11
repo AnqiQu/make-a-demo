@@ -148,6 +148,9 @@ export function createGitHubAppIntegrationFromEnv(
         state: input.state,
       });
     },
+    createInstallationToken(installationId: string) {
+      return createInstallationToken(installationId, app);
+    },
     listRepositories(installationId: string) {
       return listGitHubInstallationRepositories(
         { installationId },

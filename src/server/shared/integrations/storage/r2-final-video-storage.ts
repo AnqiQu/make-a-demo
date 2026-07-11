@@ -5,11 +5,20 @@ import type {
 } from "../../../pipeline/07-compositing/final-video-storage.interface";
 import type { R2UploadStorage } from "./r2-upload-presigner";
 
+type StreamingR2UploadStorage = R2UploadStorage & {
+  putStreamObject: NonNullable<R2UploadStorage["putStreamObject"]>;
+};
+
 export class R2FinalVideoStorage implements FinalVideoStorage {
-  private readonly r2: R2UploadStorage;
+  private readonly r2: StreamingR2UploadStorage;
 
   constructor(r2: R2UploadStorage) {
-    this.r2 = r2;
+    if (r2.putStreamObject === undefined) {
+      throw new Error(
+        "R2 final video storage requires streaming upload support",
+      );
+    }
+    this.r2 = r2 as StreamingR2UploadStorage;
   }
 
   async storeFinalVideo(
@@ -17,9 +26,10 @@ export class R2FinalVideoStorage implements FinalVideoStorage {
   ): Promise<StoredFinalVideo> {
     const key = createFinalVideoKey(input);
 
-    await this.r2.putObject({
+    await this.r2.putStreamObject({
       body: input.body,
       bucket: this.r2.bucket,
+      contentLength: input.contentLength,
       contentType: input.contentType,
       key,
     });
@@ -33,7 +43,7 @@ export class R2FinalVideoStorage implements FinalVideoStorage {
 
 function createFinalVideoKey(input: FinalVideoUploadInput) {
   return `demo-videos/${safePathSegment(input.demoRequestId)}/${safePathSegment(
-    input.runId,
+    input.scriptDigest.replace(/^sha256:/, ""),
   )}/${input.fileName}`;
 }
 

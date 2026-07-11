@@ -27,6 +27,7 @@ const lockfiles = new Set([
   "yarn.lock",
 ]);
 const secretFileNames = new Set(["id_ed25519", "id_rsa"]);
+const privateKeyFileExtensions = new Set([".key", ".p12", ".pem", ".pfx"]);
 const safeEnvFileSuffixes = new Set(["example", "sample", "template"]);
 const externalServicePackages = [
   "airtable",
@@ -117,7 +118,12 @@ function isCommittedSecretFile(filename: string): boolean {
 }
 
 function isPrivateKeyPath(filename: string): boolean {
-  return secretFileNames.has(filename);
+  const normalized = filename.toLowerCase();
+  const extensionIndex = normalized.lastIndexOf(".");
+  const extension = extensionIndex < 0 ? "" : normalized.slice(extensionIndex);
+  return (
+    secretFileNames.has(normalized) || privateKeyFileExtensions.has(extension)
+  );
 }
 
 function isPrivateKeyText(text: string | undefined): boolean {

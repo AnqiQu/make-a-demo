@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { assertScriptWritingChangesAllowed } from "./read-only-boundary";
+import {
+  assertScriptWritingChangesAllowed,
+  findScriptWritingContentChanges,
+} from "./read-only-boundary";
 
 describe("assertScriptWritingChangesAllowed", () => {
   it("allows script artifacts under /workspace/.makeademo", () => {
@@ -11,6 +14,34 @@ describe("assertScriptWritingChangesAllowed", () => {
         "/workspace/.makeademo/static-script-contract-validation.json",
       ]),
     ).not.toThrow();
+  });
+
+  it("rejects unapproved files even when they are under /workspace/.makeademo", () => {
+    expect(() =>
+      assertScriptWritingChangesAllowed([
+        "/workspace/.makeademo/script-backdoor.json",
+      ]),
+    ).toThrow(
+      "Script Writing modified disallowed workspace paths: /workspace/.makeademo/script-backdoor.json",
+    );
+  });
+
+  it("detects content changes to a file that was already dirty at the stage boundary", () => {
+    const changedPaths = findScriptWritingContentChanges({
+      after: {
+        "/workspace/README.md": "sha256:after",
+        "/workspace/src/App.tsx": "sha256:unchanged-dirty-file",
+      },
+      before: {
+        "/workspace/README.md": "sha256:before",
+        "/workspace/src/App.tsx": "sha256:unchanged-dirty-file",
+      },
+    });
+
+    expect(changedPaths).toEqual(["/workspace/README.md"]);
+    expect(() => assertScriptWritingChangesAllowed(changedPaths)).toThrow(
+      "Script Writing modified disallowed workspace paths: /workspace/README.md",
+    );
   });
 
   it("rejects app source, package, env, fixture, mock, and config edits", () => {

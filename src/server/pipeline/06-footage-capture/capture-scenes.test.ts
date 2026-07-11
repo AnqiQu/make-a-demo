@@ -1,10 +1,14 @@
+import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import type { AgentHarnessWorkspaceHandle } from "../../agent-harness/daytona/workspace.interface";
 import { captureScenesFromScript } from "./capture-scenes";
 import type { SceneRecorder } from "./scene-recorder.interface";
+
+const execFileAsync = promisify(execFile);
 
 describe("captureScenesFromScript", () => {
   it("accepts a Demo Script with a continuous Playwright flow and declared Scenes without durations", async () => {
@@ -15,7 +19,6 @@ describe("captureScenesFromScript", () => {
     await writeFile(
       scriptPath,
       JSON.stringify({
-        audio: { enabled: true, music: { id: "clean" } },
         demoPlaywrightScript: [
           "import { scene, setup } from './makeademo-capture-sdk';",
           "await setup(async ({ page, baseUrl }) => { await page.goto(baseUrl); });",
@@ -55,6 +58,13 @@ describe("captureScenesFromScript", () => {
           },
         ],
         scriptId: "script-001",
+        setupActions: [
+          {
+            id: "dismiss-welcome",
+            locator: { strategy: "text", value: "Dismiss" },
+            type: "click",
+          },
+        ],
         title: "Demo Script",
         version: 1,
         format: "16:9",
@@ -62,9 +72,13 @@ describe("captureScenesFromScript", () => {
     );
 
     const recordedSceneIds: string[] = [];
+    const recordedSetupActionIds: string[] = [];
     const recorder: SceneRecorder = {
       async recordScenes(input) {
         recordedSceneIds.push(...input.scenes.map((scene) => scene.id));
+        recordedSetupActionIds.push(
+          ...(input.setupActions?.map((action) => action.id) ?? []),
+        );
         return input.scenes.map((scene, sceneIndex) => ({
           durationSeconds: 4,
           markerEndMs: 2_000 + sceneIndex,
@@ -88,7 +102,9 @@ describe("captureScenesFromScript", () => {
     });
 
     expect(recordedSceneIds).toEqual(["scene-001", "scene-002"]);
+    expect(recordedSetupActionIds).toEqual(["dismiss-welcome"]);
     expect(manifest.scriptId).toBe("script-001");
+    expect(manifest.scriptDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(manifest.temporary).toBe(true);
     expect(manifest.scenes).toEqual([
       {
@@ -110,6 +126,12 @@ describe("captureScenesFromScript", () => {
     ]);
     expect(manifest.markerLogPath).toBe(
       join(manifest.runDirectory, "scene-markers.jsonl"),
+    );
+    expect(manifest.stdoutLogPath).toBe(
+      join(manifest.runDirectory, "stdout.log"),
+    );
+    expect(manifest.stderrLogPath).toBe(
+      join(manifest.runDirectory, "stderr.log"),
     );
     expect(manifest.qualityFindings).toEqual([]);
     expect(manifest.rawTakePath).toBeUndefined();
@@ -153,6 +175,102 @@ describe("captureScenesFromScript", () => {
     );
   });
 
+  it("records only playwright-recording Scenes from a mixed Demo Script", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
+    const recordedSceneIds: string[] = [];
+    const recorder: SceneRecorder = {
+      async recordScenes(input) {
+        recordedSceneIds.push(...input.scenes.map((scene) => scene.id));
+        return input.scenes.map((scene) => ({
+          durationSeconds: 2,
+          markerEndMs: 2_000,
+          markerStartMs: 0,
+          sceneId: scene.id,
+          sectionId: input.sectionId,
+          videoPath: join(
+            input.runDirectory,
+            "scene-clips",
+            `${scene.id}.webm`,
+          ),
+        }));
+      },
+    };
+    const browserScene = validDemoScript().scenes[0];
+
+    const manifest = await captureScenesFromScript({
+      baseUrl: "http://localhost:3000",
+      recorder,
+      scriptPackage: {
+        ...validDemoScript(),
+        scenes: [
+          {
+            backgroundColor: "#101828",
+            durationSeconds: 2,
+            id: "intro",
+            text: {
+              color: "#ffffff",
+              content: "Welcome",
+              font: "Inter",
+              position: "center",
+              size: "large",
+            },
+            type: "full-screen-text",
+          },
+          browserScene,
+          {
+            alt: "Architecture diagram",
+            assetId: "architecture.png",
+            durationSeconds: 2,
+            id: "architecture",
+            type: "static-image",
+          },
+        ],
+      },
+      tempRoot: join(workspace, "runs"),
+    });
+
+    expect(recordedSceneIds).toEqual(["scene-001"]);
+    expect(manifest.scenes.map((scene) => scene.sceneId)).toEqual([
+      "scene-001",
+    ]);
+  });
+
+  it("creates an empty Capture Manifest for a synthetic-only Demo Script", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
+
+    const manifest = await captureScenesFromScript({
+      baseUrl: "http://localhost:3000",
+      scriptPackage: {
+        format: "16:9",
+        presentation: {},
+        scenes: [
+          {
+            backgroundColor: "#101828",
+            durationSeconds: 2,
+            id: "intro",
+            text: {
+              color: "#ffffff",
+              content: "Welcome",
+              font: "Inter",
+              position: "center",
+              size: "large",
+            },
+            type: "full-screen-text",
+          },
+        ],
+        scriptId: "script-synthetic",
+        title: "Synthetic Demo",
+        version: 1,
+      },
+      tempRoot: join(workspace, "runs"),
+    });
+
+    expect(manifest.scenes).toEqual([]);
+    expect(manifest.scriptId).toBe("script-synthetic");
+    expect(manifest.markerLogPath).toBeUndefined();
+    expect(manifest.rawTakePath).toBeUndefined();
+  });
+
   it("runs Footage Capture scripts, trimming, and probing inside the prepared workspace", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
     const tempRoot = join(workspace, "runs");
@@ -172,12 +290,26 @@ describe("captureScenesFromScript", () => {
         },
         async downloadSubmittedCodeFiles(files) {
           downloadedSources.push(...files.map((file) => file.sourcePath));
-          await Promise.all(
-            files.map(async (file) => {
-              await mkdir(dirname(file.destinationPath), { recursive: true });
-              await writeFile(file.destinationPath, "downloaded video");
-            }),
+          expect(files).toHaveLength(1);
+          const archiveSource = await mkdtemp(
+            join(tmpdir(), "makeademo-capture-output-"),
           );
+          await mkdir(join(archiveSource, "scene-clips"), { recursive: true });
+          await writeFile(
+            join(archiveSource, "scene-clips", "scene-001.webm"),
+            "downloaded video",
+          );
+          await mkdir(dirname(files[0]?.destinationPath ?? ""), {
+            recursive: true,
+          });
+          await execFileAsync("tar", [
+            "-cf",
+            files[0]?.destinationPath ?? "",
+            "-C",
+            archiveSource,
+            "--",
+            "scene-clips/scene-001.webm",
+          ]);
         },
         async execute(command) {
           executedCommands.push(command);
@@ -239,7 +371,12 @@ describe("captureScenesFromScript", () => {
 
     const manifest = await captureScenesFromScript({
       baseUrl: "https://preview.example.test/",
-      keepTemp: true,
+      captureRuntimeReset: {
+        artifactPath: "/workspace/.makeademo/capture-runtime-reset.json",
+        stage: "capture-runtime-reset",
+        status: "passed",
+      },
+      keepTemp: false,
       preparationWorkspace,
       runId: "capture-sandbox",
       scriptPackage: validDemoScript(),
@@ -255,27 +392,39 @@ describe("captureScenesFromScript", () => {
         videoPath: join(manifest.runDirectory, "scene-clips", "scene-001.webm"),
       }),
     ]);
-    expect(uploadedDestinations).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining(
-          "/workspace/.makeademo/footage-capture-runs/capture-sandbox/work/continuous-take/demo-script.ts",
-        ),
-        expect.stringContaining("makeademo-capture-sdk.js"),
-      ]),
+    expect(manifest.captureRuntimeResetArtifactPath).toBe(
+      "/workspace/.makeademo/capture-runtime-reset.json",
     );
+    expect(uploadedDestinations).toEqual([
+      expect.stringMatching(/capture-inputs\.tgz$/),
+    ]);
     expect(submittedCommands.join("\n")).toContain(
       "/workspace/.makeademo/footage-capture-runs/capture-sandbox",
     );
+    expect(submittedCommands.join("\n")).toMatch(
+      /tar -xzf .*capture-inputs\.tgz.*continuous-take/s,
+    );
     expect(submittedCommands.join("\n")).toContain("ffmpeg");
     expect(submittedCommands.join("\n")).toContain("ffprobe");
+    const trimCommand = submittedCommands.find((command) =>
+      command.startsWith("ffmpeg "),
+    );
+    expect(trimCommand).toMatch(/-i .* -ss /);
+    expect(trimCommand).toContain("-c:v libvpx-vp9");
+    expect(trimCommand).not.toContain("-c copy");
+    const outputArchiveCommand = submittedCommands.find(
+      (command) =>
+        command.includes("capture-outputs.tar") && command.includes("tar -cf"),
+    );
+    expect(outputArchiveCommand).toContain("scene-clips/scene-001.webm");
+    expect(outputArchiveCommand).not.toContain(
+      "raw-scenes/continuous-take.webm",
+    );
     expect(executedCommands.join("\n")).not.toContain("ffmpeg");
     expect(executedCommands.join("\n")).not.toContain("ffprobe");
-    expect(downloadedSources).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("raw-scenes/continuous-take.webm"),
-        expect.stringContaining("scene-clips/scene-001.webm"),
-      ]),
-    );
+    expect(downloadedSources).toEqual([
+      expect.stringMatching(/capture-outputs\.tar$/),
+    ]);
     await expect(
       readFile(
         join(manifest.runDirectory, "scene-clips", "scene-001.webm"),
@@ -284,7 +433,7 @@ describe("captureScenesFromScript", () => {
     ).resolves.toBe("downloaded video");
   });
 
-  it("fails prepared-workspace Footage Capture before video discovery when runtime network is blocked", async () => {
+  it("fails prepared-workspace Footage Capture when the submitted app attempts server-side egress", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
     const tempRoot = join(workspace, "runs");
     const submittedCommands: string[] = [];
@@ -310,9 +459,11 @@ describe("captureScenesFromScript", () => {
           if (command.includes("bun ")) {
             return {
               exitCode: 0,
-              stderr:
-                '[makeademo:network-blocked] {"direction":"outbound","host":"analytics.example.com","phase":"runtime"}',
-              stdout: "",
+              stderr: "",
+              stdout: [
+                '[makeademo:scene] {"elapsedMs":100,"event":"started","sceneId":"scene-001"}',
+                '[makeademo:scene] {"elapsedMs":900,"event":"succeeded","sceneId":"scene-001"}',
+              ].join("\n"),
             };
           }
           if (
@@ -320,12 +471,22 @@ describe("captureScenesFromScript", () => {
             command.includes("ffmpeg") ||
             command.includes("ffprobe")
           ) {
-            throw new Error("post-network-block capture command must not run");
+            throw new Error(
+              `post-network-block capture command must not run: ${command}`,
+            );
           }
           return { exitCode: 0, stderr: "", stdout: "" };
         },
         async getPreviewUrl() {
           return "https://preview.example.test/";
+        },
+        async readSubmittedCodeAppStatus() {
+          return {
+            running: true,
+            stderr:
+              '[makeademo:network-blocked] {"direction":"outbound","host":"api.example.com","phase":"runtime"}',
+            stdout: "",
+          };
         },
         async setOutboundNetworkAccess() {},
         async uploadFiles() {},
@@ -336,6 +497,11 @@ describe("captureScenesFromScript", () => {
     await expect(
       captureScenesFromScript({
         baseUrl: "https://preview.example.test/",
+        captureRuntimeReset: {
+          artifactPath: "/workspace/.makeademo/capture-runtime-reset.json",
+          stage: "capture-runtime-reset",
+          status: "passed",
+        },
         keepTemp: true,
         preparationWorkspace,
         runId: "capture-sandbox",
@@ -343,7 +509,7 @@ describe("captureScenesFromScript", () => {
         tempRoot,
       }),
     ).rejects.toThrow(
-      "Footage Capture blocked runtime network access from the generated Demo Script: analytics.example.com",
+      "Footage Capture blocked server-side runtime network access from the submitted app: api.example.com",
     );
     expect(submittedCommands.join("\n")).toContain("bun ");
     expect(submittedCommands.join("\n")).not.toContain("ffmpeg");
@@ -363,6 +529,31 @@ describe("captureScenesFromScript", () => {
       }),
     ).rejects.toThrow(
       "Footage Capture requires a prepared workspace; local capture is not allowed.",
+    );
+  });
+
+  it("requires a passed fresh-runtime reset proof before recording in a prepared workspace", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
+    const preparationWorkspace: AgentHarnessWorkspaceHandle = {
+      async destroy() {},
+      id: "daytona_workspace",
+      workspace: {
+        async destroy() {},
+        async execute() {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+      },
+    };
+
+    await expect(
+      captureScenesFromScript({
+        baseUrl: "http://localhost:3000",
+        preparationWorkspace,
+        scriptPackage: validDemoScript(),
+        tempRoot: join(workspace, "runs"),
+      }),
+    ).rejects.toThrow(
+      "Footage Capture requires a passed capture-runtime-reset proof",
     );
   });
 
@@ -436,7 +627,7 @@ describe("captureScenesFromScript", () => {
         scriptPath,
         tempRoot,
       }),
-    ).rejects.toThrow("demoPlaywrightScript must be a non-empty string");
+    ).rejects.toThrow("scenes must be a non-empty array");
 
     expect(recordSceneWasCalled).toBe(false);
   });

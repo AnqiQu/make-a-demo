@@ -1,5 +1,17 @@
+import { createHash } from "node:crypto";
 import { join } from "node:path";
+import {
+  BROWSER_ACTION_COMPILER_VERSION,
+  BUN_RUNTIME_VERSION,
+  CAPTURE_SDK_CONTRACT_VERSION,
+  DEMO_SCRIPT_CONTRACT_VERSION,
+  PLAYWRIGHT_RUNTIME_VERSION,
+} from "../../pipeline/06-footage-capture/capture-contract-versions";
 import { createCaptureSdkAgentContract } from "../../pipeline/06-footage-capture/capture-sdk-contract";
+import {
+  type PlaywrightRecordingSceneDescription,
+  parseDemoScript,
+} from "../../pipeline/06-footage-capture/demo-script.schema";
 import {
   createOpenCodeProviderSandboxSecrets,
   ensureOpenCodeProviderDaytonaSecret,
@@ -44,10 +56,23 @@ import {
   createDemoScriptContract,
   validateDemoScriptCandidateContract,
 } from "../script-contract/demo-script-contract";
+import {
+  type ScriptWritingContentSnapshot,
+  findScriptWritingContentChanges,
+} from "../script-generation/read-only-boundary";
 import { runDependencyInstallThroughGate } from "../tools/dependency-install-gate";
 import { planLockfileReconciliation } from "../tools/lockfile-reconciliation";
 import { validateDynamicCapturePath } from "../validation/dynamic-capture-path-validation";
 import { validatePreparedWorkspaceCapturePath } from "../validation/prepared-workspace-capture-path-validator";
+import {
+  createRuntimeNetworkGuardSource,
+  readRuntimeNetworkAttempts,
+  runtimeNetworkGuardPath,
+} from "../validation/runtime-network-guard";
+import {
+  type RepoSourceArchive,
+  assertRepoSourceArchiveIntegrity,
+} from "./repo-snapshot";
 
 export type DefaultHarnessDependenciesOptions = {
   artifactStore: NonNullable<AgentHarnessPipelineDependencies["artifactStore"]>;
@@ -57,6 +82,9 @@ export type DefaultHarnessDependenciesOptions = {
   openCodeRunner?: OpenCodeHarnessRunner;
   outputRoot: string;
   providerID?: string;
+  /** Exact screened revision to materialize; production callers must provide it. */
+  repoSourceArchive?: RepoSourceArchive;
+  staticImageAssets?: Readonly<Record<string, { sourcePath: string }>>;
   workspaceProvider?: AgentHarnessWorkspaceProvider;
 };
 
@@ -106,15 +134,39 @@ export async function createDefaultAgentHarnessDependencies(
   let workspaceHandle: AgentHarnessWorkspaceHandle | undefined;
   let opencodeSessionId: string | undefined;
   let runtimeRepairArtifactAttempt = 0;
-  let scriptWritingBaseline = new Set<string>();
+  let preparationBaseline: ScriptWritingContentSnapshot = {};
+  let scriptWritingBaseline: ScriptWritingContentSnapshot = {};
+  const trustedStaticImageAssetIds = Object.keys(
+    options.staticImageAssets ?? {},
+  ).sort();
   const runOpenCode = (input: OpenCodeHarnessRunInput) =>
     runLoggedOpenCode({ input, logger: options.logger, openCodeRunner });
 
   const dependencies: AgentHarnessPipelineDependencies = {
     artifactStore: options.artifactStore,
+    async capturePreparationWorkspaceDiff({ workspace }) {
+      const after = await readWorkspaceContentSnapshot(workspace, {
+        includeMakeADemoArtifacts: false,
+      });
+      const patch = await readPreparationWorkspacePatch(workspace);
+      return {
+        changedPaths: findScriptWritingContentChanges({
+          after,
+          before: preparationBaseline,
+        }),
+        patch,
+        patchSha256: `sha256:${createHash("sha256").update(patch).digest("hex")}`,
+        sourceCommitSha:
+          options.repoSourceArchive?.commitSha ?? "unknown-screened-revision",
+      };
+    },
     async captureWorkspaceDiff({ workspace }) {
-      const current = await readGitStatus(workspace);
-      return [...current].filter((path) => !scriptWritingBaseline.has(path));
+      return findScriptWritingContentChanges({
+        after: await readWorkspaceContentSnapshot(workspace, {
+          includeMakeADemoArtifacts: false,
+        }),
+        before: scriptWritingBaseline,
+      });
     },
     async createWorkspace() {
       const provider =
@@ -189,7 +241,9 @@ export async function createDefaultAgentHarnessDependencies(
               };
         if (flowSpecResult.ok) {
           try {
-            return readFlowSpec(flowSpecResult.value);
+            const flowSpec = readFlowSpec(flowSpecResult.value);
+            assertFlowSpecGrounded({ actionCatalog, appMap, flowSpec });
+            return flowSpec;
           } catch (error) {
             artifactError = `Invalid FlowSpec: ${readErrorMessage(error)}`;
           }
@@ -221,7 +275,14 @@ export async function createDefaultAgentHarnessDependencies(
       runPlan,
       workspace,
     }) {
-      await cloneRepoInWorkspace({ repoUrl: repoProfile.repoUrl, workspace });
+      await materializeScreenedRepo({
+        repoProfile,
+        sourceArchive: options.repoSourceArchive,
+        workspace,
+      });
+      preparationBaseline = await readWorkspaceContentSnapshot(workspace, {
+        includeMakeADemoArtifacts: false,
+      });
       await writeWorkspaceJson(workspace, artifactPaths.demoBrief, demoBrief);
       await writeWorkspaceJson(
         workspace,
@@ -440,7 +501,7 @@ export async function createDefaultAgentHarnessDependencies(
       repoProfile,
       workspace,
     }) {
-      await writeScriptContracts(workspace);
+      await writeScriptContracts(workspace, trustedStaticImageAssetIds);
       await writeWorkspaceJson(
         workspace,
         artifactPaths.actionCatalog,
@@ -465,6 +526,9 @@ export async function createDefaultAgentHarnessDependencies(
           : "/workspace/.makeademo/static-script-contract-validation.json",
         failureReport,
       );
+      scriptWritingBaseline = await readWorkspaceContentSnapshot(workspace, {
+        includeMakeADemoArtifacts: false,
+      });
       let artifactError: string | undefined;
       for (let attempt = 1; attempt <= 3; attempt += 1) {
         const result = await runOpenCode({
@@ -491,10 +555,12 @@ export async function createDefaultAgentHarnessDependencies(
               };
         if (demoScriptResult.ok) {
           return createScriptCandidate({
+            actionCatalog,
             appMap,
             demoScript: demoScriptResult.value,
             flowSpec,
             preparationManifest,
+            trustedStaticImageAssetIds,
           });
         }
         artifactError = demoScriptResult.error;
@@ -538,11 +604,42 @@ export async function createDefaultAgentHarnessDependencies(
         {
           async runCapturePath() {
             try {
+              const demoScript = parseDemoScript(
+                scriptCandidate.scriptJsonContent,
+              );
+              const browserScenes = demoScript.scenes.filter(
+                (scene): scene is PlaywrightRecordingSceneDescription =>
+                  scene.type === "playwright-recording",
+              );
+              if (browserScenes.length === 0) {
+                return {
+                  blockedNetworkAttempts: [],
+                  browserUrl: preparationManifest.baseUrl,
+                  logs: [
+                    "Capture Path Validation skipped: Demo Script has no browser Scenes.",
+                  ],
+                  status: "succeeded" as const,
+                  warnings: [],
+                };
+              }
+              if (demoScript.demoPlaywrightScript === undefined) {
+                throw new Error(
+                  "Demo Script browser Scenes did not compile to Playwright source.",
+                );
+              }
               const result = await validatePreparedWorkspaceCapturePath({
                 baseUrl: preparationManifest.baseUrl,
-                demoPlaywrightScript: readDemoPlaywrightScript(
-                  scriptCandidate.scriptJsonContent,
-                ),
+                demoPlaywrightScript: demoScript.demoPlaywrightScript,
+                expectedStepIdsByScene: Object.fromEntries([
+                  [
+                    "setup",
+                    demoScript.setupActions?.map((action) => action.id) ?? [],
+                  ],
+                  ...browserScenes.map((scene) => [
+                    scene.id,
+                    scene.actions?.map((action) => action.id) ?? [],
+                  ]),
+                ]),
                 localRunDirectory: join(
                   options.outputRoot,
                   "capture-path-validation",
@@ -557,6 +654,7 @@ export async function createDefaultAgentHarnessDependencies(
                         : "info";
                   await options.logger?.[level](entry);
                 },
+                sceneIds: browserScenes.map((scene) => scene.id),
                 workspace: handle,
               });
               return result;
@@ -584,14 +682,17 @@ export async function createDefaultAgentHarnessDependencies(
       });
     },
     async validateScriptContract({
+      actionCatalog,
       flowSpec,
       preparationManifest,
       scriptCandidate,
     }) {
       return validateDemoScriptCandidateContract({
+        actionCatalog,
         flowSpec,
         preparationManifest,
         scriptCandidate,
+        trustedStaticImageAssetIds,
       });
     },
     async writeScript({
@@ -603,8 +704,7 @@ export async function createDefaultAgentHarnessDependencies(
       repoProfile,
       workspace,
     }) {
-      scriptWritingBaseline = await readGitStatus(workspace);
-      await writeScriptContracts(workspace);
+      await writeScriptContracts(workspace, trustedStaticImageAssetIds);
       await writeWorkspaceJson(
         workspace,
         artifactPaths.actionCatalog,
@@ -623,6 +723,9 @@ export async function createDefaultAgentHarnessDependencies(
         artifactPaths.repoProfile,
         repoProfile,
       );
+      scriptWritingBaseline = await readWorkspaceContentSnapshot(workspace, {
+        includeMakeADemoArtifacts: false,
+      });
       let artifactError = "Demo Script was not produced.";
       for (let attempt = 1; attempt <= 3; attempt += 1) {
         const stage = attempt === 1 ? "script-writing" : "script-repair";
@@ -632,7 +735,10 @@ export async function createDefaultAgentHarnessDependencies(
           model: `${providerID}/${modelID}`,
           prompt:
             attempt === 1
-              ? createScriptWritingPrompt({ demoBrief })
+              ? createScriptWritingPrompt({
+                  demoBrief,
+                  trustedStaticImageAssetIds,
+                })
               : createScriptArtifactRepairPrompt({
                   artifactError,
                   demoBrief,
@@ -653,10 +759,12 @@ export async function createDefaultAgentHarnessDependencies(
               };
         if (demoScriptResult.ok) {
           return createScriptCandidate({
+            actionCatalog,
             appMap,
             demoScript: demoScriptResult.value,
             flowSpec,
             preparationManifest,
+            trustedStaticImageAssetIds,
           });
         }
         artifactError = demoScriptResult.error;
@@ -863,38 +971,61 @@ async function createDaytonaWorkspaceProvider(input: {
   });
 }
 
-async function cloneRepoInWorkspace(input: {
-  repoUrl: string;
+async function materializeScreenedRepo(input: {
+  repoProfile: RepoProfile;
+  sourceArchive: RepoSourceArchive | undefined;
   workspace: AgentHarnessWorkspace;
 }): Promise<void> {
-  await input.workspace.setOutboundNetworkAccess?.(true);
+  if (input.sourceArchive === undefined) {
+    throw new Error(
+      "Repo Preparation requires the immutable archive produced by Repo Security Screen.",
+    );
+  }
+  if (
+    input.repoProfile.commitSha !== undefined &&
+    input.repoProfile.commitSha !== input.sourceArchive.commitSha
+  ) {
+    throw new Error(
+      `Screened repository revision mismatch: expected ${input.repoProfile.commitSha}, received ${input.sourceArchive.commitSha}.`,
+    );
+  }
+  await assertRepoSourceArchiveIntegrity(input.sourceArchive);
+  if (!/^[0-9a-f]{64}$/.test(input.sourceArchive.sha256)) {
+    throw new Error("Screened repository archive SHA-256 is malformed.");
+  }
+  if (input.workspace.uploadFiles === undefined) {
+    throw new Error(
+      "Repo Preparation workspace artifact upload is unavailable.",
+    );
+  }
+  const remoteArchivePath = `${makeADemoDirectory}/screened-repo.tar`;
+  await input.workspace.uploadFiles([
+    {
+      destinationPath: remoteArchivePath,
+      sourcePath: input.sourceArchive.path,
+    },
+  ]);
   const result = await input.workspace.execute(
     `sh -lc ${shellQuote(
       [
-        `rm -rf ${shellQuote(workspaceRepoDirectory)}`,
-        [
-          "{",
-          "makeademo_git_ca=${GIT_SSL_CAINFO:-};",
-          'for makeademo_candidate_ca in "$makeademo_git_ca" "${SSL_CERT_FILE:-}" "${CURL_CA_BUNDLE:-}" /etc/daytona/netleash/ca.crt /etc/ssl/certs/ca-certificates.crt; do',
-          'if test -n "$makeademo_candidate_ca" && test -f "$makeademo_candidate_ca"; then makeademo_git_ca="$makeademo_candidate_ca"; break; fi;',
-          "done;",
-          'if test -n "$makeademo_git_ca" && test -f "$makeademo_git_ca"; then',
-          `git -c http.sslCAInfo="$makeademo_git_ca" clone --depth 1 ${shellQuote(input.repoUrl)} ${shellQuote(
-            workspaceRepoDirectory,
-          )};`,
-          "else",
-          `git clone --depth 1 ${shellQuote(input.repoUrl)} ${shellQuote(
-            workspaceRepoDirectory,
-          )};`,
-          "fi;",
-          "}",
-        ].join(" "),
         `mkdir -p ${shellQuote(makeADemoDirectory)}`,
+        `actual_sha=$(sha256sum ${shellQuote(remoteArchivePath)} | cut -d ' ' -f 1)`,
+        `test "$actual_sha" = ${shellQuote(input.sourceArchive.sha256)}`,
+        `rm -rf ${shellQuote(workspaceRepoDirectory)}`,
+        `mkdir -p ${shellQuote(workspaceRepoDirectory)}`,
+        `tar --no-same-owner --no-same-permissions -xf ${shellQuote(remoteArchivePath)} -C ${shellQuote(workspaceRepoDirectory)}`,
+        `git -C ${shellQuote(workspaceRepoDirectory)} init -q`,
+        `git -C ${shellQuote(workspaceRepoDirectory)} add -f -A`,
+        `git -C ${shellQuote(workspaceRepoDirectory)} -c user.name=MakeADemo -c user.email=makeademo@localhost commit -q --allow-empty -m ${shellQuote(`Screened source ${input.sourceArchive.commitSha}`)}`,
+        `printf '%s\n' node_modules .vite .turbo .npm .pnpm-store .yarn/cache .next/cache .bun .cache >> ${shellQuote(`${workspaceRepoDirectory}/.git/info/exclude`)}`,
+        `rm -f ${shellQuote(remoteArchivePath)}`,
       ].join(" && "),
     )}`,
   );
   if (result.exitCode !== 0) {
-    throw new Error(`Repo clone failed: ${result.stderr || result.stdout}`);
+    throw new Error(
+      `Screened repository archive extraction failed: ${result.stderr || result.stdout}`,
+    );
   }
 }
 
@@ -1012,11 +1143,32 @@ async function validateSubmittedCodeRuntime(input: {
       stage,
     });
   }
+  const networkGuardInstallation = await installRuntimeNetworkGuard(
+    input.workspace,
+  );
+  if (networkGuardInstallation.exitCode !== 0) {
+    return failedPreparationValidation({
+      classification: "harness/internal failure",
+      logsSummary: `Failed to install submitted-code runtime network guard: ${networkGuardInstallation.stderr || networkGuardInstallation.stdout}`,
+      manifest,
+      stage,
+    });
+  }
+  const existingNodeOptions = manifest.envUsed.NODE_OPTIONS?.trim();
+  const guardedRuntimeEnv = {
+    ...manifest.envUsed,
+    MAKEADEMO_ALLOWED_RUNTIME_HOSTS: readRuntimeAllowedHosts(manifest.baseUrl),
+    NODE_OPTIONS: [existingNodeOptions, `--require=${runtimeNetworkGuardPath}`]
+      .filter(
+        (value): value is string => value !== undefined && value.length > 0,
+      )
+      .join(" "),
+  };
   try {
     await input.workspace.startSubmittedCodeApp({
       command: manifest.startCommandUsed,
       cwd: absoluteAppDirectory(manifest.appDir),
-      env: manifest.envUsed,
+      env: guardedRuntimeEnv,
     });
   } catch (error) {
     return failedPreparationValidation({
@@ -1042,10 +1194,7 @@ async function validateSubmittedCodeRuntime(input: {
       >
     | undefined;
   let appStatusError: string | undefined;
-  if (
-    preflightResult.exitCode !== 0 &&
-    input.workspace.readSubmittedCodeAppStatus !== undefined
-  ) {
+  if (input.workspace.readSubmittedCodeAppStatus !== undefined) {
     try {
       appStatus = await input.workspace.readSubmittedCodeAppStatus();
     } catch (error) {
@@ -1055,6 +1204,7 @@ async function validateSubmittedCodeRuntime(input: {
   const appOutput = [appStatus?.stderr, appStatus?.stdout]
     .filter((value): value is string => value !== undefined && value.length > 0)
     .join("\n");
+  const blockedRuntimeNetworkAttempts = readRuntimeNetworkAttempts(appOutput);
   const failedLogs = [
     `Prepared submitted-code runtime did not respond: ${preflightResult.stderr || preflightResult.stdout}`,
     appStatus === undefined
@@ -1073,18 +1223,28 @@ async function validateSubmittedCodeRuntime(input: {
   return validationReport({
     attemptedCommand: `curl ${manifest.baseUrl}`,
     exitCode: preflightResult.exitCode,
+    blockedNetworkAttempts: blockedRuntimeNetworkAttempts,
     failureClassification:
-      preflightResult.exitCode === 0
-        ? "none"
-        : probeExecutionFailed
-          ? "harness/internal failure"
-          : "start failure",
+      blockedRuntimeNetworkAttempts.length > 0
+        ? "external network attempted"
+        : preflightResult.exitCode === 0
+          ? "none"
+          : probeExecutionFailed
+            ? "harness/internal failure"
+            : "start failure",
     logsSummary:
-      preflightResult.exitCode === 0
-        ? "Prepared submitted-code runtime responded successfully."
-        : failedLogs,
+      blockedRuntimeNetworkAttempts.length > 0
+        ? `Prepared submitted-code runtime attempted ${blockedRuntimeNetworkAttempts.length} blocked external network request(s).`
+        : preflightResult.exitCode === 0
+          ? "Prepared submitted-code runtime responded successfully."
+          : failedLogs,
     stage,
-    status: preflightResult.exitCode === 0 ? "passed" : "failed",
+    networkAttempts: blockedRuntimeNetworkAttempts,
+    status:
+      preflightResult.exitCode === 0 &&
+      blockedRuntimeNetworkAttempts.length === 0
+        ? "passed"
+        : "failed",
     stderrExcerpts: preflightResult.stderr
       ? [preflightResult.stderr.slice(-500)]
       : [],
@@ -1093,6 +1253,23 @@ async function validateSubmittedCodeRuntime(input: {
       : [],
     urlChecked: manifest.baseUrl,
   });
+}
+
+async function installRuntimeNetworkGuard(workspace: AgentHarnessWorkspace) {
+  const encodedSource = Buffer.from(createRuntimeNetworkGuardSource()).toString(
+    "base64",
+  );
+  return await executeSubmitted(
+    workspace,
+    `mkdir -p ${shellQuote(makeADemoDirectory)} && printf %s ${shellQuote(encodedSource)} | base64 -d > ${shellQuote(runtimeNetworkGuardPath)}`,
+  );
+}
+
+function readRuntimeAllowedHosts(baseUrl: string): string {
+  const host = new URL(baseUrl).hostname;
+  return [...new Set([host, "localhost", "127.0.0.1", "::1", "0.0.0.0"])].join(
+    ",",
+  );
 }
 
 async function stopSubmittedCodeApp(
@@ -1186,28 +1363,127 @@ function isReadinessProbeExecutionFailure(
   );
 }
 
+function assertFlowSpecGrounded(input: {
+  actionCatalog: ActionCatalog;
+  appMap: AppMap;
+  flowSpec: FlowSpec;
+}): void {
+  if (input.actionCatalog.appMapId !== input.appMap.id) {
+    throw new Error("ActionCatalog must reference the current AppMap");
+  }
+  const observedRoutes = new Set(
+    input.appMap.discoveredRoutes.map((route) => route.path),
+  );
+  for (const route of input.flowSpec.referencedAppMapRoutePaths) {
+    if (!observedRoutes.has(route)) {
+      throw new Error(`FlowSpec references unknown AppMap route ${route}`);
+    }
+  }
+
+  const actionsById = new Map(
+    input.actionCatalog.actions.map((action) => [action.id, action]),
+  );
+  for (const actionId of input.flowSpec.referencedActionIds) {
+    const action = actionsById.get(actionId);
+    if (action === undefined) {
+      throw new Error(
+        `FlowSpec references unknown ActionCatalog action ${actionId}`,
+      );
+    }
+    if (!input.flowSpec.referencedAppMapRoutePaths.includes(action.route)) {
+      throw new Error(
+        `FlowSpec action ${actionId} belongs to unselected route ${action.route}`,
+      );
+    }
+  }
+}
+
 function wait(delayMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
-async function readGitStatus(
+async function readWorkspaceContentSnapshot(
   workspace: AgentHarnessWorkspace,
-): Promise<Set<string>> {
+  options: { includeMakeADemoArtifacts?: boolean } = {},
+): Promise<ScriptWritingContentSnapshot> {
   const result = await workspace.execute(
-    `sh -lc ${shellQuote(
-      `cd ${shellQuote(workspaceRepoDirectory)} && git status --porcelain`,
+    `bash -lc ${shellQuote(
+      [
+        "fingerprint_file() {",
+        '  path="$1"',
+        '  if test -L "$path"; then fingerprint="link:$(readlink -- "$path")"',
+        '  elif test -f "$path"; then fingerprint="file:$(sha256sum -- "$path" | cut -d " " -f 1)"',
+        '  else fingerprint="missing"',
+        "  fi",
+        '  printf "%s\\0%s\\0" "$path" "$fingerprint"',
+        "}",
+        `cd ${shellQuote(workspaceRepoDirectory)}`,
+        'git ls-files -co --exclude-standard -z | while IFS= read -r -d "" relative; do fingerprint_file "$PWD/$relative"; done',
+        ...(options.includeMakeADemoArtifacts === false
+          ? []
+          : [
+              `if test -d ${shellQuote(makeADemoDirectory)}; then find ${shellQuote(makeADemoDirectory)} \\( -type f -o -type l \\) -print0 | sort -z | while IFS= read -r -d "" path; do fingerprint_file "$path"; done; fi`,
+            ]),
+      ].join("\n"),
     )}`,
   );
   if (result.exitCode !== 0) {
-    return new Set();
+    throw new Error(
+      `Failed to fingerprint Script Writing workspace: ${result.stderr || result.stdout}`,
+    );
   }
 
-  return new Set(
-    result.stdout
-      .split("\n")
-      .filter((line) => line.length > 3)
-      .map((line) => `${workspaceRepoDirectory}/${line.slice(3).trim()}`),
+  const values = result.stdout.split("\0");
+  if (values.at(-1) === "") {
+    values.pop();
+  }
+  if (values.length % 2 !== 0) {
+    throw new Error(
+      "Script Writing workspace fingerprint output was malformed.",
+    );
+  }
+  const snapshot: Record<string, string> = {};
+  for (let index = 0; index < values.length; index += 2) {
+    const path = values[index];
+    const fingerprint = values[index + 1];
+    if (
+      path === undefined ||
+      fingerprint === undefined ||
+      (!path.startsWith(`${workspaceRepoDirectory}/`) &&
+        !path.startsWith(`${makeADemoDirectory}/`))
+    ) {
+      throw new Error(
+        "Script Writing workspace fingerprint output was unsafe.",
+      );
+    }
+    snapshot[path] = fingerprint;
+  }
+  return snapshot;
+}
+
+async function readPreparationWorkspacePatch(
+  workspace: AgentHarnessWorkspace,
+): Promise<string> {
+  const result = await workspace.execute(
+    `sh -lc ${shellQuote(
+      [
+        `cd ${shellQuote(workspaceRepoDirectory)}`,
+        "temporary_index=$(mktemp)",
+        'rm -f "$temporary_index"',
+        'cleanup_index() { rm -f "$temporary_index"; }',
+        "trap cleanup_index EXIT",
+        'GIT_INDEX_FILE="$temporary_index" git read-tree HEAD',
+        'GIT_INDEX_FILE="$temporary_index" git add -A',
+        'GIT_INDEX_FILE="$temporary_index" git diff --cached --binary --full-index HEAD',
+      ].join(" && "),
+    )}`,
   );
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `Failed to capture prepared workspace diff: ${result.stderr || result.stdout}`,
+    );
+  }
+  return result.stdout;
 }
 
 async function writeWorkspaceJson(
@@ -1232,6 +1508,7 @@ async function writeWorkspaceJson(
 
 async function writeScriptContracts(
   workspace: AgentHarnessWorkspace,
+  trustedStaticImageAssetIds: readonly string[],
 ): Promise<void> {
   await writeWorkspaceJson(
     workspace,
@@ -1241,7 +1518,7 @@ async function writeScriptContracts(
   await writeWorkspaceJson(
     workspace,
     artifactPaths.demoScriptContract,
-    createDemoScriptContract(),
+    createDemoScriptContract({ trustedStaticImageAssetIds }),
   );
 }
 
@@ -1395,9 +1672,11 @@ async function writeAgentArtifactValidationLog(input: {
 
 function validationReport(input: {
   attemptedCommand?: string;
+  blockedNetworkAttempts?: ValidationReport["blockedNetworkAttempts"];
   exitCode?: number;
   failureClassification?: string;
   logsSummary: string;
+  networkAttempts?: ValidationReport["networkAttempts"];
   stage: string;
   status?: "failed" | "passed";
   stderrExcerpts?: string[];
@@ -1406,14 +1685,14 @@ function validationReport(input: {
 }): ValidationReport {
   return {
     artifactReferences: [],
-    blockedNetworkAttempts: [],
+    blockedNetworkAttempts: input.blockedNetworkAttempts ?? [],
     browserObservations: [],
     consoleErrors: [],
     failureClassification:
       input.failureClassification ??
       (input.status === "failed" ? "harness/internal failure" : "none"),
     logsSummary: input.logsSummary,
-    networkAttempts: [],
+    networkAttempts: input.networkAttempts ?? [],
     pageErrors: [],
     retryCount: 0,
     screenshots: [],
@@ -1431,20 +1710,26 @@ function validationReport(input: {
 }
 
 function createScriptCandidate(input: {
+  actionCatalog: ActionCatalog;
   appMap: AppMap;
   demoScript: unknown;
   flowSpec: FlowSpec;
   preparationManifest: PreparationManifest;
+  trustedStaticImageAssetIds: readonly string[];
 }): ScriptCandidate {
   const candidate = {
     assumptions: [],
+    browserActionCompilerVersion: BROWSER_ACTION_COMPILER_VERSION,
+    bunRuntimeVersion: BUN_RUNTIME_VERSION,
+    captureSdkVersion: CAPTURE_SDK_CONTRACT_VERSION,
     conformanceResult: validationReport({
       logsSummary: "Pending static Demo Script contract validation.",
       stage: "static-script-contract-validation",
       urlChecked: input.preparationManifest.baseUrl,
     }),
-    contractVersion: "2026-07-08",
+    contractVersion: DEMO_SCRIPT_CONTRACT_VERSION,
     outputPath: DEMO_SCRIPT_OUTPUT_PATH,
+    playwrightRuntimeVersion: PLAYWRIGHT_RUNTIME_VERSION,
     scriptJsonContent: input.demoScript,
     sourceAppMapId: input.appMap.id,
     sourceFlowSpecId: input.flowSpec.id,
@@ -1455,9 +1740,11 @@ function createScriptCandidate(input: {
   return {
     ...candidate,
     conformanceResult: validateDemoScriptCandidateContract({
+      actionCatalog: input.actionCatalog,
       flowSpec: input.flowSpec,
       preparationManifest: input.preparationManifest,
       scriptCandidate: candidate,
+      trustedStaticImageAssetIds: input.trustedStaticImageAssetIds,
     }),
   };
 }
@@ -1504,17 +1791,6 @@ function readErrorDiagnostic(error: unknown): {
     details: [summary, ...(error.stack === undefined ? [] : [error.stack])],
     summary,
   };
-}
-
-function readDemoPlaywrightScript(value: unknown): string {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    typeof Reflect.get(value, "demoPlaywrightScript") !== "string"
-  ) {
-    throw new Error("ScriptCandidate is missing demoPlaywrightScript.");
-  }
-  return Reflect.get(value, "demoPlaywrightScript") as string;
 }
 
 function optionalSessionId(sessionId: string | undefined) {
@@ -1758,6 +2034,7 @@ function createFlowPlanningPrompt(artifactError?: string): string {
 
 function createScriptWritingPrompt(input: {
   demoBrief: AgentHarnessPipelineInput["demoBrief"];
+  trustedStaticImageAssetIds: readonly string[];
 }): string {
   return createStagePrompt({
     artifactPaths: [
@@ -1771,13 +2048,23 @@ function createScriptWritingPrompt(input: {
     ],
     instructions: [
       "Write the final capture-ready Demo Script JSON.",
-      "Read /workspace/.makeademo/demo-script-contract.json and /workspace/.makeademo/capture-sdk-contract.json before writing. Follow the canonical Capture SDK example exactly, changing only Scene IDs, actions, and locators grounded in the durable app artifacts.",
+      "Read /workspace/.makeademo/demo-script-contract.json before writing and follow its JSON Schema and mixed-Scene example exactly. The Capture SDK artifact documents the backend-generated runtime only.",
       "Do not edit app source files. Only write /workspace/.makeademo/demo-script.json.",
-      "The JSON must conform to the Capture SDK contract: version, scriptId, title, format 16:9, scenes, demoPlaywrightScript, and presentation.",
-      "Each Scene requires id and expectedVisibleOutcome; description is optional human-readable metadata.",
+      "Do not write demoPlaywrightScript; the backend compiles typed browser actions into versioned Capture SDK and Playwright source.",
+      ...(input.trustedStaticImageAssetIds.length === 0
+        ? [
+            "Use playwright-recording and full-screen-text Scene types. No trusted static-image assets are registered for this run, so static-image is unavailable.",
+          ]
+        : [
+            `Use playwright-recording, full-screen-text, and static-image Scene types. The only trusted static-image asset IDs are: ${input.trustedStaticImageAssetIds.join(", ")}.`,
+          ]),
+      "Every playwright-recording Scene requires typed actions and expectedVisibleOutcome. Each locator action must copy one browser-verified ActionCatalog locator exactly and include its locatorCandidateId; sourceActionId must reference ActionCatalog evidence selected by FlowSpec.",
+      "Use setupActions only for off-camera browser setup such as navigation or login. Every setup action must also include a sourceActionId grounded in ActionCatalog. Keep the product demonstration inside Scene actions.",
+      "A full-screen-text Scene requires durationSeconds, backgroundColor, and text. Use static-image only when a backend-trusted assetId is present in the durable artifacts; never invent paths or asset IDs.",
+      "Scene description is optional human-readable metadata.",
       "presentation.music, presentation.textOverlays, and presentation.transitions are optional. When omitted they default to disabled music, no overlays, and direct back-to-back Scene playback.",
-      "The demoPlaywrightScript must import { setup, scene } from './makeademo-capture-sdk', use the provided baseUrl, avoid external URLs, and include visible assertions.",
-      "When optional textOverlays or transitions are present, their Scene IDs must match the scenes array.",
+      "Each browser Scene must end with assert-visible or assert-text; the compiler emits explicit Playwright visibility proof.",
+      "When optional textOverlays or transitions are present, their Scene IDs must match adjacent declared Scenes.",
       `Target demo length seconds: ${input.demoBrief.demoLengthSeconds ?? 30}`,
       `Demo brief: ${JSON.stringify(input.demoBrief)}`,
     ].join("\n"),
@@ -1801,13 +2088,13 @@ function createScriptArtifactRepairPrompt(input: {
     ],
     instructions: [
       "The previous Script Writing attempt did not produce readable JSON at /workspace/.makeademo/demo-script.json.",
-      "Re-read /workspace/.makeademo/demo-script-contract.json and /workspace/.makeademo/capture-sdk-contract.json, then preserve the canonical callback-based setup and scene syntax.",
+      "Re-read /workspace/.makeademo/demo-script-contract.json and satisfy its strict JSON Schema. Browser source is backend-compiled from typed setupActions and Scene actions.",
       `Backend artifact error: ${input.artifactError}`,
       "Repair only the Demo Script artifact at that exact path. Do not edit app source or preparation files.",
-      "The JSON must include version, scriptId, title, format, scenes, demoPlaywrightScript, and presentation.",
+      "The JSON must include version, scriptId, title, format, scenes, and presentation. Do not add demoPlaywrightScript.",
       "Scene description is optional; do not spend a repair attempt adding one when id and expectedVisibleOutcome are already valid.",
       "presentation.music, presentation.textOverlays, and presentation.transitions may be omitted; the backend supplies safe defaults.",
-      "The demoPlaywrightScript must use the Capture SDK setup and scene helpers and ground locators in AppMap and ActionCatalog evidence.",
+      "Every playwright-recording Scene must use supported typed actions, an explicit visibility assertion action, sourceActionId references grounded in AppMap, ActionCatalog, and FlowSpec evidence, and locatorCandidateId references for every locator action.",
       `Demo brief: ${JSON.stringify(input.demoBrief)}`,
     ].join("\n"),
     stage: "script-repair",
@@ -1833,7 +2120,8 @@ function createScriptRepairPrompt(input: {
     ],
     instructions: [
       "Backend validation rejected the Demo Script. Repair only /workspace/.makeademo/demo-script.json.",
-      "Re-read /workspace/.makeademo/demo-script-contract.json and /workspace/.makeademo/capture-sdk-contract.json. The canonical Capture SDK example is authoritative for setup, scene callbacks, context values, and visible assertions.",
+      "Re-read /workspace/.makeademo/demo-script-contract.json. Its JSON Schema and mixed-Scene example are authoritative; the backend owns Playwright source generation.",
+      "Do not write or repair demoPlaywrightScript. Repair the typed setupActions or playwright-recording Scene actions identified by validation evidence.",
       "Do not edit app source or preparation files. Durable artifacts are the source of truth.",
       `Failure classification: ${input.failureReport.failureClassification ?? "unknown"}`,
       `Failure summary: ${input.failureReport.logsSummary}`,

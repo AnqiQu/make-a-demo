@@ -5,6 +5,37 @@ import { describe, expect, it } from "vitest";
 import { DefaultPlaywrightSceneRecorder } from "./playwright-scene-recorder";
 
 describe("DefaultPlaywrightSceneRecorder", () => {
+  it("allows the full accepted 180-second Demo Script budget plus execution grace", async () => {
+    const runDirectory = await recorderWorkspace();
+    let observedTimeoutMs: number | undefined;
+    const recorder = new DefaultPlaywrightSceneRecorder({
+      sceneScriptRunner: async (_scenePath, timeoutMs) => {
+        observedTimeoutMs = timeoutMs;
+        return {
+          exitCode: 1,
+          stderr: "stopped after observing timeout",
+          stdout: "",
+          timedOut: false,
+        };
+      },
+    });
+
+    try {
+      await expect(
+        recorder.recordScenes({
+          baseUrl: "data:text/html,<main>MakeADemo</main>",
+          demoPlaywrightScript: validDemoScript("scene-one"),
+          runDirectory,
+          scenes: [sceneDescription("scene-one")],
+          sectionId: "demo-script",
+        }),
+      ).rejects.toThrow("continuous-take failed");
+      expect(observedTimeoutMs).toBe(210_000);
+    } finally {
+      await rm(runDirectory, { force: true, recursive: true });
+    }
+  });
+
   it("rejects SDK type errors before recording browser footage", async () => {
     const runDirectory = await mkdtemp(
       join(tmpdir(), "makeademo-recorder-test-"),
@@ -34,6 +65,7 @@ describe("DefaultPlaywrightSceneRecorder", () => {
               expectedVisibleOutcome: "Main content is visible.",
               humanReadableDescription: "Show main content.",
               id: "scene-type-error",
+              type: "playwright-recording",
             },
           ],
           sectionId: "demo-script",
@@ -76,6 +108,7 @@ describe("DefaultPlaywrightSceneRecorder", () => {
               expectedVisibleOutcome: "The scene never completes.",
               humanReadableDescription: "A scene that never completes.",
               id: "scene-hangs",
+              type: "playwright-recording",
             },
           ],
           sectionId: "section-1",
@@ -100,9 +133,9 @@ describe("DefaultPlaywrightSceneRecorder", () => {
       },
       sceneScriptRunner: async () => ({
         exitCode: 0,
-        stderr:
+        stderr: "",
+        stdout:
           '[makeademo:network-blocked] {"direction":"outbound","host":"analytics.example.com","phase":"runtime"}',
-        stdout: "",
         timedOut: false,
       }),
     });
@@ -122,6 +155,7 @@ describe("DefaultPlaywrightSceneRecorder", () => {
               expectedVisibleOutcome: "Main content is visible.",
               humanReadableDescription: "Try analytics.",
               id: "scene-network",
+              type: "playwright-recording",
             },
           ],
           sectionId: "section-network",
@@ -189,11 +223,13 @@ describe("DefaultPlaywrightSceneRecorder", () => {
             expectedVisibleOutcome: "Heading is visible.",
             humanReadableDescription: "Show heading.",
             id: "scene-one",
+            type: "playwright-recording",
           },
           {
             expectedVisibleOutcome: "Button is visible.",
             humanReadableDescription: "Show button.",
             id: "scene-two",
+            type: "playwright-recording",
           },
         ],
         sectionId: "demo-script",
@@ -218,6 +254,15 @@ describe("DefaultPlaywrightSceneRecorder", () => {
       expect(
         await readFile(join(runDirectory, "scene-markers.jsonl"), "utf8"),
       ).toContain('"sceneId":"scene-one"');
+      expect(
+        await readFile(join(runDirectory, "scene-markers.jsonl"), "utf8"),
+      ).toContain('"kind":"action"');
+      expect(
+        await readFile(join(runDirectory, "stdout.log"), "utf8"),
+      ).toContain("[makeademo:scene]");
+      await expect(
+        readFile(join(runDirectory, "stderr.log"), "utf8"),
+      ).resolves.toBeTypeOf("string");
       expect(scenes[0]?.videoPath).toBe(trims[0]?.outputVideoPath);
     } finally {
       await rm(runDirectory, { force: true, recursive: true });
@@ -240,19 +285,16 @@ describe("DefaultPlaywrightSceneRecorder", () => {
       rawVideoFinder: async () => rawVideoPath,
       sceneScriptRunner: async () => ({
         exitCode: 0,
-        stderr: "",
-        stdout: [
-          sceneMarker({
-            elapsedMs: 100,
-            event: "started",
-            sceneId: "scene-one",
-          }),
-          sceneMarker({
-            elapsedMs: 200,
-            event: "succeeded",
-            sceneId: "scene-one",
-          }),
-        ].join("\n"),
+        stderr: sceneMarker({
+          elapsedMs: 200,
+          event: "succeeded",
+          sceneId: "scene-one",
+        }),
+        stdout: sceneMarker({
+          elapsedMs: 100,
+          event: "started",
+          sceneId: "scene-one",
+        }),
         timedOut: false,
       }),
     });
@@ -363,6 +405,81 @@ describe("DefaultPlaywrightSceneRecorder", () => {
       });
 
       expect(trims).toEqual([{ durationMs: 700, startMs: 9_650 }]);
+    } finally {
+      await rm(runDirectory, { force: true, recursive: true });
+    }
+  }, 20_000);
+
+  it("uses one shared boundary when adjacent Scene padding would overlap", async () => {
+    const runDirectory = await recorderWorkspace();
+    const rawVideoPath = join(runDirectory, "raw.webm");
+    const trims: Array<{
+      durationMs: number;
+      sceneId: string;
+      startMs: number;
+    }> = [];
+    await writeFile(rawVideoPath, "raw video");
+    const recorder = new DefaultPlaywrightSceneRecorder({
+      clipTrimmer: async (input) => {
+        trims.push({
+          durationMs: input.durationMs,
+          sceneId: input.sceneId,
+          startMs: input.startMs,
+        });
+        await writeFile(input.outputVideoPath, "trimmed");
+        return { durationSeconds: input.durationMs / 1000 };
+      },
+      postRollMs: 350,
+      preRollMs: 250,
+      rawVideoFinder: async () => rawVideoPath,
+      sceneScriptRunner: async () => ({
+        exitCode: 0,
+        stderr: "",
+        stdout: [
+          sceneMarker({
+            elapsedMs: 1_000,
+            event: "started",
+            sceneId: "scene-one",
+          }),
+          sceneMarker({
+            elapsedMs: 2_000,
+            event: "succeeded",
+            sceneId: "scene-one",
+          }),
+          sceneMarker({
+            elapsedMs: 2_001,
+            event: "started",
+            sceneId: "scene-two",
+          }),
+          sceneMarker({
+            elapsedMs: 3_000,
+            event: "succeeded",
+            sceneId: "scene-two",
+          }),
+        ].join("\n"),
+        timedOut: false,
+      }),
+    });
+
+    try {
+      await recorder.recordScenes({
+        baseUrl: "data:text/html,<main>MakeADemo</main>",
+        demoPlaywrightScript: [
+          validDemoScript("scene-one"),
+          "await scene('scene-two', async ({ page, expect }) => { await expect(page.locator('main')).toBeVisible(); });",
+        ].join("\n"),
+        runDirectory,
+        scenes: [sceneDescription("scene-one"), sceneDescription("scene-two")],
+        sectionId: "demo-script",
+      });
+
+      expect(trims).toEqual([
+        { durationMs: 1_250, sceneId: "scene-one", startMs: 750 },
+        { durationMs: 1_350, sceneId: "scene-two", startMs: 2_000 },
+      ]);
+      expect((trims[0]?.startMs ?? 0) + (trims[0]?.durationMs ?? 0)).toBe(
+        trims[1]?.startMs,
+      );
     } finally {
       await rm(runDirectory, { force: true, recursive: true });
     }
@@ -611,6 +728,7 @@ function sceneDescription(id: string) {
     expectedVisibleOutcome: "Main content is visible.",
     humanReadableDescription: "Show main content.",
     id,
+    type: "playwright-recording" as const,
   };
 }
 

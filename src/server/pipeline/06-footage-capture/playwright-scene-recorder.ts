@@ -1,11 +1,25 @@
 import { spawn } from "node:child_process";
 import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
+import {
+  downloadSubmittedCodeArchive,
+  uploadSubmittedCodeArchive,
+} from "../../agent-harness/daytona/submitted-code-artifact-archive";
 import { executeSubmittedCode } from "../../agent-harness/daytona/submitted-code-execution";
 import type {
   AgentHarnessWorkspace,
   AgentHarnessWorkspaceHandle,
 } from "../../agent-harness/daytona/workspace.interface";
+import { readRuntimeNetworkAttempts } from "../../agent-harness/validation/runtime-network-guard";
+import {
+  CAPTURE_COMMAND_TIMEOUT_MS,
+  CAPTURE_SCRIPT_TIMEOUT_MS,
+} from "./capture-execution-budget";
+import {
+  formatCaptureRuntimeProtocolLog,
+  readCaptureRuntimeProtocol,
+  readSuccessfulCaptureSceneRanges,
+} from "./capture-runtime-protocol";
 import {
   validateDemoScriptCaptureSdkTypes,
   writeGeneratedCaptureSdkHarness,
@@ -50,13 +64,6 @@ type SceneScriptResult = {
 
 type RawVideoFinder = (directory: string) => Promise<string>;
 
-type SceneMarker = {
-  elapsedMs: number;
-  event: "failed" | "started" | "succeeded";
-  message?: string;
-  sceneId: string;
-};
-
 export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
   private readonly headed: boolean;
   private readonly pauseAfterSceneMs: number;
@@ -75,7 +82,7 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
     this.preRollMs = options.preRollMs ?? 250;
     this.rawVideoFinder = options.rawVideoFinder ?? findSingleVideo;
     this.sceneScriptRunner = options.sceneScriptRunner ?? runSceneScript;
-    this.sceneTimeoutMs = options.sceneTimeoutMs ?? 120_000;
+    this.sceneTimeoutMs = options.sceneTimeoutMs ?? CAPTURE_SCRIPT_TIMEOUT_MS;
   }
 
   async recordScenes(input: RecordSceneInput): Promise<RecordedScene[]> {
@@ -106,8 +113,13 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
     );
 
     const result = await this.sceneScriptRunner(scenePath, this.sceneTimeoutMs);
-    await writeFile(markerLogPath, extractMarkerLog(result.stdout));
-    const blockedNetworkAttempts = readBlockedNetworkAttempts(result.stderr);
+    const protocol = readCaptureRuntimeProtocol(result);
+    await Promise.all([
+      writeFile(markerLogPath, formatCaptureRuntimeProtocolLog(protocol)),
+      writeFile(join(input.runDirectory, "stdout.log"), result.stdout),
+      writeFile(join(input.runDirectory, "stderr.log"), result.stderr),
+    ]);
+    const blockedNetworkAttempts = protocol.blockedNetworkAttempts;
     if (blockedNetworkAttempts.length > 0) {
       throw new Error(
         `Footage Capture blocked runtime network access from the generated Demo Script: ${blockedNetworkAttempts.map((attempt) => attempt.host).join(", ")}`,
@@ -122,12 +134,20 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
     await rm(rawTakePath, { force: true });
     await rename(recordedVideoPath, rawTakePath);
 
-    const markers = parseSceneMarkers(result.stdout);
-    const markerRanges = readMarkerRanges(
-      markers,
-      input.scenes.map((scene) => scene.id),
-    );
+    const markerRanges = readSuccessfulCaptureSceneRanges({
+      expectedStepIdsByScene: expectedStepIdsByScene(input),
+      protocol,
+      requireValidationLifecycle: false,
+      requireVisibleAssertions: false,
+      sceneIds: input.scenes.map((scene) => scene.id),
+    });
     const recordedScenes: RecordedScene[] = [];
+    const clipRanges = createNonOverlappingClipRanges({
+      markerRanges,
+      postRollMs: this.postRollMs,
+      preRollMs: this.preRollMs,
+      sceneIds: input.scenes.map((scene) => scene.id),
+    });
 
     for (const scene of input.scenes) {
       const range = markerRanges.get(scene.id);
@@ -135,8 +155,11 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
         throw new Error(`Scene ${scene.id} did not emit complete markers.`);
       }
 
-      const startMs = Math.max(0, range.startedAtMs - this.preRollMs);
-      const endMs = Math.max(startMs + 1, range.endedAtMs + this.postRollMs);
+      const clipRange = clipRanges.get(scene.id);
+      if (clipRange === undefined) {
+        throw new Error(`Scene ${scene.id} did not receive a clip range.`);
+      }
+      const { endMs, startMs } = clipRange;
       const outputVideoPath = join(sceneClipsDirectory, `${scene.id}.webm`);
       const trimResult = await this.clipTrimmer({
         durationMs: endMs - startMs,
@@ -154,6 +177,10 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
         sectionId: input.sectionId,
         videoPath: outputVideoPath,
       });
+    }
+
+    if (input.retainRawTake === false) {
+      await rm(rawTakePath, { force: true });
     }
 
     return recordedScenes;
@@ -181,19 +208,17 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
     this.pauseAfterSceneMs = options.pauseAfterSceneMs ?? 0;
     this.postRollMs = options.postRollMs ?? 350;
     this.preRollMs = options.preRollMs ?? 250;
-    this.sceneTimeoutMs = options.sceneTimeoutMs ?? 120_000;
+    this.sceneTimeoutMs = options.sceneTimeoutMs ?? CAPTURE_SCRIPT_TIMEOUT_MS;
   }
 
   async recordScenes(input: RecordSceneInput): Promise<RecordedScene[]> {
     const workspace = this.options.preparationWorkspace.workspace;
-    const downloadFiles = workspace.downloadSubmittedCodeFiles?.bind(workspace);
-    if (downloadFiles === undefined) {
+    if (workspace.downloadSubmittedCodeFiles === undefined) {
       throw new Error(
         "Prepared workspace Footage Capture requires artifact download support.",
       );
     }
-    const uploadFiles = workspace.uploadSubmittedCodeFiles?.bind(workspace);
-    if (uploadFiles === undefined) {
+    if (workspace.uploadSubmittedCodeFiles === undefined) {
       throw new Error(
         "Prepared workspace Footage Capture requires artifact upload support.",
       );
@@ -216,11 +241,6 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
     const localSceneClipsDirectory = join(input.runDirectory, "scene-clips");
     const localScenePath = join(localSceneWorkspace, "demo-script.ts");
     const markerLogPath = join(input.runDirectory, "scene-markers.jsonl");
-    const localRawTakePath = join(
-      localRawScenesDirectory,
-      "continuous-take.webm",
-    );
-
     await mkdir(localSceneWorkspace, { recursive: true });
     await mkdir(localRawScenesDirectory, { recursive: true });
     await mkdir(localSceneClipsDirectory, { recursive: true });
@@ -243,35 +263,53 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
       workspace,
       `mkdir -p ${shellQuote(remoteSceneWorkspace)} ${shellQuote(remoteVideoScratchDirectory)} ${shellQuote(remoteRawScenesDirectory)} ${shellQuote(remoteSceneClipsDirectory)}`,
     );
-    await uploadFiles([
-      {
-        destinationPath: `${remoteSceneWorkspace}/makeademo-capture-sdk.js`,
-        sourcePath: join(localSceneWorkspace, "makeademo-capture-sdk.js"),
-      },
-      {
-        destinationPath: `${remoteSceneWorkspace}/makeademo-capture-sdk.d.ts`,
-        sourcePath: join(localSceneWorkspace, "makeademo-capture-sdk.d.ts"),
-      },
-      {
-        destinationPath: `${remoteSceneWorkspace}/makeademo-capture-sdk.instructions.md`,
-        sourcePath: join(
-          localSceneWorkspace,
-          "makeademo-capture-sdk.instructions.md",
-        ),
-      },
-      {
-        destinationPath: `${remoteSceneWorkspace}/demo-script.contract.ts`,
-        sourcePath: join(localSceneWorkspace, "demo-script.contract.ts"),
-      },
-      { destinationPath: remoteScenePath, sourcePath: localScenePath },
-    ]);
+    await uploadSubmittedCodeArchive({
+      archiveName: "capture-inputs.tgz",
+      entries: [
+        "makeademo-capture-sdk.js",
+        "makeademo-capture-sdk.d.ts",
+        "makeademo-capture-sdk.instructions.md",
+        "demo-script.contract.ts",
+        "demo-script.ts",
+      ],
+      localDirectory: localSceneWorkspace,
+      remoteDirectory: remoteSceneWorkspace,
+      workspace,
+    });
 
     const result = await executeSubmittedCode(
       workspace,
-      `cd ${shellQuote(remoteSceneWorkspace)} && NODE_PATH="$(npm root -g)" timeout -s TERM ${Math.ceil(this.sceneTimeoutMs / 1000)} bun ${shellQuote(remoteScenePath)}`,
+      `cd ${shellQuote(remoteSceneWorkspace)} && NODE_PATH="$(npm root -g)" timeout -k 10s ${Math.ceil(this.sceneTimeoutMs / 1000)}s bun ${shellQuote(remoteScenePath)}`,
+      {
+        timeoutMs:
+          this.sceneTimeoutMs === CAPTURE_SCRIPT_TIMEOUT_MS
+            ? CAPTURE_COMMAND_TIMEOUT_MS
+            : this.sceneTimeoutMs + 10_000,
+      },
     );
-    await writeFile(markerLogPath, extractMarkerLog(result.stdout));
-    const blockedNetworkAttempts = readBlockedNetworkAttempts(result.stderr);
+    const protocol = readCaptureRuntimeProtocol(result);
+    await Promise.all([
+      writeFile(markerLogPath, formatCaptureRuntimeProtocolLog(protocol)),
+      writeFile(join(input.runDirectory, "stdout.log"), result.stdout),
+      writeFile(join(input.runDirectory, "stderr.log"), result.stderr),
+    ]);
+    if (workspace.readSubmittedCodeAppStatus !== undefined) {
+      const appStatus = await workspace.readSubmittedCodeAppStatus();
+      const appOutput = [appStatus.stderr, appStatus.stdout]
+        .filter((value) => value.length > 0)
+        .join("\n");
+      await writeFile(
+        join(input.runDirectory, "submitted-app-runtime.log"),
+        appOutput,
+      );
+      const serverNetworkAttempts = readRuntimeNetworkAttempts(appOutput);
+      if (serverNetworkAttempts.length > 0) {
+        throw new Error(
+          `Footage Capture blocked server-side runtime network access from the submitted app: ${serverNetworkAttempts.map((attempt) => attempt.host).join(", ")}`,
+        );
+      }
+    }
+    const blockedNetworkAttempts = protocol.blockedNetworkAttempts;
     if (blockedNetworkAttempts.length > 0) {
       throw new Error(
         `Footage Capture blocked runtime network access from the generated Demo Script: ${blockedNetworkAttempts.map((attempt) => attempt.host).join(", ")}`,
@@ -295,15 +333,22 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
       `rm -f ${shellQuote(remoteRawTakePath)} && mv ${shellQuote(remoteRecordedVideoPath)} ${shellQuote(remoteRawTakePath)}`,
     );
 
-    const markers = parseSceneMarkers(result.stdout);
-    const markerRanges = readMarkerRanges(
-      markers,
-      input.scenes.map((scene) => scene.id),
-    );
+    const markerRanges = readSuccessfulCaptureSceneRanges({
+      expectedStepIdsByScene: expectedStepIdsByScene(input),
+      protocol,
+      requireValidationLifecycle: false,
+      requireVisibleAssertions: false,
+      sceneIds: input.scenes.map((scene) => scene.id),
+    });
     const recordedScenes: RecordedScene[] = [];
-    const downloads = [
-      { destinationPath: localRawTakePath, sourcePath: remoteRawTakePath },
-    ];
+    const downloadEntries =
+      input.retainRawTake === false ? [] : ["raw-scenes/continuous-take.webm"];
+    const clipRanges = createNonOverlappingClipRanges({
+      markerRanges,
+      postRollMs: this.postRollMs,
+      preRollMs: this.preRollMs,
+      sceneIds: input.scenes.map((scene) => scene.id),
+    });
 
     for (const scene of input.scenes) {
       const range = markerRanges.get(scene.id);
@@ -311,8 +356,11 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
         throw new Error(`Scene ${scene.id} did not emit complete markers.`);
       }
 
-      const startMs = Math.max(0, range.startedAtMs - this.preRollMs);
-      const endMs = Math.max(startMs + 1, range.endedAtMs + this.postRollMs);
+      const clipRange = clipRanges.get(scene.id);
+      if (clipRange === undefined) {
+        throw new Error(`Scene ${scene.id} did not receive a clip range.`);
+      }
+      const { endMs, startMs } = clipRange;
       const remoteOutputVideoPath = `${remoteSceneClipsDirectory}/${scene.id}.webm`;
       const localOutputVideoPath = join(
         localSceneClipsDirectory,
@@ -324,14 +372,23 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
         [
           "ffmpeg",
           "-y",
-          "-ss",
-          shellQuote((startMs / 1000).toFixed(3)),
           "-i",
           shellQuote(remoteRawTakePath),
+          "-ss",
+          shellQuote((startMs / 1000).toFixed(3)),
           "-t",
           shellQuote(durationSeconds.toFixed(3)),
-          "-c",
-          "copy",
+          "-an",
+          "-c:v",
+          "libvpx-vp9",
+          "-deadline",
+          "good",
+          "-cpu-used",
+          "4",
+          "-crf",
+          "30",
+          "-b:v",
+          "0",
           shellQuote(remoteOutputVideoPath),
         ].join(" "),
       );
@@ -345,10 +402,7 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
         workspace,
       });
 
-      downloads.push({
-        destinationPath: localOutputVideoPath,
-        sourcePath: remoteOutputVideoPath,
-      });
+      downloadEntries.push(`scene-clips/${scene.id}.webm`);
       recordedScenes.push({
         durationSeconds: probedDurationSeconds,
         markerEndMs: range.endedAtMs,
@@ -359,10 +413,77 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
       });
     }
 
-    await downloadFiles(downloads);
+    await downloadSubmittedCodeArchive({
+      archiveName: "capture-outputs.tar",
+      compression: "none",
+      entries: downloadEntries,
+      localDirectory: input.runDirectory,
+      remoteDirectory: remoteRunDirectory,
+      workspace,
+    });
 
     return recordedScenes;
   }
+}
+
+function createNonOverlappingClipRanges(input: {
+  markerRanges: ReadonlyMap<string, { endedAtMs: number; startedAtMs: number }>;
+  postRollMs: number;
+  preRollMs: number;
+  sceneIds: readonly string[];
+}) {
+  const ranges = new Map<string, { endMs: number; startMs: number }>();
+
+  for (const sceneId of input.sceneIds) {
+    const markerRange = input.markerRanges.get(sceneId);
+    if (markerRange === undefined) {
+      continue;
+    }
+    ranges.set(sceneId, {
+      endMs: markerRange.endedAtMs + input.postRollMs,
+      startMs: Math.max(0, markerRange.startedAtMs - input.preRollMs),
+    });
+  }
+
+  for (
+    let sceneIndex = 1;
+    sceneIndex < input.sceneIds.length;
+    sceneIndex += 1
+  ) {
+    const previousSceneId = input.sceneIds[sceneIndex - 1] as string;
+    const sceneId = input.sceneIds[sceneIndex] as string;
+    const previousClip = ranges.get(previousSceneId);
+    const clip = ranges.get(sceneId);
+    if (previousClip === undefined || clip === undefined) {
+      continue;
+    }
+    if (previousClip.endMs <= clip.startMs) {
+      continue;
+    }
+
+    const previousMarker = input.markerRanges.get(previousSceneId);
+    const marker = input.markerRanges.get(sceneId);
+    if (previousMarker === undefined || marker === undefined) {
+      continue;
+    }
+    const sharedBoundaryMs = Math.floor(
+      (previousMarker.endedAtMs + marker.startedAtMs) / 2,
+    );
+    previousClip.endMs = Math.max(previousClip.startMs + 1, sharedBoundaryMs);
+    clip.startMs = Math.min(clip.endMs - 1, previousClip.endMs);
+  }
+
+  return ranges;
+}
+
+function expectedStepIdsByScene(input: RecordSceneInput) {
+  return Object.fromEntries([
+    ["setup", input.setupActions?.map((action) => action.id) ?? []],
+    ...input.scenes.map((scene) => [
+      scene.id,
+      scene.actions?.map((action) => action.id) ?? [],
+    ]),
+  ]);
 }
 
 async function trimSceneClipWithFfmpeg(input: {
@@ -375,14 +496,23 @@ async function trimSceneClipWithFfmpeg(input: {
   const durationSeconds = input.durationMs / 1000;
   const result = await runCommand("ffmpeg", [
     "-y",
-    "-ss",
-    (input.startMs / 1000).toFixed(3),
     "-i",
     input.rawTakePath,
+    "-ss",
+    (input.startMs / 1000).toFixed(3),
     "-t",
     durationSeconds.toFixed(3),
-    "-c",
-    "copy",
+    "-an",
+    "-c:v",
+    "libvpx-vp9",
+    "-deadline",
+    "good",
+    "-cpu-used",
+    "4",
+    "-crf",
+    "30",
+    "-b:v",
+    "0",
     input.outputVideoPath,
   ]);
 
@@ -526,133 +656,6 @@ async function runCommand(command: string, args: string[]) {
       resolve({ exitCode, stderr, stdout });
     });
   });
-}
-
-function extractMarkerLog(stdout: string) {
-  // scene-markers.jsonl is a derived capture protocol artifact, not a server audit log.
-  return parseSceneMarkers(stdout)
-    .map((marker) => `${JSON.stringify(marker)}\n`)
-    .join("");
-}
-
-function parseSceneMarkers(stdout: string): SceneMarker[] {
-  return stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith("[makeademo:scene] "))
-    .map((line) => readSceneMarker(line))
-    .map((value): SceneMarker => {
-      const marker = value as Partial<SceneMarker>;
-      if (
-        typeof value !== "object" ||
-        value === null ||
-        typeof marker.sceneId !== "string" ||
-        typeof marker.elapsedMs !== "number" ||
-        !Number.isFinite(marker.elapsedMs) ||
-        (marker.event !== "started" &&
-          marker.event !== "succeeded" &&
-          marker.event !== "failed")
-      ) {
-        throw new Error(
-          "Malformed MakeADemo scene marker emitted by capture script.",
-        );
-      }
-
-      return {
-        elapsedMs: marker.elapsedMs,
-        event: marker.event,
-        ...(marker.message === undefined ? {} : { message: marker.message }),
-        sceneId: marker.sceneId,
-      };
-    });
-}
-
-function readSceneMarker(line: string): unknown {
-  try {
-    return JSON.parse(line.slice("[makeademo:scene] ".length));
-  } catch {
-    throw new Error(
-      `Malformed MakeADemo scene marker emitted by capture script: ${line}`,
-    );
-  }
-}
-
-function readMarkerRanges(markers: SceneMarker[], sceneIds: string[]) {
-  const ranges = new Map<string, { endedAtMs: number; startedAtMs: number }>();
-  const openScenes = new Map<string, number>();
-
-  for (const marker of markers) {
-    if (!sceneIds.includes(marker.sceneId)) {
-      throw new Error(
-        `Capture script emitted undeclared Scene marker ${marker.sceneId}.`,
-      );
-    }
-
-    if (marker.event === "started") {
-      if (openScenes.size > 0) {
-        throw new Error("Capture script emitted nested Scene markers.");
-      }
-      if (ranges.has(marker.sceneId) || openScenes.has(marker.sceneId)) {
-        throw new Error(
-          `Capture script emitted duplicate markers for Scene ${marker.sceneId}.`,
-        );
-      }
-      openScenes.set(marker.sceneId, marker.elapsedMs);
-      continue;
-    }
-
-    const startedAtMs = openScenes.get(marker.sceneId);
-    if (startedAtMs === undefined) {
-      throw new Error(
-        `Capture script emitted ${marker.event} marker before start for Scene ${marker.sceneId}.`,
-      );
-    }
-    openScenes.delete(marker.sceneId);
-
-    if (marker.event === "failed") {
-      throw new Error(
-        `Scene ${marker.sceneId} failed during Footage Capture.${marker.message ? ` ${marker.message}` : ""}`,
-      );
-    }
-
-    ranges.set(marker.sceneId, {
-      endedAtMs: marker.elapsedMs,
-      startedAtMs,
-    });
-  }
-
-  if (openScenes.size > 0) {
-    throw new Error(
-      "Capture script emitted Scene start marker without an end marker.",
-    );
-  }
-
-  for (const sceneId of sceneIds) {
-    if (!ranges.has(sceneId)) {
-      throw new Error(`Scene ${sceneId} did not emit complete markers.`);
-    }
-  }
-
-  return ranges;
-}
-
-function readBlockedNetworkAttempts(stderr: string) {
-  return stderr
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith("[makeademo:network-blocked] "))
-    .map((line) =>
-      JSON.parse(line.slice("[makeademo:network-blocked] ".length)),
-    )
-    .filter(
-      (value) =>
-        typeof value === "object" &&
-        value !== null &&
-        value.direction === "outbound" &&
-        value.phase === "runtime" &&
-        typeof value.host === "string",
-    )
-    .map((value) => ({ host: value.host as string }));
 }
 
 function killChildProcessGroup(pid: number | undefined) {

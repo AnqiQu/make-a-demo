@@ -59,6 +59,7 @@ describe("GitHub App integration", () => {
     ).toBe(
       "http://localhost:5173/github/callback?installation_id=123&setup_action=oauth&state=draft-123",
     );
+    expect(integration.createInstallationToken).toEqual(expect.any(Function));
   });
 
   it("lists repositories available to an installation", async () => {

@@ -16,7 +16,18 @@ const placeholderPatterns = [
 ];
 
 export function assertCaptureReadyScriptQuality(demoScript: DemoScript): void {
+  const browserScenes = demoScript.scenes.filter(
+    (scene) => scene.type === "playwright-recording",
+  );
+  if (browserScenes.length === 0) {
+    return;
+  }
   const script = demoScript.demoPlaywrightScript;
+  if (script === undefined) {
+    throw new Error(
+      "Demo Script with browser Scenes must include compiled Playwright source",
+    );
+  }
   const hasMeaningfulInteraction = meaningfulInteractionPatterns.some(
     (pattern) => pattern.test(script),
   );
@@ -33,7 +44,7 @@ export function assertCaptureReadyScriptQuality(demoScript: DemoScript): void {
     throw new Error("demoPlaywrightScript contains placeholder actions");
   }
 
-  for (const scene of demoScript.scenes) {
+  for (const scene of browserScenes) {
     const sceneBody = readSceneCallbackSource(script, scene.id);
     if (sceneBody !== undefined && isPlaceholderSceneBody(sceneBody)) {
       throw new Error(`Scene ${scene.id} contains placeholder actions`);

@@ -43,6 +43,25 @@ describe("screenRepoSecurity", () => {
     );
   });
 
+  it("rejects common private-key file extensions", () => {
+    const result = screenRepoSecurity({
+      files: [
+        { path: "package.json", text: JSON.stringify({}) },
+        { path: "certificates/signing.pem" },
+        { path: "config/service-account.KEY" },
+      ],
+      repoStats: { fileCount: 3, sizeBytes: 1_000 },
+    });
+
+    expect(result.status).toBe("rejected");
+    expect(result.rejections).toContain(
+      "repo contains committed secret file certificates/signing.pem",
+    );
+    expect(result.rejections).toContain(
+      "repo contains committed secret file config/service-account.KEY",
+    );
+  });
+
   it("warns for large repos and non-fatal preparation risks", () => {
     const result = screenRepoSecurity({
       files: [

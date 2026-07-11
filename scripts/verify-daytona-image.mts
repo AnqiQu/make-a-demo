@@ -3,6 +3,7 @@ import {
   ensureOpenCodeProviderDaytonaSecret,
 } from "../src/server/shared/integrations/agents/opencode-provider-secrets";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../src/server/shared/integrations/daytona/daytona-sdk-preparation-workspace-provider";
+import { verifyDaytonaSubmittedCodeRuntime } from "./verify-daytona-submitted-code-runtime";
 
 const snapshot = process.env.MAKEADEMO_DAYTONA_SNAPSHOT;
 const submittedCodeSnapshot =
@@ -62,32 +63,38 @@ try {
     await handle.workspace.setSubmittedCodeNetworkAccess(true);
     submittedCodeNetworkOpened = true;
   }
-  const runtime = await handle.workspace.executeSubmittedCode?.(
-    [
-      "node --version",
-      "bun --version",
-      "bunx tsc --version",
-      "git --version",
-      "git ls-remote https://github.com/octocat/Hello-World.git HEAD",
+  try {
+    const runtime = await handle.workspace.executeSubmittedCode?.(
       [
-        'NODE_PATH="$(npm root -g)"',
-        "node -e \"require('@playwright/test'); console.log('playwright ok')\"",
-      ].join(" "),
-    ].join(" && "),
-    {
-      onStderr: (chunk) => process.stderr.write(chunk),
-      onStdout: (chunk) => process.stdout.write(chunk),
-    },
-  );
-  if (runtime === undefined) {
-    throw new Error(
-      "Prepared Daytona workspace lacks submitted-code execution.",
+        "node --version",
+        "bunx tsc --version",
+        "git --version",
+        "git ls-remote https://github.com/octocat/Hello-World.git HEAD",
+      ].join(" && "),
+      {
+        onStderr: (chunk) => process.stderr.write(chunk),
+        onStdout: (chunk) => process.stdout.write(chunk),
+      },
     );
+    if (runtime === undefined) {
+      throw new Error(
+        "Prepared Daytona workspace lacks submitted-code execution.",
+      );
+    }
+    assertCommandSucceeded("submitted-code runtime", runtime);
+  } finally {
+    if (
+      submittedCodeNetworkOpened &&
+      handle.workspace.setSubmittedCodeNetworkAccess !== undefined
+    ) {
+      await handle.workspace.setSubmittedCodeNetworkAccess(false);
+      submittedCodeNetworkOpened = false;
+    }
   }
-  assertCommandSucceeded("submitted-code runtime", runtime);
-  if (!runtime.stdout.includes("playwright ok")) {
-    throw new Error("Submitted-code runtime did not load @playwright/test.");
-  }
+  console.log(
+    "Verifying exact submitted-code runtime and Capture SDK under network lockdown...",
+  );
+  await verifyDaytonaSubmittedCodeRuntime(handle.workspace);
 
   if (providerSecrets === undefined) {
     console.log(
