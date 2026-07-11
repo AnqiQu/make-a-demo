@@ -258,6 +258,7 @@ describe("captureScenesFromScript", () => {
     expect(submittedCommands.join("\n")).toContain(
       "/workspace/.makeademo/footage-capture-runs/capture-sandbox",
     );
+    expect(submittedCommands.join("\n")).toContain("npm root -g");
     expect(submittedCommands.join("\n")).toContain("ffmpeg");
     expect(submittedCommands.join("\n")).toContain("ffprobe");
     expect(executedCommands.join("\n")).not.toContain("ffmpeg");

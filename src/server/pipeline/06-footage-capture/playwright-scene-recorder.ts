@@ -263,7 +263,7 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
 
     const result = await executeSubmittedCode(
       workspace,
-      `cd ${shellQuote(remoteSceneWorkspace)} && timeout -s TERM ${Math.ceil(this.sceneTimeoutMs / 1000)} bun ${shellQuote(remoteScenePath)}`,
+      `cd ${shellQuote(remoteSceneWorkspace)} && ${createExposeGlobalPlaywrightCommand()} && timeout -s TERM ${Math.ceil(this.sceneTimeoutMs / 1000)} bun ${shellQuote(remoteScenePath)}`,
     );
     await writeFile(markerLogPath, extractMarkerLog(result.stdout));
     const blockedNetworkAttempts = readBlockedNetworkAttempts(result.stderr);
@@ -720,6 +720,16 @@ async function findSingleRemoteVideo(input: {
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function createExposeGlobalPlaywrightCommand() {
+  return [
+    "global_node_modules=$(npm root -g 2>/dev/null || true)",
+    'if [ -n "$global_node_modules" ]; then mkdir -p node_modules; fi',
+    'if [ -e "$global_node_modules/@playwright" ]; then ln -sfn "$global_node_modules/@playwright" node_modules/@playwright; fi',
+    'if [ -e "$global_node_modules/playwright" ]; then ln -sfn "$global_node_modules/playwright" node_modules/playwright; fi',
+    'if [ -e "$global_node_modules/playwright-core" ]; then ln -sfn "$global_node_modules/playwright-core" node_modules/playwright-core; fi',
+  ].join("; ");
 }
 
 async function findVideoFiles(directory: string): Promise<string[]> {
