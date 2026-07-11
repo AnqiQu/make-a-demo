@@ -20,6 +20,9 @@ describe("createMakeADemoOpenCodeConfigFiles", () => {
     expect(config.provider.openai.models["gpt-5.6-luna"].options).toEqual({
       reasoningEffort: "max",
     });
+    expect(config.provider.openai.models["gpt-5.6-sol"].options).toEqual({
+      reasoningEffort: "high",
+    });
     expect(config.agent).toBeUndefined();
     expect(config.permission).toEqual({
       "*": "allow",

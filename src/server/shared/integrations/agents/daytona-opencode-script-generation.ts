@@ -26,6 +26,7 @@ import {
   createPipelineEventLogger,
 } from "../../logging/pipeline-event-logger";
 import { writeDaytonaOpenCodeActivityLog } from "./daytona-opencode-activity-log";
+import { draftCompositeReviewOpenCodeModel } from "./opencode-model-defaults";
 
 const makeADemoArtifactDirectory = "/workspace/.makeademo";
 const makeADemoOpenCodeConfigDirectory = "/tmp/makeademo/opencode";
@@ -103,9 +104,13 @@ class DaytonaOpenCodeSessionRunner {
       | "script-generation";
     workspace: PreparationWorkspace;
   }) {
+    const model =
+      input.stage === "draft-composite-review"
+        ? draftCompositeReviewOpenCodeModel
+        : { modelID: this.modelID, providerID: this.providerID };
     const result = await input.workspace.execute(
       createOpenCodeRunCommand({
-        model: `${this.providerID}/${this.modelID}`,
+        model: `${model.providerID}/${model.modelID}`,
         prompt: input.prompt,
         sessionID: input.sessionID,
       }),

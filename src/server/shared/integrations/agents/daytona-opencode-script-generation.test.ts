@@ -1078,6 +1078,8 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
         event.execute.includes("opencode run"),
     )?.execute;
     expect(openCodeCommand).toContain("--session 'session_prepare_123'");
+    expect(openCodeCommand).toContain("--model 'openai/gpt-5.6-sol'");
+    expect(openCodeCommand).not.toContain("--variant");
     expect(openCodeCommand).toContain("Draft Composite Review");
     expect(openCodeCommand).toContain("/workspace/.makeademo/draft-review");
     expect(openCodeCommand).toContain("ffmpeg/ffprobe");

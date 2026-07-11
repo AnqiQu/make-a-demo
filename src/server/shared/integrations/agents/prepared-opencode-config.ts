@@ -1,7 +1,10 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { defaultOpenCodeModel } from "./opencode-model-defaults";
+import {
+  defaultOpenCodeModel,
+  draftCompositeReviewOpenCodeModel,
+} from "./opencode-model-defaults";
 
 export type PreparedOpenCodeFile = {
   content: string;
@@ -28,6 +31,12 @@ export function createMakeADemoOpenCodeConfigFiles(): PreparedOpenCodeFile[] {
                 [defaultOpenCodeModel.modelID]: {
                   options: {
                     reasoningEffort: defaultOpenCodeModel.reasoningEffort,
+                  },
+                },
+                [draftCompositeReviewOpenCodeModel.modelID]: {
+                  options: {
+                    reasoningEffort:
+                      draftCompositeReviewOpenCodeModel.reasoningEffort,
                   },
                 },
               },
