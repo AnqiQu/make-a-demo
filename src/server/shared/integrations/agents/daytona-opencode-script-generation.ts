@@ -34,6 +34,7 @@ const demoScriptPath = `${makeADemoArtifactDirectory}/demo-script.json`;
 const draftCompositeReviewPath = `${makeADemoArtifactDirectory}/draft-composite-review.json`;
 const draftReviewDirectory = `${makeADemoArtifactDirectory}/draft-review`;
 const postRepairArtifactReadTimeoutMs = 60_000;
+const postRepairArtifactReadRetryDelaysMs = [250, 500] as const;
 
 export type DaytonaOpenCodeScriptGenerationOptions = {
   /**
@@ -508,6 +509,7 @@ async function readPostRepairArtifact<
   timeoutMs: number;
 }): Promise<T> {
   const start = Date.now();
+  const timeoutMessage = `Post-repair artifact read ${input.artifactName} timed out after ${input.timeoutMs}ms.`;
   await writeRepairSandboxLog(input.logger, input.input, {
     artifact: input.artifactName,
     attempt: input.input.attempt,
@@ -517,34 +519,87 @@ async function readPostRepairArtifact<
     timeoutMs: input.timeoutMs,
   });
 
-  try {
-    const artifact = await withTimeout(
-      input.read(),
-      input.timeoutMs,
-      `Post-repair artifact read ${input.artifactName} timed out after ${input.timeoutMs}ms.`,
-    );
-    const durationMs = Date.now() - start;
-    if (artifact.status === "failed") {
-      const reason = `Post-repair artifact read ${input.artifactName} failed: ${artifact.reason ?? "unknown artifact read failure"}`;
+  const deadline = start + input.timeoutMs;
+  let failure: unknown;
+  for (
+    let readAttempt = 1;
+    readAttempt <= postRepairArtifactReadRetryDelaysMs.length + 1;
+    readAttempt += 1
+  ) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      failure = new Error(timeoutMessage);
+      break;
+    }
+
+    try {
+      const artifact = await withTimeout(
+        input.read(),
+        remainingMs,
+        timeoutMessage,
+      );
+      const durationMs = Date.now() - start;
+      if (artifact.status === "failed") {
+        const reason = `Post-repair artifact read ${input.artifactName} failed: ${artifact.reason ?? "unknown artifact read failure"}`;
+        await writeRepairSandboxLog(input.logger, input.input, {
+          artifact: input.artifactName,
+          attempt: input.input.attempt,
+          durationMs,
+          event: "capture-path-repair.artifact-read.failed",
+          operation: `post-repair artifact read ${input.artifactName}`,
+          reason,
+        });
+        return { ...artifact, reason };
+      }
+
       await writeRepairSandboxLog(input.logger, input.input, {
         artifact: input.artifactName,
         attempt: input.input.attempt,
         durationMs,
-        event: "capture-path-repair.artifact-read.failed",
+        event: "capture-path-repair.artifact-read.succeeded",
         operation: `post-repair artifact read ${input.artifactName}`,
-        reason,
       });
-      return { ...artifact, reason };
-    }
+      return artifact;
+    } catch (error) {
+      if (
+        readAttempt <= postRepairArtifactReadRetryDelaysMs.length &&
+        isTransientDaytonaSocketClosedError(error)
+      ) {
+        const delayMs =
+          postRepairArtifactReadRetryDelaysMs[readAttempt - 1] ?? 0;
+        const remainingAfterReadMs = deadline - Date.now();
+        if (remainingAfterReadMs > 0) {
+          await writeRepairSandboxLog(input.logger, input.input, {
+            artifact: input.artifactName,
+            attempt: readAttempt,
+            delayMs,
+            durationMs: Date.now() - start,
+            event: "capture-path-repair.artifact-read.retrying",
+            nextAttempt: readAttempt + 1,
+            operation: `post-repair artifact read ${input.artifactName}`,
+            reason: `Transient Daytona socket closure while reading ${input.artifactName}: ${readErrorMessage(error)}`,
+          });
+          try {
+            await withTimeout(
+              wait(delayMs),
+              remainingAfterReadMs,
+              timeoutMessage,
+            );
+            continue;
+          } catch (retryDelayError) {
+            failure = retryDelayError;
+            break;
+          }
+        }
+      }
 
-    await writeRepairSandboxLog(input.logger, input.input, {
-      artifact: input.artifactName,
-      attempt: input.input.attempt,
-      durationMs,
-      event: "capture-path-repair.artifact-read.succeeded",
-      operation: `post-repair artifact read ${input.artifactName}`,
-    });
-    return artifact;
+      failure = error;
+      break;
+    }
+  }
+
+  try {
+    throw failure ?? new Error(timeoutMessage);
   } catch (error) {
     const durationMs = Date.now() - start;
     const errorMessage = readErrorMessage(error);
@@ -564,6 +619,23 @@ async function readPostRepairArtifact<
     });
     return { reason, status: "failed" } as T;
   }
+}
+
+function isTransientDaytonaSocketClosedError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("socket connection was closed") ||
+    message.includes("socket was closed") ||
+    message.includes("socket closed")
+  );
+}
+
+function wait(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 function withTimeout<T>(

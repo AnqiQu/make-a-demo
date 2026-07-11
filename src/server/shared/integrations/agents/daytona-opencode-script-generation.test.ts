@@ -565,6 +565,59 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
     );
   });
 
+  it("retries transient Daytona socket closures while reading repaired artifacts", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      modelID: "gpt-5.5",
+      providerID: "openai",
+    });
+
+    const result = await agent.repairCapturePathFailure(
+      capturePathRepairInput(events, {
+        transientSocketClosureArtifactReads: { "demo-script.json": 2 },
+      }),
+    );
+
+    expect(result.demoScriptPackage.scriptId).toBe("script_conduit");
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            artifact: "demo-script.json",
+            attempt: 1,
+            delayMs: 250,
+            event: "capture-path-repair.artifact-read.retrying",
+            nextAttempt: 2,
+            reason: expect.stringContaining(
+              "socket connection was closed unexpectedly",
+            ),
+            stage: "capture-path-repair",
+          }),
+        },
+        {
+          sandboxLog: expect.objectContaining({
+            artifact: "demo-script.json",
+            attempt: 2,
+            delayMs: 500,
+            event: "capture-path-repair.artifact-read.retrying",
+            nextAttempt: 3,
+            reason: expect.stringContaining(
+              "socket connection was closed unexpectedly",
+            ),
+            stage: "capture-path-repair",
+          }),
+        },
+        {
+          sandboxLog: expect.objectContaining({
+            artifact: "demo-script.json",
+            event: "capture-path-repair.artifact-read.succeeded",
+            stage: "capture-path-repair",
+          }),
+        },
+      ]),
+    );
+  });
+
   it("wraps post-repair Demo Script read failures with the artifact operation", async () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeScriptGeneration({
@@ -620,6 +673,16 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
               "Post-repair artifact read demo-script.json failed: Daytona command did not finish within 600000ms",
             ),
             stage: "capture-path-repair",
+          }),
+        },
+      ]),
+    );
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            artifact: "demo-script.json",
+            event: "capture-path-repair.artifact-read.retrying",
           }),
         },
       ]),
@@ -996,6 +1059,7 @@ function workspaceHandle(
     neverSettleSandboxLogEvents?: string[];
     rejectArtifactReads?: string[];
     rejectSandboxLogEvents?: string[];
+    transientSocketClosureArtifactReads?: Record<string, number>;
   } = {},
 ) {
   let latestArtifact: unknown;
@@ -1026,6 +1090,19 @@ function workspaceHandle(
       }
 
       if (command.includes("preparation-manifest.json")) {
+        const transientSocketClosures =
+          helperOptions.transientSocketClosureArtifactReads;
+        const remainingSocketClosures =
+          transientSocketClosures?.["preparation-manifest.json"];
+        if (
+          transientSocketClosures !== undefined &&
+          remainingSocketClosures !== undefined &&
+          remainingSocketClosures > 0
+        ) {
+          transientSocketClosures["preparation-manifest.json"] =
+            remainingSocketClosures - 1;
+          throw new Error("The socket connection was closed unexpectedly");
+        }
         if (
           helperOptions.rejectArtifactReads?.includes(
             "preparation-manifest.json",
@@ -1054,6 +1131,24 @@ function workspaceHandle(
       }
 
       if (command.startsWith("if test -f")) {
+        const artifactName = command.includes("demo-script.json")
+          ? "demo-script.json"
+          : undefined;
+        const transientSocketClosures =
+          helperOptions.transientSocketClosureArtifactReads;
+        const remainingSocketClosures =
+          artifactName === undefined
+            ? undefined
+            : transientSocketClosures?.[artifactName];
+        if (
+          artifactName !== undefined &&
+          transientSocketClosures !== undefined &&
+          remainingSocketClosures !== undefined &&
+          remainingSocketClosures > 0
+        ) {
+          transientSocketClosures[artifactName] = remainingSocketClosures - 1;
+          throw new Error("The socket connection was closed unexpectedly");
+        }
         if (
           command.includes("demo-script.json") &&
           helperOptions.rejectArtifactReads?.includes("demo-script.json")
