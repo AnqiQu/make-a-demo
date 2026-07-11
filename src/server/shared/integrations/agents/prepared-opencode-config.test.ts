@@ -21,7 +21,7 @@ describe("createMakeADemoOpenCodeConfigFiles", () => {
       reasoningEffort: "max",
     });
     expect(config.provider.openai.models["gpt-5.6-sol"].options).toEqual({
-      reasoningEffort: "high",
+      reasoningEffort: "medium",
     });
     expect(config.agent).toBeUndefined();
     expect(config.permission).toEqual({

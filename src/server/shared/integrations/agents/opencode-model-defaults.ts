@@ -9,5 +9,5 @@ export const defaultOpenCodeModel = {
 export const draftCompositeReviewOpenCodeModel = {
   modelID: "gpt-5.6-sol",
   providerID: "openai",
-  reasoningEffort: "high",
+  reasoningEffort: "medium",
 } as const;
