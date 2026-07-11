@@ -425,6 +425,9 @@ function instrumentLocator(locator, sdk, sceneId, source, sourceArguments, timeo
       }
 
       const value = Reflect.get(target, property, receiver);
+      if (property === 'constructor') {
+        return value;
+      }
       if (typeof property !== 'string' || typeof value !== 'function') {
         return value;
       }

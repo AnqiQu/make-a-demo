@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   assertDemoScriptCaptureSdkContract,
@@ -10,6 +11,51 @@ import {
 import type { DemoScript } from "./demo-script.schema";
 
 describe("Capture SDK Contract", () => {
+  it("preserves Locator identity through action instrumentation", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "makeademo-sdk-locator-"));
+    await writeGeneratedCaptureSdkHarness(workspace);
+
+    class Locator {}
+    const page = {
+      locator() {
+        return new Locator();
+      },
+    };
+    const strictExpect = (actual: unknown) => {
+      if (
+        typeof actual !== "object" ||
+        actual === null ||
+        actual.constructor.name !== "Locator"
+      ) {
+        throw new Error("toBeVisible can be only used with Locator object");
+      }
+      return { async toBeVisible() {} };
+    };
+    Reflect.set(globalThis, "__makeademoCaptureSdk", {
+      context: { baseUrl: "http://localhost", expect: strictExpect, page },
+      startedAt: performance.now(),
+    });
+
+    try {
+      const sdk = (await import(
+        `${pathToFileURL(join(workspace, "makeademo-capture-sdk.js")).href}?test=${Date.now()}`
+      )) as {
+        setup(
+          callback: (context: {
+            expect: typeof strictExpect;
+            page: typeof page;
+          }) => Promise<void>,
+        ): Promise<void>;
+      };
+
+      await sdk.setup(async ({ expect, page }) => {
+        await expect(page.locator()).toBeVisible();
+      });
+    } finally {
+      Reflect.deleteProperty(globalThis, "__makeademoCaptureSdk");
+    }
+  });
+
   it("writes generated runtime, declaration, and instruction harness files", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "makeademo-sdk-"));
 
