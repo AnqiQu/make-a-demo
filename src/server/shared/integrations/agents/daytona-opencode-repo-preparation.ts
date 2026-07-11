@@ -117,6 +117,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
         error: readErrorMessage(error),
         event: "preparation-error",
       });
+      await cancelActiveCommandsQuietly(handle);
       await destroyQuietly(handle);
       return {
         assumptions: [],
