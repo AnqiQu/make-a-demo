@@ -808,6 +808,55 @@ describe("DaytonaOpenCodeRepoPreparation", () => {
     expect(openCodeCommands[1]).toContain("--session 'session_123'");
   });
 
+  it("gives each OpenCode pass a fresh timeout budget across dependency installation", async () => {
+    const events: unknown[] = [];
+    const timeoutMs = 250;
+    const agent = new DaytonaOpenCodeRepoPreparation({
+      modelID: "gpt-5.5",
+      provider: fakeProvider(events, {
+        commandDelayMsByRun: [110, 110],
+        commandStdout: [
+          JSON.stringify({ sessionID: "session_123", type: "session" }),
+          "Validation requested.",
+        ],
+        dependencyInstallRequest: { command: "bun install" },
+        preparationResult: successResult(),
+        submittedCodeInstallDelayMs: 110,
+        validationRequest: {
+          manifestPath:
+            "/tmp/makeademo/submitted-code/preparation-manifest.json",
+        },
+      }),
+      providerID: "openai",
+      timeoutMs,
+      validatePreparation: async () => validationArtifact().validation,
+    });
+
+    const startedAt = Date.now();
+    const result = await agent.prepare({
+      normalizedSupportingDocuments: [],
+      repoUrl: "https://github.com/example/app",
+      structuredDemoIntent: { keyProductFeatures: ["validation"] },
+      workspaceId: "workspace_123",
+    });
+
+    expect(result).toMatchObject({ status: "succeeded" });
+    expect(Date.now() - startedAt).toBeGreaterThan(timeoutMs);
+    const startedEvents = events.filter(
+      (
+        event,
+      ): event is { sandboxLog: { event?: unknown; remainingMs?: unknown } } =>
+        typeof event === "object" &&
+        event !== null &&
+        "sandboxLog" in event &&
+        typeof (event as { sandboxLog?: unknown }).sandboxLog === "object" &&
+        (event as { sandboxLog?: { event?: unknown } }).sandboxLog?.event ===
+          "opencode-started",
+    );
+    expect(startedEvents).toHaveLength(2);
+    expect(startedEvents[1]?.sandboxLog.remainingMs).toBeGreaterThan(200);
+  });
+
   it("tells OpenCode successful dependency installs ran in submitted-code before retrying preparation", async () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeRepoPreparation({
@@ -2196,6 +2245,7 @@ function fakeProvider(
         commandStderrChunks?: string[];
         commandStdoutChunks?: string[];
         commandDelayMs?: number;
+        commandDelayMsByRun?: number[];
         dependencyInstallRequestReadNeverSettles?: boolean;
         cloneDiagnosticsStdout?: string;
         cloneResults?: Array<PreparationWorkspaceCommandResult | Error>;
@@ -2210,6 +2260,7 @@ function fakeProvider(
         submittedCodeCloneResult?: PreparationWorkspaceCommandResult;
         submittedCodeInstallResult?: PreparationWorkspaceCommandResult;
         submittedCodeNeverSettles?: boolean;
+        submittedCodeInstallDelayMs?: number;
         validationRequest?: {
           manifestPath: string;
         };
@@ -2251,6 +2302,7 @@ function fakeWorkspace(
     commandStderrChunks?: string[];
     commandStdoutChunks?: string[];
     commandDelayMs?: number;
+    commandDelayMsByRun?: number[];
     dependencyInstallRequestReadNeverSettles?: boolean;
     cloneDiagnosticsStdout?: string;
     cloneResults?: Array<PreparationWorkspaceCommandResult | Error>;
@@ -2265,6 +2317,7 @@ function fakeWorkspace(
     submittedCodeCloneResult?: PreparationWorkspaceCommandResult;
     submittedCodeInstallResult?: PreparationWorkspaceCommandResult;
     submittedCodeNeverSettles?: boolean;
+    submittedCodeInstallDelayMs?: number;
     validationRequest?: {
       manifestPath: string;
     };
@@ -2282,16 +2335,20 @@ function fakeWorkspace(
   let sandboxLogChain = Promise.resolve();
   let validationRequest = input.validationRequest;
   let validationResult = input.validationResult;
+  const commandDelayMsByRun = [...(input.commandDelayMsByRun ?? [])];
 
   return {
     async execute(command, options) {
       if (
         command.includes("opencode run") &&
-        input.commandDelayMs !== undefined
+        (input.commandDelayMs !== undefined || commandDelayMsByRun.length > 0)
       ) {
-        await new Promise((resolve) =>
-          setTimeout(resolve, input.commandDelayMs),
-        );
+        const commandDelayMs =
+          commandDelayMsByRun.shift() ?? input.commandDelayMs;
+        if (commandDelayMs === undefined) {
+          throw new Error("missing fake OpenCode delay");
+        }
+        await new Promise((resolve) => setTimeout(resolve, commandDelayMs));
       }
       events.push({
         execute: command,
@@ -2474,6 +2531,11 @@ function fakeWorkspace(
       if (command === "bun install") {
         if (input.submittedCodeNeverSettles === true) {
           await new Promise(() => {});
+        }
+        if (input.submittedCodeInstallDelayMs !== undefined) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, input.submittedCodeInstallDelayMs),
+          );
         }
         if (input.submittedCodeInstallResult !== undefined) {
           return input.submittedCodeInstallResult;

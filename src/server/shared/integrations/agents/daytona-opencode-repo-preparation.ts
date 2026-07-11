@@ -101,16 +101,15 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
 
   async prepare(input: RepoPreparationInput) {
     const handle = await this.provider.create();
-    const deadlineAt = Date.now() + this.timeoutMs;
     await this.writeSandboxLog(handle.workspace, {
       event: "workspace-created",
       timeoutMs: this.timeoutMs,
       workspaceId: handle.id,
     });
-    let result: TimedRunResult<RawPreparationRunResult>;
+    let result: TimedRunResult<PreparationSetupResult>;
     try {
       result = await raceWithTimeout(
-        this.runPreparation(handle, input, deadlineAt),
+        this.runPreparation(handle, input),
         this.timeoutMs,
       );
     } catch (error) {
@@ -147,7 +146,39 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
       };
     }
 
-    const parsedResult = parseCommandResult(result.value, handle);
+    if (result.value.status === "ready") {
+      let loopResult: RawPreparationRunResult;
+      try {
+        loopResult = await this.runOpenCodeLoop(
+          handle,
+          input,
+          result.value.prompt,
+        );
+      } catch (error) {
+        await this.writeSandboxLog(handle.workspace, {
+          error: readErrorMessage(error),
+          event: "preparation-error",
+        });
+        await cancelActiveCommandsQuietly(handle);
+        await destroyQuietly(handle);
+        return {
+          assumptions: [],
+          blockers: [readErrorMessage(error)],
+          status: "failed" as const,
+          suggestedChanges: [
+            "Retry Repo Preparation in a fresh Daytona workspace.",
+          ],
+        };
+      }
+      const parsedResult = parseCommandResult(loopResult, handle);
+      if (parsedResult.status === "failed") {
+        await destroyQuietly(handle);
+      }
+
+      return parsedResult;
+    }
+
+    const parsedResult = parseCommandResult(result.value.result, handle);
     if (parsedResult.status === "failed") {
       await destroyQuietly(handle);
     }
@@ -158,8 +189,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
   private async runPreparation(
     handle: PreparationWorkspaceHandle,
     input: RepoPreparationInput,
-    deadlineAt: number,
-  ): Promise<RawPreparationRunResult> {
+  ): Promise<PreparationSetupResult> {
     await this.writeSandboxLog(handle.workspace, {
       event: "clone-started",
     });
@@ -180,7 +210,13 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
         handle.workspace,
         "parent OpenCode workspace",
       );
-      return createRepoCloneFailure(cloneResult, "parent OpenCode workspace");
+      return {
+        result: createRepoCloneFailure(
+          cloneResult,
+          "parent OpenCode workspace",
+        ),
+        status: "result",
+      };
     }
 
     const submittedCodeCloneResult = await cloneSubmittedCodeWorkspace(
@@ -200,10 +236,13 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
           "linked submitted-code workspace",
           handle.workspace.executeSubmittedCode?.bind(handle.workspace),
         );
-        return createRepoCloneFailure(
-          submittedCodeCloneResult,
-          "linked submitted-code workspace",
-        );
+        return {
+          result: createRepoCloneFailure(
+            submittedCodeCloneResult,
+            "linked submitted-code workspace",
+          ),
+          status: "result",
+        };
       }
     }
 
@@ -212,37 +251,42 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
       event: "opencode-config-installed",
     });
 
-    return this.runOpenCodeLoop(
-      handle,
-      input,
-      createDaytonaRepoPreparationPrompt(input),
-      deadlineAt,
-    );
+    return {
+      prompt: createDaytonaRepoPreparationPrompt(input),
+      status: "ready",
+    };
   }
 
   private async runOpenCodeLoop(
     handle: PreparationWorkspaceHandle,
     input: RepoPreparationInput,
     initialPrompt: string,
-    deadlineAt: number,
   ): Promise<RawPreparationRunResult> {
     let prompt = initialPrompt;
     let currentSessionID: string | undefined;
     for (let attempt = 0; attempt < 8; attempt += 1) {
+      const deadlineAt = Date.now() + this.timeoutMs;
       await this.writeSandboxLog(handle.workspace, {
         attempt: attempt + 1,
         event: "opencode-started",
         remainingMs: deadlineAt - Date.now(),
       });
-      const openCodeResult = await this.executeOpenCode(handle, {
-        attempt: attempt + 1,
-        model: `${this.providerID}/${this.modelID}`,
-        prompt,
-        providerID: this.providerID,
-        ...(currentSessionID === undefined
-          ? {}
-          : { sessionID: currentSessionID }),
-      });
+      const openCodeRun = await raceWithTimeout(
+        this.executeOpenCode(handle, {
+          attempt: attempt + 1,
+          model: `${this.providerID}/${this.modelID}`,
+          prompt,
+          providerID: this.providerID,
+          ...(currentSessionID === undefined
+            ? {}
+            : { sessionID: currentSessionID }),
+        }),
+        Math.max(1, deadlineAt - Date.now()),
+      );
+      if (openCodeRun.status !== "succeeded") {
+        return this.timeoutPreparation(handle, openCodeRun.reason);
+      }
+      const openCodeResult = openCodeRun.value;
       currentSessionID = openCodeResult.sessionID ?? currentSessionID;
       await this.writeSandboxLog(handle.workspace, {
         attempt: attempt + 1,
@@ -281,6 +325,9 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
             prompt = validationOutcome.prompt;
             continue;
           }
+          if (validationOutcome.status === "timeout") {
+            return this.timeoutPreparation(handle, validationOutcome.reason);
+          }
 
           return validationOutcome.result;
         }
@@ -311,6 +358,9 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
           if (validationOutcome.status === "retry") {
             prompt = validationOutcome.prompt;
             continue;
+          }
+          if (validationOutcome.status === "timeout") {
+            return this.timeoutPreparation(handle, validationOutcome.reason);
           }
 
           return validationOutcome.result;
@@ -355,11 +405,27 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
         if (deadlineAt - Date.now() < minimumBackendToolBudgetMs) {
           return backendToolDeadlineFailure("dependency installation");
         }
-        const installResult = await runDependencyInstallWithNetworkWindow({
-          command: dependencyRequest.command,
-          workspace: handle.workspace,
-        });
-        await clearDependencyInstallRequest(handle.workspace);
+        const installRun = await raceWithTimeout(
+          runDependencyInstallWithNetworkWindow({
+            command: dependencyRequest.command,
+            workspace: handle.workspace,
+          }),
+          Math.max(1, deadlineAt - Date.now()),
+        );
+        if (installRun.status !== "succeeded") {
+          return this.timeoutPreparation(handle, installRun.reason);
+        }
+        const installResult = installRun.value;
+        const clearDependencyInstallRequestRun = await raceWithTimeout(
+          clearDependencyInstallRequest(handle.workspace),
+          Math.max(1, deadlineAt - Date.now()),
+        );
+        if (clearDependencyInstallRequestRun.status !== "succeeded") {
+          return this.timeoutPreparation(
+            handle,
+            clearDependencyInstallRequestRun.reason,
+          );
+        }
         await this.writeSandboxLog(handle.workspace, {
           event: "dependency-install-finished",
           exitCode: installResult.exitCode,
@@ -408,17 +474,48 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
           prompt = validationOutcome.prompt;
           continue;
         }
+        if (validationOutcome.status === "timeout") {
+          return this.timeoutPreparation(handle, validationOutcome.reason);
+        }
 
         return validationOutcome.result;
       }
 
-      const preparationResult = await readPreparationResult(handle.workspace);
+      const preparationResultRead = await this.readRequestArtifactWithDeadline({
+        artifactName: "preparation result",
+        deadlineAt,
+        eventPrefix: "preparation-result-read",
+        read: () => readPreparationResult(handle.workspace),
+        workspace: handle.workspace,
+      });
+      if (preparationResultRead.status !== "succeeded") {
+        return requestArtifactReadTimeoutFailure(
+          "preparation result",
+          preparationResultRead.timeoutMs,
+        );
+      }
+      const preparationResult = preparationResultRead.value;
       if (preparationResult !== undefined) {
         await this.writeSandboxLog(handle.workspace, {
           event: "preparation-result-found",
           status: preparationResult.status,
         });
-        const validation = await readValidationResult(handle.workspace);
+        const validationResultRead = await this.readRequestArtifactWithDeadline(
+          {
+            artifactName: "validation result",
+            deadlineAt,
+            eventPrefix: "validation-result-read",
+            read: () => readValidationResult(handle.workspace),
+            workspace: handle.workspace,
+          },
+        );
+        if (validationResultRead.status !== "succeeded") {
+          return requestArtifactReadTimeoutFailure(
+            "validation result",
+            validationResultRead.timeoutMs,
+          );
+        }
+        const validation = validationResultRead.value;
         if (
           preparationResult.status === "succeeded" &&
           validation?.status === "succeeded"
@@ -446,6 +543,26 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
       status: "failed" as const,
       suggestedChanges: [
         "Reduce demo setup complexity or fix validation blockers manually.",
+      ],
+    };
+  }
+
+  private async timeoutPreparation(
+    handle: PreparationWorkspaceHandle,
+    reason: string,
+  ): Promise<RawPreparationRunResult> {
+    await this.writeSandboxLog(handle.workspace, {
+      event: "preparation-timeout",
+      reason,
+      workspaceId: handle.id,
+    });
+    await cancelActiveCommandsQuietly(handle);
+    return {
+      assumptions: [],
+      blockers: [reason],
+      status: "failed" as const,
+      suggestedChanges: [
+        "Retry Repo Preparation in a fresh Daytona workspace.",
       ],
     };
   }
@@ -542,6 +659,7 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
     validationRequest: ValidationRequest;
   }): Promise<
     | { prompt: string; status: "retry" }
+    | { reason: string; status: "timeout" }
     | {
         result: Awaited<ReturnType<RepoPreparationAgent["prepare"]>>;
         status: "done";
@@ -560,17 +678,27 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
     if (this.validatePreparation === undefined) {
       throw new Error("Repo Preparation validation tool is not configured.");
     }
+    const validatePreparation = this.validatePreparation;
     let manifest: ReturnType<typeof readPreparationManifest> | undefined;
     let validation: ProjectValidationResult;
     try {
-      manifest = await readPreparationManifestFile(
-        input.handle.workspace,
-        input.validationRequest.manifestPath,
+      const validationRun = await raceWithTimeout(
+        (async () => {
+          manifest = await readPreparationManifestFile(
+            input.handle.workspace,
+            input.validationRequest.manifestPath,
+          );
+          return await validatePreparation({
+            manifest,
+            workspace: input.handle,
+          });
+        })(),
+        Math.max(1, input.deadlineAt - Date.now()),
       );
-      validation = await this.validatePreparation({
-        manifest,
-        workspace: input.handle,
-      });
+      if (validationRun.status !== "succeeded") {
+        return { reason: validationRun.reason, status: "timeout" };
+      }
+      validation = validationRun.value;
     } catch (error) {
       validation = createValidationHandoffFailure(readErrorMessage(error));
     }
@@ -579,11 +707,23 @@ export class DaytonaOpenCodeRepoPreparation implements RepoPreparationAgent {
       event: "preparation-preflight.finished",
       status: validation.status,
     });
-    await writeValidationResult(input.handle.workspace, {
-      manifest,
-      validation,
-    });
-    await clearValidationRequest(input.handle.workspace);
+    const writeValidationResultRun = await raceWithTimeout(
+      writeValidationResult(input.handle.workspace, {
+        manifest,
+        validation,
+      }),
+      Math.max(1, input.deadlineAt - Date.now()),
+    );
+    if (writeValidationResultRun.status !== "succeeded") {
+      return { reason: writeValidationResultRun.reason, status: "timeout" };
+    }
+    const clearValidationRequestRun = await raceWithTimeout(
+      clearValidationRequest(input.handle.workspace),
+      Math.max(1, input.deadlineAt - Date.now()),
+    );
+    if (clearValidationRequestRun.status !== "succeeded") {
+      return { reason: clearValidationRequestRun.reason, status: "timeout" };
+    }
     const nonRetryablePreflightFailure =
       readNonRetryablePreflightFailure(validation);
     if (nonRetryablePreflightFailure !== undefined) {
@@ -798,6 +938,10 @@ type MakeADemoOpenCodeToolName =
 type TimedRunResult<T> =
   | { status: "succeeded"; value: T }
   | { reason: string; status: "failed" | "timed-out" };
+
+type PreparationSetupResult =
+  | { prompt: string; status: "ready" }
+  | { result: RawPreparationRunResult; status: "result" };
 
 function raceWithTimeout<T>(
   promise: Promise<T>,
