@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { Daytona } from "@daytona/sdk";
 
@@ -646,7 +646,31 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
       source: file.sourcePath,
     }));
     await this.sandbox.fs.uploadFiles(uploadedFiles);
-    await this.submittedCodeSandbox?.fs.uploadFiles(uploadedFiles);
+    if (this.submittedCodeSandbox === undefined) {
+      return;
+    }
+
+    for (const file of files) {
+      const encoded = (await readFile(file.sourcePath)).toString("base64");
+      const response = await withTimeout(
+        this.submittedCodeSandbox.process.executeCommand(
+          [
+            `mkdir -p ${shellQuote(dirname(file.destinationPath))}`,
+            `printf '%s' ${shellQuote(encoded)} | base64 -d > ${shellQuote(file.destinationPath)}`,
+          ].join(" && "),
+          undefined,
+          undefined,
+          toSdkTimeoutSeconds(this.commandTimeoutMs),
+        ),
+        this.commandTimeoutMs,
+        `Daytona command did not finish within ${this.commandTimeoutMs}ms.`,
+      );
+      if ((response.exitCode ?? 0) !== 0) {
+        throw new Error(
+          `Failed to materialize submitted-code file ${file.destinationPath}: ${response.stderr ?? response.result ?? "unknown error"}`,
+        );
+      }
+    }
   }
 
   async downloadFiles(

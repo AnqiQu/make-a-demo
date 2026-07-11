@@ -866,7 +866,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ]);
   });
 
-  it("routes submitted-code execution, network, preview, and uploads through the linked child sandbox", async () => {
+  it("routes submitted-code execution, network, and preview through the linked child sandbox", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
       client: fakeLinkedClient(calls),
@@ -874,12 +874,6 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
     const handle = await provider.create();
 
-    await handle.workspace.uploadFiles([
-      {
-        destinationPath: "/workspace/package.json",
-        sourcePath: "/tmp/repo/package.json",
-      },
-    ]);
     const result = await handle.workspace.executeSubmittedCode?.("npm test");
     await handle.workspace.setSubmittedCodeNetworkAccess?.(true);
     await expect(handle.workspace.getPreviewUrl(3000)).resolves.toBe(
@@ -889,28 +883,6 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     expect(result).toEqual({ exitCode: 0, stderr: "", stdout: "child ok" });
     expect(calls).toEqual(
       expect.arrayContaining([
-        {
-          uploadFiles: {
-            files: [
-              {
-                destination: "/workspace/package.json",
-                source: "/tmp/repo/package.json",
-              },
-            ],
-            sandbox: "parent_sandbox",
-          },
-        },
-        {
-          uploadFiles: {
-            files: [
-              {
-                destination: "/workspace/package.json",
-                source: "/tmp/repo/package.json",
-              },
-            ],
-            sandbox: "submitted_sandbox",
-          },
-        },
         {
           executeCommand: { command: "npm test", sandbox: "submitted_sandbox" },
         },
@@ -929,6 +901,64 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         },
       ]),
     );
+  });
+
+  it("materializes uploaded files in the linked child without its bulk upload API", async () => {
+    const calls: unknown[] = [];
+    const root = await mkdtemp(join(tmpdir(), "makeademo-child-upload-"));
+    const parentWorkspace = join(root, "parent");
+    const submittedWorkspace = join(root, "submitted");
+    const sourcePath = join(root, "capture-script.ts");
+    await mkdir(parentWorkspace, { recursive: true });
+    await mkdir(submittedWorkspace, { recursive: true });
+    await writeFile(sourcePath, "console.log('capture');\n");
+
+    try {
+      const provider = new DaytonaSdkPreparationWorkspaceProvider({
+        client: fakeLocalShellLinkedClient(calls, {
+          parentWorkspace,
+          submittedWorkspace,
+        }),
+        submittedCodeSnapshot: "makeademo-submitted-code-browser",
+      });
+      const handle = await provider.create();
+
+      await handle.workspace.uploadFiles([
+        {
+          destinationPath: "/workspace/.makeademo/capture/script.ts",
+          sourcePath,
+        },
+      ]);
+
+      await expect(
+        readFile(
+          join(submittedWorkspace, ".makeademo/capture/script.ts"),
+          "utf8",
+        ),
+      ).resolves.toBe("console.log('capture');\n");
+      expect(calls).not.toContainEqual({
+        uploadFiles: {
+          files: [
+            {
+              destination: "/workspace/.makeademo/capture/script.ts",
+              source: sourcePath,
+            },
+          ],
+          sandbox: "submitted_sandbox",
+        },
+      });
+      expect(calls).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            executeCommand: expect.objectContaining({
+              sandbox: "submitted_sandbox",
+            }),
+          }),
+        ]),
+      );
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
   });
 
   it("passes the configured command timeout to submitted-code Daytona commands", async () => {
@@ -1452,8 +1482,12 @@ function fakeLocalShellSandbox(
       async uploadFiles(files: Array<{ destination: string; source: string }>) {
         calls.push({ uploadFiles: { files, sandbox: id } });
         for (const file of files) {
-          await mkdir(dirname(file.destination), { recursive: true });
-          await copyFile(file.source, file.destination);
+          const destination = file.destination.replace(
+            "/workspace",
+            workspacePath,
+          );
+          await mkdir(dirname(destination), { recursive: true });
+          await copyFile(file.source, destination);
         }
       },
     },
