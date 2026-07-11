@@ -43,6 +43,7 @@ export class RemotionVideoRenderer implements VideoRenderer {
     await renderMedia({
       codec: "h264",
       composition,
+      concurrency: 2,
       inputProps: input,
       logLevel: "info",
       outputLocation: input.outputPath,
