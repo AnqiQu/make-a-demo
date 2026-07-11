@@ -354,7 +354,9 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
       });
     }
 
-    await workspace.downloadFiles(downloads);
+    const download =
+      workspace.downloadSubmittedCodeFiles ?? workspace.downloadFiles;
+    await download.call(workspace, downloads);
 
     return recordedScenes;
   }

@@ -68,4 +68,8 @@ export interface PreparationWorkspace {
   uploadSubmittedCodeFiles?(
     files: PreparationWorkspaceUploadFile[],
   ): Promise<void>;
+  /** Downloads artifacts from the submitted-code runtime boundary. */
+  downloadSubmittedCodeFiles?(
+    files: PreparationWorkspaceDownloadFile[],
+  ): Promise<void>;
 }

@@ -164,7 +164,10 @@ describe("captureScenesFromScript", () => {
       async destroy() {},
       id: "daytona_workspace",
       workspace: {
-        async downloadFiles(files) {
+        async downloadFiles() {
+          throw new Error("parent download must not be used for scene files");
+        },
+        async downloadSubmittedCodeFiles(files) {
           downloadedSources.push(...files.map((file) => file.sourcePath));
           await Promise.all(
             files.map(async (file) => {

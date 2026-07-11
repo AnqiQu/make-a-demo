@@ -693,7 +693,23 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
   async downloadFiles(
     files: PreparationWorkspaceDownloadFile[],
   ): Promise<void> {
-    const results = await this.sandbox.fs.downloadFiles(
+    await this.downloadFilesFromSandbox(this.sandbox, files);
+  }
+
+  async downloadSubmittedCodeFiles(
+    files: PreparationWorkspaceDownloadFile[],
+  ): Promise<void> {
+    await this.downloadFilesFromSandbox(
+      this.submittedCodeSandbox ?? this.sandbox,
+      files,
+    );
+  }
+
+  private async downloadFilesFromSandbox(
+    sandbox: DaytonaSdkSandbox,
+    files: PreparationWorkspaceDownloadFile[],
+  ): Promise<void> {
+    const results = await sandbox.fs.downloadFiles(
       files.map((file) => ({
         destination: file.destinationPath,
         source: file.sourcePath,
