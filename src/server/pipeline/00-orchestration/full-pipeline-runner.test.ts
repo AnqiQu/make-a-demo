@@ -676,6 +676,9 @@ describe("runFullPipelineJob", () => {
           onLog: (entry) => messages.push(entry.message),
           outputRoot,
           reviewDraftComposite: acceptDraftComposite,
+          async inspectDraftCompositeEvidence() {
+            return cleanDraftEvidence();
+          },
           runId: "full-run",
         },
       );
@@ -706,6 +709,49 @@ describe("runFullPipelineJob", () => {
             event: "demo-script-written",
             message: "Accepted Demo Script ready: 1 scene(s).",
             scriptPath: result.scriptPath,
+          }),
+          expect.objectContaining({
+            event: "capture-succeeded",
+            durationMs: expect.any(Number),
+            artifacts: expect.objectContaining({
+              manifestPath: join(outputRoot, "capture-manifest.json"),
+            }),
+            manifestPath: join(outputRoot, "capture-manifest.json"),
+            sceneCount: 1,
+          }),
+          expect.objectContaining({
+            event: "compositing-succeeded",
+            durationMs: expect.any(Number),
+            artifacts: expect.objectContaining({
+              manifestPath: join(outputRoot, "composite-manifest.json"),
+              outputVideoPath: join(outputRoot, "final-video.mp4"),
+              renderPlanPath: join(outputRoot, "render-plan.json"),
+            }),
+            outputVideoPath: join(outputRoot, "final-video.mp4"),
+            viewUrl: "file:///tmp/final-video.mp4",
+          }),
+          expect.objectContaining({
+            event: "draft-composite-evidence-succeeded",
+            durationMs: expect.any(Number),
+            artifacts: expect.objectContaining({
+              captureManifestPath: join(outputRoot, "capture-manifest.json"),
+              compositeManifestPath: join(
+                outputRoot,
+                "composite-manifest.json",
+              ),
+            }),
+          }),
+          expect.objectContaining({
+            event: "draft-composite-reviewer-succeeded",
+            attempt: 1,
+            durationMs: expect.any(Number),
+            artifacts: expect.objectContaining({
+              captureManifestPath: join(outputRoot, "capture-manifest.json"),
+              compositeManifestPath: join(
+                outputRoot,
+                "composite-manifest.json",
+              ),
+            }),
           }),
           expect.objectContaining({
             event: "capture-succeeded",
@@ -1137,7 +1183,7 @@ describe("runFullPipelineJob", () => {
     }
   });
 
-  it("returns the valid draft when restoring its script checkpoint fails", async () => {
+  it("keeps a repaired script candidate out of durable persistence until its draft is valid", async () => {
     const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
     const calls: string[] = [];
     const dependencies = stage1Dependencies(calls);
@@ -1196,20 +1242,18 @@ describe("runFullPipelineJob", () => {
 
       expect(result.status).toBe("succeeded");
       expect(result.finalVideo.runId).toBe("composite-1");
-      expect(result.draftCompositeReview.warnings).toEqual(
-        expect.arrayContaining([
-          "Valid Draft Composite script checkpoint restoration failed: script store unavailable",
-        ]),
+      expect(saveCount).toBe(1);
+      expect(result.draftCompositeReview.warnings).not.toContain(
+        "Valid Draft Composite script checkpoint restoration failed: script store unavailable",
       );
       const logEntries = (await readFile(result.logPath, "utf8"))
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line));
-      expect(logEntries).toEqual(
+      expect(logEntries).not.toEqual(
         expect.arrayContaining([
           expect.objectContaining({
             event: "draft-composite-script-checkpoint-restore-failed",
-            error: "script store unavailable",
           }),
         ]),
       );

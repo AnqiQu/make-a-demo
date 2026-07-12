@@ -1,0 +1,387 @@
+import { spawn } from "node:child_process";
+import { mkdir, stat } from "node:fs/promises";
+import { join } from "node:path";
+
+import type { CaptureManifest } from "../06-footage-capture/capture-scenes";
+import type { DemoScript } from "../06-footage-capture/demo-script.schema";
+import type { CompositedVideoManifest } from "./composite-video";
+
+export const DEFAULT_EVIDENCE_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
+
+export type DraftCompositeEvidence = {
+  audioProbeFailed?: boolean;
+  audioPresent?: boolean;
+  contactSheetPaths: string[];
+  ffmpegFindings: string[];
+  sampledFramePaths: string[];
+  staticProbeFailedSceneIds?: string[];
+  staticSceneIds: string[];
+};
+
+export function collectDraftCompositeQualityFindings(input: {
+  captureManifest: Pick<CaptureManifest, "qualityFindings" | "scenes">;
+  draftEvidence: DraftCompositeEvidence;
+  finalVideo: Pick<CompositedVideoManifest, "durationInFrames" | "fps">;
+  scriptPackage: Pick<DemoScript, "presentation">;
+}) {
+  const findings: string[] = [...input.captureManifest.qualityFindings];
+  const maxDraftDurationSeconds = readPositiveNumberEnv(
+    "MAKEADEMO_MAX_DRAFT_COMPOSITE_SECONDS",
+    120,
+  );
+  const maxSceneDurationSeconds = readPositiveNumberEnv(
+    "MAKEADEMO_MAX_SCENE_CLIP_SECONDS",
+    30,
+  );
+  const draftDurationSeconds =
+    input.finalVideo.durationInFrames / input.finalVideo.fps;
+
+  if (draftDurationSeconds > maxDraftDurationSeconds) {
+    findings.push(
+      `Draft Composite duration ${draftDurationSeconds.toFixed(2)}s exceeds ${maxDraftDurationSeconds}s`,
+    );
+  }
+
+  for (const scene of input.captureManifest.scenes) {
+    if (scene.durationSeconds > maxSceneDurationSeconds) {
+      findings.push(
+        `Scene ${scene.sceneId} duration ${scene.durationSeconds.toFixed(2)}s exceeds ${maxSceneDurationSeconds}s`,
+      );
+    }
+  }
+
+  if (
+    input.scriptPackage.presentation.music.enabled &&
+    input.draftEvidence.audioPresent === false
+  ) {
+    findings.push("Draft Composite is missing audio while music is enabled");
+  }
+  if (
+    input.scriptPackage.presentation.music.enabled &&
+    input.draftEvidence.audioPresent === undefined
+  ) {
+    findings.push(
+      "Draft Composite audio presence could not be verified while music is enabled",
+    );
+  }
+
+  for (const sceneId of input.draftEvidence.staticSceneIds) {
+    findings.push(`Scene ${sceneId} contains fully static footage`);
+  }
+  for (const sceneId of input.draftEvidence.staticProbeFailedSceneIds ?? []) {
+    findings.push(`Scene ${sceneId} static-footage gate could not be verified`);
+  }
+
+  return findings;
+}
+
+export async function inspectDraftCompositeEvidence(input: {
+  captureManifest: CaptureManifest;
+  draftComposite: CompositedVideoManifest;
+  timeoutMs?: number;
+}): Promise<DraftCompositeEvidence> {
+  const timeoutMs = input.timeoutMs ?? DEFAULT_EVIDENCE_COMMAND_TIMEOUT_MS;
+  const { captureManifest, draftComposite } = input;
+  if (draftComposite.outputVideoPath === undefined) {
+    return {
+      audioProbeFailed: true,
+      contactSheetPaths: [],
+      ffmpegFindings: [
+        "Draft Composite video is stored remotely; local sampled-frame evidence was not generated.",
+      ],
+      sampledFramePaths: [],
+      staticProbeFailedSceneIds: captureManifest.scenes.map(
+        (scene) => scene.sceneId,
+      ),
+      staticSceneIds: [],
+    };
+  }
+
+  if (!(await exists(draftComposite.outputVideoPath))) {
+    return {
+      audioProbeFailed: true,
+      contactSheetPaths: [],
+      ffmpegFindings: [
+        `Draft Composite video was unavailable for evidence generation: ${draftComposite.outputVideoPath}`,
+      ],
+      sampledFramePaths: [],
+      staticProbeFailedSceneIds: captureManifest.scenes.map(
+        (scene) => scene.sceneId,
+      ),
+      staticSceneIds: [],
+    };
+  }
+
+  const evidenceDirectory = join(
+    draftComposite.runDirectory,
+    "review-evidence",
+  );
+  await mkdir(evidenceDirectory, { recursive: true });
+
+  const findings: string[] = [];
+  const sampledFramePattern = join(evidenceDirectory, "sample-%03d.jpg");
+  const contactSheetPath = join(evidenceDirectory, "contact-sheet.jpg");
+  const [sampledFrames, contactSheet, audioProbe] = await Promise.all([
+    runEvidenceCommand(
+      "ffmpeg",
+      [
+        "-y",
+        "-i",
+        draftComposite.outputVideoPath,
+        "-vf",
+        "fps=1/5",
+        "-frames:v",
+        "4",
+        sampledFramePattern,
+      ],
+      timeoutMs,
+    ),
+    runEvidenceCommand(
+      "ffmpeg",
+      [
+        "-y",
+        "-i",
+        draftComposite.outputVideoPath,
+        "-vf",
+        "fps=1/5,scale=320:-1,tile=2x2",
+        "-frames:v",
+        "1",
+        contactSheetPath,
+      ],
+      timeoutMs,
+    ),
+    runEvidenceCommand(
+      "ffprobe",
+      [
+        "-v",
+        "error",
+        "-select_streams",
+        "a",
+        "-show_entries",
+        "stream=index",
+        "-of",
+        "csv=p=0",
+        draftComposite.outputVideoPath,
+      ],
+      timeoutMs,
+    ),
+  ]);
+  if (sampledFrames.exitCode !== 0) {
+    findings.push(
+      `ffmpeg sampled-frame extraction failed: ${formatCommandOutput(sampledFrames)}`,
+    );
+  }
+  if (contactSheet.exitCode !== 0) {
+    findings.push(
+      `ffmpeg contact-sheet generation failed: ${formatCommandOutput(contactSheet)}`,
+    );
+  }
+  if (audioProbe.exitCode !== 0) {
+    findings.push(
+      `ffprobe audio probe failed: ${formatCommandOutput(audioProbe)}`,
+    );
+  }
+  const staticFootageProbe = await detectStaticScenes({
+    captureManifest,
+    findings,
+    timeoutMs,
+    videoPath: draftComposite.outputVideoPath,
+  });
+
+  return {
+    ...(audioProbe.exitCode === 0 ? {} : { audioProbeFailed: true }),
+    ...(audioProbe.exitCode === 0
+      ? { audioPresent: audioProbe.stdout.trim().length > 0 }
+      : {}),
+    contactSheetPaths: contactSheet.exitCode === 0 ? [contactSheetPath] : [],
+    ffmpegFindings: findings,
+    sampledFramePaths:
+      sampledFrames.exitCode === 0
+        ? [1, 2, 3, 4].map((index) =>
+            join(
+              evidenceDirectory,
+              `sample-${String(index).padStart(3, "0")}.jpg`,
+            ),
+          )
+        : [],
+    staticProbeFailedSceneIds: staticFootageProbe.failedSceneIds,
+    staticSceneIds: staticFootageProbe.staticSceneIds,
+  };
+}
+
+async function detectStaticScenes(input: {
+  captureManifest: CaptureManifest;
+  findings: string[];
+  timeoutMs: number;
+  videoPath: string;
+}) {
+  const failedSceneIds: string[] = [];
+  const staticSceneIds: string[] = [];
+  let sceneStartSeconds = 0;
+
+  for (const scene of input.captureManifest.scenes) {
+    const durationSeconds = scene.durationSeconds;
+    if (durationSeconds < 1) {
+      sceneStartSeconds += durationSeconds;
+      continue;
+    }
+
+    const freezeDurationSeconds = Math.max(0.5, durationSeconds * 0.75);
+    const probe = await runEvidenceCommand(
+      "ffmpeg",
+      [
+        "-v",
+        "info",
+        "-ss",
+        sceneStartSeconds.toFixed(3),
+        "-t",
+        durationSeconds.toFixed(3),
+        "-i",
+        input.videoPath,
+        "-vf",
+        `freezedetect=n=-60dB:d=${freezeDurationSeconds.toFixed(3)}`,
+        "-an",
+        "-f",
+        "null",
+        "-",
+      ],
+      input.timeoutMs,
+    );
+
+    if (probe.exitCode !== 0) {
+      failedSceneIds.push(scene.sceneId);
+      input.findings.push(
+        `ffmpeg static-footage probe failed for Scene ${scene.sceneId}: ${formatCommandOutput(probe)}`,
+      );
+    } else if (
+      isStaticSceneProbe(probe.stderr, freezeDurationSeconds, durationSeconds)
+    ) {
+      staticSceneIds.push(scene.sceneId);
+    }
+
+    sceneStartSeconds += durationSeconds;
+  }
+
+  return { failedSceneIds, staticSceneIds };
+}
+
+function isStaticSceneProbe(
+  stderr: string,
+  minimumFreezeDurationSeconds: number,
+  sceneDurationSeconds: number,
+) {
+  if (
+    /freezedetect.*freeze_start/.test(stderr) &&
+    !/freezedetect.*freeze_end/.test(stderr)
+  ) {
+    const freezeStart = stderr.match(/freeze_start:\s*([0-9.]+)/)?.[1];
+    const freezeStartSeconds =
+      freezeStart === undefined ? Number.NaN : Number(freezeStart);
+    return Number.isFinite(freezeStartSeconds)
+      ? sceneDurationSeconds - freezeStartSeconds >=
+          minimumFreezeDurationSeconds
+      : false;
+  }
+
+  return [...stderr.matchAll(/freeze_duration:\s*([0-9.]+)/g)].some((match) => {
+    const durationSeconds = Number(match[1]);
+    return (
+      Number.isFinite(durationSeconds) &&
+      durationSeconds >= minimumFreezeDurationSeconds
+    );
+  });
+}
+
+async function exists(path: string) {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function runEvidenceCommand(
+  command: string,
+  args: string[],
+  timeoutMs: number,
+) {
+  return new Promise<{
+    exitCode: number | null;
+    stderr: string;
+    stdout: string;
+  }>((resolve) => {
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const settle = (result: {
+      exitCode: number | null;
+      stderr: string;
+      stdout: string;
+    }) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeoutTimer);
+      resolve(result);
+    };
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.once("error", (error) => {
+      settle({ exitCode: 127, stderr: error.message, stdout });
+    });
+    child.once("close", (exitCode) => {
+      if (forceKillTimer !== undefined) {
+        clearTimeout(forceKillTimer);
+      }
+      settle({ exitCode, stderr, stdout });
+    });
+
+    const timeoutTimer = setTimeout(
+      () => {
+        if (settled) {
+          return;
+        }
+        stderr += `Command timed out after ${timeoutMs}ms.`;
+        child.kill("SIGTERM");
+        forceKillTimer = setTimeout(
+          () => child.kill("SIGKILL"),
+          Math.min(1000, Math.max(100, timeoutMs)),
+        );
+        settle({ exitCode: null, stderr, stdout });
+      },
+      Math.max(1, timeoutMs),
+    );
+  });
+}
+
+function formatCommandOutput(result: { stderr: string; stdout: string }) {
+  return [result.stdout.trim(), result.stderr.trim()]
+    .filter((output) => output.length > 0)
+    .join("\n");
+}
+
+function readPositiveNumberEnv(name: string, defaultValue: number) {
+  const rawValue = process.env[name];
+  if (rawValue === undefined || rawValue.trim().length === 0) {
+    return defaultValue;
+  }
+
+  const parsedValue = Number(rawValue);
+  if (!Number.isFinite(parsedValue) || parsedValue <= 0) {
+    return defaultValue;
+  }
+
+  return parsedValue;
+}
