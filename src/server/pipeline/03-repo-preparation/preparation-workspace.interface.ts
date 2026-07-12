@@ -9,6 +9,13 @@ export type PreparationWorkspaceUploadFile = {
   sourcePath: string;
 };
 
+export type PreparationWorkspaceUploadOptions = {
+  /** Cancels an in-flight upload and must be observed by implementations. */
+  signal?: AbortSignal;
+  /** Optional provider fail-safe timeout in milliseconds. */
+  timeoutMs?: number;
+};
+
 export type PreparationWorkspaceDownloadFile = {
   destinationPath: string;
   sourcePath: string;
@@ -62,7 +69,10 @@ export interface PreparationWorkspace {
    * and dependency caches so submitted-code execution starts from source state.
    */
   syncSubmittedCodeWorkspace?(): Promise<void>;
-  uploadFiles(files: PreparationWorkspaceUploadFile[]): Promise<void>;
+  uploadFiles(
+    files: PreparationWorkspaceUploadFile[],
+    options?: PreparationWorkspaceUploadOptions,
+  ): Promise<void>;
   /**
    * Uploads files only to the submitted-code runtime boundary when one exists.
    * Implementations must not mirror these files into the agent workspace.

@@ -1,6 +1,7 @@
 import { stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 
+import type { PreparationWorkspaceUploadOptions } from "../../../pipeline/03-repo-preparation/preparation-workspace.interface";
 import type {
   DraftCompositeReviewDecision,
   DraftCompositeReviewerInput,
@@ -68,7 +69,8 @@ export class DaytonaOpenCodeDraftCompositeReviewer {
             hardDeadlineAt,
           ),
           retryDelaysMs: this.options.draftReviewEvidenceUploadRetryDelaysMs,
-          upload: () => workspace.workspace.uploadFiles(upload.files),
+          upload: (options) =>
+            workspace.workspace.uploadFiles(upload.files, options),
         });
       } catch (error) {
         logEvidenceUpload(this.options.logger, {
@@ -247,7 +249,7 @@ async function uploadWithRetry(input: {
   timeoutMs: number;
   attemptTimeoutMs: number;
   retryDelaysMs: readonly number[];
-  upload: () => Promise<void>;
+  upload: (options: PreparationWorkspaceUploadOptions) => Promise<void>;
 }): Promise<void> {
   const timeoutMessage = `Draft Composite review evidence upload timed out after ${input.timeoutMs}ms.`;
   const deadline = Date.now() + input.timeoutMs;
@@ -259,8 +261,8 @@ async function uploadWithRetry(input: {
     const remaining = deadline - Date.now();
     if (remaining <= 0) throw new Error(timeoutMessage);
     try {
-      await withTimeout(
-        input.upload(),
+      await uploadWithTimeout(
+        input.upload,
         Math.min(input.attemptTimeoutMs, remaining),
         timeoutMessage,
       );
@@ -285,6 +287,45 @@ async function uploadWithRetry(input: {
       });
       await withTimeout(wait(delayMs), deadline - Date.now(), timeoutMessage);
     }
+  }
+}
+
+async function uploadWithTimeout(
+  upload: (options: PreparationWorkspaceUploadOptions) => Promise<void>,
+  timeoutMs: number,
+  timeoutMessage: string,
+): Promise<void> {
+  const controller = new AbortController();
+  const operation = upload({ signal: controller.signal, timeoutMs });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<"timed-out">((resolve) => {
+    timer = setTimeout(
+      () => {
+        controller.abort();
+        resolve("timed-out");
+      },
+      Math.max(1, timeoutMs),
+    );
+  });
+  try {
+    const result = await Promise.race([
+      operation.then(
+        () => "settled" as const,
+        (error) => ({ error }) as const,
+      ),
+      timeout,
+    ]);
+    if (result === "timed-out") {
+      // A retry may start only once the SDK has fully settled the aborted
+      // operation; never leave a detached upload running in the background.
+      await operation.catch(() => undefined);
+      throw new Error(timeoutMessage);
+    }
+    if (typeof result === "object" && "error" in result) {
+      throw result.error;
+    }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 

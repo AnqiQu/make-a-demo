@@ -16,6 +16,7 @@ import type {
   PreparationWorkspaceExecuteOptions,
   PreparationWorkspaceLogEntry,
   PreparationWorkspaceUploadFile,
+  PreparationWorkspaceUploadOptions,
 } from "../../../pipeline/03-repo-preparation/preparation-workspace.interface";
 import {
   type PipelineEventLogger,
@@ -40,6 +41,11 @@ type DaytonaSdkSandbox = {
     ): Promise<Array<{ error?: string; source: string }>>;
     uploadFiles(
       files: Array<{ destination: string; source: string }>,
+    ): Promise<void>;
+    uploadFileStream?(
+      source: string,
+      remotePath: string,
+      options?: { signal?: AbortSignal; timeout?: number },
     ): Promise<void>;
   };
   getSignedPreviewUrl(
@@ -705,12 +711,39 @@ class DaytonaSdkPreparationWorkspace implements PreparationWorkspace {
     return preview.url;
   }
 
-  async uploadFiles(files: PreparationWorkspaceUploadFile[]): Promise<void> {
-    const uploadedFiles = files.map((file) => ({
-      destination: file.destinationPath,
-      source: file.sourcePath,
-    }));
-    await this.sandbox.fs.uploadFiles(uploadedFiles);
+  async uploadFiles(
+    files: PreparationWorkspaceUploadFile[],
+    options: PreparationWorkspaceUploadOptions = {},
+  ): Promise<void> {
+    // Upload one stream at a time so cancellation can settle the current file
+    // before a caller retries, and so large video evidence never leaves a
+    // detached batch upload running in the provider.
+    if (this.sandbox.fs.uploadFileStream === undefined) {
+      if (options.signal !== undefined || options.timeoutMs !== undefined) {
+        throw new Error(
+          "Daytona sandbox does not support cancellable file uploads.",
+        );
+      }
+      await this.sandbox.fs.uploadFiles(
+        files.map((file) => ({
+          destination: file.destinationPath,
+          source: file.sourcePath,
+        })),
+      );
+      return;
+    }
+    for (const file of files) {
+      await this.sandbox.fs.uploadFileStream(
+        file.sourcePath,
+        file.destinationPath,
+        {
+          ...(options.signal === undefined ? {} : { signal: options.signal }),
+          ...(options.timeoutMs === undefined
+            ? {}
+            : { timeout: toSdkTimeoutSeconds(options.timeoutMs) }),
+        },
+      );
+    }
   }
 
   async uploadSubmittedCodeFiles(

@@ -1419,6 +1419,67 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
       ),
     ).toHaveLength(2);
   });
+
+  it("aborts and settles a timed-out evidence upload before retrying", async () => {
+    const events: unknown[] = [];
+    const reviewDirectory = await mkdtemp(join(tmpdir(), "makeademo-review-"));
+    const contactSheetPath = join(reviewDirectory, "contact-sheet.jpg");
+    await writeFile(contactSheetPath, "contact sheet");
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      draftReviewEvidenceUploadAttemptTimeoutMs: 5,
+      draftReviewEvidenceUploadTimeoutMs: 300,
+      modelID: "gpt-5.5",
+      providerID: "openai",
+    });
+
+    await expect(
+      agent.reviewDraftComposite({
+        ...draftCompositeReviewInput(reviewDirectory, {
+          contactSheetPaths: [contactSheetPath],
+          sampledFramePaths: [],
+        }),
+        preparationWorkspace: workspaceHandle(
+          events,
+          [{ decision: "accept", reason: "Looks good." }],
+          { abortableUploadFileAttempts: 1 },
+        ),
+      }),
+    ).resolves.toEqual({ decision: "accept", reason: "Looks good." });
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        { uploadAborted: true },
+        { uploadSettled: true, activeUploads: 0 },
+      ]),
+    );
+    const uploadEvents = events.filter(
+      (event): event is { uploadFiles: unknown[] } =>
+        typeof event === "object" && event !== null && "uploadFiles" in event,
+    );
+    expect(uploadEvents).toHaveLength(2);
+    const firstRetryUploadIndex = events.findIndex(
+      (event, index) =>
+        index >
+          events.findIndex(
+            (candidate) =>
+              typeof candidate === "object" &&
+              candidate !== null &&
+              "uploadFiles" in candidate,
+          ) &&
+        typeof event === "object" &&
+        event !== null &&
+        "uploadFiles" in event,
+    );
+    const uploadSettledIndex = events.findIndex(
+      (event) =>
+        typeof event === "object" &&
+        event !== null &&
+        "uploadSettled" in event &&
+        (event as { activeUploads?: number }).activeUploads === 0,
+    );
+    expect(uploadSettledIndex).toBeGreaterThanOrEqual(0);
+    expect(uploadSettledIndex).toBeLessThan(firstRetryUploadIndex);
+  });
 });
 
 function draftCompositeReviewInput(
@@ -1511,6 +1572,7 @@ function workspaceHandle(
     neverSettleSandboxLogEvents?: string[];
     neverSettleUploadFiles?: boolean;
     neverSettleUploadFileAttempts?: number;
+    abortableUploadFileAttempts?: number;
     transientSocketClosureUploadFiles?: number;
     rejectArtifactReads?: string[];
     rejectSandboxLogEvents?: string[];
@@ -1519,6 +1581,7 @@ function workspaceHandle(
 ) {
   let latestArtifact: unknown;
   let openCodeAttempt = 0;
+  let activeUploads = 0;
   const commandOutputScheduleByRun = [
     ...(helperOptions.commandOutputScheduleByRun ?? []),
   ];
@@ -1651,16 +1714,49 @@ function workspaceHandle(
       return `https://preview.example.test:${port}`;
     },
     async setOutboundNetworkAccess() {},
-    async uploadFiles(files) {
+    async uploadFiles(files, uploadOptions?: { signal?: AbortSignal }) {
       events.push({ uploadFiles: files });
-      if (helperOptions.neverSettleUploadFiles) {
-        await new Promise(() => {});
+      activeUploads += 1;
+      const settleUpload = () => {
+        activeUploads -= 1;
+        events.push({ uploadSettled: true, activeUploads });
+      };
+      if ((helperOptions.abortableUploadFileAttempts ?? 0) > 0) {
+        helperOptions.abortableUploadFileAttempts =
+          (helperOptions.abortableUploadFileAttempts ?? 0) - 1;
+        await new Promise<void>((resolve) => {
+          const signal = uploadOptions?.signal;
+          const onAbort = () => {
+            signal?.removeEventListener("abort", onAbort);
+            events.push({ uploadAborted: true });
+            settleUpload();
+            resolve();
+          };
+          signal?.addEventListener("abort", onAbort, { once: true });
+          if (signal?.aborted === true) onAbort();
+        });
+        return;
       }
-      if ((helperOptions.neverSettleUploadFileAttempts ?? 0) > 0) {
-        helperOptions.neverSettleUploadFileAttempts =
-          (helperOptions.neverSettleUploadFileAttempts ?? 0) - 1;
-        await new Promise(() => {});
+      if (
+        helperOptions.neverSettleUploadFiles ||
+        (helperOptions.neverSettleUploadFileAttempts ?? 0) > 0
+      ) {
+        if ((helperOptions.neverSettleUploadFileAttempts ?? 0) > 0) {
+          helperOptions.neverSettleUploadFileAttempts =
+            (helperOptions.neverSettleUploadFileAttempts ?? 0) - 1;
+        }
+        await new Promise<void>((resolve) => {
+          const signal = uploadOptions?.signal;
+          const onAbort = () => {
+            signal?.removeEventListener("abort", onAbort);
+            events.push({ uploadAborted: true });
+            resolve();
+          };
+          signal?.addEventListener("abort", onAbort, { once: true });
+          if (signal?.aborted === true) onAbort();
+        });
       }
+      settleUpload();
       if ((helperOptions.transientSocketClosureUploadFiles ?? 0) > 0) {
         helperOptions.transientSocketClosureUploadFiles =
           (helperOptions.transientSocketClosureUploadFiles ?? 0) - 1;

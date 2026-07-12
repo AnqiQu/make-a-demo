@@ -112,7 +112,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
   });
 
-  it("uploads screened workspace files with Daytona fs.uploadFiles", async () => {
+  it("uploads screened workspace files with abortable Daytona fs.uploadFileStream", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
       client: fakeClient(calls),
@@ -127,12 +127,38 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ]);
 
     expect(calls[1]).toEqual({
-      uploadFiles: [
+      uploadFileStream: {
+        remotePath: "/workspace/package.json",
+        source: "/tmp/repo/package.json",
+        options: {},
+      },
+    });
+  });
+
+  it("passes upload cancellation and timeout options to Daytona fs.uploadFileStream", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls),
+    });
+    const handle = await provider.create();
+    const controller = new AbortController();
+
+    await handle.workspace.uploadFiles(
+      [
         {
-          destination: "/workspace/package.json",
-          source: "/tmp/repo/package.json",
+          destinationPath: "/workspace/.makeademo/draft-review/draft.mp4",
+          sourcePath: "/tmp/draft.mp4",
         },
       ],
+      { signal: controller.signal, timeoutMs: 25 },
+    );
+
+    expect(calls[1]).toEqual({
+      uploadFileStream: {
+        remotePath: "/workspace/.makeademo/draft-review/draft.mp4",
+        source: "/tmp/draft.mp4",
+        options: { signal: controller.signal, timeout: 1 },
+      },
     });
   });
 
@@ -197,12 +223,11 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ]);
 
     expect(calls[1]).toEqual({
-      uploadFiles: [
-        {
-          destination: "/workspace/.makeademo/capture/script.ts",
-          source: "/tmp/script.ts",
-        },
-      ],
+      uploadFileStream: {
+        remotePath: "/workspace/.makeademo/capture/script.ts",
+        source: "/tmp/script.ts",
+        options: {},
+      },
     });
   });
 
@@ -1891,6 +1916,19 @@ function fakeClient(
       },
       async uploadFiles(files: unknown[]) {
         calls.push({ uploadFiles: files });
+      },
+      async uploadFileStream(
+        source: string,
+        remotePath: string,
+        uploadOptions?: { signal?: AbortSignal; timeout?: number },
+      ) {
+        calls.push({
+          uploadFileStream: {
+            options: uploadOptions ?? {},
+            remotePath,
+            source,
+          },
+        });
       },
     },
     id: "sandbox_123",
