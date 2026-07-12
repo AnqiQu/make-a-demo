@@ -153,6 +153,7 @@ export async function runDraftCompositeReviewLoop(
         )({
           baseUrl: captureBaseUrl,
           keepTemp: true,
+          log: input.log,
           runId: `capture-${runSuffix}`,
           scriptPackage: stage1.demoScriptPackage,
           ...(scriptPersistence.scriptPath === undefined

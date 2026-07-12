@@ -4,6 +4,7 @@ import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparat
 import { assertDemoScriptCaptureSdkContract } from "./capture-sdk-contract";
 import { type DemoScript, parseDemoScript } from "./demo-script.schema";
 import { PreparedWorkspacePlaywrightSceneRecorder } from "./playwright-scene-recorder";
+import type { SceneClipTrimLogger } from "./scene-clip-trimmer";
 import type { SceneRecorder } from "./scene-recorder.interface";
 
 type CapturedSceneManifestEntry = {
@@ -32,6 +33,7 @@ export type CaptureManifest = {
 export type CaptureScenesFromScriptInput = {
   baseUrl: string;
   keepTemp?: boolean;
+  log?: SceneClipTrimLogger;
   preparationWorkspace?: PreparationWorkspaceHandle;
   recorder?: SceneRecorder;
   runId?: string;
@@ -109,6 +111,7 @@ function createPreparedWorkspaceRecorder(input: CaptureScenesFromScriptInput) {
   }
 
   return new PreparedWorkspacePlaywrightSceneRecorder({
+    ...(input.log === undefined ? {} : { log: input.log }),
     preparationWorkspace: input.preparationWorkspace,
   });
 }

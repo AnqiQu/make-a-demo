@@ -160,6 +160,7 @@ describe("captureScenesFromScript", () => {
     const submittedCommands: string[] = [];
     const uploadedDestinations: string[] = [];
     const downloadedSources: string[] = [];
+    const trimEvents: string[] = [];
     const preparationWorkspace: PreparationWorkspaceHandle = {
       async destroy() {},
       id: "daytona_workspace",
@@ -202,8 +203,21 @@ describe("captureScenesFromScript", () => {
                 "/workspace/.makeademo/footage-capture-runs/capture-sandbox/work/continuous-take/playwright-videos/raw.webm\n",
             };
           }
+          if (
+            command.includes("ffprobe") &&
+            command.includes("avg_frame_rate")
+          ) {
+            return { exitCode: 0, stderr: "", stdout: "25/1\n" };
+          }
           if (command.includes("ffprobe")) {
-            return { exitCode: 0, stderr: "", stdout: "1.200\n" };
+            return { exitCode: 0, stderr: "", stdout: "1.240\n" };
+          }
+          if (command.includes("ssim")) {
+            return {
+              exitCode: 0,
+              stderr: "SSIM Y:1.000000 U:1.000000 V:1.000000 All:1.000000",
+              stdout: "",
+            };
           }
           if (command.includes("bun ")) {
             return {
@@ -235,6 +249,9 @@ describe("captureScenesFromScript", () => {
     const manifest = await captureScenesFromScript({
       baseUrl: "https://preview.example.test/",
       keepTemp: true,
+      log: async (entry) => {
+        trimEvents.push(entry.event);
+      },
       preparationWorkspace,
       runId: "capture-sandbox",
       scriptPackage: validDemoScript(),
@@ -243,7 +260,7 @@ describe("captureScenesFromScript", () => {
 
     expect(manifest.scenes).toEqual([
       expect.objectContaining({
-        durationSeconds: 1.2,
+        durationSeconds: 1.24,
         markerEndMs: 900,
         markerStartMs: 100,
         sceneId: "scene-001",
@@ -264,6 +281,12 @@ describe("captureScenesFromScript", () => {
     expect(submittedCommands.join("\n")).toContain("npm root -g");
     expect(submittedCommands.join("\n")).toContain("ffmpeg");
     expect(submittedCommands.join("\n")).toContain("ffprobe");
+    expect(submittedCommands.join("\n")).toContain("ssim");
+    expect(submittedCommands.join("\n")).not.toContain("-c copy");
+    expect(trimEvents).toEqual([
+      "scene-clip-trim-started",
+      "scene-clip-trim-succeeded",
+    ]);
     expect(executedCommands.join("\n")).not.toContain("ffmpeg");
     expect(executedCommands.join("\n")).not.toContain("ffprobe");
     expect(downloadedSources).toEqual(

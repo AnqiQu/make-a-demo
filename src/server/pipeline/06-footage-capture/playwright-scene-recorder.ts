@@ -15,6 +15,12 @@ import {
   validateDemoScriptCaptureSdkTypes,
   writeGeneratedCaptureSdkHarness,
 } from "./capture-sdk-harness";
+import {
+  type SceneClipTrimLogger,
+  type SceneClipTrimmer,
+  createLocalSceneClipTrimmer,
+  createSceneClipTrimmer,
+} from "./scene-clip-trimmer";
 import type {
   RecordSceneInput,
   RecordedScene,
@@ -32,14 +38,6 @@ export type PlaywrightSceneRecorderOptions = {
   sceneScriptRunner?: SceneScriptRunner;
   sceneTimeoutMs?: number;
 };
-
-export type SceneClipTrimmer = (input: {
-  durationMs: number;
-  outputVideoPath: string;
-  rawTakePath: string;
-  sceneId: string;
-  startMs: number;
-}) => Promise<{ durationSeconds: number }>;
 
 type SceneScriptRunner = (
   scenePath: string,
@@ -68,7 +66,7 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
   private readonly sceneScriptRunner: SceneScriptRunner;
 
   constructor(options: PlaywrightSceneRecorderOptions = {}) {
-    this.clipTrimmer = options.clipTrimmer ?? trimSceneClipWithFfmpeg;
+    this.clipTrimmer = options.clipTrimmer ?? createLocalSceneClipTrimmer();
     this.headed = options.headed ?? false;
     this.pauseAfterSceneMs = options.pauseAfterSceneMs ?? 0;
     this.postRollMs = options.postRollMs ?? 350;
@@ -138,7 +136,7 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
       const startMs = Math.max(0, range.startedAtMs - this.preRollMs);
       const endMs = Math.max(startMs + 1, range.endedAtMs + this.postRollMs);
       const outputVideoPath = join(sceneClipsDirectory, `${scene.id}.webm`);
-      const trimResult = await this.clipTrimmer({
+      const trimResult = await this.clipTrimmer.trimClip({
         durationMs: endMs - startMs,
         outputVideoPath,
         rawTakePath,
@@ -166,6 +164,7 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
   private readonly postRollMs: number;
   private readonly preRollMs: number;
   private readonly sceneTimeoutMs: number;
+  private readonly clipTrimmer: SceneClipTrimmer;
 
   constructor(
     private readonly options: {
@@ -174,6 +173,7 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
       postRollMs?: number;
       preRollMs?: number;
       preparationWorkspace: PreparationWorkspaceHandle;
+      log?: SceneClipTrimLogger;
       sceneTimeoutMs?: number;
     },
   ) {
@@ -182,6 +182,10 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
     this.postRollMs = options.postRollMs ?? 350;
     this.preRollMs = options.preRollMs ?? 250;
     this.sceneTimeoutMs = options.sceneTimeoutMs ?? 120_000;
+    this.clipTrimmer = createSubmittedCodeSceneClipTrimmer({
+      ...(options.log === undefined ? {} : { log: options.log }),
+      workspace: options.preparationWorkspace.workspace,
+    });
   }
 
   async recordScenes(input: RecordSceneInput): Promise<RecordedScene[]> {
@@ -314,31 +318,12 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
         localSceneClipsDirectory,
         `${scene.id}.webm`,
       );
-      const durationSeconds = (endMs - startMs) / 1000;
-      const trimResult = await executeSubmittedCode(
-        workspace,
-        [
-          "ffmpeg",
-          "-y",
-          "-ss",
-          shellQuote((startMs / 1000).toFixed(3)),
-          "-i",
-          shellQuote(remoteRawTakePath),
-          "-t",
-          shellQuote(durationSeconds.toFixed(3)),
-          "-c",
-          "copy",
-          shellQuote(remoteOutputVideoPath),
-        ].join(" "),
-      );
-      if (trimResult.exitCode !== 0) {
-        throw new Error(
-          `Failed to trim Scene ${scene.id} with ffmpeg.\n${[trimResult.stdout, trimResult.stderr].filter(Boolean).join("\n")}`,
-        );
-      }
-      const probedDurationSeconds = await probeRemoteVideoDurationSeconds({
-        videoPath: remoteOutputVideoPath,
-        workspace,
+      const trimResult = await this.clipTrimmer.trimClip({
+        durationMs: endMs - startMs,
+        outputVideoPath: remoteOutputVideoPath,
+        rawTakePath: remoteRawTakePath,
+        sceneId: scene.id,
+        startMs,
       });
 
       downloads.push({
@@ -346,7 +331,7 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
         sourcePath: remoteOutputVideoPath,
       });
       recordedScenes.push({
-        durationSeconds: probedDurationSeconds,
+        durationSeconds: trimResult.durationSeconds,
         markerEndMs: range.endedAtMs,
         markerStartMs: range.startedAtMs,
         sceneId: scene.id,
@@ -363,93 +348,19 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
   }
 }
 
-async function trimSceneClipWithFfmpeg(input: {
-  durationMs: number;
-  outputVideoPath: string;
-  rawTakePath: string;
-  sceneId: string;
-  startMs: number;
-}): Promise<{ durationSeconds: number }> {
-  const durationSeconds = input.durationMs / 1000;
-  const result = await runCommand("ffmpeg", [
-    "-y",
-    "-ss",
-    (input.startMs / 1000).toFixed(3),
-    "-i",
-    input.rawTakePath,
-    "-t",
-    durationSeconds.toFixed(3),
-    "-c",
-    "copy",
-    input.outputVideoPath,
-  ]);
-
-  if (result.exitCode !== 0) {
-    throw new Error(
-      `Failed to trim Scene ${input.sceneId} with ffmpeg.\n${[result.stdout, result.stderr].filter(Boolean).join("\n")}`,
-    );
-  }
-
-  return {
-    durationSeconds: await probeVideoDurationSeconds(input.outputVideoPath),
-  };
-}
-
-async function probeVideoDurationSeconds(videoPath: string): Promise<number> {
-  const result = await runCommand("ffprobe", [
-    "-v",
-    "error",
-    "-show_entries",
-    "format=duration",
-    "-of",
-    "default=noprint_wrappers=1:nokey=1",
-    videoPath,
-  ]);
-
-  if (result.exitCode !== 0) {
-    throw new Error(
-      `Failed to probe trimmed Scene clip duration.\n${[result.stdout, result.stderr].filter(Boolean).join("\n")}`,
-    );
-  }
-
-  const durationSeconds = Number(result.stdout.trim());
-  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
-    throw new Error(`ffprobe returned invalid duration for ${videoPath}`);
-  }
-
-  return durationSeconds;
-}
-
-async function probeRemoteVideoDurationSeconds(input: {
-  videoPath: string;
+function createSubmittedCodeSceneClipTrimmer(input: {
+  log?: SceneClipTrimLogger;
   workspace: PreparationWorkspace;
-}): Promise<number> {
-  const result = await executeSubmittedCode(
-    input.workspace,
-    [
-      "ffprobe",
-      "-v",
-      "error",
-      "-show_entries",
-      "format=duration",
-      "-of",
-      "default=noprint_wrappers=1:nokey=1",
-      shellQuote(input.videoPath),
-    ].join(" "),
-  );
-
-  if (result.exitCode !== 0) {
-    throw new Error(
-      `Failed to probe trimmed Scene clip duration.\n${[result.stdout, result.stderr].filter(Boolean).join("\n")}`,
-    );
-  }
-
-  const durationSeconds = Number(result.stdout.trim());
-  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
-    throw new Error(`ffprobe returned invalid duration for ${input.videoPath}`);
-  }
-
-  return durationSeconds;
+}) {
+  return createSceneClipTrimmer({
+    ...(input.log === undefined ? {} : { log: input.log }),
+    async runCommand(command, args) {
+      return await executeSubmittedCode(
+        input.workspace,
+        [command, ...args.map(shellQuote)].join(" "),
+      );
+    },
+  });
 }
 
 async function runSceneScript(scenePath: string, timeoutMs: number) {
@@ -499,31 +410,6 @@ function formatSceneFailure(sceneId: string, result: SceneScriptResult) {
   return `Scene ${sceneId} failed with exit code ${result.exitCode}.${
     details.length > 0 ? `\n${details}` : ""
   }`;
-}
-
-async function runCommand(command: string, args: string[]) {
-  return await new Promise<{
-    exitCode: number | null;
-    stderr: string;
-    stdout: string;
-  }>((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.once("error", reject);
-    child.once("close", (exitCode) => {
-      resolve({ exitCode, stderr, stdout });
-    });
-  });
 }
 
 function extractMarkerLog(stdout: string) {

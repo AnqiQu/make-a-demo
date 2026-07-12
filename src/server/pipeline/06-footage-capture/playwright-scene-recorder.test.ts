@@ -149,15 +149,17 @@ describe("DefaultPlaywrightSceneRecorder", () => {
       startMs: number;
     }> = [];
     const recorder = new DefaultPlaywrightSceneRecorder({
-      clipTrimmer: async (input) => {
-        trims.push({
-          durationMs: input.durationMs,
-          outputVideoPath: input.outputVideoPath,
-          sceneId: input.sceneId,
-          startMs: input.startMs,
-        });
-        await writeFile(input.outputVideoPath, "trimmed");
-        return { durationSeconds: input.durationMs / 1000 };
+      clipTrimmer: {
+        async trimClip(input) {
+          trims.push({
+            durationMs: input.durationMs,
+            outputVideoPath: input.outputVideoPath,
+            sceneId: input.sceneId,
+            startMs: input.startMs,
+          });
+          await writeFile(input.outputVideoPath, "trimmed");
+          return trimResult(input.durationMs);
+        },
       },
       postRollMs: 0,
       preRollMs: 0,
@@ -230,10 +232,12 @@ describe("DefaultPlaywrightSceneRecorder", () => {
     const trims: Array<{ durationMs: number; startMs: number }> = [];
     await writeFile(rawVideoPath, "raw video");
     const recorder = new DefaultPlaywrightSceneRecorder({
-      clipTrimmer: async (input) => {
-        trims.push({ durationMs: input.durationMs, startMs: input.startMs });
-        await writeFile(input.outputVideoPath, "trimmed");
-        return { durationSeconds: input.durationMs / 1000 };
+      clipTrimmer: {
+        async trimClip(input) {
+          trims.push({ durationMs: input.durationMs, startMs: input.startMs });
+          await writeFile(input.outputVideoPath, "trimmed");
+          return trimResult(input.durationMs);
+        },
       },
       postRollMs: 350,
       preRollMs: 250,
@@ -278,10 +282,12 @@ describe("DefaultPlaywrightSceneRecorder", () => {
     const trims: Array<{ durationMs: number; startMs: number }> = [];
     await writeFile(rawVideoPath, "raw video");
     const recorder = new DefaultPlaywrightSceneRecorder({
-      clipTrimmer: async (input) => {
-        trims.push({ durationMs: input.durationMs, startMs: input.startMs });
-        await writeFile(input.outputVideoPath, "trimmed");
-        return { durationSeconds: input.durationMs / 1000 };
+      clipTrimmer: {
+        async trimClip(input) {
+          trims.push({ durationMs: input.durationMs, startMs: input.startMs });
+          await writeFile(input.outputVideoPath, "trimmed");
+          return trimResult(input.durationMs);
+        },
       },
       postRollMs: 350,
       preRollMs: 250,
@@ -326,10 +332,12 @@ describe("DefaultPlaywrightSceneRecorder", () => {
     const trims: Array<{ durationMs: number; startMs: number }> = [];
     await writeFile(rawVideoPath, "raw video");
     const recorder = new DefaultPlaywrightSceneRecorder({
-      clipTrimmer: async (input) => {
-        trims.push({ durationMs: input.durationMs, startMs: input.startMs });
-        await writeFile(input.outputVideoPath, "trimmed");
-        return { durationSeconds: input.durationMs / 1000 };
+      clipTrimmer: {
+        async trimClip(input) {
+          trims.push({ durationMs: input.durationMs, startMs: input.startMs });
+          await writeFile(input.outputVideoPath, "trimmed");
+          return trimResult(input.durationMs);
+        },
       },
       postRollMs: 350,
       preRollMs: 250,
@@ -620,4 +628,13 @@ function sceneMarker(input: {
   sceneId: string;
 }) {
   return `[makeademo:scene] ${JSON.stringify(input)}`;
+}
+
+function trimResult(durationMs: number) {
+  return {
+    durationDriftMs: 0,
+    durationSeconds: durationMs / 1000,
+    firstFrameSsim: 1,
+    sourceFrameDurationMs: 40,
+  };
 }
