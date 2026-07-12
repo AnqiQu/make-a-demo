@@ -6,9 +6,13 @@ import { join } from "node:path";
 import { uploadSubmittedCodeWorkspaceFiles } from "../03-repo-preparation/preparation-workspace-upload";
 import { executeSubmittedCode } from "../03-repo-preparation/submitted-code-execution";
 import {
+  parseCaptureSdkBlockedNetworkEvents,
+  readCaptureSdkBrowserActionEvents,
+} from "../06-footage-capture/capture-sdk-event.schema";
+import {
   validateDemoScriptCaptureSdkTypes,
   writeGeneratedCaptureSdkHarness,
-} from "../06-footage-capture/capture-sdk-contract";
+} from "../06-footage-capture/capture-sdk-harness";
 import { prepareStylizedPlaywrightScript } from "../06-footage-capture/stylized-playwright-script";
 import type {
   CapturePathSceneValidationInput,
@@ -322,35 +326,8 @@ async function runSceneScript(scenePath: string) {
 }
 
 function readBlockedNetworkAttempts(stderr: string) {
-  return stderr
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith("[makeademo:network-blocked] "))
-    .map((line) =>
-      JSON.parse(line.slice("[makeademo:network-blocked] ".length)),
-    )
-    .filter(
-      (value) =>
-        typeof value === "object" &&
-        value !== null &&
-        value.direction === "outbound" &&
-        value.phase === "runtime" &&
-        typeof value.host === "string",
-    )
-    .map((value) => ({
-      direction: "outbound" as const,
-      host: value.host as string,
-      phase: "runtime" as const,
-    }));
+  return parseCaptureSdkBlockedNetworkEvents(stderr);
 }
-
-type ParsedActionMarker =
-  | {
-      event: "failed" | "started" | "succeeded";
-      label: string;
-      status: "valid";
-    }
-  | { status: "malformed" };
 
 function createSceneFailureReason(sceneId: string, failedAction?: string) {
   return `Scene ${sceneId} failed during Capture Path Validation${
@@ -367,18 +344,21 @@ function readFailedAction(logs: string[]) {
       continue;
     }
 
-    if (marker.event === "started") {
-      openAction = marker.label;
+    if (marker.event.event === "started") {
+      openAction = marker.event.label;
       continue;
     }
 
-    if (marker.event === "succeeded" && openAction === marker.label) {
+    if (
+      marker.event.event === "succeeded" &&
+      openAction === marker.event.label
+    ) {
       openAction = undefined;
       continue;
     }
 
-    if (marker.event === "failed") {
-      failedAction = marker.label;
+    if (marker.event.event === "failed") {
+      failedAction = marker.event.label;
       openAction = undefined;
     }
   }
@@ -386,35 +366,8 @@ function readFailedAction(logs: string[]) {
   return failedAction ?? openAction;
 }
 
-function readActionMarkers(logs: string[]): ParsedActionMarker[] {
-  return logs
-    .join("\n")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith("[makeademo:action] "))
-    .map((line) => readActionMarker(line));
-}
-
-function readActionMarker(line: string): ParsedActionMarker {
-  try {
-    const marker = JSON.parse(line.slice("[makeademo:action] ".length));
-    if (
-      typeof marker === "object" &&
-      marker !== null &&
-      typeof marker.label === "string" &&
-      (marker.event === "started" ||
-        marker.event === "succeeded" ||
-        marker.event === "failed")
-    ) {
-      return {
-        event: marker.event,
-        label: marker.label,
-        status: "valid",
-      };
-    }
-  } catch {}
-
-  return { status: "malformed" };
+function readActionMarkers(logs: string[]) {
+  return readCaptureSdkBrowserActionEvents(logs);
 }
 
 function readValidationFailureScreenshotPath(

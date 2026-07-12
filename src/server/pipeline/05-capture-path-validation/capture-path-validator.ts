@@ -4,6 +4,10 @@ import {
 } from "../../shared/logging/pipeline-event-logger";
 import { assertDemoScriptCaptureSdkContract } from "../06-footage-capture/capture-sdk-contract";
 import {
+  readCaptureSdkSceneEvents,
+  reduceCaptureSdkSceneEvents,
+} from "../06-footage-capture/capture-sdk-event.schema";
+import {
   type SceneDescription,
   parseDemoScript,
 } from "../06-footage-capture/demo-script.schema";
@@ -57,15 +61,6 @@ export type CapturePathSceneValidationResult =
       stderrPath?: string;
       stdoutPath?: string;
     };
-
-type ParsedSceneMarker =
-  | {
-      event: "failed" | "started" | "succeeded";
-      message?: string;
-      sceneId: string;
-      status: "valid";
-    }
-  | { line: string; status: "malformed" };
 
 /**
  * Dry-runs one Scene Description without recording final Scene footage.
@@ -423,126 +418,81 @@ async function capturePathSceneFailure(input: {
 }
 
 function validateSceneMarkers(logs: string[], sceneIds: string[]) {
-  const markers = readSceneMarkers(logs);
-  const declaredSceneIds = new Set(sceneIds);
-  const completed = new Set<string>();
-  const open = new Set<string>();
-
-  for (const marker of markers) {
-    if (marker.status !== "valid") {
-      return {
-        reason: `Capture Path emitted malformed Scene marker: ${marker.line}`,
-        status: "failed" as const,
-      };
-    }
-
-    const validMarker = marker;
-
-    if (!declaredSceneIds.has(validMarker.sceneId)) {
-      return {
-        reason: `Capture Path emitted undeclared Scene marker ${validMarker.sceneId}.`,
-        sceneId: validMarker.sceneId,
-        status: "failed" as const,
-      };
-    }
-
-    if (validMarker.event === "started") {
-      if (open.size > 0) {
-        return {
-          reason: "Capture Path emitted nested Scene markers.",
-          sceneId: validMarker.sceneId,
-          status: "failed" as const,
-        };
-      }
-      if (completed.has(validMarker.sceneId) || open.has(validMarker.sceneId)) {
-        return {
-          reason: `Capture Path emitted duplicate Scene marker ${validMarker.sceneId}.`,
-          sceneId: validMarker.sceneId,
-          status: "failed" as const,
-        };
-      }
-      open.add(validMarker.sceneId);
-      continue;
-    }
-
-    if (!open.has(validMarker.sceneId)) {
-      return {
-        reason: `Capture Path emitted ${validMarker.event} marker before start for Scene ${validMarker.sceneId}.`,
-        sceneId: validMarker.sceneId,
-        status: "failed" as const,
-      };
-    }
-    open.delete(validMarker.sceneId);
-
-    if (validMarker.event === "failed") {
-      return {
-        reason: `Scene ${validMarker.sceneId} failed during Capture Path Validation.${
-          validMarker.message === undefined ? "" : ` ${validMarker.message}`
-        }`,
-        sceneId: validMarker.sceneId,
-        status: "failed" as const,
-      };
-    }
-
-    completed.add(validMarker.sceneId);
-  }
-
-  if (open.size > 0) {
+  const parsed = readCaptureSdkSceneEvents(logs);
+  const malformed = parsed.find((marker) => marker.status === "malformed");
+  if (malformed?.status === "malformed") {
     return {
-      reason: "Capture Path emitted Scene start marker without an end marker.",
-      sceneId: [...open][0],
+      reason: `Capture Path emitted malformed Scene marker: ${malformed.line}`,
       status: "failed" as const,
     };
   }
 
-  for (const sceneId of sceneIds) {
-    if (!completed.has(sceneId)) {
-      return {
-        reason: `Scene ${sceneId} did not emit complete Capture Path markers.`,
-        sceneId,
-        status: "failed" as const,
-      };
-    }
+  const result = reduceCaptureSdkSceneEvents(
+    parsed
+      .filter((marker) => marker.status === "valid")
+      .map((marker) => marker.event),
+    sceneIds,
+  );
+  if (result.status === "succeeded") {
+    return result;
   }
 
-  return { status: "succeeded" as const };
+  switch (result.code) {
+    case "undeclared":
+      return {
+        reason: `Capture Path emitted undeclared Scene marker ${result.sceneId}.`,
+        sceneId: result.sceneId,
+        status: "failed" as const,
+      };
+    case "nested":
+      return {
+        reason: "Capture Path emitted nested Scene markers.",
+        status: "failed" as const,
+      };
+    case "duplicate":
+      return {
+        reason: `Capture Path emitted duplicate Scene marker ${result.sceneId}.`,
+        sceneId: result.sceneId,
+        status: "failed" as const,
+      };
+    case "not-started":
+      return {
+        reason: `Capture Path emitted ${result.event?.event ?? "end"} marker before start for Scene ${result.sceneId}.`,
+        sceneId: result.sceneId,
+        status: "failed" as const,
+      };
+    case "failed":
+      return {
+        reason: `Scene ${result.sceneId} failed during Capture Path Validation.${
+          result.message === undefined ? "" : ` ${result.message}`
+        }`,
+        sceneId: result.sceneId,
+        status: "failed" as const,
+      };
+    case "unclosed":
+      return {
+        reason:
+          "Capture Path emitted Scene start marker without an end marker.",
+        ...(result.sceneId === undefined ? {} : { sceneId: result.sceneId }),
+        status: "failed" as const,
+      };
+    case "missing":
+      return {
+        reason: `Scene ${result.sceneId} did not emit complete Capture Path markers.`,
+        sceneId: result.sceneId,
+        status: "failed" as const,
+      };
+  }
 }
 
 function readFailedSceneId(logs: string[]) {
-  for (const marker of readSceneMarkers(logs)) {
-    if (marker.status === "valid" && marker.event === "failed") {
-      return marker.sceneId;
+  for (const marker of readCaptureSdkSceneEvents(logs)) {
+    if (marker.status === "valid" && marker.event.event === "failed") {
+      return marker.event.sceneId;
     }
   }
 
   return undefined;
-}
-
-function readSceneMarkers(logs: string[]): ParsedSceneMarker[] {
-  return logs
-    .join("\n")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith("[makeademo:scene] "))
-    .map((line) => readSceneMarker(line));
-}
-
-function readSceneMarker(line: string): ParsedSceneMarker {
-  try {
-    const marker = JSON.parse(line.slice("[makeademo:scene] ".length));
-    if (
-      typeof marker === "object" &&
-      marker !== null &&
-      typeof marker.sceneId === "string" &&
-      (marker.event === "started" ||
-        marker.event === "succeeded" ||
-        marker.event === "failed")
-    ) {
-      return { ...marker, status: "valid" };
-    }
-  } catch {}
-
-  return { line, status: "malformed" };
 }
 
 async function writeCapturePathDiagnostics(

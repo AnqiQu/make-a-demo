@@ -3,7 +3,7 @@ import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { writeGeneratedCaptureSdkHarness } from "./capture-sdk-contract";
+import { writeGeneratedCaptureSdkHarness } from "./capture-sdk-harness";
 import { prepareStylizedPlaywrightScript } from "./stylized-playwright-script";
 
 describe("prepareStylizedPlaywrightScript", () => {

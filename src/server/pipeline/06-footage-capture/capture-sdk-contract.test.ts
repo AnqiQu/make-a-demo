@@ -3,11 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { assertDemoScriptCaptureSdkContract } from "./capture-sdk-contract";
 import {
-  assertDemoScriptCaptureSdkContract,
   validateDemoScriptCaptureSdkTypes,
   writeGeneratedCaptureSdkHarness,
-} from "./capture-sdk-contract";
+} from "./capture-sdk-harness";
 import type { DemoScript } from "./demo-script.schema";
 
 describe("Capture SDK Contract", () => {

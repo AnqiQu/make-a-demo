@@ -6,9 +6,15 @@ import { uploadSubmittedCodeWorkspaceFiles } from "../03-repo-preparation/prepar
 import type { PreparationWorkspace } from "../03-repo-preparation/preparation-workspace.interface";
 import { executeSubmittedCode } from "../03-repo-preparation/submitted-code-execution";
 import {
+  type CaptureSdkSceneEvent,
+  parseCaptureSdkBlockedNetworkEvents,
+  parseCaptureSdkSceneEvents,
+  reduceCaptureSdkSceneEvents,
+} from "./capture-sdk-event.schema";
+import {
   validateDemoScriptCaptureSdkTypes,
   writeGeneratedCaptureSdkHarness,
-} from "./capture-sdk-contract";
+} from "./capture-sdk-harness";
 import type {
   RecordSceneInput,
   RecordedScene,
@@ -49,12 +55,7 @@ type SceneScriptResult = {
 
 type RawVideoFinder = (directory: string) => Promise<string>;
 
-type SceneMarker = {
-  elapsedMs: number;
-  event: "failed" | "started" | "succeeded";
-  message?: string;
-  sceneId: string;
-};
+type SceneMarker = CaptureSdkSceneEvent;
 
 export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
   private readonly headed: boolean;
@@ -533,123 +534,47 @@ function extractMarkerLog(stdout: string) {
 }
 
 function parseSceneMarkers(stdout: string): SceneMarker[] {
-  return stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith("[makeademo:scene] "))
-    .map((line) => readSceneMarker(line))
-    .map((value): SceneMarker => {
-      const marker = value as Partial<SceneMarker>;
-      if (
-        typeof value !== "object" ||
-        value === null ||
-        typeof marker.sceneId !== "string" ||
-        typeof marker.elapsedMs !== "number" ||
-        !Number.isFinite(marker.elapsedMs) ||
-        (marker.event !== "started" &&
-          marker.event !== "succeeded" &&
-          marker.event !== "failed")
-      ) {
-        throw new Error(
-          "Malformed MakeADemo scene marker emitted by capture script.",
-        );
-      }
-
-      return {
-        elapsedMs: marker.elapsedMs,
-        event: marker.event,
-        ...(marker.message === undefined ? {} : { message: marker.message }),
-        sceneId: marker.sceneId,
-      };
-    });
-}
-
-function readSceneMarker(line: string): unknown {
-  try {
-    return JSON.parse(line.slice("[makeademo:scene] ".length));
-  } catch {
-    throw new Error(
-      `Malformed MakeADemo scene marker emitted by capture script: ${line}`,
-    );
-  }
+  return parseCaptureSdkSceneEvents(stdout);
 }
 
 function readMarkerRanges(markers: SceneMarker[], sceneIds: string[]) {
-  const ranges = new Map<string, { endedAtMs: number; startedAtMs: number }>();
-  const openScenes = new Map<string, number>();
-
-  for (const marker of markers) {
-    if (!sceneIds.includes(marker.sceneId)) {
-      throw new Error(
-        `Capture script emitted undeclared Scene marker ${marker.sceneId}.`,
-      );
-    }
-
-    if (marker.event === "started") {
-      if (openScenes.size > 0) {
-        throw new Error("Capture script emitted nested Scene markers.");
-      }
-      if (ranges.has(marker.sceneId) || openScenes.has(marker.sceneId)) {
-        throw new Error(
-          `Capture script emitted duplicate markers for Scene ${marker.sceneId}.`,
-        );
-      }
-      openScenes.set(marker.sceneId, marker.elapsedMs);
-      continue;
-    }
-
-    const startedAtMs = openScenes.get(marker.sceneId);
-    if (startedAtMs === undefined) {
-      throw new Error(
-        `Capture script emitted ${marker.event} marker before start for Scene ${marker.sceneId}.`,
-      );
-    }
-    openScenes.delete(marker.sceneId);
-
-    if (marker.event === "failed") {
-      throw new Error(
-        `Scene ${marker.sceneId} failed during Footage Capture.${marker.message ? ` ${marker.message}` : ""}`,
-      );
-    }
-
-    ranges.set(marker.sceneId, {
-      endedAtMs: marker.elapsedMs,
-      startedAtMs,
-    });
+  const result = reduceCaptureSdkSceneEvents(markers, sceneIds);
+  if (result.status === "succeeded") {
+    return result.ranges;
   }
 
-  if (openScenes.size > 0) {
-    throw new Error(
-      "Capture script emitted Scene start marker without an end marker.",
-    );
+  switch (result.code) {
+    case "undeclared":
+      throw new Error(
+        `Capture script emitted undeclared Scene marker ${result.sceneId}.`,
+      );
+    case "nested":
+      throw new Error("Capture script emitted nested Scene markers.");
+    case "duplicate":
+      throw new Error(
+        `Capture script emitted duplicate markers for Scene ${result.sceneId}.`,
+      );
+    case "not-started":
+      throw new Error(
+        `Capture script emitted ${result.event?.event ?? "end"} marker before start for Scene ${result.sceneId}.`,
+      );
+    case "failed":
+      throw new Error(
+        `Scene ${result.sceneId} failed during Footage Capture.${result.message === undefined ? "" : ` ${result.message}`}`,
+      );
+    case "unclosed":
+      throw new Error(
+        "Capture script emitted Scene start marker without an end marker.",
+      );
+    case "missing":
+      throw new Error(`Scene ${result.sceneId} did not emit complete markers.`);
   }
-
-  for (const sceneId of sceneIds) {
-    if (!ranges.has(sceneId)) {
-      throw new Error(`Scene ${sceneId} did not emit complete markers.`);
-    }
-  }
-
-  return ranges;
 }
 
 function readBlockedNetworkAttempts(stderr: string) {
-  return stderr
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith("[makeademo:network-blocked] "))
-    .map((line) =>
-      JSON.parse(line.slice("[makeademo:network-blocked] ".length)),
-    )
-    .filter(
-      (value) =>
-        typeof value === "object" &&
-        value !== null &&
-        value.direction === "outbound" &&
-        value.phase === "runtime" &&
-        typeof value.host === "string",
-    )
-    .map((value) => ({ host: value.host as string }));
+  return parseCaptureSdkBlockedNetworkEvents(stderr).map((attempt) => ({
+    host: attempt.host,
+  }));
 }
 
 function killChildProcessGroup(pid: number | undefined) {
