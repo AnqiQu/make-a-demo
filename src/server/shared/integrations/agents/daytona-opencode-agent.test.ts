@@ -1,8 +1,16 @@
 import { describe, expect, it } from "vitest";
 
+import type { DraftCompositeReviewer } from "../../../pipeline/07-compositing/draft-composite-reviewer.interface";
 import { DaytonaOpenCodeAgent } from "./daytona-opencode-agent";
 
+const reviewerContract: DraftCompositeReviewer =
+  DaytonaOpenCodeAgent.prototype.reviewDraftComposite;
+
 describe("DaytonaOpenCodeAgent", () => {
+  it("exposes the canonical Draft Composite reviewer contract", () => {
+    expect(typeof reviewerContract).toBe("function");
+  });
+
   it("requires Daytona credentials for the unified OpenCode agent", () => {
     expect(
       () =>

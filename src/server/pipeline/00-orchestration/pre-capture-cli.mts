@@ -93,6 +93,7 @@ const repoPreparationAgent = createRepoPreparationAgent({
     ? {}
     : { daytonaSubmittedCodeSnapshot }),
   modelID: options.modelID,
+  logger: cliLogger.child({ component: "repo-preparation-agent" }),
   onStderr: (chunk) => process.stderr.write(chunk),
   onStdout: (chunk) => openCodeOutput.write(chunk),
   providerID: options.providerID,
@@ -102,6 +103,7 @@ const repoPreparationAgent = createRepoPreparationAgent({
     : { repoPreparationTimeoutMs }),
 });
 const scriptGenerationAgent = new DaytonaOpenCodeScriptGeneration({
+  logger: cliLogger.child({ component: "script-generation-agent" }),
   modelID: options.modelID,
   onStderr: (chunk) => process.stderr.write(chunk),
   onStdout: (chunk) => openCodeOutput.write(chunk),

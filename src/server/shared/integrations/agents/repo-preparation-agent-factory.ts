@@ -1,6 +1,9 @@
 import type { RepoPreparationAgent } from "../../../pipeline/03-repo-preparation/repo-preparation-agent.interface";
 import { validateProject } from "../../../pipeline/05-capture-path-validation/project-runtime-preflight/project-validator";
-import type { PipelineLogSink } from "../../logging/pipeline-event-logger";
+import type {
+  PipelineEventLogger,
+  PipelineLogSink,
+} from "../../logging/pipeline-event-logger";
 import { PlaywrightBrowserValidator } from "../browser/playwright-browser-validator";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../daytona/daytona-sdk-preparation-workspace-provider";
 import { DaytonaSandboxRunner } from "../sandbox/daytona-sandbox-runner";
@@ -11,6 +14,7 @@ export type RepoPreparationAgentFactoryOptions = {
   daytonaApiKey?: string;
   daytonaSnapshot?: string;
   daytonaSubmittedCodeSnapshot?: string;
+  logger?: PipelineEventLogger;
   modelID: string;
   onStderr?: (chunk: string) => void;
   onStdout?: (chunk: string) => void;
@@ -44,6 +48,7 @@ export function createRepoPreparationAgent(
           }),
     },
     modelID: options.modelID,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
     ...(options.onStderr === undefined ? {} : { onStderr: options.onStderr }),
     ...(options.onStdout === undefined ? {} : { onStdout: options.onStdout }),
     provider: new DaytonaSdkPreparationWorkspaceProvider({

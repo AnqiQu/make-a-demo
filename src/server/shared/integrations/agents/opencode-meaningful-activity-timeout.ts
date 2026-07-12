@@ -1,26 +1,27 @@
-type MeaningfulActivityKind = "text" | "editor-tool" | "makeademo-tool";
+export type MeaningfulActivityKind = "text" | "editor-tool" | "makeademo-tool";
 
-type MeaningfulActivity = {
+export type MeaningfulActivity = {
   at: number;
   kind: MeaningfulActivityKind;
   tool?: string;
 };
 
-type MeaningfulActivityTracker = {
+export type MeaningfulActivityTracker = {
   read: () => MeaningfulActivity | undefined;
   write: (channel: "stdout" | "stderr", chunk: string) => void;
 };
 
-type MeaningfulActivityTimeoutOptions = {
+export type MeaningfulActivityTimeoutOptions = {
   activity: MeaningfulActivityTracker;
   hardDeadlineAt: number;
   hardTimeoutMs: number;
   inactivityTimeoutMs: number;
+  inactivityLabel?: string;
   label: string;
   onTimeout?: () => Promise<void> | void;
 };
 
-class MeaningfulActivityTimeoutError extends Error {
+export class MeaningfulActivityTimeoutError extends Error {
   readonly timeoutKind: "inactivity" | "hard-cap";
   readonly lastMeaningfulActivity: MeaningfulActivity | undefined;
 
@@ -31,7 +32,7 @@ class MeaningfulActivityTimeoutError extends Error {
     const reason =
       timeoutKind === "hard-cap"
         ? `${input.label} exceeded its hard cap of ${input.hardTimeoutMs}ms.`
-        : `${input.label} timed out after ${input.inactivityTimeoutMs}ms of inactivity.`;
+        : `${input.inactivityLabel ?? input.label} timed out after ${input.inactivityTimeoutMs}ms of inactivity.`;
     super(reason);
     this.name = "MeaningfulActivityTimeoutError";
     this.timeoutKind = timeoutKind;

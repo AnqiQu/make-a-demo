@@ -6,20 +6,22 @@ import type {
   CapturePathRepairer,
 } from "../../../pipeline/05-capture-path-validation/capture-path-repairer.interface";
 import { validateProject } from "../../../pipeline/05-capture-path-validation/project-runtime-preflight/project-validator";
+import type {
+  DraftCompositeReviewDecision,
+  DraftCompositeReviewerInput,
+} from "../../../pipeline/07-compositing/draft-composite-reviewer.interface";
+import type { PipelineEventLogger } from "../../logging/pipeline-event-logger";
 import { PlaywrightBrowserValidator } from "../browser/playwright-browser-validator";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../daytona/daytona-sdk-preparation-workspace-provider";
 import { DaytonaSandboxRunner } from "../sandbox/daytona-sandbox-runner";
 import { DaytonaOpenCodeRepoPreparation } from "./daytona-opencode-repo-preparation";
-import {
-  DaytonaOpenCodeScriptGeneration,
-  type DraftCompositeReviewDecision,
-  type DraftCompositeReviewInput,
-} from "./daytona-opencode-script-generation";
+import { DaytonaOpenCodeScriptGeneration } from "./daytona-opencode-script-generation";
 import { createOpenCodeProviderSandboxSecrets } from "./opencode-provider-secrets";
 
 export type DaytonaOpenCodeAgentOptions = {
   daytonaApiKey?: string;
   daytonaSnapshot?: string;
+  logger?: PipelineEventLogger;
   maxScriptGenerationAttempts?: number;
   modelID: string;
   onStderr?: (chunk: string) => void;
@@ -42,6 +44,7 @@ export class DaytonaOpenCodeAgent
     }
 
     this.repoPreparation = new DaytonaOpenCodeRepoPreparation({
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
       modelID: options.modelID,
       ...(options.onStderr === undefined ? {} : { onStderr: options.onStderr }),
       ...(options.onStdout === undefined ? {} : { onStdout: options.onStdout }),
@@ -68,6 +71,7 @@ export class DaytonaOpenCodeAgent
         ),
     });
     this.scriptGeneration = new DaytonaOpenCodeScriptGeneration({
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
       ...(options.maxScriptGenerationAttempts === undefined
         ? {}
         : { maxAttempts: options.maxScriptGenerationAttempts }),
@@ -91,8 +95,8 @@ export class DaytonaOpenCodeAgent
     return this.scriptGeneration.repairCapturePathFailure(input);
   }
 
-  reviewDraftComposite(
-    input: DraftCompositeReviewInput,
+  async reviewDraftComposite(
+    input: DraftCompositeReviewerInput,
   ): Promise<DraftCompositeReviewDecision> {
     return this.scriptGeneration.reviewDraftComposite(input);
   }

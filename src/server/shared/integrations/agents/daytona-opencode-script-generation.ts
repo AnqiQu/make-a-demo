@@ -1,6 +1,4 @@
-import { stat } from "node:fs/promises";
 import { basename } from "node:path";
-import { readPreparationManifest } from "../../../pipeline/03-repo-preparation/preparation-manifest";
 import type { PreparationWorkspaceHandle } from "../../../pipeline/03-repo-preparation/preparation-workspace-runner";
 import type { PreparationWorkspace } from "../../../pipeline/03-repo-preparation/preparation-workspace.interface";
 import type { DemoScriptPackage } from "../../../pipeline/04-script-generation/demo-script-package";
@@ -14,43 +12,39 @@ import type {
   CapturePathRepairResult,
   CapturePathRepairer,
 } from "../../../pipeline/05-capture-path-validation/capture-path-repairer.interface";
-import type { CaptureManifest } from "../../../pipeline/06-footage-capture/capture-scenes";
-import {
-  assertDemoScriptCaptureSdkContract,
-  validateDemoScriptCaptureSdkTypesInTemporaryHarness,
-} from "../../../pipeline/06-footage-capture/capture-sdk-contract";
-import {
-  type DemoScript,
-  parseDemoScript,
-} from "../../../pipeline/06-footage-capture/demo-script.schema";
-import type { CompositedVideoManifest } from "../../../pipeline/07-compositing/composite-video";
+import { assertDemoScriptCaptureSdkContract } from "../../../pipeline/06-footage-capture/capture-sdk-contract";
+import { validateDemoScriptCaptureSdkTypesInTemporaryHarness } from "../../../pipeline/06-footage-capture/capture-sdk-harness";
+import { parseDemoScript } from "../../../pipeline/06-footage-capture/demo-script.schema";
+import type {
+  DraftCompositeReviewDecision,
+  DraftCompositeReviewerInput,
+} from "../../../pipeline/07-compositing/draft-composite-reviewer.interface";
 import {
   type PipelineEventLogger,
   createPipelineEventLogger,
 } from "../../logging/pipeline-event-logger";
-import { writeDaytonaOpenCodeActivityLog } from "./daytona-opencode-activity-log";
 import {
-  createMeaningfulActivityTracker,
-  runWithMeaningfulActivityTimeout,
-} from "./opencode-meaningful-activity-timeout";
-import { draftCompositeReviewOpenCodeModel } from "./opencode-model-defaults";
+  attachPipelineMetadata,
+  boundedArtifactTimeout,
+  createDemoScriptCaptureContractPrompt,
+  createScriptPackageSchemaPrompt,
+  demoScriptPath,
+  readErrorMessage,
+  readScriptPackageArtifact,
+  truncateForPrompt,
+} from "./daytona-opencode-capture-path-repair-support";
+import { DaytonaOpenCodeCapturePathRepairer } from "./daytona-opencode-capture-path-repairer";
+import { DaytonaOpenCodeDraftCompositeReviewer } from "./daytona-opencode-draft-composite-reviewer";
+import { DaytonaOpenCodeSession } from "./daytona-opencode-session";
 
-const makeADemoArtifactDirectory = "/workspace/.makeademo";
-const makeADemoOpenCodeConfigDirectory = "/tmp/makeademo/opencode";
-const preparationManifestPath = `${makeADemoArtifactDirectory}/preparation-manifest.json`;
-const demoScriptPath = `${makeADemoArtifactDirectory}/demo-script.json`;
-const draftCompositeReviewPath = `${makeADemoArtifactDirectory}/draft-composite-review.json`;
-const draftReviewDirectory = `${makeADemoArtifactDirectory}/draft-review`;
 const initialArtifactReadTimeoutMs = 60_000;
 const initialArtifactReadRetryDelaysMs = [250, 500] as const;
 const postRepairArtifactReadTimeoutMs = 60_000;
-const postRepairArtifactReadRetryDelaysMs = [250, 500] as const;
 const draftReviewEvidenceUploadAttemptTimeoutMs = 30_000;
 const draftReviewEvidenceUploadTimeoutMs = 60_250;
 const draftReviewEvidenceUploadRetryDelaysMs = [250] as const;
 const defaultInactivityTimeoutMs = 600_000;
 const defaultHardTimeoutMs = 1_800_000;
-const openCodeHardCapGraceMs = 30_000;
 
 export type DaytonaOpenCodeScriptGenerationOptions = {
   /**
@@ -74,124 +68,12 @@ export type DaytonaOpenCodeScriptGenerationOptions = {
   hardTimeoutMs?: number;
 };
 
-export type DraftCompositeReviewDecision =
-  | { decision: "accept"; reason?: string }
-  | {
-      decision: "repair";
-      reason: string;
-      repairScope: "demo-script" | "workspace";
-    };
-
-export type DraftCompositeReviewInput = {
-  attempt: number;
-  captureManifest: CaptureManifest;
-  derivedEvidence: {
-    contactSheetPaths: string[];
-    draftDurationSeconds?: number;
-    ffmpegFindings: string[];
-    markerSummary: Array<Record<string, unknown>>;
-    qualityFindings: string[];
-    rawDraftCompositePath?: string;
-    rawTakePath?: string;
-    sampledFramePaths: string[];
-  };
-  draftComposite: CompositedVideoManifest;
-  opencodeSessionID?: string;
-  preparationWorkspace?: PreparationWorkspaceHandle;
-  scriptPackage: DemoScriptPackage;
-};
-
-class DaytonaOpenCodeSessionRunner {
-  private readonly modelID: string;
-  private readonly onStderr: ((chunk: string) => void) | undefined;
-  private readonly onStdout: ((chunk: string) => void) | undefined;
-  private readonly providerID: string;
-
-  constructor(options: DaytonaOpenCodeScriptGenerationOptions) {
-    this.modelID = options.modelID;
-    this.onStderr = options.onStderr;
-    this.onStdout = options.onStdout;
-    this.providerID = options.providerID;
-  }
-
-  async run(input: {
-    attempt: number;
-    prompt: string;
-    sessionID: string;
-    stage:
-      | "capture-path-repair"
-      | "draft-composite-review"
-      | "script-generation";
-    workspace: PreparationWorkspace;
-    hardDeadlineAt: number;
-    inactivityTimeoutMs: number;
-    hardTimeoutMs: number;
-  }) {
-    const model =
-      input.stage === "draft-composite-review"
-        ? draftCompositeReviewOpenCodeModel
-        : { modelID: this.modelID, providerID: this.providerID };
-    const activity = createMeaningfulActivityTracker();
-    return runWithMeaningfulActivityTimeout(
-      () =>
-        input.workspace.execute(
-          createOpenCodeRunCommand({
-            model: `${model.providerID}/${model.modelID}`,
-            prompt: input.prompt,
-            sessionID: input.sessionID,
-          }),
-          removeUndefinedOptions({
-            env: createOpenCodeEnv(),
-            onStderr: (chunk) => {
-              activity.write("stderr", chunk);
-              this.onStderr?.(chunk);
-              void writeDaytonaOpenCodeActivityLog(input.workspace, {
-                attempt: input.attempt,
-                channel: "stderr",
-                raw: chunk,
-                stage: input.stage,
-              });
-            },
-            onStdout: (chunk) => {
-              activity.write("stdout", chunk);
-              this.onStdout?.(chunk);
-              void writeDaytonaOpenCodeActivityLog(input.workspace, {
-                attempt: input.attempt,
-                channel: "stdout",
-                raw: chunk,
-                stage: input.stage,
-              });
-            },
-            timeoutMs: Math.max(
-              1,
-              input.hardDeadlineAt - Date.now() + openCodeHardCapGraceMs,
-            ),
-          }),
-        ),
-      {
-        activity,
-        hardDeadlineAt: input.hardDeadlineAt,
-        hardTimeoutMs: input.hardTimeoutMs,
-        inactivityTimeoutMs: input.inactivityTimeoutMs,
-        label: `${stageLabel(input.stage)} agent`,
-        onTimeout: () => input.workspace.cancelActiveCommands?.(),
-      },
-    );
-  }
-}
-
-function stageLabel(
-  stage: "capture-path-repair" | "draft-composite-review" | "script-generation",
-) {
-  switch (stage) {
-    case "capture-path-repair":
-      return "Capture Path repair";
-    case "draft-composite-review":
-      return "Draft Composite review";
-    default:
-      return "Script Generation";
-  }
-}
+/**
+ * @deprecated Import DraftCompositeReviewerInput from the Compositing stage.
+ * This alias preserves the existing adapter API while keeping its contract
+ * owned by the stage that consumes the review decision.
+ */
+export type DraftCompositeReviewInput = DraftCompositeReviewerInput;
 
 export class DaytonaOpenCodeScriptGeneration
   implements CapturePathRepairer, ScriptGenerationAgent
@@ -199,19 +81,21 @@ export class DaytonaOpenCodeScriptGeneration
   private readonly logger: PipelineEventLogger;
   private readonly maxAttempts: number;
   private readonly onStdout: ((chunk: string) => void) | undefined;
-  private readonly openCode: DaytonaOpenCodeSessionRunner;
+  private readonly openCode: DaytonaOpenCodeSession;
   private readonly postRepairArtifactReadTimeoutMs: number;
   private readonly draftReviewEvidenceUploadTimeoutMs: number;
   private readonly draftReviewEvidenceUploadAttemptTimeoutMs: number;
   private readonly draftReviewEvidenceUploadRetryDelaysMs: readonly number[];
   private readonly timeoutMs: number;
   private readonly hardTimeoutMs: number;
+  private readonly capturePathRepairer: DaytonaOpenCodeCapturePathRepairer;
+  private readonly draftCompositeReviewer: DaytonaOpenCodeDraftCompositeReviewer;
 
   constructor(options: DaytonaOpenCodeScriptGenerationOptions) {
     this.logger = options.logger ?? createScriptGenerationLogger();
     this.maxAttempts = options.maxAttempts ?? 3;
     this.onStdout = options.onStdout;
-    this.openCode = new DaytonaOpenCodeSessionRunner(options);
+    this.openCode = new DaytonaOpenCodeSession(options);
     this.postRepairArtifactReadTimeoutMs =
       options.postRepairArtifactReadTimeoutMs ??
       postRepairArtifactReadTimeoutMs;
@@ -227,6 +111,27 @@ export class DaytonaOpenCodeScriptGeneration
     ).slice(0, 1);
     this.timeoutMs = options.timeoutMs ?? defaultInactivityTimeoutMs;
     this.hardTimeoutMs = options.hardTimeoutMs ?? defaultHardTimeoutMs;
+    this.capturePathRepairer = new DaytonaOpenCodeCapturePathRepairer({
+      hardTimeoutMs: this.hardTimeoutMs,
+      logger: this.logger,
+      onStatus: (message) => this.writeStatus(message),
+      openCode: this.openCode,
+      postRepairArtifactReadTimeoutMs: this.postRepairArtifactReadTimeoutMs,
+      timeoutMs: this.timeoutMs,
+    });
+    this.draftCompositeReviewer = new DaytonaOpenCodeDraftCompositeReviewer({
+      draftReviewEvidenceUploadAttemptTimeoutMs:
+        this.draftReviewEvidenceUploadAttemptTimeoutMs,
+      draftReviewEvidenceUploadRetryDelaysMs:
+        this.draftReviewEvidenceUploadRetryDelaysMs,
+      draftReviewEvidenceUploadTimeoutMs:
+        this.draftReviewEvidenceUploadTimeoutMs,
+      hardTimeoutMs: this.hardTimeoutMs,
+      logger: this.logger,
+      onStatus: (message) => this.writeStatus(message),
+      openCode: this.openCode,
+      timeoutMs: this.timeoutMs,
+    });
   }
 
   async generateScriptPackage(
@@ -353,234 +258,13 @@ export class DaytonaOpenCodeScriptGeneration
   async repairCapturePathFailure(
     input: CapturePathRepairInput,
   ): Promise<CapturePathRepairResult> {
-    if (input.opencodeSessionID === undefined) {
-      throw new Error("Capture Path repair requires an OpenCode session ID.");
-    }
-    if (input.preparationWorkspace === undefined) {
-      throw new Error("Capture Path repair requires the prepared workspace.");
-    }
-    const preparationWorkspace = input.preparationWorkspace;
-    const hardDeadlineAt = Date.now() + this.hardTimeoutMs;
-
-    await writeRepairSandboxLog(this.logger, input, {
-      attempt: input.attempt,
-      event: "capture-path-repair.opencode-attempt.started",
-      failedSceneId: input.failure.failedSceneId,
-      opencodeSessionID: input.opencodeSessionID,
-    });
-    this.writeStatus(
-      `Capture Path repair attempt ${input.attempt} starting in session ${input.opencodeSessionID}.`,
-    );
-
-    const result = await this.openCode.run({
-      attempt: input.attempt,
-      prompt: createCapturePathRepairPrompt(input),
-      sessionID: input.opencodeSessionID,
-      stage: "capture-path-repair",
-      workspace: preparationWorkspace.workspace,
-      hardDeadlineAt,
-      inactivityTimeoutMs: this.timeoutMs,
-      hardTimeoutMs: this.hardTimeoutMs,
-    });
-
-    if (result.exitCode !== 0) {
-      const reason = `OpenCode Capture Path repair exited with ${result.exitCode}: ${[result.stderr, result.stdout].filter((line) => line.length > 0).join("\n")}`;
-      await writeRepairSandboxLog(this.logger, input, {
-        attempt: input.attempt,
-        event: "capture-path-repair.opencode-attempt.failed",
-        exitCode: result.exitCode,
-        reason,
-      });
-      throw new Error(reason);
-    }
-
-    const scriptArtifact = await readPostRepairArtifact({
-      artifactName: "demo-script.json",
-      input,
-      logger: this.logger,
-      read: () =>
-        readScriptPackageArtifact(
-          { preparationWorkspace },
-          {
-            timeoutMs: boundedArtifactTimeout(
-              Math.min(this.postRepairArtifactReadTimeoutMs, this.timeoutMs),
-              hardDeadlineAt,
-            ),
-          },
-        ),
-      timeoutMs: boundedArtifactTimeout(
-        Math.min(this.postRepairArtifactReadTimeoutMs, this.timeoutMs),
-        hardDeadlineAt,
-      ),
-    });
-    if (scriptArtifact.status === "failed") {
-      await writeRepairSandboxLog(this.logger, input, {
-        attempt: input.attempt,
-        event: "capture-path-repair.artifact.missing",
-        reason: scriptArtifact.reason,
-      });
-      throw new Error(scriptArtifact.reason);
-    }
-
-    const manifestArtifact = await readPostRepairArtifact({
-      artifactName: "preparation-manifest.json",
-      input,
-      logger: this.logger,
-      read: () =>
-        readPreparationManifestArtifact(
-          { preparationWorkspace },
-          {
-            timeoutMs: boundedArtifactTimeout(
-              Math.min(this.postRepairArtifactReadTimeoutMs, this.timeoutMs),
-              hardDeadlineAt,
-            ),
-          },
-        ),
-      timeoutMs: boundedArtifactTimeout(
-        Math.min(this.postRepairArtifactReadTimeoutMs, this.timeoutMs),
-        hardDeadlineAt,
-      ),
-    });
-
-    if (manifestArtifact.status === "failed") {
-      throw new Error(manifestArtifact.reason);
-    }
-
-    const preparationManifest =
-      manifestArtifact.status === "succeeded"
-        ? manifestArtifact.value
-        : input.preparationManifest;
-
-    let demoScript: DemoScript;
-    try {
-      demoScript = parseDemoScript(scriptArtifact.value);
-      assertDemoScriptCaptureSdkContract(demoScript);
-      assertCaptureReadyScriptQuality(demoScript);
-    } catch (error) {
-      const reason = readErrorMessage(error);
-      await writeRepairSandboxLog(this.logger, input, {
-        attempt: input.attempt,
-        event: "capture-path-repair.script-package.invalid",
-        reason,
-      });
-      throw new Error(reason);
-    }
-
-    await writeRepairSandboxLog(this.logger, input, {
-      attempt: input.attempt,
-      event: "capture-path-repair.demo-script.succeeded",
-      scriptId: demoScript.scriptId,
-    });
-    this.writeStatus(
-      `Capture Path repair attempt ${input.attempt} produced a Demo Script for revalidation.`,
-    );
-
-    return {
-      preparationManifest,
-      demoScriptPackage: attachPipelineMetadata(demoScript, {
-        demoBrief: {
-          keyProductFeatures: input.demoScriptPackage.demoPlan.featureOrder,
-        },
-        normalizedSupportingDocuments: [],
-        opencodeSessionID: input.opencodeSessionID,
-        preparationManifest,
-        preparationWorkspace,
-        repoUrl: input.repoUrl,
-      }),
-    };
+    return this.capturePathRepairer.repairCapturePathFailure(input);
   }
 
   async reviewDraftComposite(
     input: DraftCompositeReviewInput,
   ): Promise<DraftCompositeReviewDecision> {
-    if (input.opencodeSessionID === undefined) {
-      throw new Error(
-        "Draft Composite review requires an OpenCode session ID.",
-      );
-    }
-    if (input.preparationWorkspace === undefined) {
-      throw new Error(
-        "Draft Composite review requires the prepared workspace.",
-      );
-    }
-    const preparationWorkspace = input.preparationWorkspace;
-    const hardDeadlineAt = Date.now() + this.hardTimeoutMs;
-
-    const draftReviewUpload = await collectDraftReviewFiles(input);
-    logDraftReviewEvidenceUpload(this.logger, {
-      bytes: draftReviewUpload.bytes,
-      event: "draft-composite-review.evidence-upload.started",
-      fileCount: draftReviewUpload.files.length,
-    });
-    if (draftReviewUpload.files.length > 0) {
-      try {
-        await uploadDraftReviewEvidenceWithRetry({
-          bytes: draftReviewUpload.bytes,
-          files: draftReviewUpload.files,
-          logger: this.logger,
-          timeoutMs: boundedArtifactTimeout(
-            this.draftReviewEvidenceUploadTimeoutMs,
-            hardDeadlineAt,
-          ),
-          attemptTimeoutMs: boundedArtifactTimeout(
-            this.draftReviewEvidenceUploadAttemptTimeoutMs,
-            hardDeadlineAt,
-          ),
-          retryDelaysMs: this.draftReviewEvidenceUploadRetryDelaysMs,
-          upload: () =>
-            preparationWorkspace.workspace.uploadFiles(draftReviewUpload.files),
-        });
-      } catch (error) {
-        logDraftReviewEvidenceUpload(this.logger, {
-          bytes: draftReviewUpload.bytes,
-          event: "draft-composite-review.evidence-upload.failed",
-          fileCount: draftReviewUpload.files.length,
-          reason: readErrorMessage(error),
-        });
-        throw error;
-      }
-    }
-    logDraftReviewEvidenceUpload(this.logger, {
-      bytes: draftReviewUpload.bytes,
-      event: "draft-composite-review.evidence-upload.succeeded",
-      fileCount: draftReviewUpload.files.length,
-    });
-    const result = await this.openCode.run({
-      attempt: input.attempt,
-      prompt: createDraftCompositeReviewPrompt(input),
-      sessionID: input.opencodeSessionID,
-      stage: "draft-composite-review",
-      workspace: preparationWorkspace.workspace,
-      hardDeadlineAt,
-      inactivityTimeoutMs: this.timeoutMs,
-      hardTimeoutMs: this.hardTimeoutMs,
-    });
-
-    if (result.exitCode !== 0) {
-      throw new Error(
-        `OpenCode Draft Composite review exited with ${result.exitCode}: ${[result.stderr, result.stdout].filter((line) => line.length > 0).join("\n")}`,
-      );
-    }
-
-    const reviewReadTimeoutMs = boundedArtifactTimeout(
-      this.timeoutMs,
-      hardDeadlineAt,
-    );
-    const artifact = await withTimeout(
-      preparationWorkspace.workspace.execute(
-        `cat ${shellQuote(draftCompositeReviewPath)}`,
-        { timeoutMs: reviewReadTimeoutMs },
-      ),
-      reviewReadTimeoutMs,
-      `Draft Composite review artifact read timed out after ${reviewReadTimeoutMs}ms.`,
-    );
-    if (artifact.exitCode !== 0) {
-      throw new Error(
-        `OpenCode Draft Composite review did not write ${draftCompositeReviewPath}: ${artifact.stderr}`,
-      );
-    }
-
-    return parseDraftCompositeReviewDecision(artifact.stdout);
+    return this.draftCompositeReviewer.review(input);
   }
 
   private writeStatus(message: string): void {
@@ -591,313 +275,6 @@ export class DaytonaOpenCodeScriptGeneration
         type: "text",
       })}\n`,
     );
-  }
-}
-
-async function collectDraftReviewFiles(input: DraftCompositeReviewInput) {
-  if (input.preparationWorkspace === undefined) {
-    return { bytes: 0, files: [] };
-  }
-
-  const paths = [
-    ...input.derivedEvidence.contactSheetPaths,
-    ...input.derivedEvidence.sampledFramePaths,
-    input.derivedEvidence.rawDraftCompositePath,
-  ].filter((path): path is string => path !== undefined);
-  const files: Array<{
-    destinationPath: string;
-    sourcePath: string;
-  }> = [];
-  let bytes = 0;
-  for (const sourcePath of paths) {
-    const fileSize = await fileSizeBytes(sourcePath);
-    if (fileSize !== undefined) {
-      files.push({
-        destinationPath: `${draftReviewDirectory}/${basename(sourcePath)}`,
-        sourcePath,
-      });
-      bytes += fileSize;
-    }
-  }
-
-  return { bytes, files };
-}
-
-async function fileSizeBytes(path: string): Promise<number | undefined> {
-  try {
-    return (await stat(path)).size;
-  } catch {
-    return undefined;
-  }
-}
-
-function logDraftReviewEvidenceUpload(
-  logger: PipelineEventLogger,
-  entry: {
-    bytes: number;
-    event:
-      | "draft-composite-review.evidence-upload.started"
-      | "draft-composite-review.evidence-upload.retrying"
-      | "draft-composite-review.evidence-upload.succeeded"
-      | "draft-composite-review.evidence-upload.failed";
-    fileCount: number;
-    uploadAttempt?: number;
-    nextAttempt?: number;
-    delayMs?: number;
-    reason?: string;
-  },
-): void {
-  try {
-    void logger
-      .info({
-        ...entry,
-        stage: "draft-composite-review",
-      })
-      .catch(() => undefined);
-  } catch {
-    // Evidence-upload logging is best effort and must not block review.
-  }
-}
-
-async function uploadDraftReviewEvidenceWithRetry(input: {
-  bytes: number;
-  files: Array<{ destinationPath: string; sourcePath: string }>;
-  logger: PipelineEventLogger;
-  timeoutMs: number;
-  attemptTimeoutMs: number;
-  retryDelaysMs: readonly number[];
-  upload: () => Promise<void>;
-}): Promise<void> {
-  const timeoutMessage = `Draft Composite review evidence upload timed out after ${input.timeoutMs}ms.`;
-  const startedAt = Date.now();
-  const deadline = startedAt + input.timeoutMs;
-  let failure: unknown;
-
-  for (
-    let uploadAttempt = 1;
-    uploadAttempt <= input.retryDelaysMs.length + 1;
-    uploadAttempt += 1
-  ) {
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) {
-      failure = new Error(timeoutMessage);
-      break;
-    }
-
-    try {
-      await withTimeout(
-        input.upload(),
-        Math.min(input.attemptTimeoutMs, remainingMs),
-        timeoutMessage,
-      );
-      return;
-    } catch (error) {
-      if (
-        uploadAttempt <= input.retryDelaysMs.length &&
-        (isTransientDaytonaSocketClosedError(error) ||
-          (error instanceof Error && error.message === timeoutMessage))
-      ) {
-        const delayMs = input.retryDelaysMs[uploadAttempt - 1] ?? 0;
-        const remainingAfterUploadMs = deadline - Date.now();
-        if (remainingAfterUploadMs > 0) {
-          logDraftReviewEvidenceUpload(input.logger, {
-            bytes: input.bytes,
-            delayMs,
-            event: "draft-composite-review.evidence-upload.retrying",
-            fileCount: input.files.length,
-            nextAttempt: uploadAttempt + 1,
-            reason: isTransientDaytonaSocketClosedError(error)
-              ? `Transient Daytona socket closure while uploading Draft Composite review evidence: ${readErrorMessage(error)}`
-              : `Draft Composite review evidence upload attempt timed out: ${readErrorMessage(error)}`,
-            uploadAttempt,
-          });
-          try {
-            await withTimeout(
-              wait(delayMs),
-              remainingAfterUploadMs,
-              timeoutMessage,
-            );
-            continue;
-          } catch (retryDelayError) {
-            failure = retryDelayError;
-            break;
-          }
-        }
-      }
-
-      failure = error;
-      break;
-    }
-  }
-
-  throw failure ?? new Error(timeoutMessage);
-}
-
-function parseDraftCompositeReviewDecision(
-  value: string,
-): DraftCompositeReviewDecision {
-  const record = JSON.parse(value) as Record<string, unknown>;
-  if (record.decision === "accept") {
-    return typeof record.reason === "string"
-      ? { decision: "accept", reason: record.reason }
-      : { decision: "accept" };
-  }
-
-  if (
-    record.decision === "repair" &&
-    typeof record.reason === "string" &&
-    (record.repairScope === "demo-script" || record.repairScope === "workspace")
-  ) {
-    return {
-      decision: "repair",
-      reason: record.reason,
-      repairScope: record.repairScope,
-    };
-  }
-
-  throw new Error(
-    "Draft Composite review artifact must contain accept or repair decision.",
-  );
-}
-
-async function writeRepairSandboxLog(
-  logger: PipelineEventLogger,
-  input: Parameters<CapturePathRepairer["repairCapturePathFailure"]>[0],
-  entry: Record<string, unknown>,
-): Promise<void> {
-  await writeSandboxLogBestEffort({
-    entry: {
-      ...entry,
-      repoUrl: input.repoUrl,
-      stage: "capture-path-repair",
-      workspaceId: input.preparationManifest.workspaceId,
-    },
-    logger,
-    stage: "capture-path-repair",
-    write: (logEntry: Record<string, unknown>) =>
-      input.preparationWorkspace?.workspace.writeSandboxLog?.(logEntry),
-  });
-}
-
-async function readPostRepairArtifact<
-  T extends { reason?: string; status: string },
->(input: {
-  artifactName: string;
-  input: Parameters<CapturePathRepairer["repairCapturePathFailure"]>[0];
-  logger: PipelineEventLogger;
-  read: () => Promise<T>;
-  timeoutMs: number;
-}): Promise<T> {
-  const start = Date.now();
-  const timeoutMessage = `Post-repair artifact read ${input.artifactName} timed out after ${input.timeoutMs}ms.`;
-  await writeRepairSandboxLog(input.logger, input.input, {
-    artifact: input.artifactName,
-    attempt: input.input.attempt,
-    durationMs: 0,
-    event: "capture-path-repair.artifact-read.started",
-    operation: `post-repair artifact read ${input.artifactName}`,
-    timeoutMs: input.timeoutMs,
-  });
-
-  const deadline = start + input.timeoutMs;
-  let failure: unknown;
-  for (
-    let readAttempt = 1;
-    readAttempt <= postRepairArtifactReadRetryDelaysMs.length + 1;
-    readAttempt += 1
-  ) {
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) {
-      failure = new Error(timeoutMessage);
-      break;
-    }
-
-    try {
-      const artifact = await withTimeout(
-        input.read(),
-        remainingMs,
-        timeoutMessage,
-      );
-      const durationMs = Date.now() - start;
-      if (artifact.status === "failed") {
-        const reason = `Post-repair artifact read ${input.artifactName} failed: ${artifact.reason ?? "unknown artifact read failure"}`;
-        await writeRepairSandboxLog(input.logger, input.input, {
-          artifact: input.artifactName,
-          attempt: input.input.attempt,
-          durationMs,
-          event: "capture-path-repair.artifact-read.failed",
-          operation: `post-repair artifact read ${input.artifactName}`,
-          reason,
-        });
-        return { ...artifact, reason };
-      }
-
-      await writeRepairSandboxLog(input.logger, input.input, {
-        artifact: input.artifactName,
-        attempt: input.input.attempt,
-        durationMs,
-        event: "capture-path-repair.artifact-read.succeeded",
-        operation: `post-repair artifact read ${input.artifactName}`,
-      });
-      return artifact;
-    } catch (error) {
-      if (
-        readAttempt <= postRepairArtifactReadRetryDelaysMs.length &&
-        isTransientDaytonaSocketClosedError(error)
-      ) {
-        const delayMs =
-          postRepairArtifactReadRetryDelaysMs[readAttempt - 1] ?? 0;
-        const remainingAfterReadMs = deadline - Date.now();
-        if (remainingAfterReadMs > 0) {
-          await writeRepairSandboxLog(input.logger, input.input, {
-            artifact: input.artifactName,
-            attempt: readAttempt,
-            delayMs,
-            durationMs: Date.now() - start,
-            event: "capture-path-repair.artifact-read.retrying",
-            nextAttempt: readAttempt + 1,
-            operation: `post-repair artifact read ${input.artifactName}`,
-            reason: `Transient Daytona socket closure while reading ${input.artifactName}: ${readErrorMessage(error)}`,
-          });
-          try {
-            await withTimeout(
-              wait(delayMs),
-              remainingAfterReadMs,
-              timeoutMessage,
-            );
-            continue;
-          } catch (retryDelayError) {
-            failure = retryDelayError;
-            break;
-          }
-        }
-      }
-
-      failure = error;
-      break;
-    }
-  }
-
-  try {
-    throw failure ?? new Error(timeoutMessage);
-  } catch (error) {
-    const durationMs = Date.now() - start;
-    const errorMessage = readErrorMessage(error);
-    const reason = errorMessage.includes("timed out after")
-      ? errorMessage
-      : `Post-repair artifact read ${input.artifactName} failed: ${errorMessage}`;
-    const event = errorMessage.includes("timed out after")
-      ? "capture-path-repair.artifact-read.timeout"
-      : "capture-path-repair.artifact-read.failed";
-    await writeRepairSandboxLog(input.logger, input.input, {
-      artifact: input.artifactName,
-      attempt: input.input.attempt,
-      durationMs,
-      event,
-      operation: `post-repair artifact read ${input.artifactName}`,
-      reason,
-    });
-    return { reason, status: "failed" } as T;
   }
 }
 
@@ -934,13 +311,6 @@ function withTimeout<T>(
       clearTimeout(timeout);
     }
   });
-}
-
-function boundedArtifactTimeout(
-  timeoutMs: number,
-  hardDeadlineAt: number,
-): number {
-  return Math.max(1, Math.min(timeoutMs, hardDeadlineAt - Date.now()));
 }
 
 async function writeScriptGenerationSandboxLog(
@@ -1128,130 +498,6 @@ async function readInitialScriptPackageArtifact(input: {
   throw new Error(timeoutMessage);
 }
 
-async function readScriptPackageArtifact(
-  input: Pick<AgenticScriptGenerationInput, "preparationWorkspace">,
-  options: { timeoutMs?: number } = {},
-): Promise<
-  { status: "succeeded"; value: unknown } | { reason: string; status: "failed" }
-> {
-  const result = await input.preparationWorkspace.workspace.execute(
-    `if test -f ${shellQuote(demoScriptPath)}; then cat ${shellQuote(demoScriptPath)}; else exit 1; fi`,
-    options,
-  );
-  if (result.exitCode !== 0) {
-    return {
-      reason: `OpenCode did not write ${demoScriptPath}.`,
-      status: "failed",
-    };
-  }
-
-  try {
-    return { status: "succeeded", value: JSON.parse(result.stdout) };
-  } catch (error) {
-    return {
-      reason: `Demo Script artifact is not valid JSON: ${readErrorMessage(error)}`,
-      status: "failed",
-    };
-  }
-}
-
-async function readPreparationManifestArtifact(
-  input: {
-    preparationWorkspace: AgenticScriptGenerationInput["preparationWorkspace"];
-  },
-  options: { timeoutMs?: number } = {},
-): Promise<
-  | { status: "succeeded"; value: ReturnType<typeof readPreparationManifest> }
-  | { status: "missing" }
-  | { reason: string; status: "failed" }
-> {
-  const result = await input.preparationWorkspace.workspace.execute(
-    `if test -f ${shellQuote(preparationManifestPath)}; then cat ${shellQuote(preparationManifestPath)}; else exit 42; fi`,
-    options,
-  );
-  if (result.exitCode === 42) {
-    return { status: "missing" };
-  }
-  if (result.exitCode !== 0) {
-    return {
-      reason: `Could not read ${preparationManifestPath}: ${result.stderr}`,
-      status: "failed",
-    };
-  }
-
-  try {
-    return {
-      status: "succeeded",
-      value: readPreparationManifest(JSON.parse(result.stdout)),
-    };
-  } catch (error) {
-    return {
-      reason: `Preparation Manifest artifact is not valid: ${readErrorMessage(error)}`,
-      status: "failed",
-    };
-  }
-}
-
-function attachPipelineMetadata(
-  scriptPackage: DemoScript,
-  input: AgenticScriptGenerationInput,
-): DemoScriptPackage {
-  const exploration = {
-    assumptions: input.preparationManifest.assumptions,
-    productSurfaces: input.preparationManifest.scriptGenerationContext,
-    summary: input.preparationManifest.setupSummary,
-  };
-  const demoPlan = {
-    featureOrder: input.demoBrief.keyProductFeatures,
-    narrative: scriptPackage.title,
-    risks: input.preparationManifest.risks,
-  };
-
-  return {
-    ...scriptPackage,
-    assumptions: exploration.assumptions,
-    demoPlan,
-    exploration,
-  };
-}
-
-function createOpenCodeRunCommand(input: {
-  model: string;
-  prompt: string;
-  sessionID: string;
-}): string {
-  return [
-    "opencode run",
-    "--dangerously-skip-permissions",
-    "--format json",
-    "--dir /workspace",
-    `--session ${shellQuote(input.sessionID)}`,
-    `--model ${shellQuote(input.model)}`,
-    shellQuote(input.prompt),
-  ].join(" ");
-}
-
-function removeUndefinedOptions(input: {
-  env: Record<string, string>;
-  onStderr: ((chunk: string) => void) | undefined;
-  onStdout: ((chunk: string) => void) | undefined;
-  timeoutMs: number;
-}) {
-  return {
-    env: input.env,
-    timeoutMs: input.timeoutMs,
-    ...(input.onStderr === undefined ? {} : { onStderr: input.onStderr }),
-    ...(input.onStdout === undefined ? {} : { onStdout: input.onStdout }),
-  };
-}
-
-function createOpenCodeEnv(): Record<string, string> {
-  return {
-    OPENCODE_CONFIG_DIR: makeADemoOpenCodeConfigDirectory,
-    OPENCODE_ENABLE_EXA: "1",
-  };
-}
-
 function createScriptGenerationPrompt(
   input: AgenticScriptGenerationInput,
 ): string {
@@ -1319,182 +565,6 @@ function createScriptGenerationRepairPrompt(reason: string): string {
     "",
     createScriptPackageSchemaPrompt(),
   ].join("\n");
-}
-
-function createCapturePathRepairPrompt(
-  input: Parameters<CapturePathRepairer["repairCapturePathFailure"]>[0],
-): string {
-  return [
-    "# MakeADemo Capture Path Repair",
-    "",
-    "Capture Path Validation failed for the Demo Script you generated.",
-    "Repair the prepared workspace, the Demo Script, or both. The backend will rerun full Capture Path Validation after this attempt.",
-    "",
-    "## Hard Requirements",
-    `- Overwrite ${demoScriptPath} with the repaired Demo Script JSON before finishing.`,
-    "- The demoPlaywrightScript must import `{ setup, scene }` from `./makeademo-capture-sdk`.",
-    "- Every `scene(id, async ({ page, expect }) => { ... })` must end with at least one visible Playwright locator assertion such as `await expect(page.getByText('Saved')).toBeVisible()`, `await expect(page.locator('#invoice-table')).toContainText('INV-2049')`, or `await expect(page.locator('[data-testid=\"status\"]')).toHaveText('Paid')`.",
-    "- Primitive assertions like `expect(await locator.innerText()).toBe(...)` do not satisfy the visible assertion contract; pair any DOM reads with a final Playwright locator assertion.",
-    `- If you change the prepared app command, URL, assumptions, risks, or workspace-change summary, update ${preparationManifestPath}.`,
-    "- Keep Playwright interactions deterministic and use only the provided `baseUrl` variable in Playwright scripts.",
-    "- Do not add Scene durations, raw video recording, custom marker writers, or timestamps.",
-    ...createDemoScriptCaptureContractPrompt(),
-    "- Do not run final Footage Capture. You may run fast local checks if useful.",
-    "",
-    "## Failure Evidence",
-    "```json",
-    truncateForPrompt(
-      JSON.stringify(
-        {
-          attempt: input.attempt,
-          failure: input.failure,
-          currentScriptId: input.demoScriptPackage.scriptId,
-        },
-        null,
-        2,
-      ),
-    ),
-    "```",
-    input.failure.diagnosticsLogPath === undefined
-      ? "No Capture Path diagnostics log path was returned. Use the structured failure evidence above."
-      : `Before editing, read the Capture Path diagnostics log at ${input.failure.diagnosticsLogPath}. It contains verbose validation stdout/stderr excerpts and is written inside the prepared workspace for agent inspection.`,
-    "",
-    "## Current Preparation Manifest",
-    "```json",
-    JSON.stringify(input.preparationManifest, null, 2),
-    "```",
-    "",
-    "## Current Demo Script",
-    "```json",
-    truncateForPrompt(JSON.stringify(input.demoScriptPackage, null, 2)),
-    "```",
-    "",
-    createScriptPackageSchemaPrompt(),
-  ].join("\n");
-}
-
-function createDraftCompositeReviewPrompt(
-  input: DraftCompositeReviewInput,
-): string {
-  return [
-    "# MakeADemo Draft Composite Review",
-    "",
-    "Review the Draft Composite generated from the Demo Script in this same OpenCode session.",
-    "Use your preparation and Script Generation context, plus the structured evidence below, to decide whether the draft is a good demo video.",
-    `Write exactly one JSON artifact to ${draftCompositeReviewPath}.`,
-    "",
-    "## Required Decision Shape",
-    "Accept:",
-    "```json",
-    JSON.stringify(
-      { decision: "accept", reason: "Concise acceptance reason." },
-      null,
-      2,
-    ),
-    "```",
-    "Repair:",
-    "```json",
-    JSON.stringify(
-      {
-        decision: "repair",
-        reason: "Concise repair reason.",
-        repairScope: "demo-script",
-      },
-      null,
-      2,
-    ),
-    "```",
-    "Use repairScope `demo-script` for script pacing, Scene boundaries, visible outcomes, overlays, music intent, or narrative issues.",
-    "Use repairScope `workspace` only when the prepared app or deterministic demo data must change.",
-    "Do not request repair only for ffmpeg/contact-sheet/sampled-frame findings unless they reveal an actual demo quality issue. Deterministic quality gates are already supplied separately.",
-    "",
-    "## Available Local Evidence In Workspace",
-    `${draftReviewDirectory} contains uploaded draft/review files when they were available from the backend host.`,
-    "You may use shell tools such as ffmpeg/ffprobe against those files if useful.",
-    "",
-    "## Structured Evidence",
-    "```json",
-    truncateForPrompt(
-      JSON.stringify(
-        {
-          attempt: input.attempt,
-          captureManifest: input.captureManifest,
-          derivedEvidence: input.derivedEvidence,
-          draftComposite: input.draftComposite,
-          scriptId: input.scriptPackage.scriptId,
-          title: input.scriptPackage.title,
-        },
-        null,
-        2,
-      ),
-    ),
-    "```",
-  ].join("\n");
-}
-
-function createScriptPackageSchemaPrompt(): string {
-  return [
-    "## Required Demo Script Shape",
-    "The artifact must be one JSON object with every required top-level field present.",
-    "Use this exact shape, replacing example strings and scripts with repo-specific content:",
-    "```json",
-    JSON.stringify(
-      {
-        audio: { enabled: true, music: { id: "clean" } },
-        demoPlaywrightScript:
-          "import { setup, scene } from './makeademo-capture-sdk';\n\nawait setup(async ({ page, baseUrl, expect }) => { await page.goto(baseUrl); await expect(page.locator('body')).toBeVisible(); });\nawait scene('scene_requested_feature', async ({ page, expect }) => {\n  await page.getByRole('button', { name: /example/i }).click();\n  await expect(page.getByText(/result/i)).toBeVisible();\n});",
-        format: "16:9",
-        presentation: {
-          music: { enabled: true, trackId: "clean" },
-          textOverlays: [
-            {
-              content: "Show the requested feature",
-              font: "Inter",
-              position: "bottom-left",
-              sceneId: "scene_requested_feature",
-              size: "medium",
-            },
-          ],
-          transitions: [],
-        },
-        scenes: [
-          {
-            description:
-              "Show the requested feature with real UI interactions.",
-            expectedVisibleOutcome: "The feature result is visible.",
-            id: "scene_requested_feature",
-          },
-        ],
-        scriptId: "script_unique_demo_id",
-        title: "Concise demo title",
-        version: 1,
-      },
-      null,
-      2,
-    ),
-    "```",
-    "Top-level `scriptId`, `title`, `format`, `version`, `demoPlaywrightScript`, non-empty `scenes`, and `presentation` are mandatory on every attempt.",
-    "Each Scene must include `id`, `description`, and `expectedVisibleOutcome`. Do not include `durationSeconds` on recorded Scenes.",
-  ].join("\n");
-}
-
-function createDemoScriptCaptureContractPrompt(): string[] {
-  return [
-    "- Only use the MakeADemo Capture SDK: import `{ setup, scene }` from `./makeademo-capture-sdk` and write interactions inside those callbacks.",
-    "- Do not use real-time network access in the Demo Script. Do not call `fetch`, `XMLHttpRequest`, `WebSocket`, `EventSource`, `navigator.sendBeacon`, `page.request`, `page.waitForRequest`, `page.waitForResponse`, `page.route`, `page.unroute`, or Node network modules such as `http`, `https`, `net`, or `dns`.",
-    "- Use the prepared app through the provided `baseUrl`, deterministic user-visible interactions, and Playwright locator assertions. Do not inspect app internals, mutate app state with injected JavaScript, or depend on network request timing.",
-    "- Every Scene step must be executable against the prepared app and must finish with a visible locator assertion proving the expected outcome.",
-  ];
-}
-
-function readErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function truncateForPrompt(value: string, maxLength = 20_000): string {
-  return value.length <= maxLength
-    ? value
-    : `${value.slice(0, maxLength)}\n...[truncated ${value.length - maxLength} chars]`;
 }
 
 function shellQuote(value: string): string {
