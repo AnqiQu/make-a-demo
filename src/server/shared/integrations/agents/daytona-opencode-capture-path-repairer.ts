@@ -1,14 +1,9 @@
 import type { PreparationManifest } from "../../../pipeline/03-repo-preparation/preparation-manifest";
-import { assertCaptureReadyScriptQuality } from "../../../pipeline/04-script-generation/script-package-quality";
+import { validateDemoScriptCandidate } from "../../../pipeline/04-script-generation/demo-script-candidate-validator";
 import type {
   CapturePathRepairInput,
   CapturePathRepairResult,
 } from "../../../pipeline/05-capture-path-validation/capture-path-repairer.interface";
-import { assertDemoScriptCaptureSdkContract } from "../../../pipeline/06-footage-capture/capture-sdk-contract";
-import {
-  type DemoScript,
-  parseDemoScript,
-} from "../../../pipeline/06-footage-capture/demo-script.schema";
 import type { PipelineEventLogger } from "../../logging/pipeline-event-logger";
 import {
   attachPipelineMetadata,
@@ -129,11 +124,9 @@ export class DaytonaOpenCodeCapturePathRepairer {
       manifestArtifact.status === "succeeded"
         ? (manifestArtifact.value as PreparationManifest)
         : input.preparationManifest;
-    let demoScript: DemoScript;
+    let demoScript: Awaited<ReturnType<typeof validateDemoScriptCandidate>>;
     try {
-      demoScript = parseDemoScript(scriptArtifact.value);
-      assertDemoScriptCaptureSdkContract(demoScript);
-      assertCaptureReadyScriptQuality(demoScript);
+      demoScript = await validateDemoScriptCandidate(scriptArtifact.value);
     } catch (error) {
       const reason = readErrorMessage(error);
       await writeRepairSandboxLog(this.options.logger, input, {

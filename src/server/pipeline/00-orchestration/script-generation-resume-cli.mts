@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import { DaytonaOpenCodeScriptGeneration } from "../../shared/integrations/agents/daytona-opencode-script-generation";
 import { defaultOpenCodeModel } from "../../shared/integrations/agents/opencode-model-defaults";
+import { createPreparedRuntimeCapturePathValidator } from "../../shared/integrations/agents/prepared-runtime-capture-path-validator";
 import { createDaytonaSdkPreparationWorkspaceHandle } from "../../shared/integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import { createOpenCodeOutputStream } from "./opencode-output-stream";
 import { createOpenCodeRawOutputLog } from "./opencode-raw-output-log";
@@ -51,6 +52,7 @@ const scriptGenerationAgent = new DaytonaOpenCodeScriptGeneration({
     openCodeOutput.write(chunk);
   },
   providerID: options.providerID,
+  validateCapturePath: createPreparedRuntimeCapturePathValidator(),
 });
 
 const result = await runScriptGenerationResume(

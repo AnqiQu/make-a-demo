@@ -17,6 +17,7 @@ import { DaytonaSandboxRunner } from "../sandbox/daytona-sandbox-runner";
 import { DaytonaOpenCodeRepoPreparation } from "./daytona-opencode-repo-preparation";
 import { DaytonaOpenCodeScriptGeneration } from "./daytona-opencode-script-generation";
 import { createOpenCodeProviderSandboxSecrets } from "./opencode-provider-secrets";
+import { createPreparedRuntimeCapturePathValidator } from "./prepared-runtime-capture-path-validator";
 
 export type DaytonaOpenCodeAgentOptions = {
   daytonaApiKey?: string;
@@ -79,6 +80,7 @@ export class DaytonaOpenCodeAgent
       ...(options.onStderr === undefined ? {} : { onStderr: options.onStderr }),
       ...(options.onStdout === undefined ? {} : { onStdout: options.onStdout }),
       providerID: options.providerID,
+      validateCapturePath: createPreparedRuntimeCapturePathValidator(),
     });
   }
 

@@ -29,6 +29,7 @@ describe("createMakeADemoOpenCodeConfigFiles", () => {
       bash: "deny",
       makeademo_dependency_request_install: "allow",
       makeademo_submit_preparation_result: "allow",
+      makeademo_validate_demo_script: "allow",
       makeademo_validate_preparation: "allow",
     });
     expect(config.tools).toBeUndefined();
@@ -44,6 +45,8 @@ describe("createMakeADemoOpenCodeConfigFiles", () => {
     expect(plugin).toContain("preparationManifestPath");
     expect(plugin).toContain("manifestPath: tool.schema.string()");
     expect(plugin).toContain("preparation preflight");
+    expect(plugin).toContain("makeademo_validate_demo_script");
+    expect(plugin).toContain("/workspace/.makeademo/demo-script.json");
     expect(plugin).toContain("manifest = await assertValidationPassed()");
     expect(plugin).not.toContain("assertValidationPassed(args.manifest)");
   });

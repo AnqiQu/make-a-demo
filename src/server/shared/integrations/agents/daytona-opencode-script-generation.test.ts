@@ -1,7 +1,7 @@
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { PreparationWorkspace } from "../../../pipeline/03-repo-preparation/preparation-workspace.interface";
 import type { PipelineEventLogger } from "../../logging/pipeline-event-logger";
@@ -122,92 +122,78 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
   });
 
   it("times out inactive Script Generation without extending for step_start and cancels active commands", async () => {
-    vi.useFakeTimers();
-    try {
-      const events: unknown[] = [];
-      const agent = new DaytonaOpenCodeScriptGeneration({
-        hardTimeoutMs: 1_000,
-        maxAttempts: 1,
-        modelID: "gpt-5.5",
-        providerID: "openai",
-        timeoutMs: 100,
-      });
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      hardTimeoutMs: 1_000,
+      maxAttempts: 1,
+      modelID: "gpt-5.5",
+      providerID: "openai",
+      timeoutMs: 100,
+    });
 
-      const pending = agent.generateScriptPackage({
-        ...scriptGenerationInput(),
-        opencodeSessionID: "session_prepare_123",
-        preparationWorkspace: workspaceHandle(events, [interactivePackage()], {
-          commandOutputScheduleByRun: [
-            [
-              {
-                afterMs: 40,
-                channel: "stdout",
-                chunk: '{"type":"step_start"}\n',
-              },
-              {
-                afterMs: 40,
-                channel: "stdout",
-                chunk: '{"type":"step_start"}\n',
-              },
-            ],
+    const pending = agent.generateScriptPackage({
+      ...scriptGenerationInput(),
+      opencodeSessionID: "session_prepare_123",
+      preparationWorkspace: workspaceHandle(events, [interactivePackage()], {
+        commandOutputScheduleByRun: [
+          [
+            {
+              afterMs: 40,
+              channel: "stdout",
+              chunk: '{"type":"step_start"}\n',
+            },
+            {
+              afterMs: 40,
+              channel: "stdout",
+              chunk: '{"type":"step_start"}\n',
+            },
           ],
-          openCodeWaitsForCancellation: true,
-        }),
-      });
+        ],
+        openCodeWaitsForCancellation: true,
+      }),
+    });
 
-      const rejection = expect(pending).rejects.toThrow(
-        "Script Generation agent timed out after 100ms of inactivity.",
-      );
-      await vi.advanceTimersByTimeAsync(120);
-      await rejection;
-      expect(events).toEqual(
-        expect.arrayContaining([{ cancelActiveCommands: true }]),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
+    await expect(pending).rejects.toThrow(
+      "Script Generation agent timed out after 100ms of inactivity.",
+    );
+    expect(events).toEqual(
+      expect.arrayContaining([{ cancelActiveCommands: true }]),
+    );
   });
 
   it("extends Script Generation inactivity for structured text and completed editor tools", async () => {
-    vi.useFakeTimers();
-    try {
-      const events: unknown[] = [];
-      const agent = new DaytonaOpenCodeScriptGeneration({
-        hardTimeoutMs: 1_000,
-        modelID: "gpt-5.5",
-        providerID: "openai",
-        timeoutMs: 100,
-      });
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      hardTimeoutMs: 1_000,
+      modelID: "gpt-5.5",
+      providerID: "openai",
+      timeoutMs: 100,
+    });
 
-      const pending = agent.generateScriptPackage({
-        ...scriptGenerationInput(),
-        opencodeSessionID: "session_prepare_123",
-        preparationWorkspace: workspaceHandle(events, [interactivePackage()], {
-          commandOutputScheduleByRun: [
-            [
-              {
-                afterMs: 80,
-                channel: "stdout",
-                chunk: '{"type":"text","part":{"text":"working"}}\n',
-              },
-              {
-                afterMs: 80,
-                channel: "stdout",
-                chunk: '{"state":{"status":"completed"},"tool":"write"}\n',
-              },
-            ],
+    const pending = agent.generateScriptPackage({
+      ...scriptGenerationInput(),
+      opencodeSessionID: "session_prepare_123",
+      preparationWorkspace: workspaceHandle(events, [interactivePackage()], {
+        commandOutputScheduleByRun: [
+          [
+            {
+              afterMs: 80,
+              channel: "stdout",
+              chunk: '{"type":"text","part":{"text":"working"}}\n',
+            },
+            {
+              afterMs: 80,
+              channel: "stdout",
+              chunk: '{"state":{"status":"completed"},"tool":"write"}\n',
+            },
           ],
-        }),
-      });
+        ],
+      }),
+    });
 
-      await vi.advanceTimersByTimeAsync(130);
-      await vi.advanceTimersByTimeAsync(80);
-      await expect(pending).resolves.toMatchObject({
-        scriptId: "script_conduit",
-      });
-    } finally {
-      vi.useRealTimers();
-    }
+    await expect(pending).resolves.toMatchObject({
+      scriptId: "script_conduit",
+    });
   });
 
   it("bounds Script Generation artifact reads by the public stage timeout", async () => {
@@ -423,6 +409,80 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
             nextAttempt: 2,
             reason: "demoPlaywrightScript contains placeholder actions",
             stage: "script-generation",
+          }),
+        },
+      ]),
+    );
+  });
+
+  it("repairs an in-turn Demo Script validation failure without consuming another generation attempt", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      maxAttempts: 1,
+      modelID: "gpt-5.5",
+      providerID: "openai",
+      validateCapturePath: async () => ({
+        blockedNetworkAttempts: [],
+        failedAction: "locator.click(getByRole('button', { name: 'Publish' }))",
+        failedSceneId: "scene_feed",
+        failureReason: "strict mode violation: locator resolved to 2 elements",
+        logs: ["strict mode violation: locator resolved to 2 elements"],
+        status: "failed",
+        warnings: [],
+      }),
+    });
+
+    const result = await agent.generateScriptPackage({
+      ...scriptGenerationInput(),
+      opencodeSessionID: "session_prepare_123",
+      preparationWorkspace: workspaceHandle(
+        events,
+        [interactivePackage(), interactivePackage()],
+        {
+          commandOutputScheduleByRun: [
+            [
+              {
+                afterMs: 1,
+                channel: "stdout",
+                chunk: `${JSON.stringify({
+                  input: {
+                    demoScriptPath: "/workspace/.makeademo/demo-script.json",
+                  },
+                  state: { status: "completed" },
+                  tool: "makeademo_validate_demo_script",
+                })}\n`,
+              },
+            ],
+          ],
+        },
+      ),
+    });
+
+    expect(result.scriptId).toBe("script_conduit");
+    const openCodeCommands = events.filter(
+      (event): event is { execute: string } =>
+        typeof event === "object" &&
+        event !== null &&
+        "execute" in event &&
+        typeof event.execute === "string" &&
+        event.execute.includes("opencode run"),
+    );
+    expect(openCodeCommands).toHaveLength(2);
+    expect(openCodeCommands).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          execute: expect.stringContaining("--session 'session_prepare_123'"),
+        }),
+      ]),
+    );
+    expect(openCodeCommands[1]?.execute).toContain(
+      "locator-cardinality validation failed",
+    );
+    expect(events).not.toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "script-generation.retrying",
           }),
         },
       ]),
@@ -1106,6 +1166,49 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
             reason:
               "Scene scene_feed must include a visible Playwright assertion before it ends.",
             stage: "capture-path-repair",
+          }),
+        },
+      ]),
+    );
+  });
+
+  it("rejects repaired Demo Scripts whose untyped app base URL fails strict Capture SDK TypeScript validation", async () => {
+    const events: unknown[] = [];
+    const agent = new DaytonaOpenCodeScriptGeneration({
+      modelID: "gpt-5.5",
+      providerID: "openai",
+    });
+
+    await expect(
+      agent.repairCapturePathFailure({
+        ...capturePathRepairInput(events),
+        preparationWorkspace: workspaceHandle(events, [
+          {
+            ...interactivePackage(),
+            demoPlaywrightScript: [
+              "import { setup, scene } from './makeademo-capture-sdk';",
+              "let appBaseUrl;",
+              "await setup(async ({ baseUrl }) => {",
+              "  appBaseUrl = baseUrl;",
+              "});",
+              "await scene('scene_feed', async ({ page, expect }) => {",
+              "  await page.goto(appBaseUrl + '#/');",
+              "  await page.getByText('Global Feed').click();",
+              "  await expect(page.getByText('demo')).toBeVisible();",
+              "});",
+            ].join("\n"),
+          },
+        ]),
+      }),
+    ).rejects.toThrow(/TS7034|TS7005/);
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          sandboxLog: expect.objectContaining({
+            event: "capture-path-repair.script-package.invalid",
+            stage: "capture-path-repair",
+            reason: expect.stringMatching(/TS7034|TS7005/),
           }),
         },
       ]),

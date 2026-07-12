@@ -1,6 +1,7 @@
 import { DaytonaOpenCodeScriptGeneration } from "../../shared/integrations/agents/daytona-opencode-script-generation";
 import { defaultOpenCodeModel } from "../../shared/integrations/agents/opencode-model-defaults";
 import { ensureOpenCodeProviderDaytonaSecret } from "../../shared/integrations/agents/opencode-provider-secrets";
+import { createPreparedRuntimeCapturePathValidator } from "../../shared/integrations/agents/prepared-runtime-capture-path-validator";
 import {
   createRepoPreparationAgent,
   readRepoPreparationTimeoutMsFromEnv,
@@ -72,6 +73,7 @@ const repoPreparationAgent = createRepoPreparationAgent({
 const scriptGenerationAgent = new DaytonaOpenCodeScriptGeneration({
   modelID,
   providerID,
+  validateCapturePath: createPreparedRuntimeCapturePathValidator(),
 });
 
 await workerLogger.workerStarted();
