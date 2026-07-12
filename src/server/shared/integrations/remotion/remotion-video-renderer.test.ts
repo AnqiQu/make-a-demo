@@ -34,7 +34,7 @@ afterEach(async () => {
 });
 
 describe("RemotionVideoRenderer", () => {
-  it("limits each render to two concurrent browser tabs", async () => {
+  it("uses one browser tab for stable parallel-batch rendering", async () => {
     const tempRoot = await mkdtemp(join(tmpdir(), "makeademo-remotion-"));
     tempRoots.push(tempRoot);
     const renderer = new RemotionVideoRenderer({
@@ -65,7 +65,7 @@ describe("RemotionVideoRenderer", () => {
     } satisfies CompositingRenderPlan);
 
     expect(remotion.renderMedia).toHaveBeenCalledWith(
-      expect.objectContaining({ concurrency: 2 }),
+      expect.objectContaining({ concurrency: 1 }),
     );
   });
 });
