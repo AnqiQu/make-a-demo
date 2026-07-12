@@ -82,7 +82,9 @@ describe("validateCapturePath", () => {
         }),
         expect.objectContaining({
           event: "capture-path-validation.demo-script.started",
-          sceneCount: 1,
+          scenes: expect.arrayContaining([
+            expect.objectContaining({ sceneId: "scene_validation" }),
+          ]),
           stage: "capture-path-validation",
           workspaceId: "workspace_123",
         }),
@@ -95,6 +97,96 @@ describe("validateCapturePath", () => {
           sectionId: "demo-script",
           stage: "capture-path-validation",
           workspaceId: "workspace_123",
+        }),
+      ]),
+    );
+  });
+
+  it("enqueues each demo-script diagnostics event once without a fallback while a serialized sink is slow", async () => {
+    const sandboxLogs: Array<Record<string, unknown>> = [];
+    const fallbackWarnings: Array<Record<string, unknown>> = [];
+    let serializedWrites = Promise.resolve();
+    const workspace = {
+      async destroy() {},
+      id: "workspace_handle_123",
+      workspace: {
+        async execute() {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async getPreviewUrl() {
+          return "https://preview.example.test/";
+        },
+        async setOutboundNetworkAccess() {},
+        async uploadFiles() {},
+        writeSandboxLog(entry: Record<string, unknown>) {
+          const delayMs =
+            entry.event === "capture-path-validation.demo-script.started"
+              ? 30
+              : 0;
+          const write = serializedWrites.then(
+            () =>
+              new Promise<void>((resolve) => {
+                setTimeout(() => {
+                  sandboxLogs.push(entry);
+                  resolve();
+                }, delayMs);
+              }),
+          );
+          serializedWrites = write;
+          return write;
+        },
+      },
+    };
+
+    const result = await validateCapturePath(
+      {
+        preparationManifest: manifest(),
+        preparationWorkspace: workspace,
+        demoScriptCandidate: demoScript(),
+        demoScriptPackage: demoScript(),
+      },
+      {
+        diagnosticsLogger: {
+          async warn(entry) {
+            fallbackWarnings.push(entry);
+          },
+        },
+        diagnosticsWriteTimeoutMs: 50,
+        async validateProject() {
+          return {
+            blockedNetworkAttempts: [],
+            browserUrl: "https://preview.example.test/",
+            logs: ["project checks passed"],
+            status: "succeeded" as const,
+            warnings: [],
+          };
+        },
+        sceneValidator: {
+          async validateScene() {
+            return {
+              logs: [
+                '[makeademo:scene] {"elapsedMs":10,"event":"started","sceneId":"scene_validation"}',
+                '[makeademo:scene] {"elapsedMs":20,"event":"succeeded","sceneId":"scene_validation"}',
+              ],
+              status: "succeeded" as const,
+            };
+          },
+        },
+      },
+    );
+
+    expect(result.status).toBe("succeeded");
+    await serializedWrites;
+    expect(
+      sandboxLogs.filter(
+        (entry) =>
+          entry.event === "capture-path-validation.demo-script.started",
+      ),
+    ).toHaveLength(1);
+    expect(fallbackWarnings).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          failedEvent: "capture-path-validation.demo-script.started",
         }),
       ]),
     );

@@ -113,10 +113,6 @@ export async function validateCapturePath(
     });
   }
 
-  await writeCapturePathSandboxLog(input, {
-    diagnosticsLogPath: capturePathDiagnosticsLogPath,
-    event: "capture-path-validation.runtime-preflight.started",
-  });
   await writeCapturePathDiagnostics(input, dependencies, {
     event: "capture-path-validation.runtime-preflight.started",
   });
@@ -129,15 +125,6 @@ export async function validateCapturePath(
 
   if (projectValidation.status === "failed") {
     const failureLogExcerpt = createLogExcerpt(projectValidation.logs);
-    await writeCapturePathSandboxLog(input, {
-      blockedNetworkAttemptCount:
-        projectValidation.blockedNetworkAttempts.length,
-      diagnosticsLogPath: capturePathDiagnosticsLogPath,
-      event: "capture-path-validation.runtime-preflight.failed",
-      failureLogExcerpt,
-      failureReason: projectValidation.failureReason,
-      warningCount: projectValidation.warnings.length,
-    });
     await writeCapturePathDiagnostics(input, dependencies, {
       blockedNetworkAttemptCount:
         projectValidation.blockedNetworkAttempts.length,
@@ -153,13 +140,6 @@ export async function validateCapturePath(
     };
   }
 
-  await writeCapturePathSandboxLog(input, {
-    blockedNetworkAttemptCount: projectValidation.blockedNetworkAttempts.length,
-    browserUrl: projectValidation.browserUrl,
-    diagnosticsLogPath: capturePathDiagnosticsLogPath,
-    event: "capture-path-validation.runtime-preflight.succeeded",
-    warningCount: projectValidation.warnings.length,
-  });
   await writeCapturePathDiagnostics(input, dependencies, {
     blockedNetworkAttemptCount: projectValidation.blockedNetworkAttempts.length,
     browserUrl: projectValidation.browserUrl,
@@ -175,11 +155,6 @@ export async function validateCapturePath(
     input.preparationWorkspace === undefined
       ? browserUrl
       : input.preparationManifest.url;
-  await writeCapturePathSandboxLog(input, {
-    diagnosticsLogPath: capturePathDiagnosticsLogPath,
-    event: "capture-path-validation.demo-script.started",
-    sceneCount: scriptPackage.scenes.length,
-  });
   await writeCapturePathDiagnostics(input, dependencies, {
     event: "capture-path-validation.demo-script.started",
     scenes: scriptPackage.scenes.map((scene) => ({
@@ -251,16 +226,6 @@ export async function validateCapturePath(
   }
 
   for (const scene of scriptPackage.scenes) {
-    await writeCapturePathSandboxLog(input, {
-      diagnosticsLogPath: capturePathDiagnosticsLogPath,
-      event: "capture-path-validation.scene.succeeded",
-      runDirectory: sceneResult.runDirectory,
-      sceneId: scene.id,
-      scriptPath: sceneResult.scriptPath,
-      sectionId: "demo-script",
-      stderrPath: sceneResult.stderrPath,
-      stdoutPath: sceneResult.stdoutPath,
-    });
     await writeCapturePathDiagnostics(input, dependencies, {
       event: "capture-path-validation.scene.succeeded",
       logs: sceneResult.logs,
@@ -305,15 +270,6 @@ async function capturePathDemoScriptFailure(input: {
   const blockedNetworkAttempts =
     input.projectValidation?.blockedNetworkAttempts ?? [];
   const warnings = input.projectValidation?.warnings ?? [];
-  await writeCapturePathSandboxLog(input.input, {
-    blockedNetworkAttemptCount: blockedNetworkAttempts.length,
-    diagnosticsLogPath: capturePathDiagnosticsLogPath,
-    event: "capture-path-validation.demo-script.failed",
-    failedSceneId,
-    failureLogExcerpt,
-    failureReason,
-    warningCount: warnings.length,
-  });
   await writeCapturePathDiagnostics(input.input, input.dependencies, {
     blockedNetworkAttemptCount: blockedNetworkAttempts.length,
     event: "capture-path-validation.demo-script.failed",
@@ -349,23 +305,6 @@ async function capturePathSceneFailure(input: {
   sceneResult: Extract<CapturePathSceneValidationResult, { status: "failed" }>;
 }): Promise<CapturePathValidationResult> {
   const failureLogExcerpt = createLogExcerpt(input.sceneResult.logs);
-  await writeCapturePathSandboxLog(input.input, {
-    blockedNetworkAttemptCount:
-      input.sceneResult.blockedNetworkAttempts?.length ?? 0,
-    diagnosticsLogPath: capturePathDiagnosticsLogPath,
-    event: "capture-path-validation.scene.failed",
-    failedAction: input.sceneResult.failedAction,
-    errorMessage: input.sceneResult.errorMessage,
-    failureLogExcerpt,
-    failureReason: input.sceneResult.failureReason,
-    runDirectory: input.sceneResult.runDirectory,
-    sceneId: input.sceneId,
-    scriptPath: input.sceneResult.scriptPath,
-    screenshotArtifactId: input.sceneResult.screenshotArtifactId,
-    sectionId: "demo-script",
-    stderrPath: input.sceneResult.stderrPath,
-    stdoutPath: input.sceneResult.stdoutPath,
-  });
   await writeCapturePathDiagnostics(input.input, input.dependencies, {
     blockedNetworkAttemptCount:
       input.sceneResult.blockedNetworkAttempts?.length ?? 0,
@@ -567,24 +506,6 @@ async function writeFallbackDiagnosticsWarning(
   } catch {
     // Preserve Capture Path Validation progress if the fallback logger fails or hangs.
   }
-}
-
-async function writeCapturePathSandboxLog(
-  input: CapturePathValidationInput,
-  entry: Record<string, unknown>,
-) {
-  const write = input.preparationWorkspace?.workspace.writeSandboxLog?.({
-    ...removeUndefinedValues(entry),
-    repoUrl: input.preparationManifest.repoUrl,
-    scriptId: input.demoScriptPackage.scriptId,
-    stage: "capture-path-validation",
-    workspaceId: input.preparationManifest.workspaceId,
-  });
-  if (write === undefined) {
-    return;
-  }
-
-  void write.catch(() => {});
 }
 
 function removeUndefinedValues(input: Record<string, unknown>) {
