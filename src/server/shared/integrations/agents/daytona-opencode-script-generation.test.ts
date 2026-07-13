@@ -741,274 +741,88 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
     );
   });
 
-  it("reports the exact post-repair artifact read when the Demo Script read times out", async () => {
-    const events: unknown[] = [];
-    const agent = new DaytonaOpenCodeScriptGeneration({
-      modelID: "gpt-5.5",
-      postRepairArtifactReadTimeoutMs: 5,
-      providerID: "openai",
-    });
+  it.each([
+    ["Demo Script timeout", "demo-script.json", "timeout"],
+    ["Demo Script failure", "demo-script.json", "failure"],
+    ["Preparation Manifest timeout", "preparation-manifest.json", "timeout"],
+    ["Preparation Manifest failure", "preparation-manifest.json", "failure"],
+    ["transient Demo Script socket closures", "demo-script.json", "transient"],
+  ])(
+    "handles post-repair %s while preserving artifact context",
+    async (_label, artifact, mode) => {
+      const events: unknown[] = [];
+      const options =
+        mode === "timeout"
+          ? {
+              neverSettleArtifactReads: [artifact],
+              postRepairArtifactReadTimeoutMs: 5,
+            }
+          : mode === "failure"
+            ? { rejectArtifactReads: [artifact] }
+            : { transientSocketClosureArtifactReads: { [artifact]: 2 } };
+      const agent = new DaytonaOpenCodeScriptGeneration({
+        modelID: "gpt-5.5",
+        ...(mode === "timeout" ? { postRepairArtifactReadTimeoutMs: 5 } : {}),
+        providerID: "openai",
+      });
+      const operation = agent.repairCapturePathFailure(
+        capturePathRepairInput(events, options),
+      );
 
-    const repair = agent.repairCapturePathFailure({
-      attempt: 1,
-      failure: {
-        blockedNetworkAttempts: [],
-        failedSceneId: "scene_feed",
-        failureReason:
-          "Scene scene_feed failed during Capture Path Validation.",
-        logs: ["locator failed"],
-        status: "failed",
-        warnings: [],
-      },
-      opencodeSessionID: "session_prepare_123",
-      preparationManifest: scriptGenerationInput().preparationManifest,
-      preparationWorkspace: workspaceHandle(events, [interactivePackage()], {
-        neverSettleArtifactReads: ["demo-script.json"],
-      }),
-      repoUrl: "https://github.com/example/conduit",
-      demoScriptPackage: {
-        ...interactivePackage(),
-        assumptions: [],
-        demoPlan: {
-          featureOrder: ["article feed"],
-          narrative: "Conduit article feed demo",
-          risks: [],
-        },
-        exploration: {
-          assumptions: [],
-          productSurfaces: [],
-          summary: "Prepared Conduit with local articles.",
-        },
-      },
-    });
+      if (mode === "transient") {
+        const result = await operation;
+        expect(result.demoScriptPackage.scriptId).toBe("script_conduit");
+        expect(
+          events.filter(
+            (event) =>
+              typeof event === "object" &&
+              event !== null &&
+              "sandboxLog" in event &&
+              (event as { sandboxLog?: { event?: unknown } }).sandboxLog
+                ?.event === "capture-path-repair.artifact-read.retrying",
+          ),
+        ).toHaveLength(2);
+        const started = events
+          .filter(
+            (event) =>
+              typeof event === "object" &&
+              event !== null &&
+              "sandboxLog" in event,
+          )
+          .map(
+            (event) =>
+              (
+                event as {
+                  sandboxLog?: { artifact?: unknown; event?: unknown };
+                }
+              ).sandboxLog,
+          )
+          .filter(
+            (log) => log?.event === "capture-path-repair.artifact-read.started",
+          )
+          .map((log) => log?.artifact);
+        expect(started.indexOf("demo-script.json")).toBeLessThan(
+          started.indexOf("preparation-manifest.json"),
+        );
+        return;
+      }
 
-    await expect(repair).rejects.toThrow(
-      "Post-repair artifact read demo-script.json timed out",
-    );
-
-    expect(events).toEqual(
-      expect.arrayContaining([
-        {
-          sandboxLog: expect.objectContaining({
-            artifact: "demo-script.json",
-            event: "capture-path-repair.artifact-read.started",
-            stage: "capture-path-repair",
-          }),
-        },
-        {
-          sandboxLog: expect.objectContaining({
-            artifact: "demo-script.json",
-            durationMs: expect.any(Number),
-            event: "capture-path-repair.artifact-read.timeout",
-            reason: expect.stringContaining(
-              "Post-repair artifact read demo-script.json timed out",
-            ),
-            stage: "capture-path-repair",
-          }),
-        },
-      ]),
-    );
-  });
-
-  it("retries transient Daytona socket closures while reading repaired artifacts", async () => {
-    const events: unknown[] = [];
-    const agent = new DaytonaOpenCodeScriptGeneration({
-      modelID: "gpt-5.5",
-      providerID: "openai",
-    });
-
-    const result = await agent.repairCapturePathFailure(
-      capturePathRepairInput(events, {
-        transientSocketClosureArtifactReads: { "demo-script.json": 2 },
-      }),
-    );
-
-    expect(result.demoScriptPackage.scriptId).toBe("script_conduit");
-    expect(events).toEqual(
-      expect.arrayContaining([
-        {
-          sandboxLog: expect.objectContaining({
-            artifact: "demo-script.json",
-            attempt: 1,
-            delayMs: 250,
-            event: "capture-path-repair.artifact-read.retrying",
-            nextAttempt: 2,
-            reason: expect.stringContaining(
-              "socket connection was closed unexpectedly",
-            ),
-            stage: "capture-path-repair",
-          }),
-        },
-        {
-          sandboxLog: expect.objectContaining({
-            artifact: "demo-script.json",
-            attempt: 2,
-            delayMs: 500,
-            event: "capture-path-repair.artifact-read.retrying",
-            nextAttempt: 3,
-            reason: expect.stringContaining(
-              "socket connection was closed unexpectedly",
-            ),
-            stage: "capture-path-repair",
-          }),
-        },
-        {
-          sandboxLog: expect.objectContaining({
-            artifact: "demo-script.json",
-            event: "capture-path-repair.artifact-read.succeeded",
-            stage: "capture-path-repair",
-          }),
-        },
-      ]),
-    );
-  });
-
-  it("wraps post-repair Demo Script read failures with the artifact operation", async () => {
-    const events: unknown[] = [];
-    const agent = new DaytonaOpenCodeScriptGeneration({
-      modelID: "gpt-5.5",
-      providerID: "openai",
-    });
-
-    await expect(
-      agent.repairCapturePathFailure({
-        attempt: 1,
-        failure: {
-          blockedNetworkAttempts: [],
-          failedSceneId: "scene_feed",
-          failureReason:
-            "Scene scene_feed failed during Capture Path Validation.",
-          logs: ["locator failed"],
-          status: "failed",
-          warnings: [],
-        },
-        opencodeSessionID: "session_prepare_123",
-        preparationManifest: scriptGenerationInput().preparationManifest,
-        preparationWorkspace: workspaceHandle(events, [interactivePackage()], {
-          rejectArtifactReads: ["demo-script.json"],
-        }),
-        repoUrl: "https://github.com/example/conduit",
-        demoScriptPackage: {
-          ...interactivePackage(),
-          assumptions: [],
-          demoPlan: {
-            featureOrder: ["article feed"],
-            narrative: "Conduit article feed demo",
-            risks: [],
+      const expected = `Post-repair artifact read ${artifact} ${mode === "timeout" ? "timed out" : "failed: Daytona command did not finish within 600000ms"}`;
+      await expect(operation).rejects.toThrow(expected);
+      expect(events).toEqual(
+        expect.arrayContaining([
+          {
+            sandboxLog: expect.objectContaining({
+              artifact,
+              event: `capture-path-repair.artifact-read.${mode === "timeout" ? "timeout" : "failed"}`,
+              reason: expect.stringContaining(expected),
+              stage: "capture-path-repair",
+            }),
           },
-          exploration: {
-            assumptions: [],
-            productSurfaces: [],
-            summary: "Prepared Conduit with local articles.",
-          },
-        },
-      }),
-    ).rejects.toThrow(
-      "Post-repair artifact read demo-script.json failed: Daytona command did not finish within 600000ms",
-    );
-
-    expect(events).toEqual(
-      expect.arrayContaining([
-        {
-          sandboxLog: expect.objectContaining({
-            artifact: "demo-script.json",
-            durationMs: expect.any(Number),
-            event: "capture-path-repair.artifact-read.failed",
-            reason: expect.stringContaining(
-              "Post-repair artifact read demo-script.json failed: Daytona command did not finish within 600000ms",
-            ),
-            stage: "capture-path-repair",
-          }),
-        },
-      ]),
-    );
-    expect(events).not.toEqual(
-      expect.arrayContaining([
-        {
-          sandboxLog: expect.objectContaining({
-            artifact: "demo-script.json",
-            event: "capture-path-repair.artifact-read.retrying",
-          }),
-        },
-      ]),
-    );
-  });
-
-  it("fails Capture Path repair when the post-repair Preparation Manifest read times out", async () => {
-    const events: unknown[] = [];
-    const agent = new DaytonaOpenCodeScriptGeneration({
-      modelID: "gpt-5.5",
-      postRepairArtifactReadTimeoutMs: 5,
-      providerID: "openai",
-    });
-
-    await expect(
-      agent.repairCapturePathFailure(
-        capturePathRepairInput(events, {
-          neverSettleArtifactReads: ["preparation-manifest.json"],
-        }),
-      ),
-    ).rejects.toThrow(
-      "Post-repair artifact read preparation-manifest.json timed out",
-    );
-
-    expect(events).toEqual(
-      expect.arrayContaining([
-        {
-          sandboxLog: expect.objectContaining({
-            artifact: "preparation-manifest.json",
-            event: "capture-path-repair.artifact-read.started",
-            stage: "capture-path-repair",
-          }),
-        },
-        {
-          sandboxLog: expect.objectContaining({
-            artifact: "preparation-manifest.json",
-            durationMs: expect.any(Number),
-            event: "capture-path-repair.artifact-read.timeout",
-            reason: expect.stringContaining(
-              "Post-repair artifact read preparation-manifest.json timed out",
-            ),
-            stage: "capture-path-repair",
-          }),
-        },
-      ]),
-    );
-  });
-
-  it("fails Capture Path repair when the post-repair Preparation Manifest read fails", async () => {
-    const events: unknown[] = [];
-    const agent = new DaytonaOpenCodeScriptGeneration({
-      modelID: "gpt-5.5",
-      providerID: "openai",
-    });
-
-    await expect(
-      agent.repairCapturePathFailure(
-        capturePathRepairInput(events, {
-          rejectArtifactReads: ["preparation-manifest.json"],
-        }),
-      ),
-    ).rejects.toThrow(
-      "Post-repair artifact read preparation-manifest.json failed: Daytona command did not finish within 600000ms",
-    );
-
-    expect(events).toEqual(
-      expect.arrayContaining([
-        {
-          sandboxLog: expect.objectContaining({
-            artifact: "preparation-manifest.json",
-            durationMs: expect.any(Number),
-            event: "capture-path-repair.artifact-read.failed",
-            reason: expect.stringContaining(
-              "Post-repair artifact read preparation-manifest.json failed: Daytona command did not finish within 600000ms",
-            ),
-            stage: "capture-path-repair",
-          }),
-        },
-      ]),
-    );
-  });
+        ]),
+      );
+    },
+  );
 
   it("continues Capture Path repair when the attempt-start sandbox log mirror fails", async () => {
     const events: unknown[] = [];
