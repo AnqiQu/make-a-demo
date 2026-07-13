@@ -1,5 +1,4 @@
-import { spawn } from "node:child_process";
-import { mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { PreparationWorkspaceHandle } from "../03-repo-preparation/preparation-workspace-runner";
 import { uploadSubmittedCodeWorkspaceFiles } from "../03-repo-preparation/preparation-workspace-upload";
@@ -18,7 +17,6 @@ import {
 import {
   type SceneClipTrimLogger,
   type SceneClipTrimmer,
-  createLocalSceneClipTrimmer,
   createSceneClipTrimmer,
 } from "./scene-clip-trimmer";
 import type {
@@ -28,135 +26,13 @@ import type {
 } from "./scene-recorder.interface";
 import { prepareStylizedPlaywrightScript } from "./stylized-playwright-script";
 
-export type PlaywrightSceneRecorderOptions = {
-  clipTrimmer?: SceneClipTrimmer;
-  headed?: boolean;
-  pauseAfterSceneMs?: number;
-  postRollMs?: number;
-  preRollMs?: number;
-  rawVideoFinder?: RawVideoFinder;
-  sceneScriptRunner?: SceneScriptRunner;
-  sceneTimeoutMs?: number;
-};
-
-type SceneScriptRunner = (
-  scenePath: string,
-  timeoutMs: number,
-) => Promise<SceneScriptResult>;
-
+type SceneMarker = CaptureSdkSceneEvent;
 type SceneScriptResult = {
   exitCode: number | null;
   stderr: string;
   stdout: string;
   timedOut: boolean;
 };
-
-type RawVideoFinder = (directory: string) => Promise<string>;
-
-type SceneMarker = CaptureSdkSceneEvent;
-
-export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
-  private readonly headed: boolean;
-  private readonly pauseAfterSceneMs: number;
-  private readonly postRollMs: number;
-  private readonly preRollMs: number;
-  private readonly sceneTimeoutMs: number;
-  private readonly clipTrimmer: SceneClipTrimmer;
-  private readonly rawVideoFinder: RawVideoFinder;
-  private readonly sceneScriptRunner: SceneScriptRunner;
-
-  constructor(options: PlaywrightSceneRecorderOptions = {}) {
-    this.clipTrimmer = options.clipTrimmer ?? createLocalSceneClipTrimmer();
-    this.headed = options.headed ?? false;
-    this.pauseAfterSceneMs = options.pauseAfterSceneMs ?? 0;
-    this.postRollMs = options.postRollMs ?? 350;
-    this.preRollMs = options.preRollMs ?? 250;
-    this.rawVideoFinder = options.rawVideoFinder ?? findSingleVideo;
-    this.sceneScriptRunner = options.sceneScriptRunner ?? runSceneScript;
-    this.sceneTimeoutMs = options.sceneTimeoutMs ?? 120_000;
-  }
-
-  async recordScenes(input: RecordSceneInput): Promise<RecordedScene[]> {
-    const sceneWorkspace = join(input.runDirectory, "work", "continuous-take");
-    const videoScratchDirectory = join(sceneWorkspace, "playwright-videos");
-    const rawScenesDirectory = join(input.runDirectory, "raw-scenes");
-    const sceneClipsDirectory = join(input.runDirectory, "scene-clips");
-    const scenePath = join(sceneWorkspace, "demo-script.ts");
-    const markerLogPath = join(input.runDirectory, "scene-markers.jsonl");
-    const rawTakePath = join(rawScenesDirectory, "continuous-take.webm");
-
-    await mkdir(videoScratchDirectory, { recursive: true });
-    await mkdir(rawScenesDirectory, { recursive: true });
-    await mkdir(sceneClipsDirectory, { recursive: true });
-    await writeGeneratedCaptureSdkHarness(sceneWorkspace);
-    await validateDemoScriptCaptureSdkTypes({
-      demoPlaywrightScript: input.demoPlaywrightScript,
-      directory: sceneWorkspace,
-    });
-    await writeFile(
-      scenePath,
-      prepareStylizedPlaywrightScript(input.demoPlaywrightScript, {
-        baseUrl: input.baseUrl,
-        headed: this.headed,
-        pauseAfterSceneMs: this.pauseAfterSceneMs,
-        videoDirectory: videoScratchDirectory,
-      }),
-    );
-
-    const result = await this.sceneScriptRunner(scenePath, this.sceneTimeoutMs);
-    await writeFile(markerLogPath, extractMarkerLog(result.stdout));
-    const blockedNetworkAttempts = readBlockedNetworkAttempts(result.stderr);
-    if (blockedNetworkAttempts.length > 0) {
-      throw new Error(
-        `Footage Capture blocked runtime network access from the generated Demo Script: ${blockedNetworkAttempts.map((attempt) => attempt.host).join(", ")}`,
-      );
-    }
-
-    if (result.exitCode !== 0) {
-      throw new Error(formatSceneFailure("continuous-take", result));
-    }
-
-    const recordedVideoPath = await this.rawVideoFinder(videoScratchDirectory);
-    await rm(rawTakePath, { force: true });
-    await rename(recordedVideoPath, rawTakePath);
-
-    const markers = parseSceneMarkers(result.stdout);
-    const markerRanges = readMarkerRanges(
-      markers,
-      input.scenes.map((scene) => scene.id),
-    );
-    const recordedScenes: RecordedScene[] = [];
-
-    for (const scene of input.scenes) {
-      const range = markerRanges.get(scene.id);
-      if (range === undefined) {
-        throw new Error(`Scene ${scene.id} did not emit complete markers.`);
-      }
-
-      const startMs = Math.max(0, range.startedAtMs - this.preRollMs);
-      const endMs = Math.max(startMs + 1, range.endedAtMs + this.postRollMs);
-      const outputVideoPath = join(sceneClipsDirectory, `${scene.id}.webm`);
-      const trimResult = await this.clipTrimmer.trimClip({
-        durationMs: endMs - startMs,
-        outputVideoPath,
-        rawTakePath,
-        sceneId: scene.id,
-        startMs,
-      });
-
-      recordedScenes.push({
-        durationSeconds: trimResult.durationSeconds,
-        markerEndMs: range.endedAtMs,
-        markerStartMs: range.startedAtMs,
-        sceneId: scene.id,
-        sectionId: input.sectionId,
-        videoPath: outputVideoPath,
-      });
-    }
-
-    return recordedScenes;
-  }
-}
 
 export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
   private readonly headed: boolean;
@@ -363,41 +239,6 @@ function createSubmittedCodeSceneClipTrimmer(input: {
   });
 }
 
-async function runSceneScript(scenePath: string, timeoutMs: number) {
-  return await new Promise<SceneScriptResult>((resolve, reject) => {
-    const child = spawn(process.execPath, [scenePath], {
-      detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
-
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      killChildProcessGroup(child.pid);
-    }, timeoutMs);
-
-    child.once("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-    child.once("close", (exitCode) => {
-      clearTimeout(timeout);
-      resolve({ exitCode, stderr, stdout, timedOut });
-    });
-  });
-}
-
 function formatSceneFailure(sceneId: string, result: SceneScriptResult) {
   const details = [result.stdout.trim(), result.stderr.trim()]
     .filter((output) => output.length > 0)
@@ -463,39 +304,6 @@ function readBlockedNetworkAttempts(stderr: string) {
   }));
 }
 
-function killChildProcessGroup(pid: number | undefined) {
-  if (pid === undefined) {
-    return;
-  }
-
-  try {
-    process.kill(process.platform === "win32" ? pid : -pid, "SIGTERM");
-  } catch {
-    // The child may already have exited between the timeout and signal delivery.
-  }
-}
-
-async function findSingleVideo(directory: string) {
-  const videos = await findVideoFiles(directory);
-
-  if (videos.length === 0) {
-    throw new Error(`No Playwright video was created in ${directory}`);
-  }
-
-  if (videos.length > 1) {
-    throw new Error(
-      `Expected one Playwright video in ${directory}, found ${videos.length}`,
-    );
-  }
-
-  const video = videos[0];
-  if (!video) {
-    throw new Error(`No Playwright video was created in ${directory}`);
-  }
-
-  return video;
-}
-
 async function findSingleRemoteVideo(input: {
   directory: string;
   workspace: PreparationWorkspace;
@@ -543,24 +351,4 @@ function createExposeGlobalPlaywrightCommand() {
     'if [ -e "$global_node_modules/playwright" ]; then ln -sfn "$global_node_modules/playwright" node_modules/playwright; fi',
     'if [ -e "$global_node_modules/playwright-core" ]; then ln -sfn "$global_node_modules/playwright-core" node_modules/playwright-core; fi',
   ].join("; ");
-}
-
-async function findVideoFiles(directory: string): Promise<string[]> {
-  const entries = await readdir(directory, { withFileTypes: true });
-  const videos: string[] = [];
-
-  for (const entry of entries) {
-    const entryPath = join(directory, entry.name);
-
-    if (entry.isDirectory()) {
-      videos.push(...(await findVideoFiles(entryPath)));
-      continue;
-    }
-
-    if (entry.isFile() && entry.name.endsWith(".webm")) {
-      videos.push(entryPath);
-    }
-  }
-
-  return videos;
 }
