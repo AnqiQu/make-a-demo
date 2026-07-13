@@ -1,4 +1,11 @@
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -54,6 +61,26 @@ describe("collectDraftCompositeQualityFindings", () => {
       "Scene scene-feed duration 31.00s exceeds 30s",
       "Draft Composite is missing audio while music is enabled",
       "Scene scene-feed contains fully static footage",
+    ]);
+  });
+
+  it("reports unverified audio as a review gate when music is enabled", () => {
+    const findings = collectDraftCompositeQualityFindings({
+      captureManifest: { qualityFindings: [], scenes: [] },
+      draftEvidence: {
+        contactSheetPaths: [],
+        ffmpegFindings: ["ffprobe audio probe failed"],
+        sampledFramePaths: [],
+        staticSceneIds: [],
+      },
+      finalVideo: { durationInFrames: 30, fps: 30 },
+      scriptPackage: {
+        presentation: { music: { enabled: true, trackId: "focus" } },
+      } as DemoScript,
+    });
+
+    expect(findings).toEqual([
+      "Draft Composite audio presence could not be verified while music is enabled",
     ]);
   });
 });
@@ -134,6 +161,125 @@ describe("inspectDraftCompositeEvidence", () => {
       );
     } finally {
       process.env.PATH = previousPath;
+    }
+  });
+
+  it("preserves generated ffmpeg probe failures as evidence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "makeademo-evidence-"));
+    const bin = join(root, "bin");
+    await mkdir(bin, { recursive: true });
+    await writeFile(join(root, "draft.mp4"), "draft");
+    await writeFile(join(root, "scene.webm"), "scene");
+    const failing = "#!/bin/sh\necho unavailable >&2\nexit 1\n";
+    await writeFile(join(bin, "ffmpeg"), failing, { mode: 0o755 });
+    await writeFile(join(bin, "ffprobe"), failing, { mode: 0o755 });
+    const previousPath = process.env.PATH;
+    process.env.PATH = bin;
+    try {
+      const evidence = await inspectDraftCompositeEvidence({
+        captureManifest: {
+          ...({} as CaptureManifest),
+          qualityFindings: [],
+          scenes: [
+            {
+              durationSeconds: 1.2,
+              sceneId: "scene-one",
+              sectionId: "demo-script",
+              videoPath: join(root, "scene.webm"),
+            },
+          ],
+        },
+        draftComposite: {
+          ...({} as CompositedVideoManifest),
+          durationInFrames: 30,
+          fps: 30,
+          outputVideoPath: join(root, "draft.mp4"),
+          runDirectory: root,
+        },
+      });
+      expect(evidence.ffmpegFindings).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("ffmpeg sampled-frame extraction failed"),
+          expect.stringContaining("ffmpeg contact-sheet generation failed"),
+          expect.stringContaining("ffprobe audio probe failed"),
+          expect.stringContaining("ffmpeg static-footage probe failed"),
+        ]),
+      );
+      expect(evidence.audioPresent).toBeUndefined();
+    } finally {
+      process.env.PATH = previousPath;
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("treats missing ffmpeg tools as evidence instead of throwing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "makeademo-evidence-"));
+    await writeFile(join(root, "draft.mp4"), "draft");
+    const previousPath = process.env.PATH;
+    process.env.PATH = "";
+    try {
+      const evidence = await inspectDraftCompositeEvidence({
+        captureManifest: {
+          ...({} as CaptureManifest),
+          qualityFindings: [],
+          scenes: [],
+        },
+        draftComposite: {
+          ...({} as CompositedVideoManifest),
+          durationInFrames: 30,
+          fps: 30,
+          outputVideoPath: join(root, "draft.mp4"),
+          runDirectory: root,
+        },
+      });
+      expect(evidence.ffmpegFindings).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("ffmpeg sampled-frame extraction failed"),
+          expect.stringContaining("ffprobe audio probe failed"),
+        ]),
+      );
+    } finally {
+      process.env.PATH = previousPath;
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("bounds hanging ffmpeg evidence commands", async () => {
+    const root = await mkdtemp(join(tmpdir(), "makeademo-evidence-"));
+    const bin = join(root, "bin");
+    await mkdir(bin, { recursive: true });
+    await writeFile(join(root, "draft.mp4"), "draft");
+    const hanging = `#!${process.execPath}\nsetTimeout(() => {}, 60_000);\n`;
+    await writeFile(join(bin, "ffmpeg"), hanging, { mode: 0o755 });
+    await writeFile(join(bin, "ffprobe"), hanging, { mode: 0o755 });
+    const previousPath = process.env.PATH;
+    process.env.PATH = bin;
+    try {
+      const startedAt = Date.now();
+      const evidence = await inspectDraftCompositeEvidence({
+        captureManifest: {
+          ...({} as CaptureManifest),
+          qualityFindings: [],
+          scenes: [],
+        },
+        draftComposite: {
+          ...({} as CompositedVideoManifest),
+          durationInFrames: 30,
+          fps: 30,
+          outputVideoPath: join(root, "draft.mp4"),
+          runDirectory: root,
+        },
+        timeoutMs: 25,
+      });
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+      expect(evidence.ffmpegFindings).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("timed out after 25ms"),
+        ]),
+      );
+    } finally {
+      process.env.PATH = previousPath;
+      await rm(root, { force: true, recursive: true });
     }
   });
 });
