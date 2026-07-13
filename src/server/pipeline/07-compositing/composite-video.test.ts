@@ -676,7 +676,8 @@ describe("compositeVideoFromScript", () => {
       draftCompositeReviewer: acceptedDraftCompositeReviewer(),
       finalVideoEmailNotifier: emailNotifier,
       finalVideoStorage: {
-        async storeFinalVideo() {
+        async storeFinalVideo(input) {
+          await readStreamBody(input.body);
           return {
             key: "demo-videos/demo-request-001/composite-001/final-video.mp4",
             r2Url:

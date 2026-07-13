@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { captureScenesFromScript } from "../../pipeline/06-footage-capture/capture-scenes";
 import type { CaptureManifest } from "../../pipeline/06-footage-capture/capture-scenes";
+import { demoScriptLimits } from "../../pipeline/06-footage-capture/demo-script.schema";
 import {
   type CompositeVideoFromScriptInput,
   type CompositedVideoManifest,
@@ -82,6 +83,7 @@ export async function runDefaultDemoPipeline(
   options: DefaultDemoPipelineOptions = {},
 ): Promise<DefaultDemoPipelineResult> {
   assertSafeGithubRepoUrl(input.repoUrl);
+  assertRequestedFeaturesFitSceneBudget(input.importantFeatures);
 
   const runId = options.runId ?? createRunId();
   const outputRoot = options.outputRoot ?? defaultOutputRoot;
@@ -284,6 +286,21 @@ export async function runDefaultDemoPipeline(
   });
   await logger.flush();
   return completedResult;
+}
+
+function assertRequestedFeaturesFitSceneBudget(features: string[]): void {
+  const maxRequestedFeatures = Math.floor((demoScriptLimits.maxScenes - 2) / 2);
+  if (features.length > maxRequestedFeatures) {
+    throw new Error(
+      `A demo can include at most ${maxRequestedFeatures} requested features so every feature retains an introduction and demonstration Scene.`,
+    );
+  }
+  const normalized = features.map((feature) =>
+    feature.trim().replaceAll(/\s+/g, " ").toLowerCase(),
+  );
+  if (new Set(normalized).size !== normalized.length) {
+    throw new Error("Requested demo features must be unique");
+  }
 }
 
 function attachCleanupFailure(

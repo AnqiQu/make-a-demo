@@ -18,8 +18,11 @@ const preparationFailureClassifications = new Set([
   "empty/unmeaningful app state",
   "external network attempted",
   "external network required",
+  "feature auth barrier",
   "install failure",
   "missing env",
+  "prepared feature not observable",
+  "requested feature not observable",
   "start failure",
 ]);
 

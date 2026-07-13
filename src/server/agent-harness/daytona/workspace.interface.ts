@@ -8,10 +8,46 @@ export type AgentHarnessWorkspaceCommandResult = DependencyInstallCommandResult;
  * safely convert it into bounded agent feedback and retry behavior.
  */
 export class AgentHarnessCommandTimeoutError extends Error {
-  constructor(timeoutMs: number) {
-    super(`Daytona command did not finish within ${timeoutMs}ms.`);
+  readonly kind: "deadline" | "inactivity";
+  readonly timeoutMs: number;
+
+  constructor(timeoutMs: number, kind: "deadline" | "inactivity" = "deadline") {
+    super(
+      kind === "inactivity"
+        ? `Daytona command produced no output for ${timeoutMs}ms.`
+        : `Daytona command did not finish within ${timeoutMs}ms.`,
+    );
     this.name = "AgentHarnessCommandTimeoutError";
+    this.kind = kind;
+    this.timeoutMs = timeoutMs;
   }
+}
+
+/** Signals that a Daytona sandbox stayed unavailable after one bounded restart. */
+export class AgentHarnessSandboxUnavailableError extends Error {
+  readonly sandboxId: string;
+
+  constructor(sandboxId: string, cause: unknown) {
+    const causeMessage = cause instanceof Error ? cause.message : String(cause);
+    super(
+      `Daytona sandbox ${sandboxId} remained unavailable after restart: ${causeMessage}`,
+      { cause },
+    );
+    this.name = "AgentHarnessSandboxUnavailableError";
+    this.sandboxId = sandboxId;
+  }
+}
+
+/** Returns true only for failures owned by the agent/sandbox infrastructure seam. */
+export function isAgentHarnessInfrastructureError(
+  error: unknown,
+): error is
+  | AgentHarnessCommandTimeoutError
+  | AgentHarnessSandboxUnavailableError {
+  return (
+    error instanceof AgentHarnessCommandTimeoutError ||
+    error instanceof AgentHarnessSandboxUnavailableError
+  );
 }
 
 /** Identifies a bounded artifact transfer failure at a specific trust boundary. */
@@ -53,6 +89,8 @@ export type AgentHarnessWorkspaceDownloadFile = {
 
 export type AgentHarnessWorkspaceExecuteOptions = {
   env?: Record<string, string>;
+  /** Maximum silence between streamed output chunks; omitted for no idle limit. */
+  inactivityTimeoutMs?: number;
   onStderr?: (chunk: string) => void;
   onStdout?: (chunk: string) => void;
   timeoutMs?: number;
@@ -129,6 +167,11 @@ export interface AgentHarnessWorkspace {
   setSubmittedCodeNetworkAccess?(enabled: boolean): Promise<void>;
   getPreviewUrl?(port: number): Promise<string>;
   writeSandboxLog?(entry: AgentHarnessWorkspaceLogEntry): Promise<void>;
+  /**
+   * Writes exact UTF-8 text into the agent sandbox without exposing it to the
+   * submitted-code sandbox or transporting the contents as a shell argument.
+   */
+  writeTextFile?(path: string, contents: string): Promise<void>;
   uploadFiles?(files: AgentHarnessWorkspaceUploadFile[]): Promise<void>;
   downloadFiles?(files: AgentHarnessWorkspaceDownloadFile[]): Promise<void>;
   /**

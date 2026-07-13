@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { Daytona } from "@daytona/sdk";
 
@@ -21,6 +21,7 @@ import type {
 import {
   AgentHarnessArtifactTransferError,
   AgentHarnessCommandTimeoutError,
+  AgentHarnessSandboxUnavailableError,
 } from "../../../agent-harness/daytona/workspace.interface";
 import {
   type PipelineEventLogger,
@@ -54,6 +55,7 @@ type DaytonaSdkSandbox = {
   ): Promise<{ url?: string }>;
   id?: string;
   name?: string;
+  refreshData?(): Promise<void>;
   process: {
     createPty(options: {
       id: string;
@@ -64,6 +66,7 @@ type DaytonaSdkSandbox = {
       onData: (data: Uint8Array) => void | Promise<void>;
     }): Promise<{
       disconnect(): Promise<void>;
+      kill(): Promise<void>;
       sendInput(data: string | Uint8Array): Promise<void>;
       wait(): Promise<{ error?: string; exitCode?: number }>;
       waitForConnection(): Promise<void>;
@@ -104,6 +107,7 @@ type DaytonaSdkSandbox = {
       onStderr: (chunk: string) => void,
     ): Promise<{ stderr?: string; stdout?: string } | undefined>;
   };
+  start?(timeout?: number): Promise<void>;
   updateNetworkSettings(settings: { networkBlockAll: boolean }): Promise<void>;
 };
 
@@ -227,6 +231,7 @@ export class DaytonaSdkPreparationWorkspaceProvider
     const createOptions = { timeout: this.sandboxCreateTimeoutSeconds };
     const sandbox = await this.createSandboxWithConnectionRetry(
       {
+        autoStopInterval: 0,
         disk: this.diskGB,
         ...(this.secrets === undefined ? {} : { secrets: this.secrets }),
         ...(this.snapshot === undefined ? {} : { snapshot: this.snapshot }),
@@ -454,12 +459,16 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
   ): Promise<AgentHarnessWorkspaceCommandResult> {
     const output: string[] = [];
     const decoder = new TextDecoder();
+    const inactivityDeadline = createCommandInactivityDeadline(
+      options.inactivityTimeoutMs,
+    );
     const pty = await this.createConnectedPty(this.sandbox, {
       cols: 120,
       cwd: "/workspace",
       envs: options.env ?? {},
       id: `makeademo-${randomUUID()}`,
       onData: (data) => {
+        inactivityDeadline.touch();
         const chunk = decoder.decode(data);
         output.push(chunk);
         const visibleChunk = removeExitMarker(chunk);
@@ -475,8 +484,9 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       await pty.sendInput(
         `stty -echo\n${command}\nprintf '\\n__MAKEADEMO_EXIT__:%s\\n' $?\nexit\n`,
       );
+      inactivityDeadline.touch();
       const result = await withTimeout(
-        pty.wait(),
+        Promise.race([pty.wait(), inactivityDeadline.expired]),
         timeoutMs,
         () => new AgentHarnessCommandTimeoutError(timeoutMs),
       );
@@ -488,7 +498,13 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
         stderr: result.error ?? "",
         stdout: removeExitMarker(stdout),
       };
+    } catch (error) {
+      if (error instanceof AgentHarnessCommandTimeoutError) {
+        await this.terminatePtyBestEffort(pty, timeoutMs);
+      }
+      throw error;
     } finally {
+      inactivityDeadline.dispose();
       this.activePtys.delete(pty);
       await this.disconnectPtyBestEffort(pty, timeoutMs);
     }
@@ -497,23 +513,44 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
   async cancelActiveCommands(): Promise<void> {
     await Promise.allSettled([
       this.stopSubmittedCodeApp(),
-      ...[...this.activePtys].map((pty) =>
-        this.disconnectPtyBestEffort(pty, defaultPtyDisconnectTimeoutMs),
-      ),
+      ...[...this.activePtys].map(async (pty) => {
+        await this.terminatePtyBestEffort(pty, defaultPtyDisconnectTimeoutMs);
+        await this.disconnectPtyBestEffort(pty, defaultPtyDisconnectTimeoutMs);
+      }),
     ]);
   }
 
   async collectSandboxLogs(): Promise<string[]> {
-    const response = await withTimeout(
-      this.sandbox.process.executeCommand(
-        `sh -lc ${shellQuote(`test ! -f ${workspaceSandboxAuditLogPath} || cat ${workspaceSandboxAuditLogPath}`)}`,
-        undefined,
-        undefined,
-        toSdkTimeoutSeconds(this.logWriteTimeoutMs),
-      ),
-      this.logWriteTimeoutMs,
-      `Daytona sandbox log collection did not finish within ${this.logWriteTimeoutMs}ms.`,
-    );
+    const collect = () =>
+      withTimeout(
+        this.sandbox.process.executeCommand(
+          `sh -lc ${shellQuote(`test ! -f ${workspaceSandboxAuditLogPath} || cat ${workspaceSandboxAuditLogPath}`)}`,
+          undefined,
+          undefined,
+          toSdkTimeoutSeconds(this.logWriteTimeoutMs),
+        ),
+        this.logWriteTimeoutMs,
+        `Daytona sandbox log collection did not finish within ${this.logWriteTimeoutMs}ms.`,
+      );
+    let response: Awaited<ReturnType<typeof collect>>;
+    try {
+      response = await collect();
+    } catch (error) {
+      if (!(await this.restartSandboxIfNotStarted(this.sandbox, error))) {
+        throw error;
+      }
+      try {
+        response = await collect();
+      } catch (retryError) {
+        if (isDaytonaSandboxNotStartedError(retryError)) {
+          throw new AgentHarnessSandboxUnavailableError(
+            readSandboxId(this.sandbox),
+            retryError,
+          );
+        }
+        throw retryError;
+      }
+    }
     if ((response.exitCode ?? 0) !== 0) {
       throw new Error("Failed to collect Daytona sandbox audit log.");
     }
@@ -869,6 +906,59 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     await this.submittedCodeSandbox?.fs.uploadFiles(uploadedFiles);
   }
 
+  async writeTextFile(path: string, contents: string): Promise<void> {
+    const transferId = randomUUID();
+    const localDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-agent-artifact-"),
+    );
+    const localPath = join(localDirectory, transferId);
+    const remoteTemporaryPath = `${path}.upload-${transferId}`;
+    const payloadBytes = Buffer.byteLength(contents);
+    try {
+      await writeFile(localPath, contents, "utf8");
+      const directoryResult = await this.sandbox.process.executeCommand(
+        `mkdir -p ${shellQuote(dirname(path))}`,
+      );
+      if ((directoryResult.exitCode ?? 0) !== 0) {
+        throw new Error(
+          formatCommandFailure(
+            `Failed to create Daytona artifact directory for ${path}`,
+            directoryResult,
+          ),
+        );
+      }
+      await this.sandbox.fs.uploadFiles(
+        [{ destination: remoteTemporaryPath, source: localPath }],
+        defaultArtifactTransferTimeoutSeconds,
+      );
+      const promotionResult = await this.sandbox.process.executeCommand(
+        `mv -f -- ${shellQuote(remoteTemporaryPath)} ${shellQuote(path)}`,
+      );
+      if ((promotionResult.exitCode ?? 0) !== 0) {
+        throw new Error(
+          formatCommandFailure(
+            `Failed to promote Daytona artifact ${path}`,
+            promotionResult,
+          ),
+        );
+      }
+    } catch (error) {
+      throw new Error(
+        `Daytona agent artifact filesystem transfer failed for ${path} (${payloadBytes} bytes): ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
+    } finally {
+      await rm(localDirectory, { force: true, recursive: true });
+      try {
+        await this.sandbox.process.executeCommand(
+          `rm -f -- ${shellQuote(remoteTemporaryPath)}`,
+        );
+      } catch {
+        // The sandbox is ephemeral and promotion already removed this path on success.
+      }
+    }
+  }
+
   async downloadFiles(
     files: AgentHarnessWorkspaceDownloadFile[],
   ): Promise<void> {
@@ -1021,12 +1111,16 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
   ): Promise<AgentHarnessWorkspaceCommandResult> {
     const output: string[] = [];
     const decoder = new TextDecoder();
+    const inactivityDeadline = createCommandInactivityDeadline(
+      options.inactivityTimeoutMs,
+    );
     const pty = await this.createConnectedPty(sandbox, {
       cols: 120,
       cwd: "/workspace",
       envs: options.env ?? {},
       id: `makeademo-${randomUUID()}`,
       onData: (data) => {
+        inactivityDeadline.touch();
         const chunk = decoder.decode(data);
         output.push(chunk);
         const visibleChunk = removeExitMarker(chunk);
@@ -1042,8 +1136,9 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       await pty.sendInput(
         `stty -echo\n${command}\nprintf '\n__MAKEADEMO_EXIT__:%s\n' $?\nexit\n`,
       );
+      inactivityDeadline.touch();
       const result = await withTimeout(
-        pty.wait(),
+        Promise.race([pty.wait(), inactivityDeadline.expired]),
         timeoutMs,
         () => new AgentHarnessCommandTimeoutError(timeoutMs),
       );
@@ -1055,7 +1150,13 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
         stderr: result.error ?? "",
         stdout: removeExitMarker(stdout),
       };
+    } catch (error) {
+      if (error instanceof AgentHarnessCommandTimeoutError) {
+        await this.terminatePtyBestEffort(pty, timeoutMs);
+      }
+      throw error;
     } finally {
+      inactivityDeadline.dispose();
       this.activePtys.delete(pty);
       await this.disconnectPtyBestEffort(pty, timeoutMs);
     }
@@ -1066,6 +1167,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     options: DaytonaSdkPtyOptions,
   ): Promise<ManagedPty> {
     let lastError: unknown;
+    let sandboxRestarted = false;
     for (let attempt = 1; attempt <= ptyStartupRetryLimit + 1; attempt += 1) {
       let pty: ManagedPty | undefined;
 
@@ -1089,7 +1191,21 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
           await this.disconnectPtyBestEffort(pty, this.ptyConnectionTimeoutMs);
         }
 
+        if (
+          !sandboxRestarted &&
+          (await this.restartSandboxIfNotStarted(sandbox, error))
+        ) {
+          sandboxRestarted = true;
+          continue;
+        }
+
         if (attempt > ptyStartupRetryLimit) {
+          if (isDaytonaSandboxNotStartedError(error)) {
+            throw new AgentHarnessSandboxUnavailableError(
+              readSandboxId(sandbox),
+              error,
+            );
+          }
           throw error;
         }
       }
@@ -1098,6 +1214,21 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     throw lastError instanceof Error
       ? lastError
       : new Error("Daytona PTY startup failed.");
+  }
+
+  private async restartSandboxIfNotStarted(
+    sandbox: DaytonaSdkSandbox,
+    error: unknown,
+  ): Promise<boolean> {
+    if (
+      !isDaytonaSandboxNotStartedError(error) ||
+      sandbox.start === undefined
+    ) {
+      return false;
+    }
+    await sandbox.refreshData?.();
+    await sandbox.start(defaultSandboxCreateTimeoutSeconds);
+    return true;
   }
 
   private async disconnectPtyBestEffort(
@@ -1116,10 +1247,28 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       ),
     ]);
   }
+
+  private async terminatePtyBestEffort(
+    pty: ManagedPty,
+    operationTimeoutMs: number,
+  ): Promise<void> {
+    const timeoutMs = Math.max(
+      1,
+      Math.min(operationTimeoutMs, defaultPtyDisconnectTimeoutMs),
+    );
+    await Promise.allSettled([
+      withTimeout(
+        pty.kill(),
+        timeoutMs,
+        `Daytona PTY termination did not finish within ${timeoutMs}ms.`,
+      ),
+    ]);
+  }
 }
 
 class ManagedPty {
   private disconnected = false;
+  private killed = false;
 
   constructor(private readonly pty: DaytonaSdkPty) {}
 
@@ -1129,6 +1278,14 @@ class ManagedPty {
     }
     this.disconnected = true;
     await this.pty.disconnect();
+  }
+
+  async kill(): Promise<void> {
+    if (this.killed) {
+      return;
+    }
+    this.killed = true;
+    await this.pty.kill();
   }
 
   sendInput(data: string | Uint8Array): Promise<void> {
@@ -1165,6 +1322,42 @@ function withTimeout<T>(
   ]);
 }
 
+function createCommandInactivityDeadline(timeoutMs: number | undefined): {
+  dispose(): void;
+  expired: Promise<never>;
+  touch(): void;
+} {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let expire: ((error: Error) => void) | undefined;
+  const expired = new Promise<never>((_resolve, reject) => {
+    expire = reject;
+  });
+  const dispose = () => {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+  };
+
+  return {
+    dispose,
+    expired,
+    touch() {
+      if (timeoutMs === undefined) {
+        return;
+      }
+      dispose();
+      timer = setTimeout(
+        () =>
+          expire?.(
+            new AgentHarnessCommandTimeoutError(timeoutMs, "inactivity"),
+          ),
+        timeoutMs,
+      );
+    },
+  };
+}
+
 function toSdkTimeoutSeconds(timeoutMs: number): number {
   return Math.max(1, Math.ceil(timeoutMs / 1000));
 }
@@ -1184,6 +1377,19 @@ function isDaytonaConnectionError(error: unknown): boolean {
     error.message.includes("ECONNRESET") ||
     error.message.includes("ETIMEDOUT")
   );
+}
+
+function isDaytonaSandboxNotStartedError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /failed to resolve container IP|no IP address found|Is the Sandbox started/i.test(
+      error.message,
+    )
+  );
+}
+
+function readSandboxId(sandbox: DaytonaSdkSandbox): string {
+  return sandbox.id ?? sandbox.name ?? "unknown";
 }
 
 function isTransientDaytonaArtifactTransferError(error: unknown): boolean {

@@ -121,7 +121,7 @@ describe("Browser Action Plan", () => {
       items: { oneOf: expect.any(Array) },
       type: "array",
     });
-    expect(schema.items.oneOf).toHaveLength(10);
+    expect(schema.items.oneOf).toHaveLength(11);
     expect(
       schema.items.oneOf.every(
         (actionSchema) => actionSchema.additionalProperties === false,
@@ -152,6 +152,36 @@ describe("Browser Action Plan", () => {
     expect(script).toContain(
       'await expect(page.getByText("Welcome back")).toContainText("Welcome back");',
     );
+  });
+
+  it("compiles a grounded scroll without accepting arbitrary browser code", () => {
+    const script = compileBrowserActionPlan({
+      scenes: [
+        {
+          actions: readBrowserActions([
+            {
+              id: "scroll-feed",
+              locator: { strategy: "css", value: "html" },
+              position: "bottom",
+              sourceActionId: "catalog-scroll-feed",
+              type: "scroll",
+            },
+            {
+              id: "feed-footer-visible",
+              locator: { strategy: "text", value: "End of feed" },
+              sourceActionId: "catalog-feed-footer-visible",
+              type: "assert-visible",
+            },
+          ]),
+          id: "scrolling-feed",
+        },
+      ],
+    });
+
+    expect(script).toContain(
+      'await page.locator("html").evaluate((element) => { element.scrollTop = element.scrollHeight; });',
+    );
+    expect(createBrowserActionJsonSchema().items.oneOf).toHaveLength(11);
   });
 
   it("supports intentionally clearing an input with an empty fill value", () => {

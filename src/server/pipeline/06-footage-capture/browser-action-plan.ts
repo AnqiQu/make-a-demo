@@ -26,6 +26,11 @@ export type BrowserAction =
     })
   | (BrowserActionBase & {
       locator: BrowserLocator;
+      position: "bottom" | "top";
+      type: "scroll";
+    })
+  | (BrowserActionBase & {
+      locator: BrowserLocator;
       type: "fill" | "select-option";
       value: string;
     })
@@ -87,6 +92,14 @@ const actionKeysByType = {
     "key",
     "locator",
     "locatorCandidateId",
+    "sourceActionId",
+    "type",
+  ],
+  scroll: [
+    "id",
+    "locator",
+    "locatorCandidateId",
+    "position",
     "sourceActionId",
     "type",
   ],
@@ -206,6 +219,10 @@ export function createBrowserActionJsonSchema() {
         ),
         schema("click", { locator }, ["locator"]),
         schema("hover", { locator }, ["locator"]),
+        schema("scroll", { locator, position: { enum: ["bottom", "top"] } }, [
+          "locator",
+          "position",
+        ]),
         schema("fill", { locator, value: { type: "string" } }, [
           "locator",
           "value",
@@ -322,6 +339,18 @@ function readBrowserAction(value: unknown, path: string): BrowserAction {
   }
 
   const locator = readBrowserLocator(record.locator, `${path}.locator`);
+  if (type === "scroll") {
+    const position = readString(record.position, `${path}.position`);
+    if (position !== "bottom" && position !== "top") {
+      throw new Error(`${path}.position is unsupported`);
+    }
+    return {
+      ...common,
+      locator,
+      position,
+      type,
+    };
+  }
   if (type === "fill") {
     return {
       ...common,
@@ -439,6 +468,13 @@ function compileAction(action: BrowserAction): string[] {
   }
   if (action.type === "select-option") {
     return [`await ${locator}.selectOption(${JSON.stringify(action.value)});`];
+  }
+  if (action.type === "scroll") {
+    return action.position === "bottom"
+      ? [
+          `await ${locator}.evaluate((element) => { element.scrollTop = element.scrollHeight; });`,
+        ]
+      : [`await ${locator}.evaluate((element) => { element.scrollTop = 0; });`];
   }
   if (action.type === "assert-text") {
     return [

@@ -25,8 +25,11 @@ describe("RepairRouter", () => {
       "missing env",
       "external network required",
       "auth wall",
+      "feature auth barrier",
       "app route crashes",
       "empty/unmeaningful app state",
+      "prepared feature not observable",
+      "requested feature not observable",
     ]) {
       expect(
         classifyRepairRoute({ failureClassification: classification }),

@@ -1,5 +1,8 @@
 import type { SubmittedAppExplorationResult } from "../app-explorer/submitted-app-explorer";
-import type { AgentHarnessWorkspace } from "../daytona/workspace.interface";
+import {
+  type AgentHarnessWorkspace,
+  isAgentHarnessInfrastructureError,
+} from "../daytona/workspace.interface";
 import type { OpenCodeHarnessRunner } from "../opencode/opencode-harness";
 import {
   classifyRepairRoute,
@@ -100,6 +103,7 @@ export type AgentHarnessPipelineDependencies = {
     demoBrief: AgentHarnessPipelineInput["demoBrief"];
     normalizedSupportingDocuments: AgentHarnessPipelineInput["normalizedSupportingDocuments"];
     repoProfile: RepoProfile;
+    repoSourcePaths: string[];
     runPlan: RunPlan;
     workspace: AgentHarnessWorkspace;
   }): Promise<{ manifest: PreparationManifest; opencodeSessionId?: string }>;
@@ -109,6 +113,7 @@ export type AgentHarnessPipelineDependencies = {
     normalizedSupportingDocuments: AgentHarnessPipelineInput["normalizedSupportingDocuments"];
     preparationManifest: PreparationManifest;
     repoProfile: RepoProfile;
+    repoSourcePaths: string[];
     runPlan: RunPlan;
     workspace: AgentHarnessWorkspace;
   }): Promise<{ manifest: PreparationManifest; opencodeSessionId?: string }>;
@@ -311,6 +316,7 @@ export async function runAgentHarnessPipeline(
           demoBrief: input.demoBrief,
           normalizedSupportingDocuments: input.normalizedSupportingDocuments,
           repoProfile,
+          repoSourcePaths: input.files.map((file) => file.path),
           runPlan,
           workspace: requireWorkspace(workspace),
         }),
@@ -731,7 +737,10 @@ export async function runAgentHarnessPipeline(
     stageStatuses["agent-harness"] = "failed";
     const preparationFailedStage = readPreparationFailedStage(stageStatuses);
     let surfacedError = error;
-    if (preparationFailedStage !== undefined) {
+    if (
+      preparationFailedStage !== undefined &&
+      !isAgentHarnessInfrastructureError(error)
+    ) {
       const fallback = createPreparationFallbackArtifact({
         ...(input.commitSha === undefined
           ? {}
@@ -1121,6 +1130,7 @@ async function repairPreparationManifest(input: {
           input.input.normalizedSupportingDocuments,
         preparationManifest: input.preparationManifest,
         repoProfile: input.repoProfile,
+        repoSourcePaths: input.input.files.map((file) => file.path),
         runPlan: input.runPlan,
         workspace: input.workspace,
       }) as Promise<{

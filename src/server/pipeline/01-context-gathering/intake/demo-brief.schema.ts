@@ -7,10 +7,7 @@ export type DemoBrief = {
 
 export function readDemoBriefSchema(value: unknown): DemoBrief {
   const record = assertRecord(value, "Demo Brief");
-  const keyProductFeatures = readNonEmptyStringArray(
-    record,
-    "keyProductFeatures",
-  );
+  const keyProductFeatures = readStringArray(record, "keyProductFeatures");
   const audience = record.audience;
   const demoLengthSeconds = record.demoLengthSeconds;
   const productSummary = record.productSummary;
@@ -48,13 +45,13 @@ function assertRecord(value: unknown, path: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function readNonEmptyStringArray(
+function readStringArray(
   record: Record<string, unknown>,
   key: string,
 ): string[] {
   const value = record[key];
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new Error(`${key} must be a non-empty string array`);
+  if (!Array.isArray(value)) {
+    throw new Error(`${key} must be a string array`);
   }
 
   return value.map((item, index) => {

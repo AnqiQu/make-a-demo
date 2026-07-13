@@ -25,6 +25,9 @@ export class DefaultOpenCodeHarnessRunner implements OpenCodeHarnessRunner {
           ),
           OPENCODE_ENABLE_EXA: "0",
         },
+        ...(input.inactivityTimeoutMs === undefined
+          ? {}
+          : { inactivityTimeoutMs: input.inactivityTimeoutMs }),
         ...(input.onStderr === undefined ? {} : { onStderr: input.onStderr }),
         ...(input.onStdout === undefined ? {} : { onStdout: input.onStdout }),
         timeoutMs: input.timeoutMs,

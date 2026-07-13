@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  AgentHarnessCommandTimeoutError,
+  AgentHarnessSandboxUnavailableError,
+} from "../daytona/workspace.interface";
 import { DEMO_SCRIPT_OUTPUT_PATH } from "../schemas/artifacts";
 import { runAgentHarnessPipeline } from "./agent-harness";
 
@@ -270,6 +274,52 @@ describe("runAgentHarnessPipeline", () => {
       runId: "run_003",
     });
   });
+
+  it.each([
+    [
+      "an agent timeout",
+      new AgentHarnessCommandTimeoutError(300_000, "inactivity"),
+    ],
+    [
+      "a sandbox outage",
+      new AgentHarnessSandboxUnavailableError(
+        "sandbox_123",
+        new Error("no IP address found"),
+      ),
+    ],
+  ])(
+    "does not turn %s into a Preparation Fallback",
+    async (_label, failure) => {
+      const artifacts: Record<string, unknown> = {};
+      let caught: unknown;
+
+      try {
+        await runAgentHarnessPipeline(
+          {
+            demoBrief: { keyProductFeatures: ["dashboard"] },
+            files: [{ path: "package.json", text: "{}" }],
+            repoStats: { fileCount: 1, sizeBytes: 2 },
+            repoUrl: "https://github.com/example/app",
+            runId: "run_infrastructure_failure",
+          },
+          failingPreparationDependencies(failure, artifacts),
+        );
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBe(failure);
+      expect(
+        artifacts["/workspace/.makeademo/preparation-fallback.json"],
+      ).toBeUndefined();
+      expect(
+        artifacts["/workspace/.makeademo/pipeline-run-manifest.json"],
+      ).toMatchObject({
+        finalStatus: "failed",
+        unsupportedOrFailureReason: failure.message,
+      });
+    },
+  );
 
   it("preserves the pipeline failure and durably records a teardown failure", async () => {
     const artifacts: Record<string, unknown> = {};
@@ -985,6 +1035,49 @@ function workspace() {
   };
 }
 
+function failingPreparationDependencies(
+  error: Error,
+  artifacts: Record<string, unknown>,
+) {
+  return {
+    artifactStore: {
+      async writeJson(path: string, value: unknown) {
+        artifacts[path] = value;
+      },
+    },
+    async createWorkspace() {
+      return workspace();
+    },
+    async exploreApp() {
+      throw new Error("App Exploration should not run.");
+    },
+    async planFlow() {
+      throw new Error("Flow Planning should not run.");
+    },
+    async prepareRepo() {
+      throw error;
+    },
+    async resetCaptureRuntime() {
+      return report("capture-runtime-reset", "passed");
+    },
+    async synthesizeRunPlan() {
+      return runPlan();
+    },
+    async validateCapturePath() {
+      throw new Error("Capture Path Validation should not run.");
+    },
+    async validatePreparation() {
+      throw new Error("Preparation Preflight should not run.");
+    },
+    async validateScriptContract() {
+      throw new Error("Static Script Contract should not run.");
+    },
+    async writeScript() {
+      throw new Error("Script Writing should not run.");
+    },
+  };
+}
+
 function runPlan() {
   return {
     allowedPorts: [3000],
@@ -1017,6 +1110,23 @@ function preparationManifest() {
     mocksAndFixturesAdded: [],
     modifiedFiles: [],
     ports: [3000],
+    productContext: {
+      evidencePaths: ["package.json"],
+      featureInventory: [
+        {
+          authStrategy: "none" as const,
+          description: "Show the dashboard.",
+          entryPaths: ["/"],
+          fixtureNotes: [],
+          id: "dashboard",
+          label: "Dashboard",
+          requestedFeature: "dashboard",
+          sourcePaths: ["package.json"],
+        },
+      ],
+      name: "Demo App",
+      summary: "A dashboard application.",
+    },
     requiredLocalOnlyAssumptions: [],
     scriptGenerationContext: [],
     startCommandUsed: "bun run dev --host 127.0.0.1 --port 3000",
@@ -1064,6 +1174,7 @@ function actionCatalog() {
         confidence: 0.9,
         evidence: "snapshot",
         expectedResult: "Dashboard opens",
+        featureIds: ["dashboard"],
         id: "open-dashboard",
         kind: "click" as const,
         preferredLocator: {
@@ -1082,26 +1193,29 @@ function actionCatalog() {
 
 function flowSpec() {
   return {
-    expectedVisibleAssertions: ["Dashboard visible"],
+    features: [
+      {
+        expectedVisibleAssertions: ["Dashboard visible"],
+        featureId: "dashboard",
+        label: "Dashboard",
+        referencedActionIds: ["open-dashboard"],
+        referencedAppMapRoutePaths: ["/"],
+        requestedFeature: "dashboard",
+        requiredAppState: [],
+        selectionReason: "Visible route",
+        steps: ["Open dashboard"],
+      },
+    ],
     id: "flow_001",
-    locatorStrategyNotes: [],
-    objective: "Show dashboard",
-    referencedActionIds: ["open-dashboard"],
-    referencedAppMapRoutePaths: ["/"],
     repairConstraints: ["Preserve dashboard step"],
-    requiredAppState: [],
-    selectedFlowName: "Dashboard",
-    skippedOrBlockedFlows: [],
-    steps: ["Open dashboard"],
-    userDemoBriefFeaturesCovered: ["dashboard"],
-    whySelected: "Visible route",
+    version: 2 as const,
   };
 }
 
 function scriptCandidate() {
   return {
     assumptions: [],
-    browserActionCompilerVersion: "2026-07-10.1",
+    browserActionCompilerVersion: "2026-07-12.1",
     bunRuntimeVersion: "1.3.14",
     captureSdkVersion: "2026-07-10.1",
     conformanceResult: report("static-script-contract-validation", "passed"),

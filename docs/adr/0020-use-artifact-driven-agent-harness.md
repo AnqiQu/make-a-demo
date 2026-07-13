@@ -12,6 +12,14 @@ In particular, the current architecture does not ask an agent to author `demoPla
 
 Legacy parsers may continue accepting earlier raw-script artifacts for compatibility. That compatibility is not the current generation contract and must not be presented to agents as an allowed shortcut.
 
+### Feature completeness and narrative assembly amendment (2026-07-12)
+
+The Preparation Manifest now contains source-backed Product Context and a Feature Inventory. Repo Preparation must map every maker-requested feature exactly once, retain its submitted text, cite screened repository source paths, provide local browser entry paths, and record whether the ephemeral demo runtime uses no authentication preparation, a demo-only bypass, or a deterministic demo identity. App Exploration visits those feature entry paths before ordinary link crawling and tags observed routes and Action Catalog actions with their prepared feature IDs. Unexpected authentication walls, including same-route login forms, and missing requested feature evidence route back to Repo Preparation Repair; authentication UI remains observable when signing in is itself requested.
+
+Flow Spec is feature-scoped rather than a single preferred-flow summary. When the maker provides features, a successful Flow Spec contains exactly that normalized set with no skipped or convenience-based omissions. When the maker provides none, Flow Planning selects up to three source-backed features with grounded browser evidence. Every selected feature must retain distinguishing Action Catalog evidence.
+
+The Script Writer emits feature-tagged Browser Scenes. The backend owns Demo Narrative Assembly and deterministically inserts a product intro, one Full-Screen Text Scene before each selected feature, and a product outro. Script Repair cannot remove requested features or these structural Scenes. Typed scrolling is part of the Browser Action vocabulary; the backend compiles its fixed implementation, so agents still cannot author arbitrary page JavaScript.
+
 ## Context
 
 MakeADemo must turn an untrusted submitted web app into a validated, capture-ready Demo Script without allowing an agent to self-certify success. Repo Preparation, exploration, flow planning, Script Generation, validation, capture, and rendering need durable handoffs so a failed stage can be diagnosed or retried without depending on hidden model-session state.

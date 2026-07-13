@@ -19,11 +19,13 @@ import {
 import { DaytonaSdkPreparationWorkspaceProvider } from "../../shared/integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import type { PipelineEventLogger } from "../../shared/logging/pipeline-event-logger";
 import { exploreSubmittedApp } from "../app-explorer/submitted-app-explorer";
-import type {
-  AgentHarnessWorkspace,
-  AgentHarnessWorkspaceCommandResult,
-  AgentHarnessWorkspaceHandle,
-  AgentHarnessWorkspaceProvider,
+import {
+  AgentHarnessCommandTimeoutError,
+  type AgentHarnessWorkspace,
+  type AgentHarnessWorkspaceCommandResult,
+  type AgentHarnessWorkspaceHandle,
+  type AgentHarnessWorkspaceProvider,
+  isAgentHarnessInfrastructureError,
 } from "../daytona/workspace.interface";
 import { DefaultOpenCodeHarnessRunner } from "../opencode/default-opencode-harness-runner";
 import {
@@ -36,6 +38,7 @@ import type {
   AgentHarnessPipelineDependencies,
   AgentHarnessPipelineInput,
 } from "../orchestration/agent-harness";
+import { assertPreparedFeatureInventory } from "../repo-preparation/prepared-feature-inventory";
 import { synthesizeRunPlan } from "../run-planner/run-plan-synthesis";
 import {
   type ActionCatalog,
@@ -51,7 +54,9 @@ import {
   readPreparationManifest,
 } from "../schemas/artifacts";
 import { createFlowSpecContract } from "../schemas/flow-spec-contract";
+import { createPreparationManifestContract } from "../schemas/preparation-manifest-contract";
 import { createPreparationManifestTemplate } from "../schemas/preparation-manifest-template";
+import { assembleDemoNarrative } from "../script-contract/demo-narrative";
 import {
   createDemoScriptContract,
   validateDemoScriptCandidateContract,
@@ -69,6 +74,11 @@ import {
   readRuntimeNetworkAttempts,
   runtimeNetworkGuardPath,
 } from "../validation/runtime-network-guard";
+import {
+  type JsonSyntaxDiagnostic,
+  diagnoseJsonSyntax,
+  fingerprintArtifactText,
+} from "./json-artifact-diagnostic";
 import {
   type RepoSourceArchive,
   assertRepoSourceArchiveIntegrity,
@@ -98,6 +108,8 @@ const makeADemoDirectory = "/workspace/.makeademo";
 const misplacedPreparationManifestPath =
   "/workspace/repo/.makeademo/preparation-manifest.json";
 const openCodeConfigDirectory = "/tmp/makeademo/opencode";
+const maxShellArtifactWriteBytes = 120 * 1024;
+const openCodeInactivityTimeoutMs = 5 * 60_000;
 
 const artifactPaths = {
   actionCatalog: "/workspace/.makeademo/action-catalog.json",
@@ -114,6 +126,8 @@ const artifactPaths = {
   flowSpec: "/workspace/.makeademo/flow-spec.json",
   flowSpecContract: "/workspace/.makeademo/flow-spec-contract.json",
   preparationManifest: "/workspace/.makeademo/preparation-manifest.json",
+  preparationManifestContract:
+    "/workspace/.makeademo/preparation-manifest-contract.json",
   preparationManifestTemplate:
     "/workspace/.makeademo/preparation-manifest-template.json",
   preparationPreflight:
@@ -128,7 +142,8 @@ export async function createDefaultAgentHarnessDependencies(
 ): Promise<DefaultHarnessDependencies> {
   const env = options.env ?? process.env;
   const providerID = options.providerID ?? "openai";
-  const modelID = options.modelID ?? "gpt-5";
+  const modelID =
+    options.modelID ?? (env.MAKEADEMO_OPENAI_MODEL?.trim() || "gpt-5.6-terra");
   const openCodeRunner =
     options.openCodeRunner ?? new DefaultOpenCodeHarnessRunner();
   let workspaceHandle: AgentHarnessWorkspaceHandle | undefined;
@@ -140,7 +155,14 @@ export async function createDefaultAgentHarnessDependencies(
     options.staticImageAssets ?? {},
   ).sort();
   const runOpenCode = (input: OpenCodeHarnessRunInput) =>
-    runLoggedOpenCode({ input, logger: options.logger, openCodeRunner });
+    runLoggedOpenCode({
+      input: {
+        inactivityTimeoutMs: openCodeInactivityTimeoutMs,
+        ...input,
+      },
+      logger: options.logger,
+      openCodeRunner,
+    });
 
   const dependencies: AgentHarnessPipelineDependencies = {
     artifactStore: options.artifactStore,
@@ -182,6 +204,7 @@ export async function createDefaultAgentHarnessDependencies(
     async exploreApp({ preparationManifest, workspace }) {
       return await exploreSubmittedApp({
         baseUrl: preparationManifest.baseUrl,
+        featureInventory: preparationManifest.productContext.featureInventory,
         preparationManifestId: preparationManifest.id,
         workspace,
       });
@@ -242,7 +265,13 @@ export async function createDefaultAgentHarnessDependencies(
         if (flowSpecResult.ok) {
           try {
             const flowSpec = readFlowSpec(flowSpecResult.value);
-            assertFlowSpecGrounded({ actionCatalog, appMap, flowSpec });
+            assertFlowSpecGrounded({
+              actionCatalog,
+              appMap,
+              demoBrief,
+              flowSpec,
+              preparationManifest,
+            });
             return flowSpec;
           } catch (error) {
             artifactError = `Invalid FlowSpec: ${readErrorMessage(error)}`;
@@ -272,6 +301,7 @@ export async function createDefaultAgentHarnessDependencies(
       demoBrief,
       normalizedSupportingDocuments,
       repoProfile,
+      repoSourcePaths,
       runPlan,
       workspace,
     }) {
@@ -290,10 +320,19 @@ export async function createDefaultAgentHarnessDependencies(
         repoProfile,
       );
       await writeWorkspaceJson(workspace, artifactPaths.runPlan, runPlan);
+      const preparationManifestTemplate = createPreparationManifestTemplate(
+        runPlan,
+        demoBrief,
+      );
+      await writeWorkspaceJson(
+        workspace,
+        artifactPaths.preparationManifestContract,
+        createPreparationManifestContract(),
+      );
       await writeWorkspaceJson(
         workspace,
         artifactPaths.preparationManifestTemplate,
-        createPreparationManifestTemplate(runPlan),
+        preparationManifestTemplate,
       );
       await writeWorkspaceJson(
         workspace,
@@ -304,71 +343,136 @@ export async function createDefaultAgentHarnessDependencies(
         | { exitCode: number; stderr: string; stdout: string }
         | undefined;
       let readError = "PreparationManifest was not produced.";
+      let repairBaselineFingerprint: string | undefined;
+      let primaryAgentTimeout: AgentHarnessCommandTimeoutError | undefined;
       for (let attempt = 1; attempt <= 3; attempt += 1) {
         const stage =
           attempt === 1 ? "repo-preparation" : "repo-preparation-repair";
-        const result = await runOpenCode({
-          availableTools: ["read", "write"],
-          configDir: openCodeConfigDirectory,
-          model: `${providerID}/${modelID}`,
-          prompt:
-            attempt === 1
-              ? createRepoPreparationPrompt({
-                  demoBrief,
-                  repoProfile,
-                  runPlan,
-                })
-              : createRepoPreparationRepairPrompt({
-                  demoBrief,
-                  previousResult: previousResult ?? {
-                    exitCode: 1,
-                    stderr: "",
-                    stdout: "",
-                  },
-                  readError,
-                  repoProfile,
-                  runPlan,
-                }),
-          ...optionalSessionId(opencodeSessionId),
-          stage,
-          timeoutMs: attempt === 1 ? 20 * 60_000 : 10 * 60_000,
-          workingDirectory: workspaceRepoDirectory,
-          workspace,
-        });
+        let result: OpenCodeHarnessRunResult;
+        try {
+          result = await runOpenCode({
+            availableTools: ["read", "write"],
+            configDir: openCodeConfigDirectory,
+            model: `${providerID}/${modelID}`,
+            prompt:
+              attempt === 1
+                ? createRepoPreparationPrompt({
+                    demoBrief,
+                    repoProfile,
+                    runPlan,
+                  })
+                : createRepoPreparationRepairPrompt({
+                    demoBrief,
+                    previousResult: previousResult ?? {
+                      exitCode: 1,
+                      stderr: "",
+                      stdout: "",
+                    },
+                    readError,
+                    repoProfile,
+                    runPlan,
+                  }),
+            ...optionalSessionId(opencodeSessionId),
+            stage,
+            timeoutMs: attempt === 1 ? 20 * 60_000 : 10 * 60_000,
+            workingDirectory: workspaceRepoDirectory,
+            workspace,
+          });
+        } catch (error) {
+          if (
+            primaryAgentTimeout !== undefined &&
+            isAgentHarnessInfrastructureError(error)
+          ) {
+            attachSecondaryFailure(primaryAgentTimeout, "recoveryError", error);
+            throw primaryAgentTimeout;
+          }
+          throw error;
+        }
+        primaryAgentTimeout ??= result.timeoutError;
         opencodeSessionId = result.sessionId ?? opencodeSessionId;
         previousResult = result;
-        const manifestResult =
-          result.exitCode === 0
-            ? await tryReadPreparationManifest(
-                workspace,
-                artifactPaths.preparationManifest,
-              )
+        const candidateManifest = await tryReadPreparationManifest(
+          workspace,
+          artifactPaths.preparationManifest,
+          { demoBrief, repoSourcePaths },
+        );
+        let manifestResult: PreparationManifestReadResult =
+          candidateManifest.ok || result.exitCode === 0
+            ? candidateManifest
             : {
                 error: `OpenCode exited with code ${result.exitCode}: ${result.stderr || result.stdout}`,
+                failureClassification: "agent-command",
                 ok: false as const,
               };
+        if (
+          attempt > 1 &&
+          repairBaselineFingerprint !== undefined &&
+          manifestResult.candidateFingerprint === repairBaselineFingerprint
+        ) {
+          manifestResult = {
+            ...(manifestResult.candidate === undefined
+              ? {}
+              : { candidate: manifestResult.candidate }),
+            candidateFingerprint: manifestResult.candidateFingerprint,
+            error:
+              "Repo Preparation Repair did not modify preparation-manifest.json.",
+            failureClassification: "unchanged",
+            ok: false,
+          };
+        }
+        let syntaxEvidencePath: string | undefined;
+        if (
+          !manifestResult.ok &&
+          manifestResult.failureClassification === "invalid-json" &&
+          manifestResult.rawCandidate !== undefined &&
+          attempt < 3
+        ) {
+          syntaxEvidencePath = `${makeADemoDirectory}/invalid-preparation-manifest-attempt-${attempt}.json`;
+          await writeWorkspaceText(
+            workspace,
+            syntaxEvidencePath,
+            manifestResult.rawCandidate,
+          );
+          await writeWorkspaceJson(
+            workspace,
+            artifactPaths.preparationManifest,
+            preparationManifestTemplate,
+          );
+          repairBaselineFingerprint = fingerprintArtifactText(
+            `${JSON.stringify(preparationManifestTemplate, null, 2)}\n`,
+          );
+        } else if (
+          manifestResult.ok ||
+          manifestResult.failureClassification !== "unchanged"
+        ) {
+          repairBaselineFingerprint = undefined;
+        }
+        const persistedManifestResult =
+          syntaxEvidencePath === undefined || manifestResult.ok
+            ? manifestResult
+            : { ...manifestResult, syntaxEvidencePath };
         await persistAgentArtifactAttempt({
           artifactStore: options.artifactStore,
           attempt,
-          result: manifestResult,
+          result: persistedManifestResult,
           route: "repo-preparation",
           sessionId: opencodeSessionId,
         });
         await writeAgentArtifactValidationLog({
           attempt,
           logger: options.logger,
-          result: manifestResult,
+          result: persistedManifestResult,
           route: "repo-preparation",
           sessionId: opencodeSessionId,
           workspace,
         });
-        if (manifestResult.ok) {
+        if (persistedManifestResult.ok) {
           return {
-            manifest: manifestResult.manifest,
+            manifest: persistedManifestResult.manifest,
             ...(opencodeSessionId === undefined ? {} : { opencodeSessionId }),
           };
         }
-        readError = manifestResult.error;
+        readError = formatPreparationManifestReadError(persistedManifestResult);
         throwIfRequiredArtifactWriteWasDenied({
           path: artifactPaths.preparationManifest,
           result,
@@ -395,6 +499,7 @@ export async function createDefaultAgentHarnessDependencies(
       failureReport,
       preparationManifest,
       repoProfile,
+      repoSourcePaths,
       runPlan,
       workspace,
     }) {
@@ -417,8 +522,13 @@ export async function createDefaultAgentHarnessDependencies(
       await writeWorkspaceJson(workspace, artifactPaths.runPlan, runPlan);
       await writeWorkspaceJson(
         workspace,
+        artifactPaths.preparationManifestContract,
+        createPreparationManifestContract(),
+      );
+      await writeWorkspaceJson(
+        workspace,
         artifactPaths.preparationManifestTemplate,
-        createPreparationManifestTemplate(runPlan),
+        createPreparationManifestTemplate(runPlan, demoBrief),
       );
       let artifactError: string | undefined;
       for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -446,9 +556,11 @@ export async function createDefaultAgentHarnessDependencies(
             ? await tryReadPreparationManifest(
                 workspace,
                 artifactPaths.preparationManifest,
+                { demoBrief, repoSourcePaths },
               )
             : {
                 error: `OpenCode exited with code ${result.exitCode}: ${result.stderr || result.stdout}`,
+                failureClassification: "agent-command" as const,
                 ok: false as const,
               };
         runtimeRepairArtifactAttempt += 1;
@@ -691,6 +803,7 @@ export async function createDefaultAgentHarnessDependencies(
         actionCatalog,
         flowSpec,
         preparationManifest,
+        requireCanonicalNarrative: true,
         scriptCandidate,
         trustedStaticImageAssetIds,
       });
@@ -737,7 +850,6 @@ export async function createDefaultAgentHarnessDependencies(
             attempt === 1
               ? createScriptWritingPrompt({
                   demoBrief,
-                  trustedStaticImageAssetIds,
                 })
               : createScriptArtifactRepairPrompt({
                   artifactError,
@@ -801,6 +913,7 @@ async function runLoggedOpenCode(input: {
   openCodeRunner: OpenCodeHarnessRunner;
 }): Promise<OpenCodeHarnessRunResult> {
   const startedAt = Date.now();
+  let lastOutputAt: string | undefined;
   let partialStderr = "";
   let partialStdout = "";
   const startedEntry = {
@@ -808,6 +921,9 @@ async function runLoggedOpenCode(input: {
     message: `${input.input.stage} agent command started.`,
     model: input.input.model,
     stage: input.input.stage,
+    ...(input.input.inactivityTimeoutMs === undefined
+      ? {}
+      : { inactivityTimeoutMs: input.input.inactivityTimeoutMs }),
     timeoutMs: input.input.timeoutMs,
     ...(input.input.sessionId === undefined
       ? {}
@@ -819,10 +935,12 @@ async function runLoggedOpenCode(input: {
     const result = await input.openCodeRunner.run({
       ...input.input,
       onStderr: (chunk) => {
+        lastOutputAt = new Date().toISOString();
         partialStderr = appendTail(partialStderr, chunk, 4_000);
         input.input.onStderr?.(chunk);
       },
       onStdout: (chunk) => {
+        lastOutputAt = new Date().toISOString();
         partialStdout = appendTail(partialStdout, chunk, 4_000);
         input.input.onStdout?.(chunk);
       },
@@ -849,12 +967,16 @@ async function runLoggedOpenCode(input: {
     );
     return result;
   } catch (error) {
+    const timeoutError = isAgentHarnessCommandTimeout(error)
+      ? normalizeAgentHarnessCommandTimeout(error, input.input)
+      : undefined;
     await writeAgentStageLog(
       input,
       {
         durationMs: Date.now() - startedAt,
         error: readErrorMessage(error),
         event: "agent.command.failed",
+        ...(lastOutputAt === undefined ? {} : { lastOutputAt }),
         message: `${input.input.stage} agent command failed before completion.`,
         ...(partialStderr.length === 0
           ? {}
@@ -863,10 +985,16 @@ async function runLoggedOpenCode(input: {
           ? {}
           : { partialStdoutExcerpt: partialStdout }),
         stage: input.input.stage,
+        ...(timeoutError === undefined
+          ? {}
+          : {
+              timeoutKind: timeoutError.kind,
+              timeoutMs: timeoutError.timeoutMs,
+            }),
       },
       "error",
     );
-    if (isAgentHarnessCommandTimeout(error)) {
+    if (timeoutError !== undefined) {
       return {
         exitCode: 124,
         ...(input.input.sessionId === undefined
@@ -876,6 +1004,7 @@ async function runLoggedOpenCode(input: {
           .filter((value) => value.length > 0)
           .join("\n"),
         stdout: partialStdout,
+        timeoutError,
       };
     }
     throw error;
@@ -886,10 +1015,38 @@ function appendTail(current: string, chunk: string, maxLength: number): string {
   return `${current}${chunk}`.slice(-maxLength);
 }
 
-function isAgentHarnessCommandTimeout(error: unknown): boolean {
+function isAgentHarnessCommandTimeout(error: unknown): error is Error {
   return (
     error instanceof Error && error.name === "AgentHarnessCommandTimeoutError"
   );
+}
+
+function normalizeAgentHarnessCommandTimeout(
+  error: Error,
+  input: OpenCodeHarnessRunInput,
+): AgentHarnessCommandTimeoutError {
+  if (error instanceof AgentHarnessCommandTimeoutError) {
+    return error;
+  }
+  const inactivity = error.message.includes("produced no output");
+  return new AgentHarnessCommandTimeoutError(
+    inactivity
+      ? (input.inactivityTimeoutMs ?? input.timeoutMs)
+      : input.timeoutMs,
+    inactivity ? "inactivity" : "deadline",
+  );
+}
+
+function attachSecondaryFailure(
+  primaryError: Error,
+  key: string,
+  secondaryError: unknown,
+): void {
+  try {
+    Reflect.set(primaryError, key, secondaryError);
+  } catch {
+    // Preserve the primary agent failure when it is non-extensible.
+  }
 }
 
 async function writeAgentStageLog(
@@ -1366,7 +1523,9 @@ function isReadinessProbeExecutionFailure(
 function assertFlowSpecGrounded(input: {
   actionCatalog: ActionCatalog;
   appMap: AppMap;
+  demoBrief: AgentHarnessPipelineInput["demoBrief"];
   flowSpec: FlowSpec;
+  preparationManifest: PreparationManifest;
 }): void {
   if (input.actionCatalog.appMapId !== input.appMap.id) {
     throw new Error("ActionCatalog must reference the current AppMap");
@@ -1374,28 +1533,173 @@ function assertFlowSpecGrounded(input: {
   const observedRoutes = new Set(
     input.appMap.discoveredRoutes.map((route) => route.path),
   );
-  for (const route of input.flowSpec.referencedAppMapRoutePaths) {
-    if (!observedRoutes.has(route)) {
-      throw new Error(`FlowSpec references unknown AppMap route ${route}`);
-    }
-  }
-
   const actionsById = new Map(
     input.actionCatalog.actions.map((action) => [action.id, action]),
   );
-  for (const actionId of input.flowSpec.referencedActionIds) {
-    const action = actionsById.get(actionId);
-    if (action === undefined) {
+  const preparedFeaturesById = new Map(
+    input.preparationManifest.productContext.featureInventory.map((feature) => [
+      feature.id,
+      feature,
+    ]),
+  );
+  for (const feature of input.flowSpec.features) {
+    const selectedActionKinds = new Set<
+      ActionCatalog["actions"][number]["kind"]
+    >();
+    const preparedFeature = preparedFeaturesById.get(feature.featureId);
+    if (preparedFeature === undefined) {
       throw new Error(
-        `FlowSpec references unknown ActionCatalog action ${actionId}`,
+        `FlowSpec references unknown prepared feature ${feature.featureId}`,
       );
     }
-    if (!input.flowSpec.referencedAppMapRoutePaths.includes(action.route)) {
+    if (
+      normalizeFeature(feature.label) !==
+      normalizeFeature(preparedFeature.label)
+    ) {
       throw new Error(
-        `FlowSpec action ${actionId} belongs to unselected route ${action.route}`,
+        `FlowSpec feature ${feature.featureId} must preserve its prepared display label`,
+      );
+    }
+    if (
+      feature.requestedFeature !== undefined &&
+      normalizeFeature(feature.requestedFeature) !==
+        normalizeFeature(preparedFeature.requestedFeature ?? "")
+    ) {
+      throw new Error(
+        `FlowSpec feature ${feature.featureId} does not preserve its requested feature label`,
+      );
+    }
+    for (const route of feature.referencedAppMapRoutePaths) {
+      if (!observedRoutes.has(route)) {
+        throw new Error(`FlowSpec references unknown AppMap route ${route}`);
+      }
+    }
+    for (const actionId of feature.referencedActionIds) {
+      const action = actionsById.get(actionId);
+      if (action === undefined) {
+        throw new Error(
+          `FlowSpec references unknown ActionCatalog action ${actionId}`,
+        );
+      }
+      if (!feature.referencedAppMapRoutePaths.includes(action.route)) {
+        throw new Error(
+          `FlowSpec action ${actionId} belongs to unselected route ${action.route}`,
+        );
+      }
+      if (!action.featureIds?.includes(feature.featureId)) {
+        throw new Error(
+          `FlowSpec action ${actionId} is not grounded for feature ${feature.featureId}`,
+        );
+      }
+      selectedActionKinds.add(action.kind);
+    }
+    if (
+      !selectedActionKinds.has("assert") ||
+      ![...selectedActionKinds].some((kind) => kind !== "assert")
+    ) {
+      throw new Error(
+        `FlowSpec feature ${feature.featureId} must select both an interaction and visible assertion from ActionCatalog`,
       );
     }
   }
+  const actionReferenceCounts = new Map<string, number>();
+  for (const feature of input.flowSpec.features) {
+    for (const actionId of new Set(feature.referencedActionIds)) {
+      actionReferenceCounts.set(
+        actionId,
+        (actionReferenceCounts.get(actionId) ?? 0) + 1,
+      );
+    }
+  }
+  for (const feature of input.flowSpec.features) {
+    if (
+      !feature.referencedActionIds.some(
+        (actionId) => actionReferenceCounts.get(actionId) === 1,
+      )
+    ) {
+      throw new Error(
+        `FlowSpec feature ${feature.featureId} must include unique ActionCatalog evidence that distinguishes it from the other selected features`,
+      );
+    }
+  }
+
+  const requestedFeatures = input.demoBrief.keyProductFeatures ?? [];
+  if (requestedFeatures.length > 0) {
+    assertExactRequestedFeatureCoverage(
+      requestedFeatures,
+      input.flowSpec.features.map(
+        (feature) =>
+          feature.requestedFeature ?? `unrequested feature ${feature.label}`,
+      ),
+    );
+  } else {
+    const expectedFeatureCount = Math.min(
+      3,
+      input.preparationManifest.productContext.featureInventory.length,
+    );
+    if (input.flowSpec.features.length !== expectedFeatureCount) {
+      throw new Error(
+        `FlowSpec must select exactly ${expectedFeatureCount} grounded features when the maker supplied no feature list`,
+      );
+    }
+    if (
+      input.flowSpec.features.some(
+        (feature) => feature.requestedFeature !== undefined,
+      )
+    ) {
+      throw new Error(
+        "Inferred FlowSpec features must not claim a maker-requested feature",
+      );
+    }
+  }
+}
+
+function assertExactRequestedFeatureCoverage(
+  requestedFeatures: string[],
+  coveredFeatures: string[],
+): void {
+  const requested = countNormalizedFeatures(requestedFeatures);
+  const covered = countNormalizedFeatures(coveredFeatures);
+  const missing = readFeatureCountDifference(requested, covered);
+  const unexpected = readFeatureCountDifference(covered, requested);
+  if (missing.length === 0 && unexpected.length === 0) {
+    return;
+  }
+
+  throw new Error(
+    [
+      "FlowSpec must cover every requested demo feature exactly once.",
+      ...(missing.length === 0 ? [] : [`Missing: ${missing.join(", ")}.`]),
+      ...(unexpected.length === 0
+        ? []
+        : [`Unexpected: ${unexpected.join(", ")}.`]),
+    ].join(" "),
+  );
+}
+
+function countNormalizedFeatures(features: string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const feature of features) {
+    const normalized = normalizeFeature(feature);
+    counts.set(normalized, (counts.get(normalized) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function normalizeFeature(feature: string): string {
+  return feature.trim().replaceAll(/\s+/g, " ").toLowerCase();
+}
+
+function readFeatureCountDifference(
+  left: Map<string, number>,
+  right: Map<string, number>,
+): string[] {
+  const difference: string[] = [];
+  for (const [feature, leftCount] of left) {
+    const missingCount = Math.max(0, leftCount - (right.get(feature) ?? 0));
+    difference.push(...Array.from({ length: missingCount }, () => feature));
+  }
+  return difference;
 }
 
 function wait(delayMs: number): Promise<void> {
@@ -1491,17 +1795,42 @@ async function writeWorkspaceJson(
   path: string,
   value: unknown,
 ): Promise<void> {
-  const json = JSON.stringify(value, null, 2);
-  const result = await workspace.execute(
-    `sh -lc ${shellQuote(
-      `mkdir -p ${shellQuote(makeADemoDirectory)} && printf '%s\n' ${shellQuote(
-        json,
-      )} > ${shellQuote(path)}`,
-    )}`,
-  );
+  await writeWorkspaceText(workspace, path, JSON.stringify(value, null, 2));
+}
+
+async function writeWorkspaceText(
+  workspace: AgentHarnessWorkspace,
+  path: string,
+  value: string,
+): Promise<void> {
+  const contents = `${value}\n`;
+  const payloadBytes = Buffer.byteLength(contents);
+  if (workspace.writeTextFile !== undefined) {
+    try {
+      await workspace.writeTextFile(path, contents);
+      return;
+    } catch (error) {
+      throw new Error(
+        `Failed to write workspace artifact ${path} through filesystem transfer (${payloadBytes} bytes): ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
+    }
+  }
+  const command = `sh -lc ${shellQuote(
+    `mkdir -p ${shellQuote(makeADemoDirectory)} && printf '%s' ${shellQuote(
+      contents,
+    )} > ${shellQuote(path)}`,
+  )}`;
+  const commandBytes = Buffer.byteLength(command);
+  if (commandBytes > maxShellArtifactWriteBytes) {
+    throw new Error(
+      `Cannot write workspace artifact ${path}: workspace has no filesystem transfer seam and the ${payloadBytes}-byte payload produces a ${commandBytes}-byte shell command, exceeding the ${maxShellArtifactWriteBytes}-byte compatibility limit.`,
+    );
+  }
+  const result = await workspace.execute(command);
   if (result.exitCode !== 0) {
     throw new Error(
-      `Failed to write workspace artifact ${path}: ${result.stderr}`,
+      `Failed to write workspace artifact ${path} through shell fallback (${payloadBytes} bytes, exit code ${result.exitCode}). stderr: ${result.stderr || "(empty)"} stdout: ${result.stdout || "(empty)"}`,
     );
   }
 }
@@ -1523,12 +1852,38 @@ async function writeScriptContracts(
 }
 
 type WorkspaceJsonReadResult =
-  | { ok: true; value: unknown }
-  | { error: string; ok: false };
+  | { candidateFingerprint: string; ok: true; value: unknown }
+  | {
+      candidateFingerprint?: string;
+      error: string;
+      failureClassification: "invalid-json" | "missing";
+      ok: false;
+      rawCandidate?: string;
+      syntaxDiagnostic?: JsonSyntaxDiagnostic;
+    };
 
 type PreparationManifestReadResult =
-  | { candidate: unknown; manifest: PreparationManifest; ok: true }
-  | { candidate?: unknown; error: string; ok: false };
+  | {
+      candidate: unknown;
+      candidateFingerprint: string;
+      manifest: PreparationManifest;
+      ok: true;
+    }
+  | {
+      candidate?: unknown;
+      candidateFingerprint?: string;
+      error: string;
+      failureClassification:
+        | "agent-command"
+        | "invalid-json"
+        | "invalid-schema"
+        | "missing"
+        | "unchanged";
+      ok: false;
+      rawCandidate?: string;
+      syntaxDiagnostic?: JsonSyntaxDiagnostic;
+      syntaxEvidencePath?: string;
+    };
 
 async function tryReadWorkspaceJson(
   workspace: AgentHarnessWorkspace,
@@ -1541,18 +1896,26 @@ async function tryReadWorkspaceJson(
         [result.stderr.trim(), result.stdout.trim()]
           .filter(Boolean)
           .join("\n") || `cat exited with code ${result.exitCode}`,
+      failureClassification: "missing",
       ok: false,
     };
   }
 
   try {
-    return { ok: true, value: JSON.parse(result.stdout) };
-  } catch (error) {
     return {
-      error: `Invalid JSON in ${path}: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      candidateFingerprint: fingerprintArtifactText(result.stdout),
+      ok: true,
+      value: JSON.parse(result.stdout),
+    };
+  } catch (error) {
+    const syntaxDiagnostic = diagnoseJsonSyntax(result.stdout, error);
+    return {
+      candidateFingerprint: fingerprintArtifactText(result.stdout),
+      error: `Invalid JSON in ${path}: ${syntaxDiagnostic.message} at line ${syntaxDiagnostic.line}, column ${syntaxDiagnostic.column} (offset ${syntaxDiagnostic.offset})`,
+      failureClassification: "invalid-json",
       ok: false,
+      rawCandidate: result.stdout,
+      syntaxDiagnostic,
     };
   }
 }
@@ -1560,6 +1923,10 @@ async function tryReadWorkspaceJson(
 async function tryReadPreparationManifest(
   workspace: AgentHarnessWorkspace,
   path: string,
+  featureValidation?: {
+    demoBrief: AgentHarnessPipelineInput["demoBrief"];
+    repoSourcePaths: string[];
+  },
 ): Promise<PreparationManifestReadResult> {
   let json = await tryReadWorkspaceJson(workspace, path);
   if (!json.ok && path === artifactPaths.preparationManifest) {
@@ -1580,17 +1947,28 @@ async function tryReadPreparationManifest(
   }
 
   try {
+    const manifest = readPreparationManifest(json.value);
+    if (featureValidation !== undefined) {
+      assertPreparedFeatureInventory({
+        demoBrief: featureValidation.demoBrief,
+        preparationManifest: manifest,
+        repoSourcePaths: new Set(featureValidation.repoSourcePaths),
+      });
+    }
     return {
       candidate: json.value,
-      manifest: readPreparationManifest(json.value),
+      candidateFingerprint: json.candidateFingerprint,
+      manifest,
       ok: true,
     };
   } catch (error) {
     return {
       candidate: json.value,
+      candidateFingerprint: json.candidateFingerprint,
       error: `Invalid PreparationManifest in ${path}: ${
         error instanceof Error ? error.message : String(error)
       }`,
+      failureClassification: "invalid-schema",
       ok: false,
     };
   }
@@ -1610,14 +1988,39 @@ async function persistAgentArtifactAttempt(input: {
       ...(input.result.candidate === undefined
         ? {}
         : { candidate: redactArtifactCandidate(input.result.candidate) }),
+      ...(input.result.candidateFingerprint === undefined
+        ? {}
+        : { candidateFingerprint: input.result.candidateFingerprint }),
       ...(input.result.ok ? {} : { error: input.result.error }),
+      ...(input.result.ok
+        ? {}
+        : { failureClassification: input.result.failureClassification }),
       route: input.route,
       ...(input.sessionId === undefined
         ? {}
         : { opencodeSessionId: input.sessionId }),
       status: input.result.ok ? "passed" : "failed",
+      ...(!input.result.ok && input.result.syntaxDiagnostic !== undefined
+        ? { syntaxDiagnostic: input.result.syntaxDiagnostic }
+        : {}),
+      ...(!input.result.ok && input.result.syntaxEvidencePath !== undefined
+        ? { syntaxEvidencePath: input.result.syntaxEvidencePath }
+        : {}),
     },
   );
+}
+
+function formatPreparationManifestReadError(
+  result: Exclude<PreparationManifestReadResult, { ok: true }>,
+): string {
+  if (result.syntaxEvidencePath === undefined) {
+    return result.error;
+  }
+  return [
+    result.error,
+    `The malformed candidate is preserved at ${result.syntaxEvidencePath}.`,
+    `The canonical manifest was reset from ${artifactPaths.preparationManifestTemplate}; rebuild it there using useful values from the preserved candidate.`,
+  ].join("\n");
 }
 
 function redactArtifactCandidate(value: unknown): unknown {
@@ -1717,6 +2120,17 @@ function createScriptCandidate(input: {
   preparationManifest: PreparationManifest;
   trustedStaticImageAssetIds: readonly string[];
 }): ScriptCandidate {
+  let scriptJsonContent = input.demoScript;
+  try {
+    scriptJsonContent = assembleDemoNarrative({
+      draft: input.demoScript,
+      flowSpec: input.flowSpec,
+      productName: input.preparationManifest.productContext.name,
+    });
+  } catch {
+    // Preserve the original candidate so static validation can return a typed
+    // repair report for malformed or ungrounded agent output.
+  }
   const candidate = {
     assumptions: [],
     browserActionCompilerVersion: BROWSER_ACTION_COMPILER_VERSION,
@@ -1730,7 +2144,7 @@ function createScriptCandidate(input: {
     contractVersion: DEMO_SCRIPT_CONTRACT_VERSION,
     outputPath: DEMO_SCRIPT_OUTPUT_PATH,
     playwrightRuntimeVersion: PLAYWRIGHT_RUNTIME_VERSION,
-    scriptJsonContent: input.demoScript,
+    scriptJsonContent,
     sourceAppMapId: input.appMap.id,
     sourceFlowSpecId: input.flowSpec.id,
     sourcePreparationManifestId: input.preparationManifest.id,
@@ -1743,6 +2157,7 @@ function createScriptCandidate(input: {
       actionCatalog: input.actionCatalog,
       flowSpec: input.flowSpec,
       preparationManifest: input.preparationManifest,
+      requireCanonicalNarrative: true,
       scriptCandidate: candidate,
       trustedStaticImageAssetIds: input.trustedStaticImageAssetIds,
     }),
@@ -1885,22 +2300,31 @@ function createRepoPreparationPrompt(input: {
       artifactPaths.runPlan,
       artifactPaths.demoBrief,
       artifactPaths.supportingDocuments,
+      artifactPaths.preparationManifestContract,
       artifactPaths.preparationManifestTemplate,
       artifactPaths.preparationManifest,
     ],
     instructions: [
       "Prepare the cloned app in /workspace/repo for a local MakeADemo run.",
+      "Before editing, inspect the README and package metadata, then use route definitions to follow only the page components, state/API layers, authentication guards, and fixtures needed for browser-demonstrable flows.",
       "You may modify app files in /workspace/repo only when needed to make a deterministic local demo mode.",
       "Do not write secrets into files. Replace external services with local fixtures or mocks.",
-      "Inventory every browser-reachable external dependency, including scripts, stylesheets, fonts, icons, images, analytics, API calls, WebSockets, and protocol-relative URLs beginning with //. The prepared app must attempt zero outbound browser requests; remove, vendor, or replace every dependency locally.",
+      "Use one repo-wide search to inventory browser-reachable external dependencies, including scripts, stylesheets, fonts, icons, images, analytics, API calls, WebSockets, and protocol-relative URLs beginning with //. Follow only relevant matches. The prepared app must attempt zero outbound browser requests; remove, vendor, or replace every dependency locally.",
       "Do not install dependencies, build, start, or execute submitted application code in the agent sandbox. The backend runs those commands in the secret-free submitted-code sandbox.",
       "Read /workspace/.makeademo/supporting-documents.json when it contains maker-provided context and incorporate relevant setup or demo requirements.",
+      "Replace every placeholder in productContext. productContext.name and summary must describe the actual product; evidencePaths and every feature sourcePaths entry must reference original screened repository files that support the claim.",
+      "When keyProductFeatures is non-empty, prepare every requested feature exactly once and preserve its exact text in requestedFeature. Make every entryPaths route browser-reachable under local demo mode.",
+      "When keyProductFeatures is empty, stop after identifying up to three strong source-backed, browser-demonstrable feature candidates.",
+      "For a feature blocked by authentication, use an ephemeral demo-only bypass or deterministic local identity and record authStrategy. Keep registration or login visible when authentication itself is a requested feature.",
+      "Do not invent core product behavior that is absent from the source. If a requested capability is truly absent, leave concrete evidence in knownLimitations rather than fabricating it.",
       `Use this local runtime URL in the manifest: ${input.runPlan.expectedLocalUrl}`,
       `Use this install command unless you have a stronger repo-specific reason: ${input.runPlan.installCommand}`,
       `Use this start command unless you have a stronger repo-specific reason: ${input.runPlan.startCommand}`,
       "Write a valid PreparationManifest JSON object to /workspace/.makeademo/preparation-manifest.json.",
+      "Read /workspace/.makeademo/preparation-manifest-contract.json first and satisfy the complete contract, including every required field on every featureInventory entry.",
       "Start by copying /workspace/.makeademo/preparation-manifest-template.json; preserve every field type and replace or enrich its values.",
-      "The manifest must include id, appDir, installCommandUsed, startCommandUsed, baseUrl, ports, envUsed, localDemoModeChanges, createdFiles, modifiedFiles, mocksAndFixturesAdded, blockedExternalServicesReplaced, requiredLocalOnlyAssumptions, knownLimitations, appExplorationHints, scriptGenerationContext, validationEvidence, and cleanupAndReproInstructions.",
+      "Complete all inspection, edits, and checks before the final manifest write. Writing /workspace/.makeademo/preparation-manifest.json is the terminal action: after writing it, do not call another tool; return a concise completion response immediately.",
+      "The manifest must include id, appDir, installCommandUsed, startCommandUsed, baseUrl, ports, envUsed, localDemoModeChanges, createdFiles, modifiedFiles, mocksAndFixturesAdded, blockedExternalServicesReplaced, requiredLocalOnlyAssumptions, knownLimitations, appExplorationHints, productContext, scriptGenerationContext, validationEvidence, and cleanupAndReproInstructions.",
       'appDir must be relative to /workspace/repo: use "." for the repo root or a path such as "frontend"; never use an absolute path.',
       'envUsed must be a flat JSON object whose keys and values are strings, such as {"NODE_ENV":"development"}; use {} when no environment values are used. Do not put arrays or nested objects under envUsed.',
       `Demo brief: ${JSON.stringify(input.demoBrief)}`,
@@ -1922,6 +2346,7 @@ function createRepoPreparationRepairPrompt(input: {
       artifactPaths.repoProfile,
       artifactPaths.runPlan,
       artifactPaths.demoBrief,
+      artifactPaths.preparationManifestContract,
       artifactPaths.preparationManifestTemplate,
       artifactPaths.preparationManifest,
     ],
@@ -1930,13 +2355,16 @@ function createRepoPreparationRepairPrompt(input: {
       "The artifact may be missing, unreadable, invalid JSON, or schema-invalid.",
       `Backend artifact validation failed with: ${input.readError}`,
       "Repair only the Repo Preparation output contract. Inspect /workspace/repo and the durable artifacts, then write a valid PreparationManifest JSON object to /workspace/.makeademo/preparation-manifest.json.",
-      "Use /workspace/.makeademo/preparation-manifest-template.json as the canonical shape; preserve every field type while repairing all reported violations.",
+      "Read /workspace/.makeademo/preparation-manifest-contract.json and use /workspace/.makeademo/preparation-manifest-template.json as the canonical shape.",
+      "Do not patch only the named field. Rebuild and validate every productContext.featureInventory entry against the complete contract before finishing.",
+      "Inspect the source paths needed to replace productContext placeholders. Every requested feature must have one source-backed inventory entry and at least one browser entry path; do not solve validation by deleting a requested feature.",
+      "Use a demo-only auth bypass or deterministic local identity when a requested feature is protected, while keeping authentication UI visible if authentication itself is requested.",
       "Do not finish until the manifest exists at that exact path.",
       "Do not write secrets into files. Replace external services with local fixtures or mocks.",
       `Use this local runtime URL in the manifest: ${input.runPlan.expectedLocalUrl}`,
       `Use this install command unless you have a stronger repo-specific reason: ${input.runPlan.installCommand}`,
       `Use this start command unless you have a stronger repo-specific reason: ${input.runPlan.startCommand}`,
-      "The manifest must include id, appDir, installCommandUsed, startCommandUsed, baseUrl, ports, envUsed, localDemoModeChanges, createdFiles, modifiedFiles, mocksAndFixturesAdded, blockedExternalServicesReplaced, requiredLocalOnlyAssumptions, knownLimitations, appExplorationHints, scriptGenerationContext, validationEvidence, and cleanupAndReproInstructions.",
+      "The manifest must include id, appDir, installCommandUsed, startCommandUsed, baseUrl, ports, envUsed, localDemoModeChanges, createdFiles, modifiedFiles, mocksAndFixturesAdded, blockedExternalServicesReplaced, requiredLocalOnlyAssumptions, knownLimitations, appExplorationHints, productContext, scriptGenerationContext, validationEvidence, and cleanupAndReproInstructions.",
       'appDir must be relative to /workspace/repo: use "." for the repo root or a path such as "frontend"; never use an absolute path.',
       'envUsed must be a flat JSON object whose keys and values are strings, such as {"NODE_ENV":"development"}; use {} when no environment values are used. Do not put arrays or nested objects under envUsed.',
       `Previous OpenCode output excerpt:\n${formatOpenCodeOutputExcerpt(
@@ -1962,6 +2390,7 @@ function createRuntimePreparationRepairPrompt(input: {
       artifactPaths.repoProfile,
       artifactPaths.runPlan,
       artifactPaths.demoBrief,
+      artifactPaths.preparationManifestContract,
       artifactPaths.preparationManifestTemplate,
       artifactPaths.preparationManifest,
       validationArtifactPath(input.failureReport.stage),
@@ -1985,7 +2414,9 @@ function createRuntimePreparationRepairPrompt(input: {
       "Do not run the app, install dependencies, or use the network. The backend will rerun install, build, start, and browser validation in the isolated submitted-code sandbox.",
       "For browser network failures, repair every unique blocked URL shown above. Handle protocol-relative //host/path assets as external, and make the browser attempt zero outbound requests by removing, vendoring, mocking, or replacing them locally.",
       "You may edit /workspace/repo and must rewrite /workspace/.makeademo/preparation-manifest.json to match the actual repaired state.",
-      "Use /workspace/.makeademo/preparation-manifest-template.json as the canonical shape; preserve every field type while repairing all reported violations.",
+      "Preserve every requested productContext feature. If browser evidence shows an auth barrier or missing entry route, modify only the ephemeral demo runtime to make that feature reachable, update its authStrategy and entryPaths, and retain source evidence.",
+      "Read /workspace/.makeademo/preparation-manifest-contract.json and use /workspace/.makeademo/preparation-manifest-template.json as the canonical shape.",
+      "Do not patch only the reported failure. Revalidate the complete manifest and every productContext.featureInventory entry before finishing.",
       'appDir must remain relative to /workspace/repo: use "." for the repo root or a path such as "frontend"; never use an absolute path.',
       'envUsed must remain a flat string-to-string object such as {"NODE_ENV":"development","DEMO_MODE":"true"}; nested values, arrays, and descriptive objects are invalid.',
       `Current manifest: ${JSON.stringify(input.preparationManifest)}`,
@@ -2013,11 +2444,17 @@ function createFlowPlanningPrompt(artifactError?: string): string {
       artifactPaths.appMap,
       artifactPaths.actionCatalog,
       artifactPaths.demoBrief,
+      artifactPaths.preparationManifest,
       artifactPaths.flowSpecContract,
       artifactPaths.flowSpec,
     ],
     instructions: [
-      "Plan one short demo flow from the AppMap, ActionCatalog, and demo brief.",
+      "Plan one feature-scoped flow entry for every maker-requested feature using PreparationManifest productContext, AppMap, and ActionCatalog evidence.",
+      "When the maker supplied requested features, include exactly that normalized set with no omissions or extra feature entries. Duration is a pacing target and never permission to drop a feature.",
+      "When the maker supplied no features, select exactly min(3, productContext.featureInventory.length) source-backed features with the strongest browser evidence.",
+      "Each feature must use its prepared featureId and only ActionCatalog actions tagged with that featureId.",
+      "Preserve each selected feature's prepared display label so backend-owned feature introduction cards remain source-grounded.",
+      "Each feature must select both a non-assert interaction and a visible assertion from ActionCatalog, with at least one selected action not reused by another feature.",
       "Read /workspace/.makeademo/flow-spec-contract.json and satisfy every required field, property type, and invariant it defines.",
       "Write a valid FlowSpec JSON object to /workspace/.makeademo/flow-spec.json.",
       "Do not invent alternate field names or object-shaped steps. Every steps entry and every repairConstraints entry must be a string.",
@@ -2034,7 +2471,6 @@ function createFlowPlanningPrompt(artifactError?: string): string {
 
 function createScriptWritingPrompt(input: {
   demoBrief: AgentHarnessPipelineInput["demoBrief"];
-  trustedStaticImageAssetIds: readonly string[];
 }): string {
   return createStagePrompt({
     artifactPaths: [
@@ -2048,19 +2484,14 @@ function createScriptWritingPrompt(input: {
     ],
     instructions: [
       "Write the final capture-ready Demo Script JSON.",
-      "Read /workspace/.makeademo/demo-script-contract.json before writing and follow its JSON Schema and mixed-Scene example exactly. The Capture SDK artifact documents the backend-generated runtime only.",
+      "Read /workspace/.makeademo/demo-script-contract.json before writing. Use the browser Scene portion of its example as the authoring shape; Synthetic Scenes in the final schema are backend-owned. The Capture SDK artifact documents the backend-generated runtime only.",
       "Do not edit app source files. Only write /workspace/.makeademo/demo-script.json.",
       "Do not write demoPlaywrightScript; the backend compiles typed browser actions into versioned Capture SDK and Playwright source.",
-      ...(input.trustedStaticImageAssetIds.length === 0
-        ? [
-            "Use playwright-recording and full-screen-text Scene types. No trusted static-image assets are registered for this run, so static-image is unavailable.",
-          ]
-        : [
-            `Use playwright-recording, full-screen-text, and static-image Scene types. The only trusted static-image asset IDs are: ${input.trustedStaticImageAssetIds.join(", ")}.`,
-          ]),
+      "Write only playwright-recording feature demonstration Scenes. The backend deterministically adds the product intro, one brief feature intro before each feature, and the product outro.",
+      "Every browser Scene must include featureId matching exactly one FlowSpec feature. Include at least one browser Scene for every FlowSpec feature and no Scene for an unselected feature.",
       "Every playwright-recording Scene requires typed actions and expectedVisibleOutcome. Each locator action must copy one browser-verified ActionCatalog locator exactly and include its locatorCandidateId; sourceActionId must reference ActionCatalog evidence selected by FlowSpec.",
       "Use setupActions only for off-camera browser setup such as navigation or login. Every setup action must also include a sourceActionId grounded in ActionCatalog. Keep the product demonstration inside Scene actions.",
-      "A full-screen-text Scene requires durationSeconds, backgroundColor, and text. Use static-image only when a backend-trusted assetId is present in the durable artifacts; never invent paths or asset IDs.",
+      "Do not author full-screen-text or static-image narrative cards; they are backend-owned.",
       "Scene description is optional human-readable metadata.",
       "presentation.music, presentation.textOverlays, and presentation.transitions are optional. When omitted they default to disabled music, no overlays, and direct back-to-back Scene playback.",
       "Each browser Scene must end with assert-visible or assert-text; the compiler emits explicit Playwright visibility proof.",
@@ -2092,6 +2523,7 @@ function createScriptArtifactRepairPrompt(input: {
       `Backend artifact error: ${input.artifactError}`,
       "Repair only the Demo Script artifact at that exact path. Do not edit app source or preparation files.",
       "The JSON must include version, scriptId, title, format, scenes, and presentation. Do not add demoPlaywrightScript.",
+      "Use only playwright-recording Scenes. Every Scene must carry a FlowSpec featureId, and every FlowSpec feature must retain at least one Scene.",
       "Scene description is optional; do not spend a repair attempt adding one when id and expectedVisibleOutcome are already valid.",
       "presentation.music, presentation.textOverlays, and presentation.transitions may be omitted; the backend supplies safe defaults.",
       "Every playwright-recording Scene must use supported typed actions, an explicit visibility assertion action, sourceActionId references grounded in AppMap, ActionCatalog, and FlowSpec evidence, and locatorCandidateId references for every locator action.",
@@ -2122,6 +2554,7 @@ function createScriptRepairPrompt(input: {
       "Backend validation rejected the Demo Script. Repair only /workspace/.makeademo/demo-script.json.",
       "Re-read /workspace/.makeademo/demo-script-contract.json. Its JSON Schema and mixed-Scene example are authoritative; the backend owns Playwright source generation.",
       "Do not write or repair demoPlaywrightScript. Repair the typed setupActions or playwright-recording Scene actions identified by validation evidence.",
+      "Preserve every FlowSpec featureId and at least one browser Scene per feature. Product intro, feature intro, and outro cards are reassembled by the backend.",
       "Do not edit app source or preparation files. Durable artifacts are the source of truth.",
       `Failure classification: ${input.failureReport.failureClassification ?? "unknown"}`,
       `Failure summary: ${input.failureReport.logsSummary}`,

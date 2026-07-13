@@ -103,7 +103,7 @@ describe("OpenCode harness seam", () => {
     });
   });
 
-  it("applies the stage timeout and streams OpenCode output to the caller", async () => {
+  it("applies stage deadlines and streams OpenCode output to the caller", async () => {
     const runner = new DefaultOpenCodeHarnessRunner();
     let executeOptions: AgentHarnessWorkspaceExecuteOptions | undefined;
     const stdout: string[] = [];
@@ -114,6 +114,7 @@ describe("OpenCode harness seam", () => {
     } = {
       availableTools: ["read", "write"],
       configDir: "/tmp/makeademo/opencode",
+      inactivityTimeoutMs: 321,
       model: "openai/gpt-5",
       onStderr: (chunk) => stderr.push(chunk),
       onStdout: (chunk) => stdout.push(chunk),
@@ -135,6 +136,7 @@ describe("OpenCode harness seam", () => {
     await runner.run(input);
 
     expect(executeOptions?.timeoutMs).toBe(1_234);
+    expect(executeOptions?.inactivityTimeoutMs).toBe(321);
     expect(stdout).toEqual(["progress\n"]);
     expect(stderr).toEqual(["warning\n"]);
   });

@@ -1,4 +1,7 @@
-import type { AgentHarnessWorkspace } from "../daytona/workspace.interface";
+import type {
+  AgentHarnessCommandTimeoutError,
+  AgentHarnessWorkspace,
+} from "../daytona/workspace.interface";
 
 export type OpenCodeHarnessStage =
   | "app-exploration"
@@ -11,6 +14,7 @@ export type OpenCodeHarnessStage =
 export type OpenCodeHarnessRunInput = {
   availableTools: string[];
   configDir: string;
+  inactivityTimeoutMs?: number;
   model: string;
   onStderr?: (chunk: string) => void;
   onStdout?: (chunk: string) => void;
@@ -27,6 +31,7 @@ export type OpenCodeHarnessRunResult = {
   sessionId?: string;
   stderr: string;
   stdout: string;
+  timeoutError?: AgentHarnessCommandTimeoutError;
 };
 
 /**

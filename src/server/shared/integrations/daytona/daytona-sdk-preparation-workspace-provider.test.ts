@@ -22,7 +22,7 @@ import {
 const execFileAsync = promisify(execFile);
 
 describe("DaytonaSdkPreparationWorkspaceProvider", () => {
-  it("creates a sandbox from the configured snapshot", async () => {
+  it("creates a non-auto-stopping agent sandbox from the configured snapshot", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
       client: fakeClient(calls),
@@ -34,6 +34,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     expect(handle.id).toBe("sandbox_123");
     expect(calls[0]).toEqual({
       create: {
+        autoStopInterval: 0,
         disk: 3,
         snapshot: "makeademo-opencode",
       },
@@ -59,7 +60,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     await provider.create();
 
     expect(calls[0]).toEqual({
-      create: { disk: 3 },
+      create: { autoStopInterval: 0, disk: 3 },
       options: { timeout: 180 },
     });
   });
@@ -90,8 +91,14 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
 
     expect(handle.id).toBe("sandbox_123");
     expect(calls.slice(0, 2)).toEqual([
-      { create: { disk: 3 }, options: { timeout: 180 } },
-      { create: { disk: 3 }, options: { timeout: 180 } },
+      {
+        create: { autoStopInterval: 0, disk: 3 },
+        options: { timeout: 180 },
+      },
+      {
+        create: { autoStopInterval: 0, disk: 3 },
+        options: { timeout: 180 },
+      },
     ]);
   });
 
@@ -106,6 +113,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
 
     expect(calls[0]).toEqual({
       create: {
+        autoStopInterval: 0,
         disk: 3,
         secrets: { OPENAI_API_KEY: "makeademo-openai" },
       },
@@ -204,6 +212,58 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         },
       ],
     });
+  });
+
+  it("writes text artifacts atomically only to the agent sandbox", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.writeTextFile?.(
+      "/workspace/.makeademo/action-catalog.json",
+      `${"x".repeat(150_000)}\n`,
+    );
+
+    const uploads = calls.filter((call) => "uploadFiles" in Object(call));
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0]).toMatchObject({
+      uploadFiles: {
+        sandbox: "parent_sandbox",
+      },
+    });
+    expect(
+      calls.some(
+        (call) =>
+          "executeCommand" in Object(call) &&
+          JSON.stringify(call).includes("mv -f") &&
+          JSON.stringify(call).includes("parent_sandbox"),
+      ),
+    ).toBe(true);
+    expect(
+      calls.some((call) => JSON.stringify(call).includes("submitted_sandbox")),
+    ).toBe(false);
+  });
+
+  it("reports filesystem transfer failures with destination and payload size", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, {
+        uploadError: new Error("filesystem upload rejected"),
+      }),
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.writeTextFile?.(
+        "/workspace/.makeademo/action-catalog.json",
+        "large catalog",
+      ),
+    ).rejects.toThrow(
+      "Daytona agent artifact filesystem transfer failed for /workspace/.makeademo/action-catalog.json (13 bytes): filesystem upload rejected",
+    );
   });
 
   it("reconnects to an existing sandbox as a preparation workspace", async () => {
@@ -461,6 +521,24 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ]);
   });
 
+  it("starts a stopped agent sandbox once before collecting its logs", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, {
+        commandsRequireSandboxRestart: true,
+        sandboxLogContents: '{"event":"repo-preparation.failed"}\n',
+      }),
+    });
+    const handle = await provider.create();
+
+    await expect(handle.workspace.collectSandboxLogs?.()).resolves.toEqual([
+      '{"event":"repo-preparation.failed"}',
+    ]);
+    expect(calls.filter((call) => "start" in Object(call))).toEqual([
+      { start: 300 },
+    ]);
+  });
+
   it("does not resolve sandbox logging until the workspace-visible mirror is durable", async () => {
     const calls: unknown[] = [];
     const workspaceMirrorStarted = deferred<void>();
@@ -583,6 +661,24 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         timeoutMs: 1,
       }),
     ).rejects.toThrow("Daytona command did not finish within 1ms.");
+    expect(calls).toContainEqual({ kill: true });
+    expect(calls).toContainEqual({ disconnect: true });
+  });
+
+  it("disconnects a streaming command that stops producing output", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { ptyWaitsForDisconnect: true }),
+      commandTimeoutMs: 10_000,
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.execute("opencode run stalled", {
+        inactivityTimeoutMs: 1,
+        onStdout: () => {},
+      }),
+    ).rejects.toThrow("Daytona command produced no output for 1ms.");
     expect(calls).toContainEqual({ disconnect: true });
   });
 
@@ -665,6 +761,40 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       calls.filter((call) => "waitForConnection" in Object(call)),
     ).toHaveLength(2);
     expect(calls.filter((call) => "sendInput" in Object(call))).toHaveLength(1);
+  });
+
+  it("starts a stopped agent sandbox once before retrying PTY startup", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { ptyRequiresSandboxRestart: true }),
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.execute("opencode run hello", { onStdout: () => {} }),
+    ).resolves.toMatchObject({ exitCode: 7 });
+    expect(calls.filter((call) => "start" in Object(call))).toEqual([
+      { start: 300 },
+    ]);
+  });
+
+  it("reports a typed sandbox failure when a bounded restart does not recover PTY access", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, {
+        ptyRequiresSandboxRestart: true,
+        sandboxRestartDoesNotRecover: true,
+      }),
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.execute("opencode run hello", { onStdout: () => {} }),
+    ).rejects.toMatchObject({
+      name: "AgentHarnessSandboxUnavailableError",
+      sandboxId: "sandbox_123",
+    });
+    expect(calls.filter((call) => "start" in Object(call))).toHaveLength(1);
   });
 
   it("retries streaming PTY startup with a fresh id after stale duplicate-id creation", async () => {
@@ -817,6 +947,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     expect(calls.slice(0, 2)).toEqual([
       {
         create: {
+          autoStopInterval: 0,
           disk: 3,
           snapshot: "makeademo-opencode",
         },
@@ -976,6 +1107,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     expect(calls.slice(0, 2)).toEqual([
       {
         create: {
+          autoStopInterval: 0,
           disk: 3,
           secrets: { OPENAI_API_KEY: "makeademo-openai" },
         },
@@ -1954,6 +2086,7 @@ function fakeClient(
   calls: unknown[],
   options: {
     awaitWorkspaceLogMirror?: Promise<void>;
+    commandsRequireSandboxRestart?: boolean;
     downloadError?: string;
     executeCommandFails?: boolean;
     executeCommandNeverResolves?: boolean;
@@ -1967,14 +2100,20 @@ function fakeClient(
     ptyConnectionFailuresBeforeSuccess?: number;
     ptyDisconnectNeverResolves?: boolean;
     ptyNeverConnects?: boolean;
+    ptyRequiresSandboxRestart?: boolean;
     ptyStaleDuplicateIdOnFirstCreate?: boolean;
     ptyWaitFails?: boolean;
     ptyWaitsForDisconnect?: boolean;
     sandboxLogContents?: string;
+    sandboxRestartDoesNotRecover?: boolean;
+    uploadError?: Error;
   } = {},
 ) {
   let submittedCodeInitializationFailures = 0;
   let ptyConnectionFailures = 0;
+  let sandboxStarted =
+    options.ptyRequiresSandboxRestart !== true &&
+    options.commandsRequireSandboxRestart !== true;
   const stalePtyIds = new Set<string>();
   const sandbox = {
     fs: {
@@ -1992,6 +2131,9 @@ function fakeClient(
       },
       async uploadFiles(files: unknown[]) {
         calls.push({ uploadFiles: files });
+        if (options.uploadError !== undefined) {
+          throw options.uploadError;
+        }
       },
     },
     id: "sandbox_123",
@@ -2020,6 +2162,11 @@ function fakeClient(
             rows: ptyOptions.rows,
           },
         });
+        if (!sandboxStarted) {
+          throw new Error(
+            "bad request: failed to resolve container IP after 3 attempts: no IP address found. Is the Sandbox started?",
+          );
+        }
         if (options.ptyStaleDuplicateIdOnFirstCreate === true) {
           if (stalePtyIds.size === 0) {
             stalePtyIds.add(ptyOptions.id);
@@ -2052,6 +2199,10 @@ function fakeClient(
             ptyOptions.onData(
               new TextEncoder().encode("\n__MAKEADEMO_EXIT__:7\n"),
             );
+          },
+          async kill() {
+            calls.push({ kill: true });
+            resolveDisconnect?.();
           },
           async wait() {
             calls.push({ wait: true });
@@ -2086,6 +2237,11 @@ function fakeClient(
       },
       async executeCommand(command: string) {
         calls.push({ executeCommand: command });
+        if (!sandboxStarted) {
+          throw new Error(
+            "bad request: failed to resolve container IP after 3 attempts: no IP address found. Is the Sandbox started?",
+          );
+        }
         if (command.includes("cat /workspace/.makeademo/sandbox-log.jsonl")) {
           return {
             exitCode: 0,
@@ -2177,6 +2333,15 @@ function fakeClient(
 
         return { stderr: "streamed stderr", stdout: "streamed stdout" };
       },
+    },
+    async refreshData() {
+      calls.push({ refreshData: true });
+    },
+    async start(timeout?: number) {
+      calls.push({ start: timeout });
+      if (options.sandboxRestartDoesNotRecover !== true) {
+        sandboxStarted = true;
+      }
     },
     async updateNetworkSettings(settings: unknown) {
       calls.push({ updateNetworkSettings: settings });

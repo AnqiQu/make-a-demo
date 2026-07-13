@@ -39,10 +39,12 @@ describe("agent harness artifact schemas", () => {
     );
     expect(appMap.discoveredRoutes[0]?.path).toBe("/");
     expect(actionCatalog.actions[0]?.kind).toBe("click");
-    expect(flowSpec.referencedActionIds).toEqual(["open-dashboard"]);
+    expect(flowSpec.features[0]?.referencedActionIds).toEqual([
+      "open-dashboard",
+    ]);
     expect(contract.outputPath).toBe(DEMO_SCRIPT_OUTPUT_PATH);
     expect(scriptCandidate.sourceFlowSpecId).toBe("flow_001");
-    expect(scriptCandidate.browserActionCompilerVersion).toBe("2026-07-10.1");
+    expect(scriptCandidate.browserActionCompilerVersion).toBe("2026-07-12.1");
     expect(scriptCandidate.bunRuntimeVersion).toBe("1.3.14");
     expect(scriptCandidate.playwrightRuntimeVersion).toBe("1.60.0");
     expect(pipelineRunManifest.stageStatuses["script-writing"]).toBe("passed");
@@ -149,8 +151,14 @@ describe("agent harness artifact schemas", () => {
       "captureSdkVersion must be a non-empty string",
     );
 
-    expect(() => readFlowSpec({ ...validFlowSpec(), steps: [] })).toThrow(
-      "steps must be a non-empty array",
+    const invalidFlowSpec = validFlowSpec();
+    const firstFeature = invalidFlowSpec.features[0];
+    if (firstFeature === undefined) {
+      throw new Error("Expected a FlowSpec feature fixture");
+    }
+    firstFeature.steps = [];
+    expect(() => readFlowSpec(invalidFlowSpec)).toThrow(
+      "features[0] must contain non-empty steps",
     );
   });
 
@@ -163,6 +171,22 @@ describe("agent harness artifact schemas", () => {
       }),
     ).toThrow(
       "PreparationManifest validation failed: localDemoModeChanges must be an array; scriptGenerationContext must be an array",
+    );
+  });
+
+  it("reports every invalid feature inventory field in one pass", () => {
+    const manifest = validPreparationManifest();
+    const feature = manifest.productContext.featureInventory[0];
+    if (feature === undefined) {
+      throw new Error("Expected a prepared feature fixture");
+    }
+    feature.authStrategy = "not-required";
+    Reflect.deleteProperty(feature, "description");
+    Reflect.deleteProperty(feature, "fixtureNotes");
+    Reflect.deleteProperty(feature, "label");
+
+    expect(() => readPreparationManifest(manifest)).toThrow(
+      "productContext.featureInventory[0].authStrategy must be one of: bypass, demo-identity, none; productContext.featureInventory[0].description must be a non-empty string; productContext.featureInventory[0].fixtureNotes must be an array; productContext.featureInventory[0].label must be a non-empty string",
     );
   });
 
@@ -238,6 +262,23 @@ function validPreparationManifest() {
     mocksAndFixturesAdded: ["stripe fixture"],
     modifiedFiles: ["src/demo.ts"],
     ports: [3000],
+    productContext: {
+      evidencePaths: ["README.md"],
+      featureInventory: [
+        {
+          authStrategy: "demo-identity",
+          description: "Open the seeded dashboard.",
+          entryPaths: ["/dashboard"],
+          fixtureNotes: ["Seed a local account"],
+          id: "dashboard",
+          label: "Dashboard",
+          requestedFeature: "dashboard",
+          sourcePaths: ["src/demo.ts"],
+        },
+      ],
+      name: "Demo Dashboard",
+      summary: "A dashboard onboarding application.",
+    },
     requiredLocalOnlyAssumptions: ["no external APIs"],
     scriptGenerationContext: ["Demo dashboard onboarding"],
     startCommandUsed: "bun run dev --host 127.0.0.1 --port 3000",
@@ -318,6 +359,7 @@ function validActionCatalog() {
         confidence: 0.9,
         evidence: "button name in accessibility snapshot",
         expectedResult: "Dashboard route opens",
+        featureIds: ["dashboard"],
         fallbackLocator: "text=Open dashboard",
         id: "open-dashboard",
         kind: "click",
@@ -337,19 +379,22 @@ function validActionCatalog() {
 
 function validFlowSpec() {
   return {
-    expectedVisibleAssertions: ["Dashboard heading is visible"],
+    features: [
+      {
+        expectedVisibleAssertions: ["Dashboard heading is visible"],
+        featureId: "dashboard",
+        label: "Dashboard onboarding",
+        referencedActionIds: ["open-dashboard"],
+        referencedAppMapRoutePaths: ["/", "/dashboard"],
+        requestedFeature: "dashboard",
+        requiredAppState: ["demo user"],
+        selectionReason: "The route is visible and local",
+        steps: ["Open the dashboard", "Show the dashboard heading"],
+      },
+    ],
     id: "flow_001",
-    objective: "Show dashboard onboarding",
-    referencedActionIds: ["open-dashboard"],
-    referencedAppMapRoutePaths: ["/", "/dashboard"],
     repairConstraints: ["Do not remove dashboard assertion"],
-    requiredAppState: ["demo user"],
-    selectedFlowName: "Dashboard onboarding",
-    skippedOrBlockedFlows: [{ flow: "Billing", reason: "Stripe is mocked" }],
-    steps: ["Open the dashboard", "Show the dashboard heading"],
-    userDemoBriefFeaturesCovered: ["dashboard"],
-    whySelected: "The route is visible and local",
-    locatorStrategyNotes: ["Prefer role locators"],
+    version: 2,
   };
 }
 
@@ -378,7 +423,7 @@ function validScriptCandidate() {
   return {
     assumptions: ["dashboard available"],
     captureSdkVersion: "generated",
-    browserActionCompilerVersion: "2026-07-10.1",
+    browserActionCompilerVersion: "2026-07-12.1",
     bunRuntimeVersion: "1.3.14",
     conformanceResult: validValidationReport(),
     contractVersion: "2026-07-08",

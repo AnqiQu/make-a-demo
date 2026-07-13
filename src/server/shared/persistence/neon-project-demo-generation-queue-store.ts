@@ -286,7 +286,7 @@ function readDemoBriefFromProjectContext(value: unknown) {
     ...(targetUsers ? { audience: targetUsers } : {}),
     ...(demoLengthSeconds === undefined ? {} : { demoLengthSeconds }),
     keyProductFeatures: splitFeatures(
-      readString(structuredContext, "importantFeatures"),
+      readOptionalString(structuredContext, "importantFeatures") ?? "",
     ),
     ...(productSummary ? { productSummary } : {}),
   };
@@ -298,7 +298,7 @@ function splitFeatures(value: string) {
     .map((feature) => feature.trim())
     .filter((feature) => feature.length > 0);
 
-  return features.length > 0 ? features : [value.trim()];
+  return features;
 }
 
 function readQueuedSupportingDocumentUploads(

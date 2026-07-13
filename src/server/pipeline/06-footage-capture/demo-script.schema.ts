@@ -12,6 +12,7 @@ type SceneBase = {
 export type PlaywrightRecordingSceneDescription = SceneBase & {
   actions?: BrowserAction[];
   expectedVisibleOutcome: string;
+  featureId?: string;
   type: "playwright-recording";
 };
 
@@ -231,6 +232,7 @@ function readScenes(scriptRecord: Record<string, unknown>) {
             "actions",
             "description",
             "expectedVisibleOutcome",
+            "featureId",
             "humanReadableDescription",
             "id",
             "type",
@@ -279,6 +281,11 @@ function readScenes(scriptRecord: Record<string, unknown>) {
           "expectedVisibleOutcome",
           path,
         ),
+        ...(sceneRecord.featureId === undefined
+          ? {}
+          : {
+              featureId: readSafeIdentifier(sceneRecord, "featureId", path),
+            }),
         type,
       };
     }

@@ -204,53 +204,12 @@ describe("DemoScriptContract", () => {
     });
   });
 
-  it("rejects a synthetic-only Demo Script when Flow Planning selected a browser route without actions", () => {
-    const routeOnlyFlow = {
-      ...syntheticFlowSpec(),
-      referencedAppMapRoutePaths: ["/"],
-    };
-
-    expect(
-      validateDemoScriptCandidateContract({
-        actionCatalog: actionCatalog(),
-        flowSpec: routeOnlyFlow,
-        preparationManifest: preparationManifest(),
-        scriptCandidate: scriptCandidate({
-          format: "16:9",
-          presentation: {},
-          scenes: [
-            {
-              backgroundColor: "#101828",
-              durationSeconds: 2,
-              id: "title-card",
-              text: {
-                color: "#ffffff",
-                content: "Welcome",
-                font: "Inter",
-                position: "center",
-                size: "large",
-              },
-              type: "full-screen-text",
-            },
-          ],
-          scriptId: "title-card-demo",
-          title: "Title Card Demo",
-          version: 1,
-        }),
-      }),
-    ).toMatchObject({
-      logsSummary: expect.stringContaining(
-        "does not cover selected FlowSpec route /",
-      ),
-      status: "failed",
-    });
-  });
-
   it("accepts static-image Scenes only when the backend registered the asset ID", () => {
     const staticImageScript = {
       format: "16:9",
       presentation: {},
       scenes: [
+        ...validDemoScript().scenes,
         {
           alt: "Product architecture",
           assetId: "architecture-v2.png",
@@ -265,7 +224,7 @@ describe("DemoScriptContract", () => {
     };
     const input = {
       actionCatalog: actionCatalog(),
-      flowSpec: syntheticFlowSpec(),
+      flowSpec: flowSpec(),
       preparationManifest: preparationManifest(),
       scriptCandidate: scriptCandidate(staticImageScript),
     };
@@ -313,6 +272,7 @@ describe("DemoScriptContract", () => {
             },
           ],
           expectedVisibleOutcome: "Dashboard heading is visible.",
+          featureId: "dashboard",
           id: "dashboard",
           type: "playwright-recording",
         },
@@ -324,7 +284,7 @@ describe("DemoScriptContract", () => {
     const candidate = {
       ...scriptCandidate(typedScript),
       captureSdkVersion: "2026-07-10.1",
-      contractVersion: "2026-07-10.1",
+      contractVersion: "2026-07-12.1",
     };
 
     expect(
@@ -353,6 +313,27 @@ describe("DemoScriptContract", () => {
         scriptCandidate: ungrounded,
       }).logsSummary,
     ).toContain("unknown ActionCatalog action invented-action");
+  });
+
+  it("requires every browser Scene to identify the feature it demonstrates", () => {
+    const script = structuredClone(validDemoScript()) as {
+      scenes: Array<Record<string, unknown>>;
+    };
+    Reflect.deleteProperty(script.scenes[0] ?? {}, "featureId");
+
+    expect(
+      validateDemoScriptCandidateContract({
+        actionCatalog: actionCatalog(),
+        flowSpec: flowSpec(),
+        preparationManifest: preparationManifest(),
+        scriptCandidate: scriptCandidate(script),
+      }),
+    ).toMatchObject({
+      logsSummary: expect.stringContaining(
+        "Browser Scene dashboard must identify its FlowSpec featureId",
+      ),
+      status: "failed",
+    });
   });
 
   it("allows grounded off-camera setup actions outside the selected on-camera route", () => {
@@ -402,6 +383,7 @@ describe("DemoScriptContract", () => {
       confidence: 1,
       evidence: "App exploration",
       expectedResult: "Settings opens",
+      featureIds: ["dashboard"],
       id: "open-settings",
       kind: "click",
       preferredLocator: {
@@ -435,7 +417,7 @@ describe("DemoScriptContract", () => {
       }),
     ).toMatchObject({
       logsSummary: expect.stringContaining(
-        "Browser action open-settings was not selected by FlowSpec",
+        "Browser action open-settings was not selected for FlowSpec feature dashboard",
       ),
       status: "failed",
     });
@@ -498,6 +480,7 @@ describe("DemoScriptContract", () => {
       confidence: 1,
       evidence: "Playwright loaded the route",
       expectedResult: "Home becomes visible",
+      featureIds: ["dashboard"],
       id: "navigate-home",
       kind: "navigate",
       preferredLocator: {
@@ -509,7 +492,7 @@ describe("DemoScriptContract", () => {
       route: "/",
     });
     const selectedFlow = flowSpec();
-    selectedFlow.referencedActionIds.unshift("navigate-home");
+    selectedFlow.features[0]?.referencedActionIds.unshift("navigate-home");
     const script = validDemoScript();
     const actions = script.scenes[0]?.actions as unknown as Array<
       Record<string, unknown>
@@ -552,7 +535,7 @@ describe("DemoScriptContract", () => {
           ...scriptCandidate(validDemoScript()),
           browserActionCompilerVersion: "stale",
         },
-        "browserActionCompilerVersion must be 2026-07-10.1",
+        "browserActionCompilerVersion must be 2026-07-12.1",
       ],
       [
         "agent-authored Playwright source",
@@ -668,10 +651,10 @@ function scriptCandidate(scriptJsonContent: unknown) {
       stdoutExcerpts: [],
       suggestedRepairHints: [],
     },
-    browserActionCompilerVersion: "2026-07-10.1",
+    browserActionCompilerVersion: "2026-07-12.1",
     bunRuntimeVersion: "1.3.14",
     captureSdkVersion: "2026-07-10.1",
-    contractVersion: "2026-07-10.1",
+    contractVersion: "2026-07-12.1",
     outputPath: DEMO_SCRIPT_OUTPUT_PATH,
     playwrightRuntimeVersion: "1.60.0",
     scriptJsonContent,
@@ -699,6 +682,23 @@ function preparationManifest() {
     mocksAndFixturesAdded: [],
     modifiedFiles: [],
     ports: [3000],
+    productContext: {
+      evidencePaths: ["package.json"],
+      featureInventory: [
+        {
+          authStrategy: "none",
+          description: "Show the dashboard.",
+          entryPaths: ["/"],
+          fixtureNotes: [],
+          id: "dashboard",
+          label: "Dashboard",
+          requestedFeature: "dashboard",
+          sourcePaths: ["package.json"],
+        },
+      ],
+      name: "Demo App",
+      summary: "A dashboard application.",
+    },
     requiredLocalOnlyAssumptions: [],
     scriptGenerationContext: [],
     startCommandUsed: "bun run dev --host 127.0.0.1 --port 3000",
@@ -708,27 +708,22 @@ function preparationManifest() {
 
 function flowSpec() {
   return {
-    expectedVisibleAssertions: ["Dashboard heading is visible"],
+    features: [
+      {
+        expectedVisibleAssertions: ["Dashboard heading is visible"],
+        featureId: "dashboard",
+        label: "Dashboard",
+        referencedActionIds: ["open-dashboard", "dashboard-visible"],
+        referencedAppMapRoutePaths: ["/"],
+        requestedFeature: "dashboard",
+        requiredAppState: [],
+        selectionReason: "Visible in app map",
+        steps: ["Open dashboard"],
+      },
+    ],
     id: "flow_001",
-    locatorStrategyNotes: ["Use role locators"],
-    objective: "Show dashboard",
-    referencedActionIds: ["open-dashboard", "dashboard-visible"],
-    referencedAppMapRoutePaths: ["/"],
     repairConstraints: ["Preserve the dashboard assertion"],
-    requiredAppState: [],
-    selectedFlowName: "Dashboard",
-    skippedOrBlockedFlows: [],
-    steps: ["Open dashboard"],
-    userDemoBriefFeaturesCovered: ["dashboard"],
-    whySelected: "Visible in app map",
-  };
-}
-
-function syntheticFlowSpec() {
-  return {
-    ...flowSpec(),
-    referencedActionIds: [],
-    referencedAppMapRoutePaths: [],
+    version: 2 as const,
   };
 }
 
@@ -739,6 +734,7 @@ function actionCatalog() {
         confidence: 1,
         evidence: "App exploration",
         expectedResult: "Dashboard opens",
+        featureIds: ["dashboard"],
         id: "open-dashboard",
         kind: "click",
         preferredLocator: {
@@ -753,6 +749,7 @@ function actionCatalog() {
         confidence: 1,
         evidence: "App exploration",
         expectedResult: "Dashboard remains visible",
+        featureIds: ["dashboard"],
         id: "dashboard-visible",
         kind: "assert",
         preferredLocator: {
@@ -798,6 +795,7 @@ function validDemoScript() {
           },
         ],
         expectedVisibleOutcome: "Dashboard heading is visible.",
+        featureId: "dashboard",
         humanReadableDescription: "Open the dashboard.",
         id: "dashboard",
         type: "playwright-recording",

@@ -4,6 +4,7 @@ import {
   type ActionCatalog,
   type AppMap,
   type NetworkAttempt,
+  type PreparedDemoFeature,
   type ValidationReport,
   type VerifiedLocatorCandidate,
   readActionCatalog,
@@ -45,10 +46,21 @@ type ObservedInputLocator = {
   };
   name: string;
 };
+type ObservedScrollTarget = {
+  locator: {
+    reason: string;
+    strategy: "css";
+    value: string;
+  };
+  locatorEvidence?: ObservedLocatorEvidence | null;
+  name: string;
+  position: "bottom" | "top";
+};
 type ObservedRoute = {
   buttons: string[];
   buttonLocatorEvidence?: Array<ObservedLocatorEvidence | null>;
   forms: string[];
+  featureIds?: string[];
   headings: string[];
   headingLocatorEvidence?: Array<ObservedLocatorEvidence | null>;
   inputLocators?: ObservedInputLocator[];
@@ -56,7 +68,9 @@ type ObservedRoute = {
   links: ObservedLink[];
   path: string;
   primaryNavigation: string[];
+  requestedPath?: string;
   screenshot: string;
+  scrollTargets?: ObservedScrollTarget[];
   snapshot: string;
   text: string[];
   textLocatorEvidence?: Array<ObservedLocatorEvidence | null>;
@@ -79,10 +93,14 @@ const explorerPath = `${explorerDirectory}/explore-app.mjs`;
  */
 export async function exploreSubmittedApp(input: {
   baseUrl: string;
+  featureInventory?: PreparedDemoFeature[];
   preparationManifestId: string;
   workspace: AgentHarnessWorkspace;
 }): Promise<SubmittedAppExplorationResult> {
-  const script = createExplorerScript(input.baseUrl);
+  const script = createExplorerScript(
+    input.baseUrl,
+    input.featureInventory ?? [],
+  );
   const encodedScript = Buffer.from(script).toString("base64");
   const result = await executeSubmittedCode(
     input.workspace,
@@ -108,6 +126,7 @@ export async function exploreSubmittedApp(input: {
 
   return createExplorationArtifacts({
     baseUrl: input.baseUrl,
+    featureInventory: input.featureInventory ?? [],
     observation,
     preparationManifestId: input.preparationManifestId,
   });
@@ -115,6 +134,7 @@ export async function exploreSubmittedApp(input: {
 
 function createExplorationArtifacts(input: {
   baseUrl: string;
+  featureInventory: PreparedDemoFeature[];
   observation: BrowserExplorationProtocol;
   preparationManifestId: string;
 }): SubmittedAppExplorationResult {
@@ -123,12 +143,16 @@ function createExplorationArtifacts(input: {
   const networkAttempts = readObservedNetworkAttempts(input.observation);
   const routes = input.observation.routes.map((route) => ({
     buttons: route.buttons,
+    ...(route.featureIds === undefined ? {} : { featureIds: route.featureIds }),
     forms: route.forms,
     headings: route.headings,
     inputs: route.inputs,
     links: route.links.map((link) => link.href),
     path: route.path,
     primaryNavigation: route.primaryNavigation,
+    ...(route.requestedPath === undefined
+      ? {}
+      : { requestedPath: route.requestedPath }),
     screenshots: [route.screenshot],
     snapshotPath: route.snapshot,
     stableLocatorCandidates: createRouteLocatorCandidates(route),
@@ -187,7 +211,9 @@ function createExplorationArtifacts(input: {
     id: actionCatalogId,
   });
   const validationReport = createExplorationValidationReport({
+    actionCatalog,
     appMap,
+    featureInventory: input.featureInventory,
     networkAttempts,
   });
 
@@ -232,6 +258,7 @@ function createActions(routes: ObservedRoute[]) {
       confidence: 1,
       evidence: `Playwright loaded ${route.path}`,
       expectedResult: `${route.title || route.path} becomes visible`,
+      featureIds: route.featureIds ?? [],
       id: `navigate-route-${routeIndex + 1}`,
       kind: "navigate",
       preferredLocator: {
@@ -252,6 +279,7 @@ function createActions(routes: ObservedRoute[]) {
         confidence: 0.95,
         evidence: `Playwright observed heading on ${route.path}`,
         expectedResult: `${heading} remains visible`,
+        featureIds: route.featureIds ?? [],
         id,
         kind: "assert",
         ...createLocatorCandidateFields(id, locatorEvidence),
@@ -278,6 +306,7 @@ function createActions(routes: ObservedRoute[]) {
           confidence: 0.85,
           evidence: `Playwright observed visible text on ${route.path}`,
           expectedResult: `${visibleText} remains visible`,
+          featureIds: route.featureIds ?? [],
           id,
           kind: "assert",
           ...createLocatorCandidateFields(
@@ -302,6 +331,7 @@ function createActions(routes: ObservedRoute[]) {
             confidence: 0.85,
             evidence: `Playwright observed a visible control on ${route.path}`,
             expectedResult: `${visibleButton} remains visible`,
+            featureIds: route.featureIds ?? [],
             id,
             kind: "assert",
             ...createLocatorCandidateFields(
@@ -329,6 +359,7 @@ function createActions(routes: ObservedRoute[]) {
         confidence: 0.9,
         evidence: `Playwright observed button on ${route.path}`,
         expectedResult: `Clicking ${button} changes visible app state`,
+        featureIds: route.featureIds ?? [],
         id,
         kind: "click",
         ...createLocatorCandidateFields(id, locatorEvidence),
@@ -354,6 +385,7 @@ function createActions(routes: ObservedRoute[]) {
         confidence: 0.9,
         evidence: `Playwright observed link to ${link.href}`,
         expectedResult: `${link.href} becomes visible`,
+        featureIds: route.featureIds ?? [],
         id,
         kind: "click",
         ...createLocatorCandidateFields(id, link.locatorEvidence),
@@ -378,12 +410,32 @@ function createActions(routes: ObservedRoute[]) {
           input.controlKind === "select"
             ? `Selecting an option in ${input.name} changes visible app state`
             : `Entering a value in ${input.name} changes visible app state`,
+        featureIds: route.featureIds ?? [],
         id,
         kind: input.controlKind,
         ...createLocatorCandidateFields(id, input.locatorEvidence),
         preferredLocator: input.locator,
         risks: [],
         route: route.path,
+      });
+    });
+    (route.scrollTargets ?? []).forEach((target, index) => {
+      if (target.locatorEvidence === null) {
+        return;
+      }
+      const id = `scroll-route-${routeIndex + 1}-${index + 1}`;
+      actions.push({
+        confidence: 0.95,
+        evidence: `Playwright observed scrollable content on ${route.path}`,
+        expectedResult: `Scrolling ${target.name} reveals more visible content`,
+        featureIds: route.featureIds ?? [],
+        id,
+        kind: "scroll",
+        ...createLocatorCandidateFields(id, target.locatorEvidence),
+        preferredLocator: target.locator,
+        risks: [],
+        route: route.path,
+        scrollPosition: target.position,
       });
     });
   });
@@ -406,10 +458,17 @@ function createLocatorCandidateFields(
 }
 
 function createExplorationValidationReport(input: {
+  actionCatalog: ActionCatalog;
   appMap: AppMap;
+  featureInventory: PreparedDemoFeature[];
   networkAttempts: NetworkAttempt[];
 }): ValidationReport {
-  const failure = readExplorationFailure(input.appMap, input.networkAttempts);
+  const failure = readExplorationFailure(
+    input.appMap,
+    input.networkAttempts,
+    input.featureInventory,
+    input.actionCatalog,
+  );
   return readValidationReport({
     artifactReferences: [
       "/workspace/.makeademo/app-map.json",
@@ -465,6 +524,8 @@ function createExplorationValidationReport(input: {
 function readExplorationFailure(
   appMap: AppMap,
   networkAttempts: NetworkAttempt[],
+  featureInventory: PreparedDemoFeature[],
+  actionCatalog: ActionCatalog,
 ): { classification: string; message: string } | undefined {
   if (networkAttempts.length > 0) {
     const pageErrorSummary =
@@ -486,7 +547,68 @@ function readExplorationFailure(
       message: `Browser exploration observed ${formatCount(appMap.pageErrors.length, "page error")} and ${formatCount(appMap.consoleErrors.length, "console error")}: ${[...appMap.pageErrors, ...appMap.consoleErrors].slice(0, 6).join(" | ")}.`,
     };
   }
+  const featuresById = new Map(
+    featureInventory.map((feature) => [feature.id, feature]),
+  );
+  const authBarrierFeatureIds = new Set(
+    appMap.discoveredRoutes.filter(isAuthWall).flatMap((route) =>
+      (route.featureIds ?? []).filter((featureId) => {
+        const feature = featuresById.get(featureId);
+        return feature !== undefined && !isAuthenticationFeature(feature);
+      }),
+    ),
+  );
+  if (authBarrierFeatureIds.size > 0) {
+    const blockedFeatures = featureInventory
+      .filter((feature) => authBarrierFeatureIds.has(feature.id))
+      .map((feature) => feature.requestedFeature ?? feature.label);
+    return {
+      classification: "feature auth barrier",
+      message: `Prepared feature routes redirected to authentication for: ${blockedFeatures.join(", ")}.`,
+    };
+  }
+  const groundedFeatureIds = new Set(
+    featureInventory
+      .filter((feature) => {
+        const actions = actionCatalog.actions.filter((action) =>
+          action.featureIds?.includes(feature.id),
+        );
+        return (
+          actions.some((action) => action.kind === "assert") &&
+          actions.some((action) => action.kind !== "assert")
+        );
+      })
+      .map((feature) => feature.id),
+  );
+  const missingRequestedFeatures = featureInventory
+    .filter(
+      (feature) =>
+        feature.requestedFeature !== undefined &&
+        !groundedFeatureIds.has(feature.id),
+    )
+    .map((feature) => feature.requestedFeature as string);
+  if (missingRequestedFeatures.length > 0) {
+    return {
+      classification: "requested feature not observable",
+      message: `App Exploration found no browser evidence for requested features: ${missingRequestedFeatures.join(", ")}.`,
+    };
+  }
   if (
+    !featureInventory.some((feature) => feature.requestedFeature !== undefined)
+  ) {
+    const observedPreparedFeatureCount = featureInventory.filter((feature) =>
+      groundedFeatureIds.has(feature.id),
+    ).length;
+    const requiredPreparedFeatureCount = Math.min(3, featureInventory.length);
+    if (observedPreparedFeatureCount < requiredPreparedFeatureCount) {
+      return {
+        classification: "prepared feature not observable",
+        message: `App Exploration observed ${observedPreparedFeatureCount} prepared features but needs ${requiredPreparedFeatureCount} to plan the default demo.`,
+      };
+    }
+  }
+  if (
+    featureInventory.length === 0 &&
     appMap.loginOrAuthWalls.length === appMap.discoveredRoutes.length &&
     appMap.loginOrAuthWalls.length > 0
   ) {
@@ -545,9 +667,24 @@ function createRouteLocatorCandidates(route: ObservedRoute): string[] {
   ]);
 }
 
-function isAuthWall(route: ObservedRoute): boolean {
-  return /\b(?:log in|login|sign in|authenticate)\b/i.test(
-    [...route.headings, ...route.text.slice(0, 20)].join(" "),
+function isAuthWall(route: {
+  buttons: string[];
+  headings: string[];
+  inputs: string[];
+}): boolean {
+  const hasPassword = route.inputs.some((input) => /password/i.test(input));
+  const hasIdentity = route.inputs.some((input) =>
+    /email|username|user name/i.test(input),
+  );
+  const hasAuthCallToAction = /\b(?:log in|login|sign in|authenticate)\b/i.test(
+    [...route.headings, ...route.buttons].join(" "),
+  );
+  return hasPassword && hasIdentity && hasAuthCallToAction;
+}
+
+function isAuthenticationFeature(feature: PreparedDemoFeature): boolean {
+  return /\b(?:log(?:ging)?\s*in|login|sign(?:ing)?\s*in|authentication|authenticate)\b/i.test(
+    `${feature.requestedFeature ?? ""} ${feature.label}`,
   );
 }
 
@@ -572,13 +709,21 @@ function unique(values: string[]): string[] {
   return [...new Set(values.filter((value) => value.trim().length > 0))];
 }
 
-function createExplorerScript(baseUrl: string): string {
+function createExplorerScript(
+  baseUrl: string,
+  featureInventory: PreparedDemoFeature[],
+): string {
+  const featureEntryTargets = createFeatureEntryTargets(
+    baseUrl,
+    featureInventory,
+  );
   return `
 import { chromium } from "@playwright/test";
 import { mkdir, writeFile } from "node:fs/promises";
 
 const baseUrl = ${JSON.stringify(baseUrl)};
 const baseOrigin = new URL(baseUrl).origin;
+const featureEntryTargets = ${JSON.stringify(featureEntryTargets)};
 const outputDirectory = ${JSON.stringify(explorerDirectory)};
 const result = { blockedNetworkAttempts: [], consoleErrors: [], pageErrors: [], routes: [] };
 const browser = await chromium.launch({ headless: true });
@@ -675,15 +820,19 @@ try {
     if (message.type() === "error") result.consoleErrors.push(page.url() + ": " + message.text());
   });
   page.on("pageerror", (error) => result.pageErrors.push(page.url() + ": " + error.message));
-  const queue = [new URL(baseUrl).toString()];
+  const queue = [
+    ...featureEntryTargets,
+    { featureIds: [], requestedPath: new URL(baseUrl).pathname, url: new URL(baseUrl).toString() },
+  ];
   const seen = new Set();
+  const maxRoutes = Math.min(30, Math.max(10, featureEntryTargets.length + 10));
   await mkdir(outputDirectory, { recursive: true });
-  while (queue.length > 0 && seen.size < 10) {
-    const url = queue.shift();
-    if (!url || seen.has(url)) continue;
-    seen.add(url);
+  while (queue.length > 0 && seen.size < maxRoutes) {
+    const target = queue.shift();
+    if (!target || seen.has(target.url)) continue;
+    seen.add(target.url);
     try {
-      await page.goto(url, { timeout: 20000, waitUntil: "domcontentloaded" });
+      await page.goto(target.url, { timeout: 20000, waitUntil: "domcontentloaded" });
       await page.waitForTimeout(500);
       const observed = await page.evaluate(() => {
         const clean = (value) => (value || "").replace(/\\s+/g, " ").trim();
@@ -726,6 +875,17 @@ try {
             : [{ controlKind: tag === "select" ? "select" : "fill", locator, name }];
         });
         const inputs = inputLocators.map((input) => input.name);
+        const scrollTargets = document.documentElement.scrollHeight > window.innerHeight + 40
+          ? [{
+              locator: {
+                reason: "The document scroll root has no semantic locator.",
+                strategy: "css",
+                value: "html",
+              },
+              name: clean(document.querySelector("h1, h2, [role=heading]")?.textContent) || "page",
+              position: "bottom",
+            }]
+          : [];
         return {
           buttons: texts("button, [role=button]"),
           forms: Array.from(document.querySelectorAll("form")).filter(visible).map((element) => clean(element.getAttribute("aria-label") || element.getAttribute("name") || element.id || "form")),
@@ -734,6 +894,7 @@ try {
           inputs,
           links,
           primaryNavigation: texts("nav a, [role=navigation] a"),
+          scrollTargets,
           text: Array.from(document.querySelectorAll("main p, main li, article p, [role=main] p")).filter(visible).map((element) => clean(element.textContent)).filter(Boolean).slice(0, 80),
           title: document.title || clean(document.querySelector("h1")?.textContent) || location.pathname,
         };
@@ -793,19 +954,40 @@ try {
           route: path,
         }),
       ));
+      observed.scrollTargets = await Promise.all(observed.scrollTargets.map(async (target) => ({
+        ...target,
+        locatorEvidence: (await createVerifiedDirectLocatorEvidence({
+          element: page.locator(target.locator.value),
+          locator: { strategy: target.locator.strategy, value: target.locator.value },
+          route: path,
+        })) ?? null,
+      })));
       const slug = path === "/" ? "root" : path.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || "route";
       const screenshot = outputDirectory + "/" + slug + ".png";
       const snapshot = outputDirectory + "/" + slug + ".aria.yml";
       await page.screenshot({ fullPage: true, path: screenshot });
       const ariaSnapshot = typeof page.locator("body").ariaSnapshot === "function" ? await page.locator("body").ariaSnapshot() : await page.locator("body").innerText();
       await writeFile(snapshot, ariaSnapshot);
-      result.routes.push({ ...observed, path, screenshot, snapshot });
+      result.routes.push({
+        ...observed,
+        featureIds: target.featureIds,
+        path,
+        requestedPath: target.requestedPath,
+        screenshot,
+        snapshot,
+      });
       for (const link of observed.links) {
-        const target = new URL(link.href, baseUrl);
-        if (link.sameOrigin && target.origin === baseOrigin && !seen.has(target.toString())) queue.push(target.toString());
+        const linkTarget = new URL(link.href, baseUrl);
+        if (link.sameOrigin && linkTarget.origin === baseOrigin && !seen.has(linkTarget.toString())) {
+          queue.push({
+            featureIds: target.featureIds ?? [],
+            requestedPath: linkTarget.pathname + linkTarget.search + linkTarget.hash,
+            url: linkTarget.toString(),
+          });
+        }
       }
     } catch (error) {
-      result.pageErrors.push(url + ": " + (error instanceof Error ? error.message : String(error)));
+      result.pageErrors.push(target.url + ": " + (error instanceof Error ? error.message : String(error)));
     }
   }
 } finally {
@@ -813,6 +995,34 @@ try {
 }
 process.stdout.write(JSON.stringify(result));
 `;
+}
+
+function createFeatureEntryTargets(
+  baseUrl: string,
+  featureInventory: PreparedDemoFeature[],
+): Array<{ featureIds: string[]; requestedPath: string; url: string }> {
+  const targets = new Map<
+    string,
+    { featureIds: Set<string>; requestedPath: string; url: string }
+  >();
+  for (const feature of featureInventory) {
+    for (const entryPath of feature.entryPaths) {
+      const url = new URL(entryPath, baseUrl);
+      const absoluteUrl = url.toString();
+      const existing = targets.get(absoluteUrl) ?? {
+        featureIds: new Set<string>(),
+        requestedPath: url.pathname + url.search + url.hash,
+        url: absoluteUrl,
+      };
+      existing.featureIds.add(feature.id);
+      targets.set(absoluteUrl, existing);
+    }
+  }
+  return [...targets.values()].map((target) => ({
+    featureIds: [...target.featureIds],
+    requestedPath: target.requestedPath,
+    url: target.url,
+  }));
 }
 
 function shellQuote(value: string): string {

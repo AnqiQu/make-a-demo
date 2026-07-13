@@ -7,7 +7,9 @@ import type { PreparationManifest, RunPlan } from "./artifacts";
  */
 export function createPreparationManifestTemplate(
   runPlan: RunPlan,
+  demoBrief: { keyProductFeatures?: string[] } = {},
 ): PreparationManifest {
+  const requestedFeatures = demoBrief.keyProductFeatures ?? [];
   return {
     appDir: runPlan.appDir,
     appExplorationHints: [],
@@ -27,6 +29,21 @@ export function createPreparationManifestTemplate(
     modifiedFiles: [],
     ports: runPlan.allowedPorts,
     requiredLocalOnlyAssumptions: [],
+    productContext: {
+      evidencePaths: [],
+      featureInventory: requestedFeatures.map((feature, index) => ({
+        authStrategy: "none",
+        description: `Prepare a deterministic demo for ${feature}`,
+        entryPaths: [],
+        fixtureNotes: [],
+        id: `requested-feature-${index + 1}`,
+        label: feature,
+        requestedFeature: feature,
+        sourcePaths: [],
+      })),
+      name: "replace-with-product-name",
+      summary: "replace-with-product-summary",
+    },
     scriptGenerationContext: [],
     startCommandUsed: runPlan.startCommand,
     validationEvidence: [],

@@ -20,4 +20,10 @@ describe("Context Gathering intake", () => {
       keyProductFeatures: ["repo validation", "script planning"],
     });
   });
+
+  it("allows an empty feature list so the pipeline can select explored features", () => {
+    expect(readDemoBrief({ keyProductFeatures: [] })).toEqual({
+      keyProductFeatures: [],
+    });
+  });
 });

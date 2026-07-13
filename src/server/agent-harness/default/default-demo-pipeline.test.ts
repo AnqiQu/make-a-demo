@@ -6,6 +6,30 @@ import { DEMO_SCRIPT_OUTPUT_PATH } from "../schemas/artifacts";
 import { runDefaultDemoPipeline } from "./default-demo-pipeline";
 
 describe("runDefaultDemoPipeline", () => {
+  it("rejects a feature list that cannot fit the Scene contract", async () => {
+    let snapshotRead = false;
+
+    await expect(
+      runDefaultDemoPipeline(
+        {
+          demoLengthSeconds: 30,
+          importantFeatures: Array.from(
+            { length: 10 },
+            (_, index) => `feature ${index + 1}`,
+          ),
+          repoUrl: "https://github.com/acme/too-many-features",
+        },
+        {
+          async readRepoSnapshot() {
+            snapshotRead = true;
+            throw new Error("snapshot should not be read");
+          },
+        },
+      ),
+    ).rejects.toThrow("A demo can include at most 9 requested features");
+    expect(snapshotRead).toBe(false);
+  });
+
   it("forwards private-repo access and the screened source archive without persisting a token", async () => {
     const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-private-"));
     const sourceArchive = {
@@ -254,6 +278,12 @@ describe("runDefaultDemoPipeline", () => {
               mocksAndFixturesAdded: [],
               modifiedFiles: [],
               ports: [3000],
+              productContext: {
+                evidencePaths: ["package.json"],
+                featureInventory: [],
+                name: "Demo App",
+                summary: "A demo application.",
+              },
               requiredLocalOnlyAssumptions: [],
               scriptGenerationContext: [],
               startCommandUsed: "bun run dev",
@@ -261,7 +291,7 @@ describe("runDefaultDemoPipeline", () => {
             },
             scriptCandidate: {
               assumptions: [],
-              browserActionCompilerVersion: "2026-07-10.1",
+              browserActionCompilerVersion: "2026-07-12.1",
               bunRuntimeVersion: "1.3.14",
               captureSdkVersion: "2026-07-10.1",
               conformanceResult: {
@@ -476,6 +506,12 @@ describe("runDefaultDemoPipeline", () => {
               mocksAndFixturesAdded: [],
               modifiedFiles: [],
               ports: [3000],
+              productContext: {
+                evidencePaths: ["package.json"],
+                featureInventory: [],
+                name: "Synthetic App",
+                summary: "A synthetic demo application.",
+              },
               requiredLocalOnlyAssumptions: [],
               scriptGenerationContext: [],
               startCommandUsed: "bun run dev",
@@ -483,7 +519,7 @@ describe("runDefaultDemoPipeline", () => {
             },
             scriptCandidate: {
               assumptions: [],
-              browserActionCompilerVersion: "2026-07-10.1",
+              browserActionCompilerVersion: "2026-07-12.1",
               bunRuntimeVersion: "1.3.14",
               captureSdkVersion: "2026-07-10.1",
               conformanceResult: {
@@ -502,7 +538,7 @@ describe("runDefaultDemoPipeline", () => {
                 stdoutExcerpts: [],
                 suggestedRepairHints: [],
               },
-              contractVersion: "2026-07-10.1",
+              contractVersion: "2026-07-12.1",
               outputPath: DEMO_SCRIPT_OUTPUT_PATH,
               playwrightRuntimeVersion: "1.60.0",
               scriptJsonContent: {

@@ -5,69 +5,32 @@ import { NeonProjectDemoGenerationQueueStore } from "./neon-project-demo-generat
 describe("NeonProjectDemoGenerationQueueStore", () => {
   it("claims the next queued Project and maps intake context into a demo generation job", async () => {
     const updates: unknown[] = [];
-    const db = {
-      select() {
-        return {
-          from() {
-            return {
-              innerJoin() {
-                return {
-                  where() {
-                    return {
-                      orderBy() {
-                        return {
-                          limit: async () => [
-                            {
-                              context: {
-                                structuredContext: {
-                                  importantFeatures:
-                                    "script generation, video generation",
-                                  productSummary: "Creates demo videos.",
-                                  requestedDurationSeconds: 60,
-                                  targetUsers: "Founders",
-                                },
-                              },
-                              demoRequestId: "demo-request-1",
-                              githubInstallationId: "installation-123",
-                              projectId: "project-1",
-                              repoUrl: "https://github.com/example/app",
-                              supportingFiles: [
-                                JSON.stringify({
-                                  fileName: "product.md",
-                                  mimeType: "text/markdown",
-                                  r2Key: "uploads/draft-1/product.md",
-                                  r2Url:
-                                    "r2://owlet/uploads/draft-1/product.md",
-                                  sizeBytes: 128,
-                                }),
-                              ],
-                            },
-                          ],
-                        };
-                      },
-                    };
-                  },
-                };
-              },
-            };
+    const db = queuedProjectDatabase(
+      {
+        context: {
+          structuredContext: {
+            importantFeatures: "script generation, video generation",
+            productSummary: "Creates demo videos.",
+            requestedDurationSeconds: 60,
+            targetUsers: "Founders",
           },
-        };
+        },
+        demoRequestId: "demo-request-1",
+        githubInstallationId: "installation-123",
+        projectId: "project-1",
+        repoUrl: "https://github.com/example/app",
+        supportingFiles: [
+          JSON.stringify({
+            fileName: "product.md",
+            mimeType: "text/markdown",
+            r2Key: "uploads/draft-1/product.md",
+            r2Url: "r2://owlet/uploads/draft-1/product.md",
+            sizeBytes: 128,
+          }),
+        ],
       },
-      update() {
-        return {
-          set(values: unknown) {
-            updates.push(values);
-            return {
-              where() {
-                return {
-                  returning: async () => [{ id: "project-1" }],
-                };
-              },
-            };
-          },
-        };
-      },
-    };
+      updates,
+    );
     const store = new NeonProjectDemoGenerationQueueStore(
       db,
       {
@@ -129,6 +92,30 @@ describe("NeonProjectDemoGenerationQueueStore", () => {
         status: "processing",
       },
     ]);
+  });
+
+  it("preserves an omitted feature list for automatic codebase-driven selection", async () => {
+    const db = queuedProjectDatabase({
+      context: { structuredContext: { importantFeatures: "" } },
+      demoRequestId: "demo-request-1",
+      projectId: "project-1",
+      repoUrl: "https://github.com/example/app",
+      supportingFiles: [],
+    });
+    const store = new NeonProjectDemoGenerationQueueStore(
+      db,
+      {
+        async loadSupportingDocuments() {
+          return [];
+        },
+      },
+      { createLeaseToken: () => "lease-empty-features" },
+    );
+
+    await expect(store.claimNextQueuedProject()).resolves.toMatchObject({
+      demoBrief: { keyProductFeatures: [] },
+      projectId: "project-1",
+    });
   });
 
   it("marks a claimed Project failed when Supporting Documents cannot be normalized", async () => {
@@ -377,3 +364,46 @@ describe("NeonProjectDemoGenerationQueueStore", () => {
     ).rejects.toThrow("processing lease is no longer owned");
   });
 });
+
+function queuedProjectDatabase(
+  row: Record<string, unknown>,
+  updates: unknown[] = [],
+) {
+  return {
+    select() {
+      return {
+        from() {
+          return {
+            innerJoin() {
+              return {
+                where() {
+                  return {
+                    orderBy() {
+                      return {
+                        limit: async () => [row],
+                      };
+                    },
+                  };
+                },
+              };
+            },
+          };
+        },
+      };
+    },
+    update() {
+      return {
+        set(values: unknown) {
+          updates.push(values);
+          return {
+            where() {
+              return {
+                returning: async () => [{ id: "project-1" }],
+              };
+            },
+          };
+        },
+      };
+    },
+  };
+}

@@ -22,6 +22,7 @@ import {
   DEMO_SCRIPT_OUTPUT_PATH,
   type DemoScriptContract,
   type FlowSpec,
+  type FlowSpecFeature,
   type PreparationManifest,
   type ScriptCandidate,
   type ValidationReport,
@@ -31,6 +32,7 @@ import {
   readScriptCandidate,
   readValidationReport,
 } from "../schemas/artifacts";
+import { assertCanonicalDemoNarrative } from "./demo-narrative";
 import { assertCaptureReadyScriptQuality } from "./script-quality";
 
 const externalUrlPattern =
@@ -215,10 +217,17 @@ export function createDemoScriptContract(
               properties: {
                 actions: browserActions,
                 expectedVisibleOutcome: description,
+                featureId: safeId,
                 ...sceneBaseProperties,
                 type: { const: "playwright-recording" },
               },
-              required: ["actions", "expectedVisibleOutcome", "id", "type"],
+              required: [
+                "actions",
+                "expectedVisibleOutcome",
+                "featureId",
+                "id",
+                "type",
+              ],
               type: "object",
             },
             {
@@ -333,6 +342,7 @@ export function createDemoScriptContract(
             },
           ],
           expectedVisibleOutcome: "The Dashboard heading is visible.",
+          featureId: "dashboard",
           id: "dashboard",
           type: "playwright-recording",
         },
@@ -373,6 +383,7 @@ export function createDemoScriptContract(
       "locator.fill",
       "locator.press",
       "locator.selectOption",
+      "locator.evaluate (backend-compiled typed scroll only)",
       "expect(locator).toBeVisible",
       "expect(locator).toContainText",
       "expect(page).toHaveTitle",
@@ -431,6 +442,7 @@ export function validateDemoScriptCandidateContract(input: {
   actionCatalog?: unknown;
   flowSpec: unknown;
   preparationManifest: unknown;
+  requireCanonicalNarrative?: boolean;
   scriptCandidate: unknown;
   trustedStaticImageAssetIds?: readonly string[];
 }): ValidationReport {
@@ -446,6 +458,13 @@ export function validateDemoScriptCandidateContract(input: {
       scriptCandidate,
     });
     const demoScript = parseDemoScript(scriptCandidate.scriptJsonContent);
+    if (input.requireCanonicalNarrative === true) {
+      assertCanonicalDemoNarrative({
+        demoScript,
+        flowSpec,
+        productName: preparationManifest.productContext.name,
+      });
+    }
     assertCurrentContractGrounding({
       actionCatalog: input.actionCatalog,
       demoScript,
@@ -561,13 +580,13 @@ function assertCurrentContractGrounding(input: {
     (scene) => scene.type === "playwright-recording",
   );
   if (browserScenes.length === 0) {
-    const selectedActionId = input.flowSpec.referencedActionIds[0];
+    const selectedActionId = readSelectedFlowActionIds(input.flowSpec)[0];
     if (selectedActionId !== undefined) {
       throw new Error(
         `Demo Script does not cover selected FlowSpec action ${selectedActionId}`,
       );
     }
-    const selectedRoute = input.flowSpec.referencedAppMapRoutePaths[0];
+    const selectedRoute = readSelectedFlowRoutes(input.flowSpec)[0];
     if (selectedRoute !== undefined) {
       throw new Error(
         `Demo Script does not cover selected FlowSpec route ${selectedRoute}`,
@@ -637,9 +656,25 @@ function assertBrowserActionsGrounded(input: {
   const catalogActionsById = new Map(
     input.actionCatalog.actions.map((action) => [action.id, action]),
   );
-  const sourceActionIds = new Set<string>();
+  const sourceActionIdsByFeature = new Map<string, Set<string>>();
 
   for (const scene of input.browserScenes) {
+    if (scene.featureId === undefined) {
+      throw new Error(
+        `Browser Scene ${scene.id} must identify its FlowSpec featureId`,
+      );
+    }
+    const selectedFeature = input.flowSpec.features.find(
+      (feature) => feature.featureId === scene.featureId,
+    );
+    if (selectedFeature === undefined) {
+      throw new Error(
+        `Browser Scene ${scene.id} references unknown FlowSpec feature ${scene.featureId}`,
+      );
+    }
+    const sourceActionIds =
+      sourceActionIdsByFeature.get(scene.featureId) ?? new Set<string>();
+    sourceActionIdsByFeature.set(scene.featureId, sourceActionIds);
     if (scene.actions === undefined || scene.actions.length === 0) {
       throw new Error(
         `Current browser Scene ${scene.id} must contain typed actions`,
@@ -650,21 +685,29 @@ function assertBrowserActionsGrounded(input: {
         action,
         catalogActionsById,
       );
-      assertActionMatchesCatalog(action, sourceAction, input.flowSpec, true);
+      assertActionMatchesCatalog(action, sourceAction, selectedFeature, true);
       sourceActionIds.add(sourceAction.id);
     }
   }
 
   for (const action of input.setupActions) {
     const sourceAction = readGroundedCatalogAction(action, catalogActionsById);
-    assertActionMatchesCatalog(action, sourceAction, input.flowSpec, false);
+    assertActionMatchesCatalog(action, sourceAction, undefined, false);
   }
 
-  for (const actionId of input.flowSpec.referencedActionIds) {
-    if (!sourceActionIds.has(actionId)) {
+  for (const feature of input.flowSpec.features) {
+    const sourceActionIds = sourceActionIdsByFeature.get(feature.featureId);
+    if (sourceActionIds === undefined) {
       throw new Error(
-        `Demo Script does not cover selected FlowSpec action ${actionId}`,
+        `Demo Script does not contain a browser Scene for FlowSpec feature ${feature.featureId}`,
       );
+    }
+    for (const actionId of feature.referencedActionIds) {
+      if (!sourceActionIds.has(actionId)) {
+        throw new Error(
+          `Demo Script does not cover selected FlowSpec action ${actionId} for feature ${feature.featureId}`,
+        );
+      }
     }
   }
 }
@@ -690,7 +733,7 @@ function readGroundedCatalogAction(
 function assertActionMatchesCatalog(
   action: BrowserAction,
   sourceAction: ActionCatalog["actions"][number],
-  flowSpec: FlowSpec,
+  selectedFeature: FlowSpecFeature | undefined,
   requireSelectedRoute: boolean,
 ): void {
   const compatibleKinds = compatibleCatalogKinds(action.type);
@@ -705,8 +748,20 @@ function assertActionMatchesCatalog(
     );
   }
   if (
+    action.type === "scroll" &&
+    sourceAction.scrollPosition !== undefined &&
+    action.position !== sourceAction.scrollPosition
+  ) {
+    throw new Error(
+      `Browser action ${action.id} scroll position does not match its ActionCatalog evidence`,
+    );
+  }
+  if (requireSelectedRoute && selectedFeature === undefined) {
+    throw new Error(`Browser action ${action.id} was not selected by FlowSpec`);
+  }
+  if (
     requireSelectedRoute &&
-    !flowSpec.referencedAppMapRoutePaths.includes(sourceAction.route)
+    !selectedFeature?.referencedAppMapRoutePaths.includes(sourceAction.route)
   ) {
     throw new Error(
       `Browser action ${action.id} uses ActionCatalog route ${sourceAction.route} outside the selected FlowSpec`,
@@ -714,9 +769,20 @@ function assertActionMatchesCatalog(
   }
   if (
     requireSelectedRoute &&
-    !flowSpec.referencedActionIds.includes(sourceAction.id)
+    !selectedFeature?.referencedActionIds.includes(sourceAction.id)
   ) {
-    throw new Error(`Browser action ${action.id} was not selected by FlowSpec`);
+    throw new Error(
+      `Browser action ${action.id} was not selected for FlowSpec feature ${selectedFeature?.featureId}`,
+    );
+  }
+  if (
+    requireSelectedRoute &&
+    selectedFeature !== undefined &&
+    !sourceAction.featureIds?.includes(selectedFeature.featureId)
+  ) {
+    throw new Error(
+      `Browser action ${action.id} ActionCatalog evidence is not tagged for FlowSpec feature ${selectedFeature.featureId}`,
+    );
   }
   if ("locator" in action) {
     if (
@@ -754,6 +820,24 @@ function assertActionMatchesCatalog(
       );
     }
   }
+}
+
+function readSelectedFlowActionIds(flowSpec: FlowSpec): string[] {
+  return [
+    ...new Set(
+      flowSpec.features.flatMap((feature) => feature.referencedActionIds),
+    ),
+  ];
+}
+
+function readSelectedFlowRoutes(flowSpec: FlowSpec): string[] {
+  return [
+    ...new Set(
+      flowSpec.features.flatMap(
+        (feature) => feature.referencedAppMapRoutePaths,
+      ),
+    ),
+  ];
 }
 
 function browserLocatorsEqual(
@@ -806,6 +890,9 @@ function compatibleCatalogKinds(
   }
   if (type === "hover") {
     return ["wait"];
+  }
+  if (type === "scroll") {
+    return ["scroll"];
   }
   return ["assert"];
 }
