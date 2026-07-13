@@ -20,6 +20,7 @@ export type DraftCompositeReviewerInput = {
   derivedEvidence: {
     contactSheetPaths: string[];
     draftDurationSeconds?: number;
+    evidenceManifestPath?: string;
     ffmpegFindings: string[];
     markerSummary: Array<Record<string, unknown>>;
     qualityFindings: string[];

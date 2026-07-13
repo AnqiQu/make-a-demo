@@ -300,12 +300,18 @@ export async function runDraftCompositeReviewLoop(
         artifacts: {
           ...evidenceArtifacts,
           contactSheetPaths: draftEvidence.contactSheetPaths,
+          ...(draftEvidence.evidenceManifestPath === undefined
+            ? {}
+            : { evidenceManifestPath: draftEvidence.evidenceManifestPath }),
           sampledFramePaths: draftEvidence.sampledFramePaths,
         },
         durationMs: elapsedMs(evidenceStartedAt),
         event: "draft-composite-evidence-succeeded",
+        failedSceneProbeCount:
+          draftEvidence.staticProbeFailedSceneIds?.length ?? 0,
         ffmpegFindingCount: draftEvidence.ffmpegFindings.length,
         message: "Draft Composite evidence generation succeeded.",
+        staticSceneCount: draftEvidence.staticSceneIds.length,
       });
       latestFindings = collectDraftCompositeQualityFindings({
         captureManifest,
@@ -336,6 +342,9 @@ export async function runDraftCompositeReviewLoop(
           derivedEvidence: {
             contactSheetPaths: draftEvidence.contactSheetPaths,
             draftDurationSeconds: finalVideo.durationInFrames / finalVideo.fps,
+            ...(draftEvidence.evidenceManifestPath === undefined
+              ? {}
+              : { evidenceManifestPath: draftEvidence.evidenceManifestPath }),
             ffmpegFindings: draftEvidence.ffmpegFindings,
             markerSummary: captureManifest.scenes.map((scene) => ({
               durationSeconds: scene.durationSeconds,

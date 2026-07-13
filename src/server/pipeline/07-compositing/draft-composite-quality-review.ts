@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, stat } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { CaptureManifest } from "../06-footage-capture/capture-scenes";
@@ -14,6 +14,7 @@ export type DraftCompositeEvidence = {
   contactSheetPaths: string[];
   ffmpegFindings: string[];
   sampledFramePaths: string[];
+  evidenceManifestPath?: string;
   staticProbeFailedSceneIds?: string[];
   staticSceneIds: string[];
 };
@@ -185,8 +186,24 @@ export async function inspectDraftCompositeEvidence(input: {
     captureManifest,
     findings,
     timeoutMs,
-    videoPath: draftComposite.outputVideoPath,
   });
+  const evidenceManifestPath = join(
+    evidenceDirectory,
+    "evidence-manifest.json",
+  );
+  await writeFile(
+    evidenceManifestPath,
+    `${JSON.stringify(
+      {
+        generatedAt: new Date().toISOString(),
+        sceneProbes: staticFootageProbe.sceneProbes,
+        staticSceneIds: staticFootageProbe.staticSceneIds,
+        failedSceneIds: staticFootageProbe.failedSceneIds,
+      },
+      null,
+      2,
+    )}\n`,
+  );
 
   return {
     ...(audioProbe.exitCode === 0 ? {} : { audioProbeFailed: true }),
@@ -204,6 +221,7 @@ export async function inspectDraftCompositeEvidence(input: {
             ),
           )
         : [],
+    evidenceManifestPath,
     staticProbeFailedSceneIds: staticFootageProbe.failedSceneIds,
     staticSceneIds: staticFootageProbe.staticSceneIds,
   };
@@ -213,16 +231,25 @@ async function detectStaticScenes(input: {
   captureManifest: CaptureManifest;
   findings: string[];
   timeoutMs: number;
-  videoPath: string;
 }) {
   const failedSceneIds: string[] = [];
   const staticSceneIds: string[] = [];
-  let sceneStartSeconds = 0;
+  const sceneProbes: Array<{
+    durationSeconds: number;
+    sceneId: string;
+    status: "failed" | "non-static" | "static" | "skipped";
+    videoPath: string;
+  }> = [];
 
   for (const scene of input.captureManifest.scenes) {
     const durationSeconds = scene.durationSeconds;
     if (durationSeconds < 1) {
-      sceneStartSeconds += durationSeconds;
+      sceneProbes.push({
+        durationSeconds,
+        sceneId: scene.sceneId,
+        status: "skipped",
+        videoPath: scene.videoPath,
+      });
       continue;
     }
 
@@ -232,12 +259,10 @@ async function detectStaticScenes(input: {
       [
         "-v",
         "info",
-        "-ss",
-        sceneStartSeconds.toFixed(3),
         "-t",
         durationSeconds.toFixed(3),
         "-i",
-        input.videoPath,
+        scene.videoPath,
         "-vf",
         `freezedetect=n=-60dB:d=${freezeDurationSeconds.toFixed(3)}`,
         "-an",
@@ -250,6 +275,12 @@ async function detectStaticScenes(input: {
 
     if (probe.exitCode !== 0) {
       failedSceneIds.push(scene.sceneId);
+      sceneProbes.push({
+        durationSeconds,
+        sceneId: scene.sceneId,
+        status: "failed",
+        videoPath: scene.videoPath,
+      });
       input.findings.push(
         `ffmpeg static-footage probe failed for Scene ${scene.sceneId}: ${formatCommandOutput(probe)}`,
       );
@@ -257,12 +288,23 @@ async function detectStaticScenes(input: {
       isStaticSceneProbe(probe.stderr, freezeDurationSeconds, durationSeconds)
     ) {
       staticSceneIds.push(scene.sceneId);
+      sceneProbes.push({
+        durationSeconds,
+        sceneId: scene.sceneId,
+        status: "static",
+        videoPath: scene.videoPath,
+      });
+    } else {
+      sceneProbes.push({
+        durationSeconds,
+        sceneId: scene.sceneId,
+        status: "non-static",
+        videoPath: scene.videoPath,
+      });
     }
-
-    sceneStartSeconds += durationSeconds;
   }
 
-  return { failedSceneIds, staticSceneIds };
+  return { failedSceneIds, sceneProbes, staticSceneIds };
 }
 
 function isStaticSceneProbe(

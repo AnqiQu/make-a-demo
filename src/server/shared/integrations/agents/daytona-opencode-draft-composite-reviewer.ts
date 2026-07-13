@@ -197,6 +197,7 @@ async function collectDraftReviewFiles(input: DraftCompositeReviewerInput) {
   const paths = [
     ...input.derivedEvidence.contactSheetPaths,
     ...input.derivedEvidence.sampledFramePaths,
+    input.derivedEvidence.evidenceManifestPath,
     input.derivedEvidence.rawDraftCompositePath,
   ].filter((path): path is string => path !== undefined);
   const files: Array<{ destinationPath: string; sourcePath: string }> = [];
