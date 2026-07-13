@@ -21,6 +21,11 @@ describe("runFullPipelineJob", () => {
   it("runs Stage 1, captures prepared scenes from the local app URL, and composites the final video", async () => {
     const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
     const calls: string[] = [];
+    const cleanupEvents: string[] = [];
+    const preparationWorkspace = fakePreparationWorkspaceHandle();
+    preparationWorkspace.destroy = async () => {
+      cleanupEvents.push("destroy");
+    };
 
     try {
       const result = await runFullPipelineJob(
@@ -34,7 +39,7 @@ describe("runFullPipelineJob", () => {
           repoUrl: "https://github.com/example/app",
           workspaceId: "workspace_123",
         },
-        stage1Dependencies(calls),
+        stage1Dependencies(calls, undefined, preparationWorkspace),
         {
           async captureScenes(input) {
             calls.push(`capture:${input.baseUrl}`);
@@ -81,6 +86,9 @@ describe("runFullPipelineJob", () => {
             calls.push(`fresh-capture:${input.browserUrl}`);
             return { browserUrl: "https://fresh-preview.example.test/" };
           },
+          onLog(entry) {
+            cleanupEvents.push(`log:${entry.event}`);
+          },
           rawOpenCodeLogPath: join(
             outputRoot,
             "full-run",
@@ -104,6 +112,15 @@ describe("runFullPipelineJob", () => {
         `composite:${join(outputRoot, "capture-manifest.json")}`,
         "review:1:session_prepare_123",
       ]);
+      expect(cleanupEvents.indexOf("destroy")).toBeGreaterThan(
+        cleanupEvents.indexOf("log:result-written"),
+      );
+      expect(cleanupEvents).toEqual(
+        expect.arrayContaining([
+          "log:preparation-workspace-cleanup.started",
+          "log:preparation-workspace-cleanup.succeeded",
+        ]),
+      );
       expect(result.status).toBe("succeeded");
       expect(result.finalVideo.outputVideoPath).toBe(
         join(outputRoot, "final-video.mp4"),
@@ -159,6 +176,11 @@ describe("runFullPipelineJob", () => {
   it("reports the sandbox log artifact only when a local sink path is configured", async () => {
     const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-full-"));
     const sandboxLogPath = join(outputRoot, "full-run", "sandbox-log.jsonl");
+    const cleanupEvents: string[] = [];
+    const preparationWorkspace = fakePreparationWorkspaceHandle();
+    preparationWorkspace.destroy = async () => {
+      throw new Error("provider cleanup unavailable");
+    };
 
     try {
       const result = await runFullPipelineJob(
@@ -172,7 +194,7 @@ describe("runFullPipelineJob", () => {
           repoUrl: "https://github.com/example/app",
           workspaceId: "workspace_123",
         },
-        stage1Dependencies([]),
+        stage1Dependencies([], undefined, preparationWorkspace),
         {
           async captureScenes(input) {
             return captureManifest(outputRoot, input.runId ?? "capture");
@@ -182,6 +204,9 @@ describe("runFullPipelineJob", () => {
           },
           async inspectDraftCompositeEvidence() {
             return cleanDraftEvidence();
+          },
+          onLog(entry) {
+            cleanupEvents.push(entry.event);
           },
           outputRoot,
           reviewDraftComposite: acceptDraftComposite,
@@ -195,6 +220,7 @@ describe("runFullPipelineJob", () => {
         artifacts: { sandboxLogPath },
         status: "succeeded",
       });
+      expect(cleanupEvents).toContain("preparation-workspace-cleanup.failed");
     } finally {
       await rm(outputRoot, { force: true, recursive: true });
     }
@@ -1944,6 +1970,7 @@ function stage1Dependencies(
     includeBrowserUrl: true,
     musicEnabled: false,
   },
+  preparationWorkspace = fakePreparationWorkspaceHandle(),
 ): PipelineOrchestratorDependencies {
   return {
     async generateScriptPackage() {
@@ -2003,7 +2030,7 @@ function stage1Dependencies(
         },
         opencodeSessionID: "session_prepare_123",
         status: "succeeded",
-        workspace: fakePreparationWorkspaceHandle(),
+        workspace: preparationWorkspace,
       };
     },
     screenRepoSecurity() {

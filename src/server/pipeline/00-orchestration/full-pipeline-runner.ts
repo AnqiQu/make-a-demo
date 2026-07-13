@@ -163,6 +163,19 @@ export async function runFullPipelineJob(
     extraSinks: options.logSinks ?? [],
     onLog: options.onLog,
   });
+  const preparationWorkspaces = new Set<
+    NonNullable<SucceededStage1["preparationWorkspace"]>
+  >();
+  const orchestratorDependencies: PipelineOrchestratorDependencies = {
+    ...dependencies,
+    async prepareRepo(preparationInput) {
+      const result = await dependencies.prepareRepo(preparationInput);
+      if (result.status === "succeeded" && result.workspace !== undefined) {
+        preparationWorkspaces.add(result.workspace);
+      }
+      return result;
+    },
+  };
 
   await log({
     event: "pipeline-started",
@@ -175,7 +188,7 @@ export async function runFullPipelineJob(
   });
 
   let scriptGenerationResumePath: string | undefined;
-  const initialStage1 = await runPipelineJob(input, dependencies, {
+  const initialStage1 = await runPipelineJob(input, orchestratorDependencies, {
     ...options,
     onScriptGenerationReady: async (event) => {
       await options.onScriptGenerationReady?.(event);
@@ -258,7 +271,7 @@ export async function runFullPipelineJob(
 
   const reviewResult = await runDraftCompositeReviewLoop({
     browserUrl,
-    dependencies,
+    dependencies: orchestratorDependencies,
     input,
     log,
     options,
@@ -333,6 +346,10 @@ export async function runFullPipelineJob(
     message: "Full pipeline result written.",
     resultPath,
   });
+  await cleanupPreparationWorkspaces({
+    handles: preparationWorkspaces,
+    log,
+  });
 
   return {
     captureManifest,
@@ -347,6 +364,49 @@ export async function runFullPipelineJob(
     stage1,
     status: "succeeded",
   };
+}
+
+async function cleanupPreparationWorkspaces(input: {
+  handles: Iterable<NonNullable<SucceededStage1["preparationWorkspace"]>>;
+  log: (entry: FullPipelineLogInput) => Promise<void>;
+}) {
+  for (const handle of input.handles) {
+    await logCleanupEvent(input.log, {
+      event: "preparation-workspace-cleanup.started",
+      message: "Preparation workspace cleanup started.",
+      workspaceId: handle.id,
+    });
+
+    const startedAt = Date.now();
+    try {
+      await handle.destroy();
+      await logCleanupEvent(input.log, {
+        durationMs: Date.now() - startedAt,
+        event: "preparation-workspace-cleanup.succeeded",
+        message: "Preparation workspace cleanup succeeded.",
+        workspaceId: handle.id,
+      });
+    } catch (error) {
+      await logCleanupEvent(input.log, {
+        durationMs: Date.now() - startedAt,
+        error: readErrorMessage(error),
+        event: "preparation-workspace-cleanup.failed",
+        message: "Preparation workspace cleanup failed.",
+        workspaceId: handle.id,
+      });
+    }
+  }
+}
+
+async function logCleanupEvent(
+  log: (entry: FullPipelineLogInput) => Promise<void>,
+  entry: FullPipelineLogInput,
+) {
+  try {
+    await log(entry);
+  } catch {
+    // Cleanup observability must not hide an already durable successful result.
+  }
 }
 
 async function writeDraftCompositeReviewMetadata(input: {
@@ -576,6 +636,10 @@ function removeUndefinedFields(input: Record<string, unknown>) {
   return Object.fromEntries(
     Object.entries(input).filter(([, value]) => value !== undefined),
   );
+}
+
+function readErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function createRunId() {
