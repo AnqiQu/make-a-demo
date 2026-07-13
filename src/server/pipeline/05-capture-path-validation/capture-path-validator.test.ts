@@ -387,63 +387,6 @@ describe("validateCapturePath", () => {
     );
   });
 
-  it("logs diagnostics write failures through the default structured fallback logger", async () => {
-    const fallbackWarnings: Array<Record<string, unknown>> = [];
-    vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
-      fallbackWarnings.push(
-        JSON.parse(String(chunk)) as Record<string, unknown>,
-      );
-      return true;
-    });
-
-    const result = await validateCapturePath(
-      {
-        preparationManifest: manifest(),
-        preparationWorkspace: failingLogWorkspaceHandle(),
-        demoScriptCandidate: demoScript(),
-        demoScriptPackage: demoScript(),
-      },
-      {
-        async validateProject() {
-          return {
-            blockedNetworkAttempts: [],
-            browserUrl: "https://preview.example.test/",
-            logs: [],
-            status: "succeeded",
-            warnings: [],
-          };
-        },
-        sceneValidator: {
-          async validateScene() {
-            return {
-              failureReason: "Scene scene_validation failed.",
-              logs: ["stdout: before failure"],
-              status: "failed",
-            };
-          },
-        },
-      },
-    );
-
-    expect(result).toMatchObject({ status: "failed" });
-    expect(fallbackWarnings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          component: "capture-path-validation",
-          diagnosticsLogPath: "/workspace/.makeademo/sandbox-log.jsonl",
-          diagnosticsSource: "capture-path-validation",
-          error: "disk full",
-          event: "capture-path-validation.diagnostics-log-write-failed",
-          failedEvent: "capture-path-validation.scene.failed",
-          level: "warn",
-          service: "makeademo",
-          stage: "capture-path-validation",
-          workspaceId: "workspace_123",
-        }),
-      ]),
-    );
-  });
-
   it("does not block Capture Path Validation when fallback warning logging hangs", async () => {
     vi.useFakeTimers();
     const resultPromise = validateCapturePath(

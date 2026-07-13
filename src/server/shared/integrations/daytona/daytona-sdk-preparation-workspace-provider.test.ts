@@ -1096,141 +1096,6 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     );
   });
 
-  it("syncs prepared parent workspace files into the linked submitted-code sandbox while excluding generated artifacts", async () => {
-    const calls: unknown[] = [];
-    const provider = new DaytonaSdkPreparationWorkspaceProvider({
-      client: fakeLinkedClient(calls),
-      submittedCodeSnapshot: "makeademo-submitted-code-browser",
-    });
-    const handle = await provider.create();
-
-    await handle.workspace.syncSubmittedCodeWorkspace?.();
-
-    expect(calls).toContainEqual({
-      executeCommand: {
-        command: expect.stringContaining("./.git"),
-        sandbox: "parent_sandbox",
-      },
-    });
-    expect(calls).toContainEqual({
-      executeCommand: {
-        command: expect.stringContaining("./*/node_modules/*"),
-        sandbox: "parent_sandbox",
-      },
-    });
-    const archiveCommand = calls.find(
-      (
-        call,
-      ): call is { executeCommand: { command: string; sandbox: string } } =>
-        typeof call === "object" &&
-        call !== null &&
-        "executeCommand" in call &&
-        typeof call.executeCommand === "object" &&
-        call.executeCommand !== null &&
-        "command" in call.executeCommand &&
-        typeof call.executeCommand.command === "string" &&
-        call.executeCommand.command.includes("tar ") &&
-        call.executeCommand.command.includes("-czf"),
-    )?.executeCommand.command;
-    expect(archiveCommand).toEqual(expect.stringContaining("./.vite/*"));
-    expect(archiveCommand).toEqual(expect.stringContaining("./*/.turbo/*"));
-    expect(archiveCommand).toEqual(expect.stringContaining("./.npm/*"));
-    expect(archiveCommand).toEqual(
-      expect.stringContaining("./*/.pnpm-store/*"),
-    );
-    expect(archiveCommand).toEqual(expect.stringContaining("./.yarn/cache/*"));
-    expect(archiveCommand).toEqual(
-      expect.stringContaining("./*/.next/cache/*"),
-    );
-    expect(archiveCommand).toEqual(expect.stringContaining("./.makeademo"));
-    expect(archiveCommand).toEqual(expect.stringContaining("./.makeademo/*"));
-    expect(archiveCommand).toEqual(expect.stringContaining("-C /workspace ."));
-    expect(archiveCommand).not.toEqual(
-      expect.stringContaining("--exclude='./*'"),
-    );
-    expect(calls).toContainEqual({
-      downloadFiles: {
-        files: [
-          {
-            destination: expect.stringContaining("makeademo-daytona-sync-"),
-            source: expect.stringContaining(
-              "/tmp/makeademo/prepared-workspace-",
-            ),
-          },
-        ],
-        sandbox: "parent_sandbox",
-        timeoutSec: 0,
-      },
-    });
-    expect(calls).toContainEqual({
-      uploadFiles: {
-        files: [
-          {
-            destination: expect.stringContaining(
-              "/tmp/makeademo/prepared-workspace-",
-            ),
-            source: expect.stringContaining("makeademo-daytona-sync-"),
-          },
-        ],
-        sandbox: "submitted_sandbox",
-      },
-    });
-    expect(calls).toContainEqual({
-      executeCommand: {
-        command: expect.stringContaining("tar -xzf"),
-        sandbox: "submitted_sandbox",
-      },
-    });
-    const restoreCommand = calls.find(
-      (
-        call,
-      ): call is { executeCommand: { command: string; sandbox: string } } =>
-        typeof call === "object" &&
-        call !== null &&
-        "executeCommand" in call &&
-        typeof call.executeCommand === "object" &&
-        call.executeCommand !== null &&
-        "command" in call.executeCommand &&
-        "sandbox" in call.executeCommand &&
-        typeof call.executeCommand.command === "string" &&
-        call.executeCommand.sandbox === "submitted_sandbox" &&
-        call.executeCommand.command.includes("tar -xzf"),
-    )?.executeCommand.command;
-    expect(restoreCommand).toEqual(expect.stringContaining("node_modules"));
-    expect(restoreCommand).toEqual(expect.stringContaining(".vite"));
-    expect(restoreCommand).toEqual(expect.stringContaining(".turbo"));
-    expect(restoreCommand).toEqual(expect.stringContaining(".npm"));
-    expect(restoreCommand).toEqual(expect.stringContaining(".pnpm-store"));
-    expect(restoreCommand).toEqual(expect.stringContaining(".yarn/cache"));
-    expect(restoreCommand).toEqual(expect.stringContaining(".next/cache"));
-    expect(restoreCommand).toEqual(expect.stringContaining(".bun"));
-    expect(restoreCommand).toEqual(expect.stringContaining(".cache"));
-    expect(restoreCommand).toEqual(
-      expect.stringContaining(
-        '{ cp -a "$preserved"/. /workspace/ 2>/dev/null || true; }',
-      ),
-    );
-    expect(restoreCommand).toEqual(
-      expect.stringContaining("preserved_paths=$(mktemp)"),
-    );
-    expect(restoreCommand).toEqual(
-      expect.stringContaining('> "$preserved_paths"'),
-    );
-    expect(restoreCommand).toEqual(
-      expect.stringContaining('done < "$preserved_paths"'),
-    );
-    expect(restoreCommand).toEqual(expect.stringContaining("mkdir -p"));
-    expect(restoreCommand).toEqual(
-      expect.stringContaining('mv -- "$path" "$preserved/$relative" || exit 1'),
-    );
-    expect(restoreCommand).toEqual(expect.stringContaining(" || exit 1"));
-    expect(restoreCommand).not.toContain("| while");
-    expect(restoreCommand).not.toMatch(/&& cp -a .* \|\| true && tar -xzf/);
-    expect(restoreCommand).not.toContain(
-      "find /workspace -mindepth 1 -exec rm -rf {} +",
-    );
-  });
-
   it("retries an invalid Daytona bearer token once with fresh archive paths and telemetry", async () => {
     const calls: unknown[] = [];
     const relayedLogs: string[] = [];
@@ -1320,49 +1185,33 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ).toHaveLength(0);
   });
 
-  it("escapes submitted-code restore find grouping for the sandbox shell", async () => {
-    const calls: unknown[] = [];
-    const provider = new DaytonaSdkPreparationWorkspaceProvider({
-      client: fakeLinkedClient(calls),
-      submittedCodeSnapshot: "makeademo-submitted-code-browser",
-    });
-    const handle = await provider.create();
-
-    await handle.workspace.syncSubmittedCodeWorkspace?.();
-
-    const restoreCommand = calls.find(
-      (
-        call,
-      ): call is { executeCommand: { command: string; sandbox: string } } =>
-        typeof call === "object" &&
-        call !== null &&
-        "executeCommand" in call &&
-        typeof call.executeCommand === "object" &&
-        call.executeCommand !== null &&
-        "command" in call.executeCommand &&
-        "sandbox" in call.executeCommand &&
-        typeof call.executeCommand.command === "string" &&
-        call.executeCommand.sandbox === "submitted_sandbox" &&
-        call.executeCommand.command.includes("tar -xzf"),
-    )?.executeCommand.command;
-
-    expect(restoreCommand).toEqual(
-      expect.stringContaining("find /workspace -mindepth 1 \\( "),
-    );
-    expect(restoreCommand).toEqual(
-      expect.stringContaining(" \\) -prune -print"),
-    );
-  });
-
   it("restores submitted-code workspace through a POSIX shell while preserving caches and excluding MakeADemo artifacts", async () => {
     const root = await mkdtemp(join(tmpdir(), "makeademo-daytona-shell-"));
     const parentWorkspace = join(root, "parent");
     const submittedWorkspace = join(root, "submitted");
     const calls: unknown[] = [];
     await mkdir(join(parentWorkspace, ".makeademo"), { recursive: true });
+    await mkdir(join(parentWorkspace, ".cache", "nested"), { recursive: true });
+    await mkdir(join(parentWorkspace, "packages", "web", ".next", "cache"), {
+      recursive: true,
+    });
     await mkdir(join(parentWorkspace, "node_modules"), { recursive: true });
+    await mkdir(join(parentWorkspace, "packages", "web", "node_modules"), {
+      recursive: true,
+    });
     await mkdir(join(submittedWorkspace, "node_modules"), { recursive: true });
+    await mkdir(join(submittedWorkspace, "packages", "web", "node_modules"), {
+      recursive: true,
+    });
+    await mkdir(join(submittedWorkspace, ".cache", "nested"), {
+      recursive: true,
+    });
     await writeFile(join(parentWorkspace, "package.json"), "prepared app");
+    await writeFile(join(parentWorkspace, ".env.local"), "prepared secret");
+    await writeFile(
+      join(parentWorkspace, "packages", "web", "route.ts"),
+      "prepared route",
+    );
     await writeFile(
       join(parentWorkspace, ".makeademo", "capture.webm"),
       "generated artifact",
@@ -1372,10 +1221,29 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       "must stay excluded",
     );
     await writeFile(
+      join(
+        parentWorkspace,
+        "packages",
+        "web",
+        "node_modules",
+        "prepared-cache.txt",
+      ),
+      "must stay excluded",
+    );
+    await writeFile(
+      join(parentWorkspace, ".cache", "nested", "prepared.txt"),
+      "must stay excluded",
+    );
+    await writeFile(
       join(submittedWorkspace, "node_modules", "preserved-cache.txt"),
       "keep me",
     );
     await writeFile(join(submittedWorkspace, "stale.txt"), "remove me");
+    await writeFile(join(submittedWorkspace, ".env.local"), "stale secret");
+    await writeFile(
+      join(submittedWorkspace, ".cache", "nested", "stale.txt"),
+      "remove me",
+    );
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
       client: fakeLocalShellLinkedClient(calls, {
         parentWorkspace,
@@ -1401,6 +1269,30 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       await expectPathMissing(
         join(submittedWorkspace, "node_modules", "prepared-cache.txt"),
       );
+      await expect(
+        readFile(join(submittedWorkspace, ".env.local"), "utf8"),
+      ).resolves.toBe("prepared secret");
+      await expect(
+        readFile(
+          join(submittedWorkspace, "packages", "web", "route.ts"),
+          "utf8",
+        ),
+      ).resolves.toBe("prepared route");
+      await expectPathMissing(
+        join(
+          submittedWorkspace,
+          "packages",
+          "web",
+          "node_modules",
+          "prepared-cache.txt",
+        ),
+      );
+      await expect(
+        readFile(
+          join(submittedWorkspace, ".cache", "nested", "stale.txt"),
+          "utf8",
+        ),
+      ).resolves.toBe("remove me");
       await expectPathMissing(join(submittedWorkspace, ".makeademo"));
       await expectPathMissing(join(submittedWorkspace, "stale.txt"));
     } finally {
