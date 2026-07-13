@@ -1,11 +1,6 @@
 import type { PreparationWorkspace } from "../../../pipeline/03-repo-preparation/preparation-workspace.interface";
 import { writeDaytonaOpenCodeActivityLog } from "./daytona-opencode-activity-log";
 import {
-  type MakeADemoOpenCodeToolPayload,
-  createMakeADemoOpenCodeProtocolTracker,
-  readOpenCodeProtocolResult,
-} from "./makeademo-opencode-tool-protocol";
-import {
   createMeaningfulActivityTracker,
   runWithMeaningfulActivityTimeout,
 } from "./opencode-meaningful-activity-timeout";
@@ -51,8 +46,7 @@ export class DaytonaOpenCodeSession {
             providerID: this.options.providerID,
           };
     const activity = createMeaningfulActivityTracker();
-    const protocol = createMakeADemoOpenCodeProtocolTracker();
-    const result = await runWithMeaningfulActivityTimeout(
+    return runWithMeaningfulActivityTimeout(
       () =>
         input.workspace.execute(
           createOpenCodeRunCommand({
@@ -64,7 +58,6 @@ export class DaytonaOpenCodeSession {
             env: createOpenCodeEnv(),
             onStderr: (chunk) => {
               activity.write("stderr", chunk);
-              protocol.write(chunk);
               this.options.onStderr?.(chunk);
               void writeDaytonaOpenCodeActivityLog(input.workspace, {
                 attempt: input.attempt,
@@ -75,7 +68,6 @@ export class DaytonaOpenCodeSession {
             },
             onStdout: (chunk) => {
               activity.write("stdout", chunk);
-              protocol.write(chunk);
               this.options.onStdout?.(chunk);
               void writeDaytonaOpenCodeActivityLog(input.workspace, {
                 attempt: input.attempt,
@@ -99,30 +91,6 @@ export class DaytonaOpenCodeSession {
         onTimeout: () => input.workspace.cancelActiveCommands?.(),
       },
     );
-    const finalProtocol = readOpenCodeProtocolResult(
-      `${result.stdout}\n${result.stderr}`,
-    );
-    const completedToolPayload = protocol.readCompletedPayload();
-    return {
-      ...result,
-      ...(completedToolPayload === undefined ? {} : { completedToolPayload }),
-      ...((protocol.readPayload() ?? finalProtocol.payload) === undefined
-        ? {}
-        : {
-            toolPayload: protocol.readPayload() ?? finalProtocol.payload,
-          }),
-      ...((protocol.readPayloadError() ?? finalProtocol.payloadError) ===
-      undefined
-        ? {}
-        : {
-            toolPayloadError:
-              protocol.readPayloadError() ?? finalProtocol.payloadError,
-          }),
-    } as typeof result & {
-      completedToolPayload?: MakeADemoOpenCodeToolPayload;
-      toolPayload?: MakeADemoOpenCodeToolPayload;
-      toolPayloadError?: string;
-    };
   }
 }
 

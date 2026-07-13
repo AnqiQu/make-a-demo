@@ -4,7 +4,6 @@ import { createInterface } from "node:readline/promises";
 
 import { DaytonaOpenCodeScriptGeneration } from "../../shared/integrations/agents/daytona-opencode-script-generation";
 import { ensureOpenCodeProviderDaytonaSecret } from "../../shared/integrations/agents/opencode-provider-secrets";
-import { createPreparedRuntimeCapturePathValidator } from "../../shared/integrations/agents/prepared-runtime-capture-path-validator";
 import {
   createRepoPreparationAgent,
   readRepoPreparationTimeoutMsFromEnv,
@@ -109,7 +108,6 @@ const scriptGenerationAgent = new DaytonaOpenCodeScriptGeneration({
   onStderr: (chunk) => process.stderr.write(chunk),
   onStdout: (chunk) => openCodeOutput.write(chunk),
   providerID: options.providerID,
-  validateCapturePath: createPreparedRuntimeCapturePathValidator(),
 });
 
 const result = await runPipelineJob(

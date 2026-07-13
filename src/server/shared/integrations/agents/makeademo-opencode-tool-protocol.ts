@@ -9,17 +9,12 @@ export type MakeADemoOpenCodeToolPayload =
   | {
       input: { manifestPath: string };
       toolName: "makeademo_validate_preparation";
-    }
-  | {
-      input: { demoScriptPath: string };
-      toolName: "makeademo_validate_demo_script";
     };
 
 export type MakeADemoOpenCodeToolName =
   | "makeademo_dependency_request_install"
   | "makeademo_install_dependencies"
-  | "makeademo_validate_preparation"
-  | "makeademo_validate_demo_script";
+  | "makeademo_validate_preparation";
 
 /**
  * Tracks OpenCode's streamed JSON protocol across arbitrary chunk boundaries.
@@ -167,7 +162,7 @@ function readLatestMakeADemoTool(
 ): MakeADemoOpenCodeToolName | undefined {
   let latest: MakeADemoOpenCodeToolName | undefined;
   const pattern =
-    /\b(makeademo_(?:dependency_request_install|install_dependencies|validate_preparation|validate_demo_script))\b/g;
+    /\b(makeademo_(?:dependency_request_install|install_dependencies|validate_preparation))\b/g;
   for (const match of output.matchAll(pattern))
     latest = match[1] as MakeADemoOpenCodeToolName;
   return latest;
@@ -261,13 +256,6 @@ function describePayloadError(
       ? undefined
       : `${tool} payload is missing required field input.manifestPath`;
   }
-  if (tool === "makeademo_validate_demo_script") {
-    return typeof input === "object" &&
-      input !== null &&
-      typeof (input as { demoScriptPath?: unknown }).demoScriptPath === "string"
-      ? undefined
-      : `${tool} payload is missing required field input.demoScriptPath`;
-  }
   return typeof input === "object" &&
     input !== null &&
     typeof (input as { command?: unknown }).command === "string"
@@ -295,8 +283,7 @@ function readToolName(
     if (
       value === "makeademo_dependency_request_install" ||
       value === "makeademo_install_dependencies" ||
-      value === "makeademo_validate_preparation" ||
-      value === "makeademo_validate_demo_script"
+      value === "makeademo_validate_preparation"
     )
       return value;
   }
@@ -324,17 +311,6 @@ function createPayload(
   ) {
     return {
       input: { manifestPath: (input as { manifestPath: string }).manifestPath },
-      toolName: tool,
-    };
-  }
-  if (
-    tool === "makeademo_validate_demo_script" &&
-    typeof (input as { demoScriptPath?: unknown }).demoScriptPath === "string"
-  ) {
-    return {
-      input: {
-        demoScriptPath: (input as { demoScriptPath: string }).demoScriptPath,
-      },
       toolName: tool,
     };
   }

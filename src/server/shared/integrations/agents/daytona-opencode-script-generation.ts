@@ -13,10 +13,6 @@ import type {
   CapturePathRepairer,
 } from "../../../pipeline/05-capture-path-validation/capture-path-repairer.interface";
 import type {
-  CapturePathValidationInput,
-  CapturePathValidationResult,
-} from "../../../pipeline/05-capture-path-validation/capture-path-validator.interface";
-import type {
   DraftCompositeReviewDecision,
   DraftCompositeReviewerInput,
 } from "../../../pipeline/07-compositing/draft-composite-reviewer.interface";
@@ -35,7 +31,6 @@ import {
   truncateForPrompt,
 } from "./daytona-opencode-capture-path-repair-support";
 import { DaytonaOpenCodeCapturePathRepairer } from "./daytona-opencode-capture-path-repairer";
-import { DaytonaOpenCodeDemoScriptValidationHandler } from "./daytona-opencode-demo-script-validation";
 import { DaytonaOpenCodeDraftCompositeReviewer } from "./daytona-opencode-draft-composite-reviewer";
 import { DaytonaOpenCodeSession } from "./daytona-opencode-session";
 
@@ -47,7 +42,6 @@ const draftReviewEvidenceUploadTimeoutMs = 60_250;
 const draftReviewEvidenceUploadRetryDelaysMs = [250] as const;
 const defaultInactivityTimeoutMs = 600_000;
 const defaultHardTimeoutMs = 1_800_000;
-const defaultInTurnValidationTimeoutMs = 120_000;
 
 export type DaytonaOpenCodeScriptGenerationOptions = {
   /**
@@ -69,14 +63,6 @@ export type DaytonaOpenCodeScriptGenerationOptions = {
   timeoutMs?: number;
   /** Absolute cap for each public Script Generation, repair, or review call. */
   hardTimeoutMs?: number;
-  /** Maximum validation tool calls handled within one Script Generation attempt. */
-  maxValidationCallsPerAttempt?: number;
-  /** Bound each in-turn static/runtime validation handoff. */
-  validationTimeoutMs?: number;
-  /** Override the prepared-runtime validator used by the in-session tool loop. */
-  validateCapturePath?: (
-    input: CapturePathValidationInput,
-  ) => Promise<CapturePathValidationResult>;
 };
 
 /**
@@ -101,9 +87,6 @@ export class DaytonaOpenCodeScriptGeneration
   private readonly hardTimeoutMs: number;
   private readonly capturePathRepairer: DaytonaOpenCodeCapturePathRepairer;
   private readonly draftCompositeReviewer: DaytonaOpenCodeDraftCompositeReviewer;
-  private readonly demoScriptValidation: DaytonaOpenCodeDemoScriptValidationHandler;
-  private readonly maxValidationCallsPerAttempt: number;
-  private readonly validationTimeoutMs: number;
 
   constructor(options: DaytonaOpenCodeScriptGenerationOptions) {
     this.logger = options.logger ?? createScriptGenerationLogger();
@@ -132,24 +115,6 @@ export class DaytonaOpenCodeScriptGeneration
       openCode: this.openCode,
       postRepairArtifactReadTimeoutMs: this.postRepairArtifactReadTimeoutMs,
       timeoutMs: this.timeoutMs,
-    });
-    this.maxValidationCallsPerAttempt = Math.max(
-      1,
-      options.maxValidationCallsPerAttempt ?? 3,
-    );
-    this.validationTimeoutMs = Math.max(
-      1,
-      options.validationTimeoutMs ?? defaultInTurnValidationTimeoutMs,
-    );
-    this.demoScriptValidation = new DaytonaOpenCodeDemoScriptValidationHandler({
-      logger: this.logger,
-      validateCapturePath:
-        options.validateCapturePath ??
-        (async () => {
-          throw new Error(
-            "Prepared-runtime Capture Path Validation is not configured for this Script Generation session.",
-          );
-        }),
     });
     this.draftCompositeReviewer = new DaytonaOpenCodeDraftCompositeReviewer({
       draftReviewEvidenceUploadAttemptTimeoutMs:
@@ -188,105 +153,16 @@ export class DaytonaOpenCodeScriptGeneration
         `Script Generation OpenCode attempt ${attempt} starting in session ${input.opencodeSessionID}.`,
       );
       await removePreviousScriptPackage(input);
-      let validationInvocation = 0;
-      let validationLimitExceeded = false;
-      let result: Awaited<ReturnType<DaytonaOpenCodeSession["run"]>>;
-      while (true) {
-        result = await this.openCode.run({
-          attempt,
-          prompt,
-          sessionID: input.opencodeSessionID,
-          stage: "script-generation",
-          workspace: input.preparationWorkspace.workspace,
-          hardDeadlineAt,
-          inactivityTimeoutMs: this.timeoutMs,
-          hardTimeoutMs: this.hardTimeoutMs,
-        });
-        if (
-          result.completedToolPayload?.toolName !==
-          "makeademo_validate_demo_script"
-        ) {
-          break;
-        }
-        validationInvocation += 1;
-        if (validationInvocation > this.maxValidationCallsPerAttempt) {
-          lastFailure = `Script Generation exceeded the in-turn Demo Script validation limit of ${this.maxValidationCallsPerAttempt}.`;
-          validationLimitExceeded = true;
-          await writeScriptGenerationSandboxLog(this.logger, input, {
-            attempt,
-            event: "script-generation.demo-script-validation.limit-exceeded",
-            invocation: validationInvocation,
-            maxValidationCallsPerAttempt: this.maxValidationCallsPerAttempt,
-          });
-          break;
-        }
-        let validation: Awaited<
-          ReturnType<DaytonaOpenCodeDemoScriptValidationHandler["handle"]>
-        >;
-        try {
-          validation = await withTimeout(
-            this.demoScriptValidation.handle(
-              {
-                demoBrief: input.demoBrief,
-                preparationManifest: input.preparationManifest,
-                preparationWorkspace: input.preparationWorkspace,
-              },
-              result.completedToolPayload.input.demoScriptPath,
-            ),
-            Math.min(
-              this.validationTimeoutMs,
-              Math.max(1, hardDeadlineAt - Date.now()),
-            ),
-            `Demo Script validation timed out after ${this.validationTimeoutMs}ms.`,
-          );
-        } catch (error) {
-          validation = {
-            feedback: `Demo Script infrastructure validation failed: ${readErrorMessage(error)}. Repair ${demoScriptPath}, then call makeademo_validate_demo_script again.`,
-            kind: "infrastructure",
-            status: "failed",
-          };
-        }
-        await writeScriptGenerationSandboxLog(this.logger, input, {
-          attempt,
-          event: "script-generation.demo-script-validation.feedback-sent",
-          failureReason: validation.validation?.failureReason,
-          failedAction: validation.validation?.failedAction,
-          failedSceneId: validation.validation?.failedSceneId,
-          invocation: validationInvocation,
-          outcome: validation.status,
-          kind: validation.kind,
-          sessionID: input.opencodeSessionID,
-        });
-        this.writeStatus(validation.feedback);
-        prompt = validation.feedback;
-      }
-
-      if (validationLimitExceeded) {
-        prompt = createScriptGenerationRepairPrompt(lastFailure);
-        await writeScriptGenerationRetryLog(this.logger, input, {
-          attempt,
-          maxAttempts: this.maxAttempts,
-          reason: lastFailure,
-        });
-        continue;
-      }
-
-      if (result.toolPayloadError !== undefined) {
-        lastFailure = result.toolPayloadError;
-        await writeScriptGenerationSandboxLog(this.logger, input, {
-          attempt,
-          event:
-            "script-generation.demo-script-validation.tool-payload-invalid",
-          reason: lastFailure,
-        });
-        prompt = createScriptGenerationRepairPrompt(lastFailure);
-        await writeScriptGenerationRetryLog(this.logger, input, {
-          attempt,
-          maxAttempts: this.maxAttempts,
-          reason: lastFailure,
-        });
-        continue;
-      }
+      const result = await this.openCode.run({
+        attempt,
+        prompt,
+        sessionID: input.opencodeSessionID,
+        stage: "script-generation",
+        workspace: input.preparationWorkspace.workspace,
+        hardDeadlineAt,
+        inactivityTimeoutMs: this.timeoutMs,
+        hardTimeoutMs: this.hardTimeoutMs,
+      });
 
       if (result.exitCode !== 0) {
         const retryReason = `OpenCode Script Generation exited with ${result.exitCode}.`;
@@ -640,7 +516,6 @@ function createScriptGenerationPrompt(
     "- Do not emit placeholder scripts that only load the page, wait, smoke-check body text, or set inert DOM attributes.",
     "- Keep scripts deterministic and short enough for capture.",
     "- Do not call Repo Preparation tools. Do not request dependency installs. Do not run preparation preflight or Capture Path Validation.",
-    "- After writing /workspace/.makeademo/demo-script.json, call makeademo_validate_demo_script({ demoScriptPath: '/workspace/.makeademo/demo-script.json' }) and stop/wait for backend feedback. Repair any reported static, TypeScript, locator-cardinality, or runtime failure in the same OpenCode session without incrementing this attempt.",
     "",
     "## Artifact Path",
     demoScriptPath,
@@ -677,7 +552,6 @@ function createScriptGenerationRepairPrompt(reason: string): string {
     "",
     `The previous Script Generation output was rejected: ${reason}`,
     `Repair the Demo Script and overwrite ${demoScriptPath}.`,
-    "After repairing, call makeademo_validate_demo_script with the fixed path and wait for direct backend feedback before finishing.",
     "Do not modify app source. Include real user interactions and feature-specific assertions.",
     "",
     createScriptPackageSchemaPrompt(),

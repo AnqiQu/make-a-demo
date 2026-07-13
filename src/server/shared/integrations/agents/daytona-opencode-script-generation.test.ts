@@ -415,21 +415,12 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
     );
   });
 
-  it("repairs an in-turn Demo Script validation failure without consuming another generation attempt", async () => {
+  it("leaves prepared-runtime validation to Capture Path Validation", async () => {
     const events: unknown[] = [];
     const agent = new DaytonaOpenCodeScriptGeneration({
       maxAttempts: 1,
       modelID: "gpt-5.5",
       providerID: "openai",
-      validateCapturePath: async () => ({
-        blockedNetworkAttempts: [],
-        failedAction: "locator.click(getByRole('button', { name: 'Publish' }))",
-        failedSceneId: "scene_feed",
-        failureReason: "strict mode violation: locator resolved to 2 elements",
-        logs: ["strict mode violation: locator resolved to 2 elements"],
-        status: "failed",
-        warnings: [],
-      }),
     });
 
     const result = await agent.generateScriptPackage({
@@ -467,25 +458,9 @@ describe("DaytonaOpenCodeScriptGeneration", () => {
         typeof event.execute === "string" &&
         event.execute.includes("opencode run"),
     );
-    expect(openCodeCommands).toHaveLength(2);
-    expect(openCodeCommands).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          execute: expect.stringContaining("--session 'session_prepare_123'"),
-        }),
-      ]),
-    );
-    expect(openCodeCommands[1]?.execute).toContain(
-      "locator-cardinality validation failed",
-    );
-    expect(events).not.toEqual(
-      expect.arrayContaining([
-        {
-          sandboxLog: expect.objectContaining({
-            event: "script-generation.retrying",
-          }),
-        },
-      ]),
+    expect(openCodeCommands).toHaveLength(1);
+    expect(openCodeCommands[0]?.execute).toContain(
+      "--session 'session_prepare_123'",
     );
   });
 
