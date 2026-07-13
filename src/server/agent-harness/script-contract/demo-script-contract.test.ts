@@ -519,6 +519,40 @@ describe("DemoScriptContract", () => {
     });
   });
 
+  it("accepts placeholder as a grounded locator strategy", () => {
+    const catalog = actionCatalog();
+    const catalogAction = catalog.actions[0];
+    if (catalogAction === undefined) {
+      throw new Error("Expected an ActionCatalog fixture action");
+    }
+    catalogAction.kind = "fill";
+    catalogAction.preferredLocator = {
+      name: "Search articles",
+      strategy: "placeholder",
+      value: "Search articles",
+    };
+    const script = validDemoScript();
+    Object.assign(script.scenes[0]?.actions[0] ?? {}, {
+      locator: {
+        exact: true,
+        strategy: "placeholder",
+        value: "Search articles",
+      },
+      locatorCandidateId: "open-dashboard-locator-1",
+      type: "fill",
+      value: "quarterly results",
+    });
+
+    expect(
+      validateDemoScriptCandidateContract({
+        actionCatalog: catalog,
+        flowSpec: flowSpec(),
+        preparationManifest: preparationManifest(),
+        scriptCandidate: scriptCandidate(script),
+      }),
+    ).toMatchObject({ status: "passed" });
+  });
+
   it("fails invalid scripts with typed contract failures", () => {
     const cases: Array<[string, unknown, string]> = [
       [

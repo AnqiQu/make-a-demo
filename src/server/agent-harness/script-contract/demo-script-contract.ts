@@ -953,7 +953,9 @@ function assertNoExternalUrls(script: string): void {
 }
 
 function assertNoPlaceholders(scriptJsonContent: unknown): void {
-  const serialized = JSON.stringify(scriptJsonContent);
+  const serialized = JSON.stringify(scriptJsonContent, (key, value) =>
+    key === "strategy" && value === "placeholder" ? undefined : value,
+  );
   if (placeholderPattern.test(serialized)) {
     throw new Error("Demo Script must not contain placeholder content");
   }
