@@ -380,6 +380,109 @@ describe("captureScenesFromScript", () => {
     );
   });
 
+  it("stops before video discovery when the Demo Script command exits 124", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
+    const tempRoot = join(workspace, "runs");
+    const submittedCommands: string[] = [];
+    const downloadedSources: string[] = [];
+    const preparationWorkspace: PreparationWorkspaceHandle = {
+      async destroy() {},
+      id: "daytona_workspace",
+      workspace: {
+        async downloadFiles() {},
+        async execute() {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async downloadSubmittedCodeFiles(files) {
+          downloadedSources.push(...files.map((file) => file.sourcePath));
+        },
+        async executeSubmittedCode(command) {
+          submittedCommands.push(command);
+          if (command.includes("bun ")) {
+            return { exitCode: 124, stderr: "command timed out", stdout: "" };
+          }
+          if (command.includes("find ") || command.includes("ffprobe")) {
+            throw new Error("video discovery must not run after timeout");
+          }
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async getPreviewUrl() {
+          return "https://preview.example.test/";
+        },
+        async setOutboundNetworkAccess() {},
+        async uploadFiles() {},
+        async uploadSubmittedCodeFiles() {},
+      },
+    };
+
+    await expect(
+      captureScenesFromScript({
+        baseUrl: "https://preview.example.test/",
+        preparationWorkspace,
+        runId: "capture-sandbox",
+        scriptPackage: validDemoScript(),
+        tempRoot,
+      }),
+    ).rejects.toThrow("Scene continuous-take timed out.");
+    expect(submittedCommands.join("\n")).not.toContain("find ");
+    expect(submittedCommands.join("\n")).not.toContain("ffprobe");
+    expect(downloadedSources).toEqual([]);
+  });
+
+  it("reports the declared Scene when capture emits incomplete markers", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
+    const tempRoot = join(workspace, "runs");
+    const submittedCommands: string[] = [];
+    const preparationWorkspace: PreparationWorkspaceHandle = {
+      async destroy() {},
+      id: "daytona_workspace",
+      workspace: {
+        async downloadFiles() {},
+        async execute() {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async downloadSubmittedCodeFiles() {},
+        async executeSubmittedCode(command) {
+          submittedCommands.push(command);
+          if (command.includes("bun ") || command.includes("continuous-take")) {
+            return {
+              exitCode: 0,
+              stderr: "",
+              stdout:
+                '[makeademo:scene] {"elapsedMs":100,"event":"started","sceneId":"scene-001"}',
+            };
+          }
+          if (command.includes("find ") || command.includes("ffprobe")) {
+            return {
+              exitCode: 0,
+              stderr: "",
+              stdout: command.includes("find ") ? "/tmp/raw.webm\n" : "1.000\n",
+            };
+          }
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async getPreviewUrl() {
+          return "https://preview.example.test/";
+        },
+        async setOutboundNetworkAccess() {},
+        async uploadFiles() {},
+        async uploadSubmittedCodeFiles() {},
+      },
+    };
+
+    await expect(
+      captureScenesFromScript({
+        baseUrl: "https://preview.example.test/",
+        preparationWorkspace,
+        runId: "capture-sandbox",
+        scriptPackage: validDemoScript(),
+        tempRoot,
+      }),
+    ).rejects.toThrow(
+      "Capture script emitted Scene start marker without an end marker for Scene scene-001.",
+    );
+  });
+
   it("rejects Demo Scripts with agent-authored recorded Scene durations before recording starts", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
     const tempRoot = join(workspace, "runs");

@@ -291,7 +291,7 @@ function readMarkerRanges(markers: SceneMarker[], sceneIds: string[]) {
       );
     case "unclosed":
       throw new Error(
-        "Capture script emitted Scene start marker without an end marker.",
+        `Capture script emitted Scene start marker without an end marker${result.sceneId === undefined ? "" : ` for Scene ${result.sceneId}`}.`,
       );
     case "missing":
       throw new Error(`Scene ${result.sceneId} did not emit complete markers.`);
