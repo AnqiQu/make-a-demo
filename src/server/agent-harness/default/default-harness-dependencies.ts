@@ -110,6 +110,7 @@ const misplacedPreparationManifestPath =
 const openCodeConfigDirectory = "/tmp/makeademo/opencode";
 const maxShellArtifactWriteBytes = 120 * 1024;
 const openCodeInactivityTimeoutMs = 5 * 60_000;
+const preparationDiffCommandTimeoutMs = 60_000;
 
 const artifactPaths = {
   actionCatalog: "/workspace/.makeademo/action-catalog.json",
@@ -167,10 +168,55 @@ export async function createDefaultAgentHarnessDependencies(
   const dependencies: AgentHarnessPipelineDependencies = {
     artifactStore: options.artifactStore,
     async capturePreparationWorkspaceDiff({ workspace }) {
-      const after = await readWorkspaceContentSnapshot(workspace, {
-        includeMakeADemoArtifacts: false,
+      const fingerprintStartedAt = Date.now();
+      await options.logger?.info({
+        event: "preparation.diff.fingerprint.started",
+        timeoutMs: preparationDiffCommandTimeoutMs,
       });
-      const patch = await readPreparationWorkspacePatch(workspace);
+      let after: ScriptWritingContentSnapshot;
+      try {
+        after = await readWorkspaceContentSnapshot(workspace, {
+          includeMakeADemoArtifacts: false,
+        });
+        await options.logger?.info({
+          durationMs: Date.now() - fingerprintStartedAt,
+          event: "preparation.diff.fingerprint.succeeded",
+          fileCount: Object.keys(after).length,
+          timeoutMs: preparationDiffCommandTimeoutMs,
+        });
+      } catch (error) {
+        await options.logger?.error({
+          durationMs: Date.now() - fingerprintStartedAt,
+          error: readUnknownErrorMessage(error),
+          event: "preparation.diff.fingerprint.failed",
+          timeoutMs: preparationDiffCommandTimeoutMs,
+        });
+        throw createPreparationDiffOperationError("fingerprint", error);
+      }
+
+      const patchStartedAt = Date.now();
+      await options.logger?.info({
+        event: "preparation.diff.patch.started",
+        timeoutMs: preparationDiffCommandTimeoutMs,
+      });
+      let patch: string;
+      try {
+        patch = await readPreparationWorkspacePatch(workspace);
+        await options.logger?.info({
+          durationMs: Date.now() - patchStartedAt,
+          event: "preparation.diff.patch.succeeded",
+          patchBytes: Buffer.byteLength(patch),
+          timeoutMs: preparationDiffCommandTimeoutMs,
+        });
+      } catch (error) {
+        await options.logger?.error({
+          durationMs: Date.now() - patchStartedAt,
+          error: readUnknownErrorMessage(error),
+          event: "preparation.diff.patch.failed",
+          timeoutMs: preparationDiffCommandTimeoutMs,
+        });
+        throw createPreparationDiffOperationError("patch", error);
+      }
       return {
         changedPaths: findScriptWritingContentChanges({
           after,
@@ -1730,6 +1776,7 @@ async function readWorkspaceContentSnapshot(
             ]),
       ].join("\n"),
     )}`,
+    { timeoutMs: preparationDiffCommandTimeoutMs },
   );
   if (result.exitCode !== 0) {
     throw new Error(
@@ -1781,6 +1828,7 @@ async function readPreparationWorkspacePatch(
         'GIT_INDEX_FILE="$temporary_index" git diff --cached --binary --full-index HEAD',
       ].join(" && "),
     )}`,
+    { timeoutMs: preparationDiffCommandTimeoutMs },
   );
   if (result.exitCode !== 0) {
     throw new Error(
@@ -1788,6 +1836,21 @@ async function readPreparationWorkspacePatch(
     );
   }
   return result.stdout;
+}
+
+function createPreparationDiffOperationError(
+  operation: "fingerprint" | "patch",
+  error: unknown,
+): Error {
+  const label = operation === "fingerprint" ? "fingerprint" : "patch capture";
+  const detail = readUnknownErrorMessage(error);
+  return new Error(`Preparation workspace ${label} failed: ${detail}`, {
+    cause: error,
+  });
+}
+
+function readUnknownErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function writeWorkspaceJson(

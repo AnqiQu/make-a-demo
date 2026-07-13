@@ -30,12 +30,7 @@ describe("runAgentHarnessPipeline", () => {
         },
         async capturePreparationWorkspaceDiff() {
           calls.push("preparation-diff");
-          return {
-            changedPaths: ["/workspace/repo/src/demo.ts"],
-            patch: "diff --git a/src/demo.ts b/src/demo.ts",
-            patchSha256: `sha256:${"a".repeat(64)}`,
-            sourceCommitSha: "abc123def456",
-          };
+          return preparationWorkspaceDiff();
         },
         async createWorkspace() {
           calls.push("workspace");
@@ -97,7 +92,6 @@ describe("runAgentHarnessPipeline", () => {
       "run-plan:bun",
       "workspace",
       "prepare:bun:bun install --frozen-lockfile",
-      "preparation-diff",
       "preflight:http://127.0.0.1:3000",
       "explore:prep_001:passed",
       "flow:appmap_001:actions_001",
@@ -105,6 +99,7 @@ describe("runAgentHarnessPipeline", () => {
       `static:${"flow_001"}`,
       `dynamic:${DEMO_SCRIPT_OUTPUT_PATH}`,
       "reset:prep_001",
+      "preparation-diff",
     ]);
     expect(result.pipelineRunManifest.stageStatuses).toMatchObject({
       "app-exploration": "passed",
@@ -320,6 +315,40 @@ describe("runAgentHarnessPipeline", () => {
       });
     },
   );
+
+  it("captures a preparation diff once after failure without masking the pipeline error", async () => {
+    const failure = new AgentHarnessCommandTimeoutError(300_000, "inactivity");
+    const diffFailure = new Error("Preparation diff timed out");
+    let diffCaptures = 0;
+    let caught: unknown;
+
+    try {
+      await runAgentHarnessPipeline(
+        {
+          demoBrief: { keyProductFeatures: ["dashboard"] },
+          files: [{ path: "package.json", text: "{}" }],
+          repoStats: { fileCount: 1, sizeBytes: 2 },
+          repoUrl: "https://github.com/example/app",
+          runId: "run_failure_diff",
+        },
+        {
+          ...failingPreparationDependencies(failure, {}),
+          async capturePreparationWorkspaceDiff() {
+            diffCaptures += 1;
+            throw diffFailure;
+          },
+        },
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBe(failure);
+    expect(diffCaptures).toBe(1);
+    expect(Reflect.get(caught as object, "preparationWorkspaceDiffError")).toBe(
+      diffFailure,
+    );
+  });
 
   it("preserves the pipeline failure and durably records a teardown failure", async () => {
     const artifacts: Record<string, unknown> = {};
@@ -740,6 +769,7 @@ describe("runAgentHarnessPipeline", () => {
   });
 
   it("allows three preparation repairs independently in preflight and app exploration", async () => {
+    let diffCaptures = 0;
     let explorationAttempts = 0;
     let preflightAttempts = 0;
     const repairStages: string[] = [];
@@ -756,6 +786,10 @@ describe("runAgentHarnessPipeline", () => {
         runId: "run_phase_repair_budgets",
       },
       {
+        async capturePreparationWorkspaceDiff() {
+          diffCaptures += 1;
+          return preparationWorkspaceDiff();
+        },
         async createWorkspace() {
           return workspace();
         },
@@ -830,6 +864,7 @@ describe("runAgentHarnessPipeline", () => {
       "app-exploration",
       "app-exploration",
     ]);
+    expect(diffCaptures).toBe(1);
   });
 
   it("allows three script repairs independently in static and capture validation", async () => {
@@ -1091,6 +1126,15 @@ function runPlan() {
     runtime: "bun" as const,
     startCommand: "bun run dev --host 127.0.0.1 --port 3000",
     validationExpectations: ["body visible"],
+  };
+}
+
+function preparationWorkspaceDiff() {
+  return {
+    changedPaths: ["/workspace/repo/src/demo.ts"],
+    patch: "diff --git a/src/demo.ts b/src/demo.ts",
+    patchSha256: `sha256:${"a".repeat(64)}` as const,
+    sourceCommitSha: "abc123def456",
   };
 }
 

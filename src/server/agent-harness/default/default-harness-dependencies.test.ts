@@ -41,6 +41,93 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(models).toEqual(["openai/gpt-5"]);
   });
 
+  it("bounds and reports preparation diff fingerprint and patch commands", async () => {
+    const commands: Array<{
+      command: string;
+      timeoutMs: number | undefined;
+    }> = [];
+    const logLines: string[] = [];
+    const logger = createPipelineEventLogger({
+      sinks: [
+        {
+          write(line) {
+            logLines.push(line);
+          },
+        },
+      ],
+    });
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async uploadFiles() {},
+      async execute(command, options) {
+        commands.push({ command, timeoutMs: options?.timeoutMs });
+        return command.includes("fingerprint_file")
+          ? {
+              exitCode: 0,
+              stderr: "",
+              stdout: "/workspace/repo/src/App.tsx\0file:changed\0",
+            }
+          : { exitCode: 0, stderr: "", stdout: "diff contents" };
+      },
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      logger,
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.capturePreparationWorkspaceDiff?.({ workspace }),
+    ).resolves.toMatchObject({
+      changedPaths: ["/workspace/repo/src/App.tsx"],
+      patch: "diff contents",
+    });
+    await logger.flush();
+
+    expect(commands.map(({ timeoutMs }) => timeoutMs)).toEqual([
+      60_000, 60_000,
+    ]);
+    expect(logLines.map((line) => JSON.parse(line))).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "preparation.diff.fingerprint.succeeded",
+          fileCount: 1,
+          timeoutMs: 60_000,
+        }),
+        expect.objectContaining({
+          event: "preparation.diff.patch.succeeded",
+          patchBytes: 13,
+          timeoutMs: 60_000,
+        }),
+      ]),
+    );
+  });
+
+  it("identifies the preparation diff operation that exceeds its deadline", async () => {
+    const timeout = new AgentHarnessCommandTimeoutError(60_000);
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async uploadFiles() {},
+      async execute() {
+        throw timeout;
+      },
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.capturePreparationWorkspaceDiff?.({ workspace }),
+    ).rejects.toMatchObject({
+      cause: timeout,
+      message:
+        "Preparation workspace fingerprint failed: Daytona command did not finish within 60000ms.",
+    });
+  });
+
   it("gives Flow Planning the complete backend-owned FlowSpec contract", async () => {
     const { result, textFiles } = await runFlowPlanningScenario({
       candidates: [flowSpec()],

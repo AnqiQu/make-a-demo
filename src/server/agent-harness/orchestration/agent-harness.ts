@@ -230,7 +230,25 @@ export async function runAgentHarnessPipeline(
   let completedResult: AgentHarnessPipelineResult | undefined;
   let cleanupFailure: unknown;
   let primaryError: unknown;
+  let preparationWorkspaceDiff: PreparationWorkspaceDiff | undefined;
+  let preparationWorkspaceDiffCaptureAttempted = false;
+  let preparationWorkspaceMutated = false;
   let workspace: AgentHarnessWorkspace | undefined;
+  const capturePreparationWorkspaceDiff = async (): Promise<
+    PreparationWorkspaceDiff | undefined
+  > => {
+    preparationWorkspaceDiffCaptureAttempted = true;
+    if (dependencies.capturePreparationWorkspaceDiff === undefined) {
+      return undefined;
+    }
+    return await writeArtifact(
+      dependencies,
+      artifactPaths.preparationWorkspaceDiff,
+      await dependencies.capturePreparationWorkspaceDiff({
+        workspace: requireWorkspace(workspace),
+      }),
+    );
+  };
 
   const security = runStage(
     "static-repo-security-screen",
@@ -307,6 +325,7 @@ export async function runAgentHarnessPipeline(
   }
 
   try {
+    preparationWorkspaceMutated = true;
     const preparation = await runAsyncStage(
       "repo-preparation",
       stageStatuses,
@@ -350,7 +369,6 @@ export async function runAgentHarnessPipeline(
       workspace: requireWorkspace(workspace),
     });
     preparationManifest = preparationState.preparationManifest;
-    let preparationWorkspaceDiff = preparationState.preparationWorkspaceDiff;
     let preparationValidation = preparationState.preparationValidation;
     opencodeSessionIds.push(...preparationState.opencodeSessionIds);
 
@@ -432,7 +450,6 @@ export async function runAgentHarnessPipeline(
           workspace: requireWorkspace(workspace),
         });
         preparationManifest = preparationState.preparationManifest;
-        preparationWorkspaceDiff = preparationState.preparationWorkspaceDiff;
         preparationValidation = preparationState.preparationValidation;
         opencodeSessionIds.push(...preparationState.opencodeSessionIds);
       }
@@ -579,7 +596,6 @@ export async function runAgentHarnessPipeline(
             workspace: requireWorkspace(workspace),
           });
           preparationManifest = preparationState.preparationManifest;
-          preparationWorkspaceDiff = preparationState.preparationWorkspaceDiff;
           preparationValidation = preparationState.preparationValidation;
           opencodeSessionIds.push(...preparationState.opencodeSessionIds);
           continue pipelineAttempt;
@@ -700,6 +716,8 @@ export async function runAgentHarnessPipeline(
       break;
     }
 
+    preparationWorkspaceDiff = await capturePreparationWorkspaceDiff();
+
     const pipelineRunManifest = await persistRunManifest({
       dependencies,
       input,
@@ -733,6 +751,18 @@ export async function runAgentHarnessPipeline(
     const failedSessionId = readFailedOpenCodeSessionId(error);
     if (failedSessionId !== undefined) {
       opencodeSessionIds.push(failedSessionId);
+    }
+    let preparationWorkspaceDiffError: unknown;
+    if (
+      preparationWorkspaceMutated &&
+      !preparationWorkspaceDiffCaptureAttempted &&
+      workspace !== undefined
+    ) {
+      try {
+        preparationWorkspaceDiff = await capturePreparationWorkspaceDiff();
+      } catch (diffError) {
+        preparationWorkspaceDiffError = diffError;
+      }
     }
     stageStatuses["agent-harness"] = "failed";
     const preparationFailedStage = readPreparationFailedStage(stageStatuses);
@@ -769,6 +799,13 @@ export async function runAgentHarnessPipeline(
           fallbackArtifactError,
         );
       }
+    }
+    if (preparationWorkspaceDiffError !== undefined) {
+      attachSecondaryError(
+        surfacedError,
+        "preparationWorkspaceDiffError",
+        preparationWorkspaceDiffError,
+      );
     }
     primaryError = surfacedError;
     try {
@@ -1008,7 +1045,6 @@ async function ensureValidPreparation(input: {
   opencodeSessionIds: string[];
   preparationManifest: PreparationManifest;
   preparationValidation: ValidationReport;
-  preparationWorkspaceDiff?: PreparationWorkspaceDiff;
 }> {
   let preparationManifest = input.preparationManifest;
   let failure = input.initialFailure;
@@ -1043,17 +1079,6 @@ async function ensureValidPreparation(input: {
       );
     }
 
-    const preparationWorkspaceDiff =
-      input.dependencies.capturePreparationWorkspaceDiff === undefined
-        ? undefined
-        : await writeArtifact(
-            input.dependencies,
-            artifactPaths.preparationWorkspaceDiff,
-            await input.dependencies.capturePreparationWorkspaceDiff({
-              workspace: input.workspace,
-            }),
-          );
-
     const preparationValidation = await runValidationStage(
       "preparation-preflight",
       input.dependencies,
@@ -1076,9 +1101,6 @@ async function ensureValidPreparation(input: {
         opencodeSessionIds,
         preparationManifest,
         preparationValidation,
-        ...(preparationWorkspaceDiff === undefined
-          ? {}
-          : { preparationWorkspaceDiff }),
       };
     }
     failure = preparationValidation;
