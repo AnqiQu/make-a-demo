@@ -55,7 +55,6 @@ export async function verifyDaytonaSubmittedCodeRuntime(
           baseUrl: "data:text/html,<h1>Main%20content</h1>",
           headed: false,
           mode: "validation",
-          pauseAfterSceneMs: 0,
         },
       ),
     );

@@ -2,7 +2,7 @@ export type PrepareStylizedPlaywrightScriptInput = {
   baseUrl: string;
   headed: boolean;
   mode?: "recording" | "validation";
-  pauseAfterSceneMs: number;
+  sceneHoldMsById?: Readonly<Record<string, number>>;
   videoDirectory?: string;
 };
 
@@ -43,13 +43,6 @@ export function prepareStylizedPlaywrightScript(
 
   prepared = injectRecordingHelpers(prepared);
 
-  if (input.pauseAfterSceneMs > 0) {
-    prepared = prepared.replace(
-      /await\s+context\.close\(\);/,
-      `await page.waitForTimeout(${input.pauseAfterSceneMs});\nawait context.close();`,
-    );
-  }
-
   return prepared;
 }
 
@@ -58,10 +51,7 @@ function wrapActionBody(
   input: PrepareStylizedPlaywrightScriptInput,
 ) {
   const launchOptions = input.headed ? "{ headless: false }" : "";
-  const pauseLine =
-    input.pauseAfterSceneMs > 0
-      ? `await page.waitForTimeout(${input.pauseAfterSceneMs});`
-      : "";
+  const sceneHoldMsById = JSON.stringify(input.sceneHoldMsById ?? {});
 
   return `import { chromium, expect } from "@playwright/test";
 import { setup, scene, step } from "./makeademo-capture-sdk.js";
@@ -82,11 +72,10 @@ ${runtimeNetworkLockdownSource()}
 const page = await context.newPage();
 const makeADemoCaptureStartedAt = performance.now();
 const makeADemoCaptureContext = { page, baseUrl, expect };
-globalThis.__makeademoCaptureSdk = { context: makeADemoCaptureContext, startedAt: makeADemoCaptureStartedAt };
+globalThis.__makeademoCaptureSdk = { context: makeADemoCaptureContext, sceneHoldMsById: ${sceneHoldMsById}, startedAt: makeADemoCaptureStartedAt };
 
 try {
 ${indentScriptBody(script)}
-  ${pauseLine}
 } finally {
   await context.close();
   await browser.close();

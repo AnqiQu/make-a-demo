@@ -31,10 +31,19 @@ import type {
 } from "./scene-recorder.interface";
 import { prepareStylizedPlaywrightScript } from "./stylized-playwright-script";
 
+const interactiveSceneHoldMs = 1_000;
+const staticRevealSceneHoldMs = 3_000;
+const staticRevealActionTypes = new Set([
+  "assert-text",
+  "assert-title",
+  "assert-url",
+  "assert-visible",
+  "goto",
+]);
+
 export type PlaywrightSceneRecorderOptions = {
   clipTrimmer?: SceneClipTrimmer;
   headed?: boolean;
-  pauseAfterSceneMs?: number;
   postRollMs?: number;
   preRollMs?: number;
   rawVideoFinder?: RawVideoFinder;
@@ -66,7 +75,6 @@ type RawVideoFinder = (directory: string) => Promise<string>;
 
 export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
   private readonly headed: boolean;
-  private readonly pauseAfterSceneMs: number;
   private readonly postRollMs: number;
   private readonly preRollMs: number;
   private readonly sceneTimeoutMs: number;
@@ -77,7 +85,6 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
   constructor(options: PlaywrightSceneRecorderOptions = {}) {
     this.clipTrimmer = options.clipTrimmer ?? trimSceneClipWithFfmpeg;
     this.headed = options.headed ?? false;
-    this.pauseAfterSceneMs = options.pauseAfterSceneMs ?? 0;
     this.postRollMs = options.postRollMs ?? 350;
     this.preRollMs = options.preRollMs ?? 250;
     this.rawVideoFinder = options.rawVideoFinder ?? findSingleVideo;
@@ -86,6 +93,9 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
   }
 
   async recordScenes(input: RecordSceneInput): Promise<RecordedScene[]> {
+    const sceneHoldMsById = createSceneHoldMsById(input.scenes);
+    const captureTimeoutMs =
+      this.sceneTimeoutMs + sumSceneHoldMs(sceneHoldMsById);
     const sceneWorkspace = join(input.runDirectory, "work", "continuous-take");
     const videoScratchDirectory = join(sceneWorkspace, "playwright-videos");
     const rawScenesDirectory = join(input.runDirectory, "raw-scenes");
@@ -107,12 +117,12 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
       prepareStylizedPlaywrightScript(input.demoPlaywrightScript, {
         baseUrl: input.baseUrl,
         headed: this.headed,
-        pauseAfterSceneMs: this.pauseAfterSceneMs,
+        sceneHoldMsById,
         videoDirectory: videoScratchDirectory,
       }),
     );
 
-    const result = await this.sceneScriptRunner(scenePath, this.sceneTimeoutMs);
+    const result = await this.sceneScriptRunner(scenePath, captureTimeoutMs);
     const protocol = readCaptureRuntimeProtocol(result);
     await Promise.all([
       writeFile(markerLogPath, formatCaptureRuntimeProtocolLog(protocol)),
@@ -189,7 +199,6 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
 
 export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
   private readonly headed: boolean;
-  private readonly pauseAfterSceneMs: number;
   private readonly postRollMs: number;
   private readonly preRollMs: number;
   private readonly sceneTimeoutMs: number;
@@ -197,7 +206,6 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
   constructor(
     private readonly options: {
       headed?: boolean;
-      pauseAfterSceneMs?: number;
       postRollMs?: number;
       preRollMs?: number;
       preparationWorkspace: AgentHarnessWorkspaceHandle;
@@ -205,13 +213,15 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
     },
   ) {
     this.headed = options.headed ?? false;
-    this.pauseAfterSceneMs = options.pauseAfterSceneMs ?? 0;
     this.postRollMs = options.postRollMs ?? 350;
     this.preRollMs = options.preRollMs ?? 250;
     this.sceneTimeoutMs = options.sceneTimeoutMs ?? CAPTURE_SCRIPT_TIMEOUT_MS;
   }
 
   async recordScenes(input: RecordSceneInput): Promise<RecordedScene[]> {
+    const sceneHoldMsById = createSceneHoldMsById(input.scenes);
+    const captureTimeoutMs =
+      this.sceneTimeoutMs + sumSceneHoldMs(sceneHoldMsById);
     const workspace = this.options.preparationWorkspace.workspace;
     if (workspace.downloadSubmittedCodeFiles === undefined) {
       throw new Error(
@@ -254,7 +264,7 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
       prepareStylizedPlaywrightScript(input.demoPlaywrightScript, {
         baseUrl: input.baseUrl,
         headed: this.headed,
-        pauseAfterSceneMs: this.pauseAfterSceneMs,
+        sceneHoldMsById,
         videoDirectory: remoteVideoScratchDirectory,
       }),
     );
@@ -279,12 +289,11 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
 
     const result = await executeSubmittedCode(
       workspace,
-      `cd ${shellQuote(remoteSceneWorkspace)} && NODE_PATH="$(npm root -g)" timeout -k 10s ${Math.ceil(this.sceneTimeoutMs / 1000)}s bun ${shellQuote(remoteScenePath)}`,
+      `cd ${shellQuote(remoteSceneWorkspace)} && NODE_PATH="$(npm root -g)" timeout -k 10s ${Math.ceil(captureTimeoutMs / 1000)}s bun ${shellQuote(remoteScenePath)}`,
       {
         timeoutMs:
-          this.sceneTimeoutMs === CAPTURE_SCRIPT_TIMEOUT_MS
-            ? CAPTURE_COMMAND_TIMEOUT_MS
-            : this.sceneTimeoutMs + 10_000,
+          captureTimeoutMs +
+          (CAPTURE_COMMAND_TIMEOUT_MS - CAPTURE_SCRIPT_TIMEOUT_MS),
       },
     );
     const protocol = readCaptureRuntimeProtocol(result);
@@ -474,6 +483,26 @@ function createNonOverlappingClipRanges(input: {
   }
 
   return ranges;
+}
+
+function createSceneHoldMsById(
+  scenes: RecordSceneInput["scenes"],
+): Record<string, number> {
+  return Object.fromEntries(
+    scenes.map((scene) => [
+      scene.id,
+      scene.actions?.every((action) => staticRevealActionTypes.has(action.type))
+        ? staticRevealSceneHoldMs
+        : interactiveSceneHoldMs,
+    ]),
+  );
+}
+
+function sumSceneHoldMs(sceneHoldMsById: Readonly<Record<string, number>>) {
+  return Object.values(sceneHoldMsById).reduce(
+    (total, holdMs) => total + holdMs,
+    0,
+  );
 }
 
 function expectedStepIdsByScene(input: RecordSceneInput) {

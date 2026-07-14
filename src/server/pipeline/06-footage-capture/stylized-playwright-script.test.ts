@@ -8,14 +8,14 @@ import { writeGeneratedCaptureSdkHarness } from "./capture-sdk-contract";
 import { prepareStylizedPlaywrightScript } from "./stylized-playwright-script";
 
 describe("prepareStylizedPlaywrightScript", () => {
-  it("keeps validation free of video and recording pauses", () => {
+  it("keeps validation free of video and presentation holds", () => {
     const prepared = prepareStylizedPlaywrightScript(
       "await page.getByLabel(/message/i).fill('Show me the launch plan');\nawait page.getByRole('button', { name: /send/i }).click();",
       {
         baseUrl: "http://localhost:3000",
         headed: false,
         mode: "validation",
-        pauseAfterSceneMs: 900,
+        sceneHoldMsById: { scene_one: 900 },
       },
     );
 
@@ -39,13 +39,11 @@ describe("prepareStylizedPlaywrightScript", () => {
       baseUrl: "http://127.0.0.1:3000",
       headed: false,
       mode: "validation",
-      pauseAfterSceneMs: 0,
     });
     const recording = prepareStylizedPlaywrightScript(script, {
       baseUrl: "http://127.0.0.1:3000",
       headed: false,
       mode: "recording",
-      pauseAfterSceneMs: 0,
       videoDirectory: ".demo-capture-runs/run/playwright-videos",
     });
 
@@ -76,7 +74,6 @@ describe("prepareStylizedPlaywrightScript", () => {
         baseUrl: "http://127.0.0.1:3000",
         headed: false,
         mode: "validation",
-        pauseAfterSceneMs: 0,
       },
     );
 
@@ -101,7 +98,6 @@ describe("prepareStylizedPlaywrightScript", () => {
         baseUrl: "http://127.0.0.1:3000",
         headed: false,
         mode,
-        pauseAfterSceneMs: 0,
         ...(mode === "recording"
           ? { videoDirectory: ".demo-capture-runs/run/playwright-videos" }
           : {}),
@@ -124,7 +120,6 @@ describe("prepareStylizedPlaywrightScript", () => {
           baseUrl: "http://127.0.0.1:3000",
           headed: false,
           mode,
-          pauseAfterSceneMs: 0,
           ...(mode === "recording"
             ? { videoDirectory: ".demo-capture-runs/run/playwright-videos" }
             : {}),
@@ -188,7 +183,6 @@ describe("prepareStylizedPlaywrightScript", () => {
           baseUrl,
           headed: false,
           mode: "validation",
-          pauseAfterSceneMs: 0,
         },
       ),
     );
@@ -211,7 +205,6 @@ describe("prepareStylizedPlaywrightScript", () => {
         baseUrl: "http://127.0.0.1:3000",
         headed: false,
         mode: "validation",
-        pauseAfterSceneMs: 0,
       },
     );
 
@@ -246,7 +239,6 @@ describe("prepareStylizedPlaywrightScript", () => {
           baseUrl: "http://127.0.0.1:3000",
           headed: false,
           mode: "validation",
-          pauseAfterSceneMs: 0,
         },
       ),
     );
@@ -289,7 +281,6 @@ describe("prepareStylizedPlaywrightScript", () => {
         baseUrl: "data:text/html,<main>MakeADemo</main>",
         headed: false,
         mode: "validation",
-        pauseAfterSceneMs: 900,
       },
     );
 
@@ -323,7 +314,6 @@ describe("prepareStylizedPlaywrightScript", () => {
       {
         baseUrl: "http://localhost:3000",
         headed: false,
-        pauseAfterSceneMs: 0,
         videoDirectory: ".demo-capture-runs/run/playwright-videos",
       },
     );
@@ -349,7 +339,6 @@ describe("prepareStylizedPlaywrightScript", () => {
       {
         baseUrl: "http://localhost:3000",
         headed: false,
-        pauseAfterSceneMs: 0,
         videoDirectory: ".demo-capture-runs/run/playwright-videos",
       },
     );
@@ -389,7 +378,6 @@ describe("prepareStylizedPlaywrightScript", () => {
         baseUrl: "data:text/html,<main>MakeADemo</main>",
         headed: false,
         mode: "validation",
-        pauseAfterSceneMs: 0,
       },
     );
 
@@ -419,7 +407,6 @@ describe("prepareStylizedPlaywrightScript", () => {
       {
         baseUrl: "http://localhost:3000",
         headed: false,
-        pauseAfterSceneMs: 0,
         videoDirectory: ".demo-capture-runs/run/playwright-videos",
       },
     );
@@ -439,7 +426,6 @@ describe("prepareStylizedPlaywrightScript", () => {
       {
         baseUrl: "http://localhost:3000",
         headed: false,
-        pauseAfterSceneMs: 0,
         videoDirectory: ".demo-capture-runs/run/playwright-videos",
       },
     );
@@ -467,7 +453,6 @@ await transcript.evaluate((element) => { element.scrollTop = 0; });`,
       {
         baseUrl: "http://localhost:3000",
         headed: false,
-        pauseAfterSceneMs: 0,
         videoDirectory: ".demo-capture-runs/run/playwright-videos",
       },
     );
@@ -504,7 +489,6 @@ await browser.close();`,
       {
         baseUrl: "http://localhost:3000",
         headed: false,
-        pauseAfterSceneMs: 0,
         videoDirectory: ".demo-capture-runs/run/playwright-videos",
       },
     );

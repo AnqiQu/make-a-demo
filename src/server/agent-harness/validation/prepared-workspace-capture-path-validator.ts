@@ -82,7 +82,6 @@ export async function validatePreparedWorkspaceCapturePath(input: {
       baseUrl: input.baseUrl,
       headed: false,
       mode: "validation",
-      pauseAfterSceneMs: 0,
     }),
   );
 

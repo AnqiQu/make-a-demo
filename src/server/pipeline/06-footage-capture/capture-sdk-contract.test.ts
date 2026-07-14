@@ -142,6 +142,54 @@ describe("Capture SDK Contract", () => {
     }
   });
 
+  it("holds only successful Scene results before their terminal markers", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "makeademo-sdk-"));
+    await writeGeneratedCaptureSdkHarness(workspace);
+    const captureSdk = await import(
+      `${pathToFileURL(join(workspace, "makeademo-capture-sdk.js")).href}?test=${Date.now()}`
+    );
+    const events: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => {
+      if (args[0] === "[makeademo:scene]") {
+        events.push(JSON.parse(String(args[1])).event);
+      }
+    };
+    captureSdkGlobal.__makeademoCaptureSdk = {
+      context: {
+        baseUrl: "http://127.0.0.1:3000",
+        expect: () => ({}),
+        page: {
+          waitForTimeout: async (durationMs: number) => {
+            events.push(`held:${durationMs}`);
+          },
+        },
+      },
+      sceneHoldMsById: { scene_failed: 3_000, scene_one: 3_000 },
+      startedAt: performance.now(),
+    };
+
+    try {
+      await captureSdk.scene("scene_one", async () => undefined);
+      await expect(
+        captureSdk.scene("scene_failed", async () => {
+          throw new Error("scene failed");
+        }),
+      ).rejects.toThrow("scene failed");
+
+      expect(events).toEqual([
+        "started",
+        "held:3000",
+        "succeeded",
+        "started",
+        "failed",
+      ]);
+    } finally {
+      console.log = originalLog;
+      captureSdkGlobal.__makeademoCaptureSdk = undefined;
+    }
+  });
+
   it("passes original Playwright subjects to expect while retaining action instrumentation", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "makeademo-sdk-"));
     await writeGeneratedCaptureSdkHarness(workspace);

@@ -5,12 +5,14 @@ import { describe, expect, it } from "vitest";
 import { DefaultPlaywrightSceneRecorder } from "./playwright-scene-recorder";
 
 describe("DefaultPlaywrightSceneRecorder", () => {
-  it("allows the full accepted 180-second Demo Script budget plus execution grace", async () => {
+  it("adds backend-owned Scene holds to the capture execution budget", async () => {
     const runDirectory = await recorderWorkspace();
     let observedTimeoutMs: number | undefined;
+    let preparedScript = "";
     const recorder = new DefaultPlaywrightSceneRecorder({
-      sceneScriptRunner: async (_scenePath, timeoutMs) => {
+      sceneScriptRunner: async (scenePath, timeoutMs) => {
         observedTimeoutMs = timeoutMs;
+        preparedScript = await readFile(scenePath, "utf8");
         return {
           exitCode: 1,
           stderr: "stopped after observing timeout",
@@ -24,13 +26,40 @@ describe("DefaultPlaywrightSceneRecorder", () => {
       await expect(
         recorder.recordScenes({
           baseUrl: "data:text/html,<main>MakeADemo</main>",
-          demoPlaywrightScript: validDemoScript("scene-one"),
+          demoPlaywrightScript: [
+            validDemoScript("static-scene"),
+            "await scene('interactive-scene', async ({ page, expect }) => { await expect(page.locator('main')).toBeVisible(); });",
+          ].join("\n"),
           runDirectory,
-          scenes: [sceneDescription("scene-one")],
+          scenes: [
+            sceneDescription("static-scene", [
+              { id: "open", path: "/", type: "goto" },
+              {
+                id: "show",
+                locator: { strategy: "css", value: "main" },
+                type: "assert-visible",
+              },
+            ]),
+            sceneDescription("interactive-scene", [
+              {
+                id: "click",
+                locator: { strategy: "text", value: "Next" },
+                type: "click",
+              },
+              {
+                id: "show-next",
+                locator: { strategy: "css", value: "main" },
+                type: "assert-visible",
+              },
+            ]),
+          ],
           sectionId: "demo-script",
         }),
       ).rejects.toThrow("continuous-take failed");
-      expect(observedTimeoutMs).toBe(210_000);
+      expect(preparedScript).toContain(
+        'sceneHoldMsById: {"static-scene":3000,"interactive-scene":1000}',
+      );
+      expect(observedTimeoutMs).toBe(214_000);
     } finally {
       await rm(runDirectory, { force: true, recursive: true });
     }
@@ -723,8 +752,16 @@ function validDemoScript(sceneId: string) {
   ].join("\n");
 }
 
-function sceneDescription(id: string) {
+function sceneDescription(
+  id: string,
+  actions?: NonNullable<
+    Parameters<
+      DefaultPlaywrightSceneRecorder["recordScenes"]
+    >[0]["scenes"][number]["actions"]
+  >,
+) {
   return {
+    ...(actions === undefined ? {} : { actions }),
     expectedVisibleOutcome: "Main content is visible.",
     humanReadableDescription: "Show main content.",
     id,

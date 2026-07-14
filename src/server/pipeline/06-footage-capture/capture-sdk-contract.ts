@@ -359,9 +359,13 @@ export async function scene() {
   // Generated protocol: parent validators/recorders parse these stdout markers for Scene timing.
   console.log('[makeademo:scene]', JSON.stringify({ elapsedMs: elapsedMs(sdk), event: 'started', sceneId: id }));
   try {
-    await runWithActiveScene(sdk, id, () =>
-      callback(createInstrumentedContext(sdk, id)),
-    );
+    await runWithActiveScene(sdk, id, async () => {
+      await callback(createInstrumentedContext(sdk, id));
+      const holdMs = sdk.sceneHoldMsById?.[id] ?? 0;
+      if (holdMs > 0) {
+        await sdk.context.page.waitForTimeout(holdMs);
+      }
+    });
     console.log('[makeademo:scene]', JSON.stringify({ elapsedMs: elapsedMs(sdk), event: 'succeeded', sceneId: id }));
   } catch (error) {
     console.log('[makeademo:scene]', JSON.stringify({
