@@ -1555,14 +1555,14 @@ function createSubmittedCodeWorkspaceExtractCommand(
 
   return `sh -lc ${shellQuote(
     [
-      "preserved=$(mktemp -d)",
+      "preserved=$(mktemp -d /workspace/.makeademo-reset.XXXXXX)",
       "preserved_paths=$(mktemp)",
       'cleanup() { rm -f -- "$preserved_paths"; rm -rf -- "$preserved"; }',
       "trap cleanup EXIT",
       `find /workspace -mindepth 1 \\( ${preservedWorkspacePaths} \\) -prune -print > "$preserved_paths"`,
       `while IFS= read -r path; do relative="\${path#/workspace/}"; mkdir -p -- "\$preserved/\$(dirname -- "\$relative")" || exit 1; mv -- "\$path" "\$preserved/\$relative" || exit 1; done < "$preserved_paths"`,
-      "rm -rf -- /workspace/* /workspace/.[!.]* /workspace/..?*",
-      '{ cp -a "$preserved"/. /workspace/ 2>/dev/null || true; }',
+      'for path in /workspace/* /workspace/.[!.]* /workspace/..?*; do { [ -e "$path" ] || [ -L "$path" ]; } || continue; if [ "$path" != "$preserved" ]; then rm -rf -- "$path" || exit 1; fi; done',
+      `while IFS= read -r path; do relative="\${path#/workspace/}"; mkdir -p -- "\$(dirname -- "\$path")" || exit 1; mv -- "\$preserved/\$relative" "\$path" || exit 1; done < "$preserved_paths"`,
       `tar -xzf ${shellQuote(archivePath)} -C /workspace`,
     ].join(" && "),
   )}`;

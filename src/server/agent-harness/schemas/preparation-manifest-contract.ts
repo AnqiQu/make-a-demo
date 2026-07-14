@@ -42,6 +42,7 @@ export function createPreparationManifestContract() {
       "every maker-requested feature must appear exactly once and preserve its exact text in requestedFeature",
       "when no features were requested, featureInventory must contain at least three source-backed browser-demonstrable candidates when the product supports them",
       "every feature entry must include every required field, including empty array fields",
+      "every feature sourcePaths list must cite an original browser route, page, component, or UI module used by the prepared route",
       "authStrategy must be exactly bypass, demo-identity, or none",
       "feature ids must be stable safe identifiers and unique within featureInventory",
     ],

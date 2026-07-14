@@ -6,6 +6,7 @@ import {
   mkdtemp,
   readFile,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -1438,13 +1439,14 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     expect(restoreCommand).not.toContain(".next/cache");
     expect(restoreCommand).toEqual(expect.stringContaining(".bun"));
     expect(restoreCommand).not.toContain("-name .cache");
-    expect(restoreCommand).toEqual(
-      expect.stringContaining(
-        '{ cp -a "$preserved"/. /workspace/ 2>/dev/null || true; }',
-      ),
-    );
+    expect(restoreCommand).not.toContain("cp -a");
     expect(restoreCommand).toEqual(
       expect.stringContaining("preserved_paths=$(mktemp)"),
+    );
+    expect(restoreCommand).toEqual(
+      expect.stringContaining(
+        "preserved=$(mktemp -d /workspace/.makeademo-reset.XXXXXX)",
+      ),
     );
     expect(restoreCommand).toEqual(
       expect.stringContaining('> "$preserved_paths"'),
@@ -1456,9 +1458,11 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     expect(restoreCommand).toEqual(
       expect.stringContaining('mv -- "$path" "$preserved/$relative" || exit 1'),
     );
+    expect(restoreCommand).toEqual(
+      expect.stringContaining('mv -- "$preserved/$relative" "$path" || exit 1'),
+    );
     expect(restoreCommand).toEqual(expect.stringContaining(" || exit 1"));
     expect(restoreCommand).not.toContain("| while");
-    expect(restoreCommand).not.toMatch(/&& cp -a .* \|\| true && tar -xzf/);
     expect(restoreCommand).not.toContain(
       "find /workspace -mindepth 1 -exec rm -rf {} +",
     );
@@ -1522,6 +1526,11 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       join(submittedWorkspace, "node_modules", "preserved-cache.txt"),
       "keep me",
     );
+    const preservedInode = (
+      await stat(
+        join(submittedWorkspace, "node_modules", "preserved-cache.txt"),
+      )
+    ).ino;
     await writeFile(join(submittedWorkspace, "stale.txt"), "remove me");
     await writeFile(
       join(submittedWorkspace, ".next", "cache", "stale-state"),
@@ -1549,6 +1558,13 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
           "utf8",
         ),
       ).resolves.toBe("keep me");
+      expect(
+        (
+          await stat(
+            join(submittedWorkspace, "node_modules", "preserved-cache.txt"),
+          )
+        ).ino,
+      ).toBe(preservedInode);
       await expectPathMissing(
         join(submittedWorkspace, "node_modules", "prepared-cache.txt"),
       );

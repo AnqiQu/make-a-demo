@@ -111,6 +111,7 @@ const openCodeConfigDirectory = "/tmp/makeademo/opencode";
 const maxShellArtifactWriteBytes = 120 * 1024;
 const openCodeInactivityTimeoutMs = 5 * 60_000;
 const preparationDiffCommandTimeoutMs = 60_000;
+const preparationPatchMarker = "\0MAKEADEMO_PATCH\0";
 
 const artifactPaths = {
   actionCatalog: "/workspace/.makeademo/action-catalog.json",
@@ -126,6 +127,8 @@ const artifactPaths = {
   demoScriptContract: "/workspace/.makeademo/demo-script-contract.json",
   flowSpec: "/workspace/.makeademo/flow-spec.json",
   flowSpecContract: "/workspace/.makeademo/flow-spec-contract.json",
+  preparationFidelity:
+    "/workspace/.makeademo/preparation-fidelity-validation-report.json",
   preparationManifest: "/workspace/.makeademo/preparation-manifest.json",
   preparationManifestContract:
     "/workspace/.makeademo/preparation-manifest-contract.json",
@@ -150,7 +153,6 @@ export async function createDefaultAgentHarnessDependencies(
   let workspaceHandle: AgentHarnessWorkspaceHandle | undefined;
   let opencodeSessionId: string | undefined;
   let runtimeRepairArtifactAttempt = 0;
-  let preparationBaseline: ScriptWritingContentSnapshot = {};
   let scriptWritingBaseline: ScriptWritingContentSnapshot = {};
   const trustedStaticImageAssetIds = Object.keys(
     options.staticImageAssets ?? {},
@@ -168,44 +170,18 @@ export async function createDefaultAgentHarnessDependencies(
   const dependencies: AgentHarnessPipelineDependencies = {
     artifactStore: options.artifactStore,
     async capturePreparationWorkspaceDiff({ workspace }) {
-      const fingerprintStartedAt = Date.now();
-      await options.logger?.info({
-        event: "preparation.diff.fingerprint.started",
-        timeoutMs: preparationDiffCommandTimeoutMs,
-      });
-      let after: ScriptWritingContentSnapshot;
-      try {
-        after = await readWorkspaceContentSnapshot(workspace, {
-          includeMakeADemoArtifacts: false,
-        });
-        await options.logger?.info({
-          durationMs: Date.now() - fingerprintStartedAt,
-          event: "preparation.diff.fingerprint.succeeded",
-          fileCount: Object.keys(after).length,
-          timeoutMs: preparationDiffCommandTimeoutMs,
-        });
-      } catch (error) {
-        await options.logger?.error({
-          durationMs: Date.now() - fingerprintStartedAt,
-          error: readUnknownErrorMessage(error),
-          event: "preparation.diff.fingerprint.failed",
-          timeoutMs: preparationDiffCommandTimeoutMs,
-        });
-        throw createPreparationDiffOperationError("fingerprint", error);
-      }
-
       const patchStartedAt = Date.now();
       await options.logger?.info({
         event: "preparation.diff.patch.started",
         timeoutMs: preparationDiffCommandTimeoutMs,
       });
-      let patch: string;
+      let diff: { changedPaths: string[]; patch: string };
       try {
-        patch = await readPreparationWorkspacePatch(workspace);
+        diff = await readPreparationWorkspaceDiff(workspace);
         await options.logger?.info({
           durationMs: Date.now() - patchStartedAt,
           event: "preparation.diff.patch.succeeded",
-          patchBytes: Buffer.byteLength(patch),
+          patchBytes: Buffer.byteLength(diff.patch),
           timeoutMs: preparationDiffCommandTimeoutMs,
         });
       } catch (error) {
@@ -215,15 +191,11 @@ export async function createDefaultAgentHarnessDependencies(
           event: "preparation.diff.patch.failed",
           timeoutMs: preparationDiffCommandTimeoutMs,
         });
-        throw createPreparationDiffOperationError("patch", error);
+        throw createPreparationDiffOperationError(error);
       }
       return {
-        changedPaths: findScriptWritingContentChanges({
-          after,
-          before: preparationBaseline,
-        }),
-        patch,
-        patchSha256: `sha256:${createHash("sha256").update(patch).digest("hex")}`,
+        ...diff,
+        patchSha256: `sha256:${createHash("sha256").update(diff.patch).digest("hex")}`,
         sourceCommitSha:
           options.repoSourceArchive?.commitSha ?? "unknown-screened-revision",
       };
@@ -355,9 +327,6 @@ export async function createDefaultAgentHarnessDependencies(
         repoProfile,
         sourceArchive: options.repoSourceArchive,
         workspace,
-      });
-      preparationBaseline = await readWorkspaceContentSnapshot(workspace, {
-        includeMakeADemoArtifacts: false,
       });
       await writeWorkspaceJson(workspace, artifactPaths.demoBrief, demoBrief);
       await writeWorkspaceJson(
@@ -740,10 +709,16 @@ export async function createDefaultAgentHarnessDependencies(
       }
       throw new Error("Script Repair artifact retry loop exited early.");
     },
-    async resetCaptureRuntime({ preparationManifest, runPlan, workspace }) {
+    async resetCaptureRuntime({
+      preparationManifest,
+      repoProfile,
+      runPlan,
+      workspace,
+    }) {
       return await validateSubmittedCodeRuntime({
         installDependencies: false,
         preparationManifest,
+        repoProfile,
         runPlan,
         stage: "capture-runtime-reset",
         workspace,
@@ -832,9 +807,15 @@ export async function createDefaultAgentHarnessDependencies(
         },
       );
     },
-    async validatePreparation({ preparationManifest, runPlan, workspace }) {
+    async validatePreparation({
+      preparationManifest,
+      repoProfile,
+      runPlan,
+      workspace,
+    }) {
       return await validateSubmittedCodeRuntime({
         preparationManifest,
+        repoProfile,
         runPlan,
         workspace,
       });
@@ -1235,12 +1216,26 @@ async function materializeScreenedRepo(input: {
 async function validateSubmittedCodeRuntime(input: {
   installDependencies?: boolean;
   preparationManifest: PreparationManifest;
+  repoProfile: RepoProfile;
   runPlan: RunPlan;
   stage?: string;
   workspace: AgentHarnessWorkspace;
 }): Promise<ValidationReport> {
   const manifest = input.preparationManifest;
   const stage = input.stage ?? "preparation-preflight";
+  const buildScopeViolation = findBuildScopeViolation({
+    manifest,
+    repoProfile: input.repoProfile,
+  });
+  if (buildScopeViolation !== undefined) {
+    return failedPreparationValidation({
+      attemptedCommand: buildScopeViolation.attemptedCommand,
+      classification: "build failure",
+      logsSummary: `Root aggregate build is too broad for the prepared feature. Use ${buildScopeViolation.scopedCommand} instead.`,
+      manifest,
+      stage,
+    });
+  }
   try {
     await stopSubmittedCodeApp(input.workspace);
     await setSubmittedCodeNetwork(input.workspace, false);
@@ -1456,6 +1451,50 @@ async function validateSubmittedCodeRuntime(input: {
       : [],
     urlChecked: manifest.baseUrl,
   });
+}
+
+function findBuildScopeViolation(input: {
+  manifest: PreparationManifest;
+  repoProfile: RepoProfile;
+}): { attemptedCommand: string; scopedCommand: string } | undefined {
+  const buildCommand = input.manifest.buildCommandUsed;
+  if (
+    buildCommand === undefined ||
+    input.manifest.appDir !== "." ||
+    !input.repoProfile.workspaces.isMonorepo ||
+    !/^(?:(?:bun|pnpm|yarn)(?:\s+run)?|npm\s+run)\s+build(?:\s|$)/.test(
+      buildCommand,
+    ) ||
+    !/\b(?:turbo|nx|lerna)\b/.test(input.repoProfile.packageScripts.build ?? "")
+  ) {
+    return undefined;
+  }
+
+  const appNames = new Set(
+    input.manifest.productContext.featureInventory.flatMap(({ sourcePaths }) =>
+      sourcePaths.flatMap((path) => {
+        const match = /(?:^|\/)apps\/([^/]+)\//.exec(path);
+        return match?.[1] === undefined ? [] : [match[1]];
+      }),
+    ),
+  );
+  if (appNames.size !== 1) {
+    return undefined;
+  }
+
+  const [appName] = appNames;
+  const scriptName = `build:${appName}`;
+  if (input.repoProfile.packageScripts[scriptName] === undefined) {
+    return undefined;
+  }
+  const runner =
+    input.repoProfile.packageManager === "unknown"
+      ? "npm"
+      : input.repoProfile.packageManager;
+  return {
+    attemptedCommand: buildCommand,
+    scopedCommand: `${runner} run ${scriptName}`,
+  };
 }
 
 async function installRuntimeNetworkGuard(workspace: AgentHarnessWorkspace) {
@@ -1812,9 +1851,9 @@ async function readWorkspaceContentSnapshot(
   return snapshot;
 }
 
-async function readPreparationWorkspacePatch(
+async function readPreparationWorkspaceDiff(
   workspace: AgentHarnessWorkspace,
-): Promise<string> {
+): Promise<{ changedPaths: string[]; patch: string }> {
   const result = await workspace.execute(
     `sh -lc ${shellQuote(
       [
@@ -1825,6 +1864,8 @@ async function readPreparationWorkspacePatch(
         "trap cleanup_index EXIT",
         'GIT_INDEX_FILE="$temporary_index" git read-tree HEAD',
         'GIT_INDEX_FILE="$temporary_index" git add -A',
+        'GIT_INDEX_FILE="$temporary_index" git diff --cached --name-only -z HEAD',
+        "printf '\\0MAKEADEMO_PATCH\\0'",
         'GIT_INDEX_FILE="$temporary_index" git diff --cached --binary --full-index HEAD',
       ].join(" && "),
     )}`,
@@ -1835,16 +1876,32 @@ async function readPreparationWorkspacePatch(
       `Failed to capture prepared workspace diff: ${result.stderr || result.stdout}`,
     );
   }
-  return result.stdout;
+  const markerIndex = result.stdout.indexOf(preparationPatchMarker);
+  if (markerIndex === -1) {
+    throw new Error("Prepared workspace diff output was malformed.");
+  }
+  const relativePaths = result.stdout
+    .slice(0, markerIndex)
+    .split("\0")
+    .filter((path) => path.length > 0);
+  if (
+    relativePaths.some(
+      (path) => path.startsWith("/") || path.split("/").includes(".."),
+    )
+  ) {
+    throw new Error("Prepared workspace diff contained an unsafe path.");
+  }
+  return {
+    changedPaths: relativePaths.map(
+      (path) => `${workspaceRepoDirectory}/${path}`,
+    ),
+    patch: result.stdout.slice(markerIndex + preparationPatchMarker.length),
+  };
 }
 
-function createPreparationDiffOperationError(
-  operation: "fingerprint" | "patch",
-  error: unknown,
-): Error {
-  const label = operation === "fingerprint" ? "fingerprint" : "patch capture";
+function createPreparationDiffOperationError(error: unknown): Error {
   const detail = readUnknownErrorMessage(error);
-  return new Error(`Preparation workspace ${label} failed: ${detail}`, {
+  return new Error(`Preparation workspace patch capture failed: ${detail}`, {
     cause: error,
   });
 }
@@ -2371,15 +2428,20 @@ function createRepoPreparationPrompt(input: {
       "Prepare the cloned app in /workspace/repo for a local MakeADemo run.",
       "Before editing, inspect the README and package metadata, then use route definitions to follow only the page components, state/API layers, authentication guards, and fixtures needed for browser-demonstrable flows.",
       "You may modify app files in /workspace/repo only when needed to make a deterministic local demo mode.",
+      "Preserve the original product: captured routes must continue to use its existing route tree, UI components, design system, styles, brand assets, and interaction logic. Do not create an alternate frontend, standalone demo server, replacement page, or copied approximation of the product.",
+      "Make demo changes at integration seams only: authentication/session providers, API or data adapters, external-service clients, fixtures, seed state, environment/configuration, and locally vendored copies of existing remote assets. Mock the data behind the original screen, never the screen itself.",
+      "Do not remove workspace configuration, replace the package graph or lockfile with a smaller demo project, or redirect an app command to a newly authored application entrypoint. Additive package-script or dependency changes are allowed only when they still launch the original app.",
       "Do not write secrets into files. Replace external services with local fixtures or mocks.",
       "Use one repo-wide search to inventory browser-reachable external dependencies, including scripts, stylesheets, fonts, icons, images, analytics, API calls, WebSockets, and protocol-relative URLs beginning with //. Follow only relevant matches. The prepared app must attempt zero outbound browser requests; remove, vendor, or replace every dependency locally.",
       "Do not install dependencies, build, start, or execute submitted application code in the agent sandbox. The backend runs those commands in the secret-free submitted-code sandbox.",
+      "Omit buildCommandUsed when the selected start command runs a development server. When a build is required in a monorepo, use the narrowest app-scoped build command and never a root aggregate build that compiles unrelated packages.",
       "Read /workspace/.makeademo/supporting-documents.json when it contains maker-provided context and incorporate relevant setup or demo requirements.",
       "Replace every placeholder in productContext. productContext.name and summary must describe the actual product; evidencePaths and every feature sourcePaths entry must reference original screened repository files that support the claim.",
       "When keyProductFeatures is non-empty, prepare every requested feature exactly once and preserve its exact text in requestedFeature. Make every entryPaths route browser-reachable under local demo mode.",
       "When keyProductFeatures is empty, stop after identifying up to three strong source-backed, browser-demonstrable feature candidates.",
       "For a feature blocked by authentication, use an ephemeral demo-only bypass or deterministic local identity and record authStrategy. Keep registration or login visible when authentication itself is a requested feature.",
       "Do not invent core product behavior that is absent from the source. If a requested capability is truly absent, leave concrete evidence in knownLimitations rather than fabricating it.",
+      "Every feature sourcePaths list must cite at least one original browser route, page, component, or UI module used by the prepared route. If the original app cannot be prepared through the allowed seams, do not synthesize a substitute product.",
       `Use this local runtime URL in the manifest: ${input.runPlan.expectedLocalUrl}`,
       `Use this install command unless you have a stronger repo-specific reason: ${input.runPlan.installCommand}`,
       `Use this start command unless you have a stronger repo-specific reason: ${input.runPlan.startCommand}`,
@@ -2422,8 +2484,10 @@ function createRepoPreparationRepairPrompt(input: {
       "Do not patch only the named field. Rebuild and validate every productContext.featureInventory entry against the complete contract before finishing.",
       "Inspect the source paths needed to replace productContext placeholders. Every requested feature must have one source-backed inventory entry and at least one browser entry path; do not solve validation by deleting a requested feature.",
       "Use a demo-only auth bypass or deterministic local identity when a requested feature is protected, while keeping authentication UI visible if authentication itself is requested.",
+      "Preserve original routes, UI components, styles, brand assets, and interaction logic. Repair only authentication, data, external-service, fixture, seed, asset-vendoring, environment, or configuration seams; never create a replacement app or standalone demo server.",
       "Do not finish until the manifest exists at that exact path.",
       "Do not write secrets into files. Replace external services with local fixtures or mocks.",
+      "Omit buildCommandUsed for development-server starts. If a monorepo build is required, select an app-scoped package script instead of the root aggregate build.",
       `Use this local runtime URL in the manifest: ${input.runPlan.expectedLocalUrl}`,
       `Use this install command unless you have a stronger repo-specific reason: ${input.runPlan.installCommand}`,
       `Use this start command unless you have a stronger repo-specific reason: ${input.runPlan.startCommand}`,
@@ -2475,8 +2539,11 @@ function createRuntimePreparationRepairPrompt(input: {
             `The previous repaired manifest was rejected: ${input.artifactError}`,
           ]),
       "Do not run the app, install dependencies, or use the network. The backend will rerun install, build, start, and browser validation in the isolated submitted-code sandbox.",
+      "Omit buildCommandUsed for development-server starts. If validation reports that a root aggregate build is too broad, use the exact app-scoped command from the failure summary.",
       "For browser network failures, repair every unique blocked URL shown above. Handle protocol-relative //host/path assets as external, and make the browser attempt zero outbound requests by removing, vendoring, mocking, or replacing them locally.",
       "You may edit /workspace/repo and must rewrite /workspace/.makeademo/preparation-manifest.json to match the actual repaired state.",
+      "The repaired runtime must still be the original product. Preserve its route tree, UI components, design system, styles, brand assets, and interaction logic; remove alternate demo servers, replacement pages, and commands that bypass the original app.",
+      "Repair only authentication/session, data/API, external-service, fixture/seed, local asset, environment, or configuration seams. Do not remove workspace configuration or replace the package graph or lockfile with a smaller demo project.",
       "Preserve every requested productContext feature. If browser evidence shows an auth barrier or missing entry route, modify only the ephemeral demo runtime to make that feature reachable, update its authStrategy and entryPaths, and retain source evidence.",
       "Read /workspace/.makeademo/preparation-manifest-contract.json and use /workspace/.makeademo/preparation-manifest-template.json as the canonical shape.",
       "Do not patch only the reported failure. Revalidate the complete manifest and every productContext.featureInventory entry before finishing.",
@@ -2492,6 +2559,9 @@ function createRuntimePreparationRepairPrompt(input: {
 }
 
 function validationArtifactPath(stage: string): string {
+  if (stage === "preparation-fidelity") {
+    return artifactPaths.preparationFidelity;
+  }
   if (stage === "app-exploration") {
     return artifactPaths.appExplorationValidation;
   }

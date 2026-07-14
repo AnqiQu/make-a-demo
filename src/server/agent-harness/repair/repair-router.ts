@@ -22,6 +22,7 @@ const preparationFailureClassifications = new Set([
   "install failure",
   "missing env",
   "prepared feature not observable",
+  "product fidelity violation",
   "requested feature not observable",
   "start failure",
 ]);

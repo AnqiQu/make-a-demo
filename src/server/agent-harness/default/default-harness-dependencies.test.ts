@@ -41,7 +41,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(models).toEqual(["openai/gpt-5"]);
   });
 
-  it("bounds and reports preparation diff fingerprint and patch commands", async () => {
+  it("captures preparation paths and patch in one bounded command", async () => {
     const commands: Array<{
       command: string;
       timeoutMs: number | undefined;
@@ -61,13 +61,11 @@ describe("createDefaultAgentHarnessDependencies", () => {
       async uploadFiles() {},
       async execute(command, options) {
         commands.push({ command, timeoutMs: options?.timeoutMs });
-        return command.includes("fingerprint_file")
-          ? {
-              exitCode: 0,
-              stderr: "",
-              stdout: "/workspace/repo/src/App.tsx\0file:changed\0",
-            }
-          : { exitCode: 0, stderr: "", stdout: "diff contents" };
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout: "src/App.tsx\0\0MAKEADEMO_PATCH\0diff contents",
+        };
       },
     };
     const harness = await createDefaultAgentHarnessDependencies({
@@ -85,16 +83,9 @@ describe("createDefaultAgentHarnessDependencies", () => {
     });
     await logger.flush();
 
-    expect(commands.map(({ timeoutMs }) => timeoutMs)).toEqual([
-      60_000, 60_000,
-    ]);
+    expect(commands.map(({ timeoutMs }) => timeoutMs)).toEqual([60_000]);
     expect(logLines.map((line) => JSON.parse(line))).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          event: "preparation.diff.fingerprint.succeeded",
-          fileCount: 1,
-          timeoutMs: 60_000,
-        }),
         expect.objectContaining({
           event: "preparation.diff.patch.succeeded",
           patchBytes: 13,
@@ -124,7 +115,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
     ).rejects.toMatchObject({
       cause: timeout,
       message:
-        "Preparation workspace fingerprint failed: Daytona command did not finish within 60000ms.",
+        "Preparation workspace patch capture failed: Daytona command did not finish within 60000ms.",
     });
   });
 
@@ -266,7 +257,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
             id: "reporting",
             label: "Reporting",
             requestedFeature: "reporting",
-            sourcePaths: ["package.json"],
+            sourcePaths: ["src/App.tsx"],
           },
         ],
       },
@@ -321,7 +312,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
       fixtureNotes: [],
       id,
       label,
-      sourcePaths: ["package.json"],
+      sourcePaths: ["src/App.tsx"],
     });
     const prepared: PreparationManifest = {
       ...preparationManifest(),
@@ -436,7 +427,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
       demoBrief: { keyProductFeatures: [] },
       normalizedSupportingDocuments: undefined,
       repoProfile: repoProfile(),
-      repoSourcePaths: ["package.json"],
+      repoSourcePaths: ["package.json", "src/App.tsx"],
       runPlan: runPlan(),
       workspace,
     });
@@ -525,7 +516,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         normalizedSupportingDocuments: undefined,
         repoProfile: repoProfile(),
-        repoSourcePaths: ["package.json"],
+        repoSourcePaths: ["package.json", "src/App.tsx"],
         runPlan: runPlan(),
         workspace,
       }),
@@ -552,7 +543,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         normalizedSupportingDocuments: undefined,
         repoProfile: repoProfile(),
-        repoSourcePaths: ["package.json"],
+        repoSourcePaths: ["package.json", "src/App.tsx"],
         runPlan: runPlan(),
         workspace,
       }),
@@ -604,7 +595,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         normalizedSupportingDocuments: undefined,
         repoProfile: repoProfile(),
-        repoSourcePaths: ["package.json"],
+        repoSourcePaths: ["package.json", "src/App.tsx"],
         runPlan: runPlan(),
         workspace,
       }),
@@ -646,7 +637,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         normalizedSupportingDocuments: undefined,
         repoProfile: repoProfile(),
-        repoSourcePaths: ["package.json"],
+        repoSourcePaths: ["package.json", "src/App.tsx"],
         runPlan: runPlan(),
         workspace: repairableRepoPreparationWorkspace(),
       }),
@@ -695,7 +686,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         normalizedSupportingDocuments: undefined,
         repoProfile: repoProfile(),
-        repoSourcePaths: ["package.json"],
+        repoSourcePaths: ["package.json", "src/App.tsx"],
         runPlan: runPlan(),
         workspace,
       }),
@@ -743,7 +734,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         normalizedSupportingDocuments: undefined,
         repoProfile: repoProfile(),
-        repoSourcePaths: ["package.json"],
+        repoSourcePaths: ["package.json", "src/App.tsx"],
         runPlan: runPlan(),
         workspace,
       }),
@@ -784,7 +775,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         normalizedSupportingDocuments: undefined,
         repoProfile: repoProfile(),
-        repoSourcePaths: ["package.json"],
+        repoSourcePaths: ["package.json", "src/App.tsx"],
         runPlan: runPlan(),
         workspace,
       });
@@ -839,7 +830,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         normalizedSupportingDocuments: undefined,
         repoProfile: repoProfile(),
-        repoSourcePaths: ["package.json"],
+        repoSourcePaths: ["package.json", "src/App.tsx"],
         runPlan: runPlan(),
         workspace,
       }),
@@ -866,7 +857,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
             id: "reporting",
             label: "Reporting",
             requestedFeature: "reporting",
-            sourcePaths: ["package.json"],
+            sourcePaths: ["src/App.tsx"],
           },
         ],
       },
@@ -913,7 +904,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         demoBrief: { keyProductFeatures: ["dashboard", "reporting"] },
         normalizedSupportingDocuments: undefined,
         repoProfile: repoProfile(),
-        repoSourcePaths: ["package.json"],
+        repoSourcePaths: ["package.json", "src/App.tsx"],
         runPlan: runPlan(),
         workspace,
       }),
@@ -994,7 +985,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         normalizedSupportingDocuments: undefined,
         repoProfile: repoProfile(),
-        repoSourcePaths: ["package.json"],
+        repoSourcePaths: ["package.json", "src/App.tsx"],
         runPlan: runPlan(),
         workspace,
       }),
@@ -1082,7 +1073,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         normalizedSupportingDocuments: undefined,
         repoProfile: repoProfile(),
-        repoSourcePaths: ["package.json"],
+        repoSourcePaths: ["package.json", "src/App.tsx"],
         runPlan: runPlan(),
         workspace,
       }),
@@ -1179,7 +1170,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         normalizedSupportingDocuments: undefined,
         repoProfile: repoProfile(),
-        repoSourcePaths: ["package.json"],
+        repoSourcePaths: ["package.json", "src/App.tsx"],
         runPlan: runPlan(),
         workspace,
       }),
@@ -1244,7 +1235,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
       demoBrief: { keyProductFeatures: ["dashboard"] },
       normalizedSupportingDocuments: undefined,
       repoProfile: repoProfile(),
-      repoSourcePaths: ["package.json"],
+      repoSourcePaths: ["package.json", "src/App.tsx"],
       runPlan: runPlan(),
       workspace,
     });
@@ -1325,6 +1316,82 @@ describe("createDefaultAgentHarnessDependencies", () => {
         ),
       ]),
     );
+  });
+
+  it("rejects a root aggregate build when the prepared feature has a scoped monorepo build", async () => {
+    const calls: string[] = [];
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async uploadFiles() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode(command) {
+        calls.push(command);
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async setSubmittedCodeNetworkAccess() {
+        calls.push("network");
+      },
+      async startSubmittedCodeApp() {
+        calls.push("start");
+      },
+      async stopSubmittedCodeApp() {
+        calls.push("stop");
+      },
+      async syncSubmittedCodeWorkspace() {
+        calls.push("sync");
+      },
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.validatePreparation({
+        preparationManifest: {
+          ...preparationManifest(),
+          buildCommandUsed: "bun run build",
+          productContext: {
+            ...preparationManifest().productContext,
+            featureInventory: [
+              {
+                authStrategy: "none",
+                description: "Show the prepared dashboard.",
+                entryPaths: ["/"],
+                fixtureNotes: [],
+                id: "dashboard",
+                label: "Dashboard",
+                requestedFeature: "dashboard",
+                sourcePaths: ["apps/dashboard/src/app/page.tsx"],
+              },
+            ],
+          },
+        },
+        repoProfile: {
+          ...repoProfile(),
+          packageScripts: {
+            build: "turbo build",
+            "build:dashboard": "turbo build --filter=@midday/dashboard",
+          },
+          workspaces: {
+            isMonorepo: true,
+            packageDirectories: ["apps/*"],
+          },
+        },
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).resolves.toMatchObject({
+      attemptedCommand: "bun run build",
+      failureClassification: "build failure",
+      logsSummary: expect.stringContaining("bun run build:dashboard"),
+      status: "failed",
+    });
+    expect(calls).toEqual([]);
   });
 
   it("starts and stops the submitted app through the workspace managed-process seam", async () => {
@@ -1577,7 +1644,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         normalizedSupportingDocuments: undefined,
         repoProfile: repoProfile(),
-        repoSourcePaths: ["package.json"],
+        repoSourcePaths: ["package.json", "src/App.tsx"],
         runPlan: runPlan(),
         workspace,
       }),
@@ -1865,7 +1932,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         normalizedSupportingDocuments: undefined,
         preparationManifest: preparationManifest(),
         repoProfile: repoProfile(),
-        repoSourcePaths: ["package.json"],
+        repoSourcePaths: ["package.json", "src/App.tsx"],
         runPlan: runPlan(),
         workspace,
       });
@@ -2359,7 +2426,7 @@ function preparationManifest(): PreparationManifest {
           id: "dashboard",
           label: "Dashboard",
           requestedFeature: "dashboard",
-          sourcePaths: ["package.json"],
+          sourcePaths: ["src/App.tsx"],
         },
       ],
       name: "Demo App",

@@ -45,6 +45,11 @@ export function assertPreparedFeatureInventory(input: {
       input.repoSourcePaths,
       `${path}.sourcePaths`,
     );
+    if (!feature.sourcePaths.some(isBrowserUiSourcePath)) {
+      throw new Error(
+        `${path}.sourcePaths must cite an original route, page, component, or browser UI module`,
+      );
+    }
     if (feature.entryPaths.length === 0) {
       throw new Error(`${path}.entryPaths must contain a local app path`);
     }
@@ -74,6 +79,19 @@ export function assertPreparedFeatureInventory(input: {
         ? []
         : [`Unexpected: ${unexpected.join(", ")}.`]),
     ].join(" "),
+  );
+}
+
+function isBrowserUiSourcePath(path: string) {
+  return (
+    /\.(?:html|jsx|tsx|svelte|vue)$/i.test(path) ||
+    /(?:^|\/)(?:app|client|index|main|router|routes)\.(?:js|mjs|mts|ts)$/i.test(
+      path,
+    ) ||
+    (/(?:^|\/)(?:app|components|pages|routes|screens|views)(?:\/|$)/i.test(
+      path,
+    ) &&
+      /\.(?:js|mjs|mts|ts)$/i.test(path))
   );
 }
 

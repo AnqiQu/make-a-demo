@@ -92,6 +92,7 @@ describe("runAgentHarnessPipeline", () => {
       "run-plan:bun",
       "workspace",
       "prepare:bun:bun install --frozen-lockfile",
+      "preparation-diff",
       "preflight:http://127.0.0.1:3000",
       "explore:prep_001:passed",
       "flow:appmap_001:actions_001",
@@ -99,13 +100,13 @@ describe("runAgentHarnessPipeline", () => {
       `static:${"flow_001"}`,
       `dynamic:${DEMO_SCRIPT_OUTPUT_PATH}`,
       "reset:prep_001",
-      "preparation-diff",
     ]);
     expect(result.pipelineRunManifest.stageStatuses).toMatchObject({
       "app-exploration": "passed",
       "capture-path-validation": "passed",
       "flow-planning": "passed",
       "repo-preparation": "passed",
+      "preparation-fidelity": "passed",
       "script-writing": "passed",
       "static-repo-security-screen": "passed",
       "static-script-contract-validation": "passed",
@@ -617,6 +618,100 @@ describe("runAgentHarnessPipeline", () => {
     );
   });
 
+  it("repairs a product fidelity violation before runtime preflight", async () => {
+    const calls: string[] = [];
+    let diffAttempts = 0;
+
+    const result = await runAgentHarnessPipeline(
+      {
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        files: [
+          { path: "package.json", text: "{}" },
+          { path: "src/App.tsx", text: "export function App() {}" },
+        ],
+        repoStats: { fileCount: 2, sizeBytes: 200 },
+        repoUrl: "https://github.com/example/app",
+        runId: "run_fidelity_repair",
+      },
+      {
+        async capturePreparationWorkspaceDiff() {
+          diffAttempts += 1;
+          return diffAttempts === 1
+            ? replacementWorkspaceDiff()
+            : unchangedWorkspaceDiff();
+        },
+        async createWorkspace() {
+          return workspace();
+        },
+        async exploreApp() {
+          calls.push("explore");
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return {
+            manifest: {
+              ...preparationManifest(),
+              createdFiles: ["demo/server.ts"],
+              modifiedFiles: ["package.json"],
+            },
+          };
+        },
+        async repairPreparation({ failureReport }) {
+          calls.push(`repair:${failureReport.stage}`);
+          return { manifest: preparationManifest() };
+        },
+        async resetCaptureRuntime() {
+          return report("capture-runtime-reset", "passed");
+        },
+        async synthesizeRunPlan() {
+          return runPlan();
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          calls.push("preflight");
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(diffAttempts).toBe(2);
+    expect(calls).toEqual([
+      "repair:preparation-fidelity",
+      "preflight",
+      "explore",
+    ]);
+    expect(result.validationReports).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          failureClassification: "product fidelity violation",
+          stage: "preparation-fidelity",
+          status: "failed",
+        }),
+        expect.objectContaining({
+          stage: "preparation-fidelity",
+          status: "passed",
+        }),
+      ]),
+    );
+  });
+
   it("rejects Script Repair when it mutates app source", async () => {
     let diffChecks = 0;
 
@@ -864,7 +959,7 @@ describe("runAgentHarnessPipeline", () => {
       "app-exploration",
       "app-exploration",
     ]);
-    expect(diffCaptures).toBe(1);
+    expect(diffCaptures).toBe(7);
   });
 
   it("allows three script repairs independently in static and capture validation", async () => {
@@ -1134,6 +1229,33 @@ function preparationWorkspaceDiff() {
     changedPaths: ["/workspace/repo/src/demo.ts"],
     patch: "diff --git a/src/demo.ts b/src/demo.ts",
     patchSha256: `sha256:${"a".repeat(64)}` as const,
+    sourceCommitSha: "abc123def456",
+  };
+}
+
+function replacementWorkspaceDiff() {
+  return {
+    changedPaths: [
+      "/workspace/repo/demo/server.ts",
+      "/workspace/repo/package.json",
+    ],
+    patch: [
+      "diff --git a/demo/server.ts b/demo/server.ts",
+      "new file mode 100644",
+      "+Bun.serve({ fetch() { return new Response(`<!doctype html><style></style>`); } });",
+      "diff --git a/package.json b/package.json",
+      '+  "dev": "bun run demo/server.ts"',
+    ].join("\n"),
+    patchSha256: `sha256:${"b".repeat(64)}` as const,
+    sourceCommitSha: "abc123def456",
+  };
+}
+
+function unchangedWorkspaceDiff() {
+  return {
+    changedPaths: [],
+    patch: "",
+    patchSha256: `sha256:${"c".repeat(64)}` as const,
     sourceCommitSha: "abc123def456",
   };
 }

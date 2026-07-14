@@ -48,4 +48,32 @@ describe("synthesizeRunPlan", () => {
       ],
     });
   });
+
+  it("does not build before starting a development server", () => {
+    const runPlan = synthesizeRunPlan({
+      authHints: [],
+      candidateAppDirs: ["."],
+      candidateBuildCommands: ["bun run build"],
+      candidateInstallCommands: ["bun install --frozen-lockfile"],
+      candidatePorts: [3000],
+      candidateStartCommands: ["bun run dev"],
+      confidence: { assumptions: [], overall: 0.9 },
+      detectedFrameworks: ["next"],
+      dockerHints: [],
+      envExamples: [],
+      externalServiceHints: [],
+      lockfiles: ["bun.lock"],
+      packageManager: "bun",
+      packageScripts: { build: "next build", dev: "next dev" },
+      repoUrl: "https://github.com/example/app",
+      requiredEnvHints: [],
+      rootDir: "/workspace",
+      securityWarnings: [],
+      unsupportedReasons: [],
+      workspaces: { isMonorepo: false, packageDirectories: [] },
+    });
+
+    expect(runPlan.startCommand).toBe("bun run dev");
+    expect(runPlan).not.toHaveProperty("buildCommand");
+  });
 });

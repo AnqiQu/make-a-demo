@@ -2,11 +2,19 @@ import type { RepoProfile, RunPlan } from "../schemas/artifacts";
 
 export function synthesizeRunPlan(repoProfile: RepoProfile): RunPlan {
   const port = repoProfile.candidatePorts[0] ?? 3000;
+  const startCommand =
+    repoProfile.candidateStartCommands[0] ??
+    fallbackStartCommand(repoProfile.packageManager, port);
   return {
     allowedPorts: [port],
     appDir: repoProfile.candidateAppDirs[0] ?? ".",
     assumptions: ["selected first profiled app directory"],
-    ...optionalString("buildCommand", repoProfile.candidateBuildCommands[0]),
+    ...optionalString(
+      "buildCommand",
+      isDevelopmentCommand(startCommand)
+        ? undefined
+        : repoProfile.candidateBuildCommands[0],
+    ),
     env: { NODE_ENV: "development" },
     expectedLocalUrl: `http://127.0.0.1:${port}`,
     installCommand:
@@ -15,14 +23,16 @@ export function synthesizeRunPlan(repoProfile: RepoProfile): RunPlan {
     localServices: [],
     riskFlags: readRiskFlags(repoProfile),
     runtime: readRuntime(repoProfile.packageManager),
-    startCommand:
-      repoProfile.candidateStartCommands[0] ??
-      fallbackStartCommand(repoProfile.packageManager, port),
+    startCommand,
     validationExpectations: [
       "base URL loads under Runtime Network Lockdown",
       "at least one meaningful visible route is available",
     ],
   };
+}
+
+function isDevelopmentCommand(command: string): boolean {
+  return /(?:^|\s)(?:run\s+)?dev(?:\s|$)/.test(command);
 }
 
 function readRiskFlags(repoProfile: RepoProfile): string[] {

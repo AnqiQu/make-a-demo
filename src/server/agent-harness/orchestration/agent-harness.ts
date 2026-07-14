@@ -8,6 +8,7 @@ import {
   classifyRepairRoute,
   readRepairBudgetDecision,
 } from "../repair/repair-router";
+import { validatePreparationFidelity } from "../repo-preparation/preparation-fidelity";
 import type { PreparationWorkspaceDiff } from "../repo-preparation/preparation-workspace-diff";
 import { profileRepo } from "../repo-profiler/repo-profiler";
 import { screenStaticRepoSecurity } from "../repo-security/static-repo-security";
@@ -198,6 +199,8 @@ const artifactPaths = {
   flowSpec: "/workspace/.makeademo/flow-spec.json",
   pipelineRunManifest: "/workspace/.makeademo/pipeline-run-manifest.json",
   preparationFallback: "/workspace/.makeademo/preparation-fallback.json",
+  preparationFidelity:
+    "/workspace/.makeademo/preparation-fidelity-validation-report.json",
   preparationManifest: "/workspace/.makeademo/preparation-manifest.json",
   preparationWorkspaceDiff:
     "/workspace/.makeademo/preparation-workspace-diff.json",
@@ -241,13 +244,14 @@ export async function runAgentHarnessPipeline(
     if (dependencies.capturePreparationWorkspaceDiff === undefined) {
       return undefined;
     }
-    return await writeArtifact(
+    preparationWorkspaceDiff = await writeArtifact(
       dependencies,
       artifactPaths.preparationWorkspaceDiff,
       await dependencies.capturePreparationWorkspaceDiff({
         workspace: requireWorkspace(workspace),
       }),
     );
+    return preparationWorkspaceDiff;
   };
 
   const security = runStage(
@@ -355,6 +359,7 @@ export async function runAgentHarnessPipeline(
     const scriptRepairLimit = options.scriptRepairLimit ?? 3;
     const validationAttemptCounts: Record<string, number> = {};
     let preparationState = await ensureValidPreparation({
+      capturePreparationWorkspaceDiff,
       dependencies,
       input,
       preparationManifest,
@@ -435,6 +440,7 @@ export async function runAgentHarnessPipeline(
         }
 
         preparationState = await ensureValidPreparation({
+          capturePreparationWorkspaceDiff,
           dependencies,
           initialFailure: explorationValidation,
           input,
@@ -581,6 +587,7 @@ export async function runAgentHarnessPipeline(
           "repo-preparation-repair"
         ) {
           preparationState = await ensureValidPreparation({
+            capturePreparationWorkspaceDiff,
             dependencies,
             initialFailure: capturePathValidation,
             input,
@@ -716,7 +723,9 @@ export async function runAgentHarnessPipeline(
       break;
     }
 
-    preparationWorkspaceDiff = await capturePreparationWorkspaceDiff();
+    if (preparationWorkspaceDiff === undefined) {
+      preparationWorkspaceDiff = await capturePreparationWorkspaceDiff();
+    }
 
     const pipelineRunManifest = await persistRunManifest({
       dependencies,
@@ -882,6 +891,7 @@ function readPreparationFailedStage(
       ([stage, status]) =>
         status === "failed" &&
         (stage === "repo-preparation" ||
+          stage === "preparation-fidelity" ||
           stage === "preparation-preflight" ||
           stage === "app-exploration"),
     )?.[0];
@@ -1028,6 +1038,9 @@ async function repairScriptCandidate(input: {
 }
 
 async function ensureValidPreparation(input: {
+  capturePreparationWorkspaceDiff: () => Promise<
+    PreparationWorkspaceDiff | undefined
+  >;
   dependencies: AgentHarnessPipelineDependencies;
   initialFailure?: ValidationReport;
   input: AgentHarnessPipelineInput;
@@ -1077,6 +1090,32 @@ async function ensureValidPreparation(input: {
         artifactPaths.preparationManifest,
         readPreparationManifest(repair.manifest),
       );
+    }
+
+    const workspaceDiff = await input.capturePreparationWorkspaceDiff();
+    if (workspaceDiff !== undefined) {
+      const fidelityValidation = await runValidationStage(
+        "preparation-fidelity",
+        input.dependencies,
+        artifactPaths.preparationFidelity,
+        input.validationReports,
+        input.stageStatuses,
+        input.stageTimings,
+        async () =>
+          validatePreparationFidelity({
+            preparationManifest,
+            repoSourcePaths: new Set(
+              input.input.files.map((file) => file.path),
+            ),
+            workspaceDiff,
+          }),
+        input.validationAttemptCounts,
+        input.preparationRepairAttemptsByPhase["preparation-fidelity"] ?? 0,
+      );
+      if (fidelityValidation.status === "failed") {
+        failure = fidelityValidation;
+        continue;
+      }
     }
 
     const preparationValidation = await runValidationStage(
@@ -1131,7 +1170,10 @@ async function repairPreparationManifest(input: {
 
   const budget = readRepairBudgetDecision({
     attempted: input.phaseRepairAttempts,
-    limit: input.repoPreparationRepairLimit,
+    limit:
+      input.failureReport.stage === "preparation-fidelity"
+        ? Math.min(1, input.repoPreparationRepairLimit)
+        : input.repoPreparationRepairLimit,
     route,
   });
   if (budget.status === "exhausted") {
