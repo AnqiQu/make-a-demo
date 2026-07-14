@@ -248,8 +248,18 @@ describe("exploreSubmittedApp", () => {
   it("reports unique attempted external resources with page errors", async () => {
     const { result } = await exploreObservation({
       blockedNetworkAttempts: [
-        { host: "api.example.com", url: "https://api.example.com/v1" },
-        { host: "api.example.com", url: "https://api.example.com/v1" },
+        {
+          host: "api.example.com",
+          method: "GET",
+          resourceType: "fetch",
+          url: "https://api.example.com/v1",
+        },
+        {
+          host: "api.example.com",
+          method: "GET",
+          resourceType: "fetch",
+          url: "https://api.example.com/v1",
+        },
       ],
       pageErrors: [`${baseUrl}/: render failed`],
       routes: [observedRoute({ headings: ["Welcome"], text: ["Welcome"] })],
@@ -264,9 +274,42 @@ describe("exploreSubmittedApp", () => {
       status: "failed",
     });
     expect(artifacts.validationReport.logsSummary).toContain(
-      "1 unique external network request",
+      "1 required external browser resource",
     );
     expect(artifacts.validationReport.logsSummary).toContain("1 page error");
+  });
+
+  it("keeps blocked side effects as evidence when the feature remains observable", async () => {
+    const feature = preparedFeature();
+    const { result } = await exploreObservation({
+      blockedNetworkAttempts: [
+        {
+          host: "analytics.example.com",
+          method: "POST",
+          resourceType: "fetch",
+          url: "https://analytics.example.com/events",
+        },
+      ],
+      consoleErrors: [`${baseUrl}/: net::ERR_BLOCKED_BY_CLIENT`],
+      featureInventory: [feature],
+      routes: [
+        observedRoute({
+          buttons: ["Open global feed"],
+          featureIds: [feature.id],
+          headings: ["Global Feed"],
+          text: ["Global Feed"],
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    expect(artifacts.validationReport).toMatchObject({
+      blockedNetworkAttempts: [
+        expect.objectContaining({ host: "analytics.example.com" }),
+      ],
+      failureClassification: "none",
+      status: "passed",
+    });
   });
 
   it("uses visible text as assertion evidence when a route has no heading", async () => {
@@ -335,7 +378,12 @@ describe("exploreSubmittedApp", () => {
 type ExplorationResult = Awaited<ReturnType<typeof exploreSubmittedApp>>;
 
 async function exploreObservation(input: {
-  blockedNetworkAttempts?: Array<{ host: string; url?: string }>;
+  blockedNetworkAttempts?: Array<{
+    host: string;
+    method?: string;
+    resourceType?: string;
+    url?: string;
+  }>;
   consoleErrors?: string[];
   featureInventory?: PreparedDemoFeature[];
   pageErrors?: string[];

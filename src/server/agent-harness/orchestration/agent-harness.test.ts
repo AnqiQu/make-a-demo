@@ -15,10 +15,26 @@ describe("runAgentHarnessPipeline", () => {
       {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         files: [
-          { path: "package.json", text: "{}" },
+          {
+            path: "package.json",
+            text: JSON.stringify({
+              scripts: {
+                "dev:dashboard": "turbo dev --filter=@acme/dashboard",
+              },
+              workspaces: ["apps/*"],
+            }),
+          },
+          {
+            path: "apps/dashboard/package.json",
+            text: JSON.stringify({
+              name: "@acme/dashboard",
+              scripts: { dev: "next dev -p 3001" },
+            }),
+          },
+          { path: "apps/dashboard/src/page.tsx", text: "export default 1" },
           { path: "bun.lock", text: "" },
         ],
-        repoStats: { fileCount: 2, sizeBytes: 200 },
+        repoStats: { fileCount: 4, sizeBytes: 400 },
         repoUrl: "https://github.com/example/app",
         runId: "run_001",
       },
@@ -55,8 +71,14 @@ describe("runAgentHarnessPipeline", () => {
           calls.push(
             `prepare:${repoProfile.packageManager}:${runPlan.installCommand}`,
           );
+          const manifest = preparationManifest();
+          const feature = manifest.productContext.featureInventory[0];
+          if (feature === undefined) {
+            throw new Error("Expected dashboard fixture");
+          }
+          feature.sourcePaths = ["apps/dashboard/src/page.tsx"];
           return {
-            manifest: preparationManifest(),
+            manifest,
             opencodeSessionId: "session_prepare",
           };
         },
@@ -93,10 +115,10 @@ describe("runAgentHarnessPipeline", () => {
       "workspace",
       "prepare:bun:bun install --frozen-lockfile",
       "preparation-diff",
-      "preflight:http://127.0.0.1:3000",
+      "preflight:http://127.0.0.1:3001",
       "explore:prep_001:passed",
       "flow:appmap_001:actions_001",
-      "script:flow_001:http://127.0.0.1:3000",
+      "script:flow_001:http://127.0.0.1:3001",
       `static:${"flow_001"}`,
       `dynamic:${DEMO_SCRIPT_OUTPUT_PATH}`,
       "reset:prep_001",
@@ -113,6 +135,14 @@ describe("runAgentHarnessPipeline", () => {
     });
     expect(artifacts["/workspace/.makeademo/repo-profile.json"]).toMatchObject({
       packageManager: "bun",
+    });
+    expect(
+      artifacts["/workspace/.makeademo/preparation-manifest.json"],
+    ).toMatchObject({
+      appDir: ".",
+      baseUrl: "http://127.0.0.1:3001",
+      ports: [3001],
+      startCommandUsed: "bun run dev:dashboard",
     });
     expect(
       artifacts["/workspace/.makeademo/preparation-workspace-diff.json"],

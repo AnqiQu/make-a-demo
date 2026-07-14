@@ -1,3 +1,6 @@
+import { createBrowserRuntimeNetworkPolicySource } from "../../shared/external-resources/browser-runtime-network-policy";
+import { isHydratableExternalResource } from "../../shared/external-resources/external-resource-cache";
+import type { ExternalResourceManifest } from "../../shared/external-resources/external-resource-manifest.schema";
 import { executeSubmittedCode } from "../daytona/submitted-code-execution";
 import type { AgentHarnessWorkspace } from "../daytona/workspace.interface";
 import {
@@ -77,7 +80,9 @@ type ObservedRoute = {
   title: string;
 };
 type BrowserExplorationProtocol = {
-  blockedNetworkAttempts: Array<{ host: string; route?: string; url?: string }>;
+  blockedNetworkAttempts: Array<
+    Pick<NetworkAttempt, "host"> & Partial<NetworkAttempt>
+  >;
   consoleErrors: string[];
   pageErrors: string[];
   routes: ObservedRoute[];
@@ -93,6 +98,7 @@ const explorerPath = `${explorerDirectory}/explore-app.mjs`;
  */
 export async function exploreSubmittedApp(input: {
   baseUrl: string;
+  externalResourceManifest?: ExternalResourceManifest;
   featureInventory?: PreparedDemoFeature[];
   preparationManifestId: string;
   workspace: AgentHarnessWorkspace;
@@ -100,6 +106,7 @@ export async function exploreSubmittedApp(input: {
   const script = createExplorerScript(
     input.baseUrl,
     input.featureInventory ?? [],
+    input.externalResourceManifest,
   );
   const encodedScript = Buffer.from(script).toString("base64");
   const result = await executeSubmittedCode(
@@ -469,6 +476,12 @@ function createExplorationValidationReport(input: {
     input.featureInventory,
     input.actionCatalog,
   );
+  const unresolvedResources = input.networkAttempts.filter(
+    isHydratableExternalResource,
+  );
+  const actionableConsoleErrors = input.appMap.consoleErrors.filter(
+    isActionableBrowserConsoleError,
+  );
   return readValidationReport({
     artifactReferences: [
       "/workspace/.makeademo/app-map.json",
@@ -500,20 +513,20 @@ function createExplorationValidationReport(input: {
       failure === undefined
         ? []
         : [
-            ...(input.networkAttempts.length === 0
+            ...(unresolvedResources.length === 0
               ? []
               : [
-                  `Remove, vendor, mock, or locally replace every blocked browser URL: ${input.networkAttempts.map((attempt) => attempt.url ?? attempt.host).join(", ")}`,
+                  `Repair unresolved browser resources that could not be cached locally: ${unresolvedResources.map((attempt) => attempt.url ?? attempt.host).join(", ")}`,
                 ]),
             ...(input.appMap.pageErrors.length === 0
               ? []
               : [
                   `Repair these route-aware page errors: ${input.appMap.pageErrors.join(" | ")}`,
                 ]),
-            ...(input.appMap.consoleErrors.length === 0
+            ...(actionableConsoleErrors.length === 0
               ? []
               : [
-                  `Repair these route-aware console errors: ${input.appMap.consoleErrors.join(" | ")}`,
+                  `Repair these route-aware console errors: ${actionableConsoleErrors.join(" | ")}`,
                 ]),
             "Rerun browser exploration after repairing the prepared runtime.",
           ],
@@ -527,24 +540,30 @@ function readExplorationFailure(
   featureInventory: PreparedDemoFeature[],
   actionCatalog: ActionCatalog,
 ): { classification: string; message: string } | undefined {
-  if (networkAttempts.length > 0) {
+  const unresolvedResources = networkAttempts.filter(
+    isHydratableExternalResource,
+  );
+  const actionableConsoleErrors = appMap.consoleErrors.filter(
+    isActionableBrowserConsoleError,
+  );
+  if (unresolvedResources.length > 0) {
     const pageErrorSummary =
       appMap.pageErrors.length === 0
         ? ""
         : ` Browser exploration also observed ${formatCount(appMap.pageErrors.length, "page error")}: ${appMap.pageErrors.slice(0, 3).join(" | ")}.`;
     const consoleErrorSummary =
-      appMap.consoleErrors.length === 0
+      actionableConsoleErrors.length === 0
         ? ""
-        : ` Browser exploration also observed ${formatCount(appMap.consoleErrors.length, "console error")}: ${appMap.consoleErrors.slice(0, 3).join(" | ")}.`;
+        : ` Browser exploration also observed ${formatCount(actionableConsoleErrors.length, "console error")}: ${actionableConsoleErrors.slice(0, 3).join(" | ")}.`;
     return {
       classification: "external network attempted",
-      message: `Browser exploration blocked ${formatCount(networkAttempts.length, "unique external network request")}: ${networkAttempts.map((attempt) => attempt.url ?? attempt.host).join(", ")}.${pageErrorSummary}${consoleErrorSummary}`,
+      message: `Browser exploration could not cache ${formatCount(unresolvedResources.length, "required external browser resource")}: ${unresolvedResources.map((attempt) => attempt.url ?? attempt.host).join(", ")}.${pageErrorSummary}${consoleErrorSummary}`,
     };
   }
-  if (appMap.pageErrors.length > 0 || appMap.consoleErrors.length > 0) {
+  if (appMap.pageErrors.length > 0 || actionableConsoleErrors.length > 0) {
     return {
       classification: "browser console/page error",
-      message: `Browser exploration observed ${formatCount(appMap.pageErrors.length, "page error")} and ${formatCount(appMap.consoleErrors.length, "console error")}: ${[...appMap.pageErrors, ...appMap.consoleErrors].slice(0, 6).join(" | ")}.`,
+      message: `Browser exploration observed ${formatCount(appMap.pageErrors.length, "page error")} and ${formatCount(actionableConsoleErrors.length, "console error")}: ${[...appMap.pageErrors, ...actionableConsoleErrors].slice(0, 6).join(" | ")}.`,
     };
   }
   const featuresById = new Map(
@@ -620,6 +639,12 @@ function readExplorationFailure(
   return undefined;
 }
 
+function isActionableBrowserConsoleError(error: string): boolean {
+  return !/(?:ERR_BLOCKED_BY_CLIENT|_next\/webpack-hmr.*ERR_INVALID_HTTP_RESPONSE)/i.test(
+    error,
+  );
+}
+
 function formatCount(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
@@ -641,9 +666,16 @@ function readObservedNetworkAttempts(
   return uniqueNetworkAttempts(
     observation.blockedNetworkAttempts.map(
       (attempt): NetworkAttempt => ({
-        direction: "outbound",
+        direction: attempt.direction ?? "outbound",
+        ...(attempt.hasCredentials === undefined
+          ? {}
+          : { hasCredentials: attempt.hasCredentials }),
         host: attempt.host,
-        phase: "browser",
+        ...(attempt.method === undefined ? {} : { method: attempt.method }),
+        phase: attempt.phase ?? "browser",
+        ...(attempt.resourceType === undefined
+          ? {}
+          : { resourceType: attempt.resourceType }),
         ...(attempt.route === undefined ? {} : { route: attempt.route }),
         ...(attempt.url === undefined ? {} : { url: attempt.url }),
       }),
@@ -712,6 +744,7 @@ function unique(values: string[]): string[] {
 function createExplorerScript(
   baseUrl: string,
   featureInventory: PreparedDemoFeature[],
+  externalResourceManifest?: ExternalResourceManifest,
 ): string {
   const featureEntryTargets = createFeatureEntryTargets(
     baseUrl,
@@ -728,23 +761,13 @@ const outputDirectory = ${JSON.stringify(explorerDirectory)};
 const result = { blockedNetworkAttempts: [], consoleErrors: [], pageErrors: [], routes: [] };
 const browser = await chromium.launch({ headless: true });
 try {
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  await context.route("**/*", async (route) => {
-    const requestUrl = route.request().url();
-    try {
-      const parsed = new URL(requestUrl);
-      if (["127.0.0.1", "localhost", "0.0.0.0"].includes(parsed.hostname) || ["about:", "blob:", "data:"].includes(parsed.protocol)) {
-        await route.continue();
-        return;
-      }
-      let initiatorRoute;
-      try { initiatorRoute = route.request().frame().url(); } catch {}
-      result.blockedNetworkAttempts.push({ host: parsed.host, route: initiatorRoute, url: requestUrl });
-      await route.abort("blockedbyclient");
-    } catch {
-      await route.abort("blockedbyclient");
-    }
-  });
+  const context = await browser.newContext({ serviceWorkers: "block", viewport: { width: 1440, height: 900 } });
+  ${createBrowserRuntimeNetworkPolicySource({
+    ...(externalResourceManifest === undefined
+      ? {}
+      : { manifest: externalResourceManifest }),
+    mode: "exploration",
+  })}
   const page = await context.newPage();
   const readAriaRootName = (snapshot) => {
     const firstLine = snapshot.split("\\n", 1)[0] || "";

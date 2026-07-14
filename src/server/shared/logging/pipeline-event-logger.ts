@@ -33,6 +33,10 @@ type SharedLoggerState = {
   writeChain: Promise<void>;
 };
 
+const ANSI_GREEN = "\u001b[32m";
+const ANSI_RED = "\u001b[31m";
+const ANSI_RESET = "\u001b[39m";
+
 export function createPipelineEventLogger(
   options: PipelineEventLoggerOptions,
 ): PipelineEventLogger {
@@ -154,8 +158,7 @@ function formatPrettyLogEntry(entry: Record<string, unknown>): string {
   const context = [component, stage, event].filter(
     (part): part is string => part !== undefined && part.length > 0,
   );
-
-  return [
+  const formattedEntry = [
     time === undefined ? undefined : `[${time}]`,
     level.toUpperCase().padEnd(5),
     context.length === 0 ? undefined : context.join("/"),
@@ -163,6 +166,38 @@ function formatPrettyLogEntry(entry: Record<string, unknown>): string {
   ]
     .filter((part): part is string => part !== undefined && part.length > 0)
     .join(" ");
+  const color = getPrettyLogColor(entry, level);
+
+  return color === undefined
+    ? formattedEntry
+    : `${color}${formattedEntry}${ANSI_RESET}`;
+}
+
+function getPrettyLogColor(
+  entry: Record<string, unknown>,
+  level: string,
+): string | undefined {
+  const event = typeof entry.event === "string" ? entry.event : undefined;
+  const status = typeof entry.status === "string" ? entry.status : undefined;
+
+  if (
+    event === "succeeded" ||
+    event?.endsWith(".succeeded") ||
+    status === "succeeded"
+  ) {
+    return ANSI_GREEN;
+  }
+
+  if (
+    event === "failed" ||
+    event?.endsWith(".failed") ||
+    status === "failed" ||
+    level === "error"
+  ) {
+    return ANSI_RED;
+  }
+
+  return undefined;
 }
 
 function wrapPinoLogger(

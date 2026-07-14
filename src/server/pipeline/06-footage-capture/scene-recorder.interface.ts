@@ -1,9 +1,11 @@
+import type { ExternalResourceManifest } from "../../shared/external-resources/external-resource-manifest.schema";
 import type { BrowserAction } from "./browser-action-plan";
 import type { PlaywrightRecordingSceneDescription } from "./demo-script.schema";
 
 export type RecordSceneInput = {
   baseUrl: string;
   demoPlaywrightScript: string;
+  externalResourceManifest?: ExternalResourceManifest;
   retainRawTake?: boolean;
   runDirectory: string;
   scenes: PlaywrightRecordingSceneDescription[];

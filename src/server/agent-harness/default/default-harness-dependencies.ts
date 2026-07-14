@@ -13,12 +13,19 @@ import {
   parseDemoScript,
 } from "../../pipeline/06-footage-capture/demo-script.schema";
 import {
+  type ExternalResourceFetcher,
+  hydrateExternalResourceCache,
+  isHydratableExternalResource,
+} from "../../shared/external-resources/external-resource-cache";
+import type { ExternalResourceManifest } from "../../shared/external-resources/external-resource-manifest.schema";
+import {
   createOpenCodeProviderSandboxSecrets,
   ensureOpenCodeProviderDaytonaSecret,
 } from "../../shared/integrations/agents/opencode-provider-secrets";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../../shared/integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import type { PipelineEventLogger } from "../../shared/logging/pipeline-event-logger";
 import { exploreSubmittedApp } from "../app-explorer/submitted-app-explorer";
+import { uploadSubmittedCodeExternalResourceCache } from "../daytona/submitted-code-external-resource-cache";
 import {
   AgentHarnessCommandTimeoutError,
   type AgentHarnessWorkspace,
@@ -41,10 +48,15 @@ import type {
 import { assertPreparedFeatureInventory } from "../repo-preparation/prepared-feature-inventory";
 import { synthesizeRunPlan } from "../run-planner/run-plan-synthesis";
 import {
+  findRuntimeConfigurationIssue,
+  resolvePreparationRuntime,
+} from "../run-planner/runtime-target-resolution";
+import {
   type ActionCatalog,
   type AppMap,
   DEMO_SCRIPT_OUTPUT_PATH,
   type FlowSpec,
+  type NetworkAttempt,
   type PreparationManifest,
   type RepoProfile,
   type RunPlan,
@@ -87,6 +99,7 @@ import {
 export type DefaultHarnessDependenciesOptions = {
   artifactStore: NonNullable<AgentHarnessPipelineDependencies["artifactStore"]>;
   env?: Record<string, string | undefined>;
+  externalResourceFetcher?: ExternalResourceFetcher;
   logger?: PipelineEventLogger;
   modelID?: string;
   openCodeRunner?: OpenCodeHarnessRunner;
@@ -100,6 +113,9 @@ export type DefaultHarnessDependenciesOptions = {
 
 export type DefaultHarnessDependencies = {
   dependencies: AgentHarnessPipelineDependencies;
+  getExternalResourceCache?():
+    | { directory: string; manifest: ExternalResourceManifest }
+    | undefined;
   getWorkspaceHandle(): AgentHarnessWorkspaceHandle | undefined;
 };
 
@@ -112,6 +128,7 @@ const maxShellArtifactWriteBytes = 120 * 1024;
 const openCodeInactivityTimeoutMs = 5 * 60_000;
 const preparationDiffCommandTimeoutMs = 60_000;
 const preparationPatchMarker = "\0MAKEADEMO_PATCH\0";
+const maximumExternalResourceHydrationPasses = 3;
 
 const artifactPaths = {
   actionCatalog: "/workspace/.makeademo/action-catalog.json",
@@ -125,6 +142,8 @@ const artifactPaths = {
   demoBrief: "/workspace/.makeademo/demo-brief.json",
   demoScript: DEMO_SCRIPT_OUTPUT_PATH,
   demoScriptContract: "/workspace/.makeademo/demo-script-contract.json",
+  externalResourceManifest:
+    "/workspace/.makeademo/external-resource-manifest.json",
   flowSpec: "/workspace/.makeademo/flow-spec.json",
   flowSpecContract: "/workspace/.makeademo/flow-spec-contract.json",
   preparationFidelity:
@@ -154,6 +173,11 @@ export async function createDefaultAgentHarnessDependencies(
   let opencodeSessionId: string | undefined;
   let runtimeRepairArtifactAttempt = 0;
   let scriptWritingBaseline: ScriptWritingContentSnapshot = {};
+  const externalResourceDirectory = join(
+    options.outputRoot,
+    "external-resources",
+  );
+  let externalResourceManifest: ExternalResourceManifest | undefined;
   const trustedStaticImageAssetIds = Object.keys(
     options.staticImageAssets ?? {},
   ).sort();
@@ -166,6 +190,42 @@ export async function createDefaultAgentHarnessDependencies(
       logger: options.logger,
       openCodeRunner,
     });
+  const hydrateExternalResources = async (
+    attempts: NetworkAttempt[],
+    pass: number,
+  ) => {
+    const previousEntryCount = externalResourceManifest?.entries.length ?? 0;
+    externalResourceManifest = await hydrateExternalResourceCache({
+      attempts,
+      directory: externalResourceDirectory,
+      ...(externalResourceManifest === undefined
+        ? {}
+        : { existingManifest: externalResourceManifest }),
+      ...(options.externalResourceFetcher === undefined
+        ? {}
+        : { fetchResource: options.externalResourceFetcher }),
+      onFailure: async ({ error, url }) => {
+        await options.logger?.warn({
+          error: readUnknownErrorMessage(error),
+          event: "external-resource.hydration.failed",
+          url,
+        });
+      },
+    });
+    await options.artifactStore.writeJson(
+      artifactPaths.externalResourceManifest,
+      externalResourceManifest,
+    );
+    const addedResources =
+      externalResourceManifest.entries.length - previousEntryCount;
+    await options.logger?.info({
+      addedResources,
+      event: "external-resource.hydration.completed",
+      pass,
+      resourceCount: externalResourceManifest.entries.length,
+    });
+    return addedResources > 0;
+  };
 
   const dependencies: AgentHarnessPipelineDependencies = {
     artifactStore: options.artifactStore,
@@ -220,12 +280,44 @@ export async function createDefaultAgentHarnessDependencies(
       return workspaceHandle.workspace;
     },
     async exploreApp({ preparationManifest, workspace }) {
-      return await exploreSubmittedApp({
-        baseUrl: preparationManifest.baseUrl,
-        featureInventory: preparationManifest.productContext.featureInventory,
-        preparationManifestId: preparationManifest.id,
-        workspace,
-      });
+      for (
+        let pass = 0;
+        pass <= maximumExternalResourceHydrationPasses;
+        pass += 1
+      ) {
+        await uploadSubmittedCodeExternalResourceCache({
+          directory: externalResourceDirectory,
+          ...(externalResourceManifest === undefined
+            ? {}
+            : { manifest: externalResourceManifest }),
+          workspace,
+        });
+        const exploration = await exploreSubmittedApp({
+          baseUrl: preparationManifest.baseUrl,
+          ...(externalResourceManifest === undefined
+            ? {}
+            : { externalResourceManifest }),
+          featureInventory: preparationManifest.productContext.featureInventory,
+          preparationManifestId: preparationManifest.id,
+          workspace,
+        });
+        const blocked = exploration.validationReport.blockedNetworkAttempts;
+        const eligible = blocked.filter(isHydratableExternalResource);
+        if (
+          pass === maximumExternalResourceHydrationPasses ||
+          eligible.every((attempt) =>
+            externalResourceManifest?.entries.some(
+              (entry) => entry.url === attempt.url,
+            ),
+          )
+        ) {
+          return exploration;
+        }
+        if (!(await hydrateExternalResources(eligible, pass + 1))) {
+          return exploration;
+        }
+      }
+      throw new Error("External resource hydration loop did not terminate.");
     },
     async planFlow({
       actionCatalog,
@@ -760,37 +852,79 @@ export async function createDefaultAgentHarnessDependencies(
                   "Demo Script browser Scenes did not compile to Playwright source.",
                 );
               }
-              const result = await validatePreparedWorkspaceCapturePath({
-                baseUrl: preparationManifest.baseUrl,
-                demoPlaywrightScript: demoScript.demoPlaywrightScript,
-                expectedStepIdsByScene: Object.fromEntries([
-                  [
-                    "setup",
-                    demoScript.setupActions?.map((action) => action.id) ?? [],
-                  ],
-                  ...browserScenes.map((scene) => [
-                    scene.id,
-                    scene.actions?.map((action) => action.id) ?? [],
+              for (
+                let pass = 0;
+                pass <= maximumExternalResourceHydrationPasses;
+                pass += 1
+              ) {
+                await uploadSubmittedCodeExternalResourceCache({
+                  directory: externalResourceDirectory,
+                  ...(externalResourceManifest === undefined
+                    ? {}
+                    : { manifest: externalResourceManifest }),
+                  workspace: handle.workspace,
+                });
+                const result = await validatePreparedWorkspaceCapturePath({
+                  baseUrl: preparationManifest.baseUrl,
+                  demoPlaywrightScript: demoScript.demoPlaywrightScript,
+                  ...(externalResourceManifest === undefined
+                    ? {}
+                    : { externalResourceManifest }),
+                  expectedStepIdsByScene: Object.fromEntries([
+                    [
+                      "setup",
+                      demoScript.setupActions?.map((action) => action.id) ?? [],
+                    ],
+                    ...browserScenes.map((scene) => [
+                      scene.id,
+                      scene.actions?.map((action) => action.id) ?? [],
+                    ]),
                   ]),
-                ]),
-                localRunDirectory: join(
-                  options.outputRoot,
-                  "capture-path-validation",
-                  `capture-path-validation-${Date.now()}`,
-                ),
-                onEvent: async (entry) => {
-                  const level =
-                    entry.level === "error"
-                      ? "error"
-                      : entry.level === "warn"
-                        ? "warn"
-                        : "info";
-                  await options.logger?.[level](entry);
-                },
-                sceneIds: browserScenes.map((scene) => scene.id),
-                workspace: handle,
-              });
-              return result;
+                  localRunDirectory: join(
+                    options.outputRoot,
+                    "capture-path-validation",
+                    `capture-path-validation-${Date.now()}-${pass}`,
+                  ),
+                  onEvent: async (entry) => {
+                    const level =
+                      entry.level === "error"
+                        ? "error"
+                        : entry.level === "warn"
+                          ? "warn"
+                          : "info";
+                    await options.logger?.[level](entry);
+                  },
+                  sceneIds: browserScenes.map((scene) => scene.id),
+                  workspace: handle,
+                });
+                const eligible = result.blockedNetworkAttempts.filter(
+                  isHydratableExternalResource,
+                );
+                if (eligible.length === 0) {
+                  return result;
+                }
+                const uncached = eligible.filter(
+                  (attempt) =>
+                    !externalResourceManifest?.entries.some(
+                      (entry) => entry.url === attempt.url,
+                    ),
+                );
+                if (
+                  pass === maximumExternalResourceHydrationPasses ||
+                  uncached.length === 0 ||
+                  !(await hydrateExternalResources(uncached, pass + 1))
+                ) {
+                  return {
+                    ...result,
+                    failureReason:
+                      "Capture Path Validation could not replay required external browser resources.",
+                    status: "failed",
+                  };
+                }
+              }
+              throw new Error(
+                "Capture Path Validation resource hydration loop did not terminate.",
+              );
             } catch (error) {
               const diagnostic = readErrorDiagnostic(error);
               return {
@@ -930,6 +1064,13 @@ export async function createDefaultAgentHarnessDependencies(
 
   return {
     dependencies,
+    getExternalResourceCache: () =>
+      externalResourceManifest === undefined
+        ? undefined
+        : {
+            directory: externalResourceDirectory,
+            manifest: externalResourceManifest,
+          },
     getWorkspaceHandle: () => workspaceHandle,
   };
 }
@@ -1221,8 +1362,26 @@ async function validateSubmittedCodeRuntime(input: {
   stage?: string;
   workspace: AgentHarnessWorkspace;
 }): Promise<ValidationReport> {
-  const manifest = input.preparationManifest;
+  const resolution = resolvePreparationRuntime({
+    preparationManifest: input.preparationManifest,
+    repoProfile: input.repoProfile,
+  });
+  const manifest = resolution.preparationManifest;
+  const runtimeTarget = resolution.runtimeTarget;
   const stage = input.stage ?? "preparation-preflight";
+  const runtimeConfigurationIssue = findRuntimeConfigurationIssue({
+    preparationManifest: manifest,
+    repoProfile: input.repoProfile,
+  });
+  if (runtimeConfigurationIssue !== undefined) {
+    return failedPreparationValidation({
+      attemptedCommand: manifest.startCommandUsed,
+      classification: "start failure",
+      logsSummary: runtimeConfigurationIssue,
+      manifest,
+      stage,
+    });
+  }
   const buildScopeViolation = findBuildScopeViolation({
     manifest,
     repoProfile: input.repoProfile,
@@ -1260,7 +1419,10 @@ async function validateSubmittedCodeRuntime(input: {
         runCommand: () =>
           executeSubmitted(
             input.workspace,
-            commandInAppDirectory(manifest.appDir, command),
+            commandInAppDirectory(
+              runtimeTarget?.install.cwd ?? manifest.appDir,
+              command,
+            ),
           ),
       });
     let result = await runInstall(installCommand);
@@ -1314,7 +1476,10 @@ async function validateSubmittedCodeRuntime(input: {
   if (manifest.buildCommandUsed !== undefined) {
     const buildResult = await executeSubmitted(
       input.workspace,
-      commandInAppDirectory(manifest.appDir, manifest.buildCommandUsed),
+      commandInAppDirectory(
+        runtimeTarget?.build?.cwd ?? manifest.appDir,
+        manifest.buildCommandUsed,
+      ),
       { env: manifest.envUsed },
     );
     if (buildResult.exitCode !== 0) {
@@ -1365,7 +1530,7 @@ async function validateSubmittedCodeRuntime(input: {
   try {
     await input.workspace.startSubmittedCodeApp({
       command: manifest.startCommandUsed,
-      cwd: absoluteAppDirectory(manifest.appDir),
+      cwd: absoluteAppDirectory(runtimeTarget?.start.cwd ?? manifest.appDir),
       env: guardedRuntimeEnv,
     });
   } catch (error) {
@@ -1423,26 +1588,20 @@ async function validateSubmittedCodeRuntime(input: {
     exitCode: preflightResult.exitCode,
     blockedNetworkAttempts: blockedRuntimeNetworkAttempts,
     failureClassification:
-      blockedRuntimeNetworkAttempts.length > 0
-        ? "external network attempted"
-        : preflightResult.exitCode === 0
-          ? "none"
-          : probeExecutionFailed
-            ? "harness/internal failure"
-            : "start failure",
+      preflightResult.exitCode === 0
+        ? "none"
+        : probeExecutionFailed
+          ? "harness/internal failure"
+          : "start failure",
     logsSummary:
-      blockedRuntimeNetworkAttempts.length > 0
-        ? `Prepared submitted-code runtime attempted ${blockedRuntimeNetworkAttempts.length} blocked external network request(s).`
-        : preflightResult.exitCode === 0
+      preflightResult.exitCode === 0
+        ? blockedRuntimeNetworkAttempts.length === 0
           ? "Prepared submitted-code runtime responded successfully."
-          : failedLogs,
+          : `Prepared submitted-code runtime responded successfully; Runtime Network Lockdown suppressed ${blockedRuntimeNetworkAttempts.length} external request(s).`
+        : failedLogs,
     stage,
     networkAttempts: blockedRuntimeNetworkAttempts,
-    status:
-      preflightResult.exitCode === 0 &&
-      blockedRuntimeNetworkAttempts.length === 0
-        ? "passed"
-        : "failed",
+    status: preflightResult.exitCode === 0 ? "passed" : "failed",
     stderrExcerpts: preflightResult.stderr
       ? [preflightResult.stderr.slice(-500)]
       : [],
@@ -2432,13 +2591,14 @@ function createRepoPreparationPrompt(input: {
       "Make demo changes at integration seams only: authentication/session providers, API or data adapters, external-service clients, fixtures, seed state, environment/configuration, and locally vendored copies of existing remote assets. Mock the data behind the original screen, never the screen itself.",
       "Do not remove workspace configuration, replace the package graph or lockfile with a smaller demo project, or redirect an app command to a newly authored application entrypoint. Additive package-script or dependency changes are allowed only when they still launch the original app.",
       "Do not write secrets into files. Replace external services with local fixtures or mocks.",
-      "Use one repo-wide search to inventory browser-reachable external dependencies, including scripts, stylesheets, fonts, icons, images, analytics, API calls, WebSockets, and protocol-relative URLs beginning with //. Follow only relevant matches. The prepared app must attempt zero outbound browser requests; remove, vendor, or replace every dependency locally.",
+      "Use one repo-wide search to inventory browser-reachable external dependencies, including scripts, stylesheets, fonts, icons, images, analytics, API calls, WebSockets, and protocol-relative URLs beginning with //. Preserve original public presentation-resource references because the backend snapshots and replays them locally. Adapt only authenticated/stateful APIs or external services that prevent a requested feature from working offline; never remove or substitute visible product assets merely to silence network attempts.",
       "Do not install dependencies, build, start, or execute submitted application code in the agent sandbox. The backend runs those commands in the secret-free submitted-code sandbox.",
       "Omit buildCommandUsed when the selected start command runs a development server. When a build is required in a monorepo, use the narrowest app-scoped build command and never a root aggregate build that compiles unrelated packages.",
+      "Do not add cd, --cwd, --prefix, or --dir to runtime commands. Cite the selected application in feature sourcePaths; the backend owns command working directories and workspace scoping.",
       "Read /workspace/.makeademo/supporting-documents.json when it contains maker-provided context and incorporate relevant setup or demo requirements.",
       "Replace every placeholder in productContext. productContext.name and summary must describe the actual product; evidencePaths and every feature sourcePaths entry must reference original screened repository files that support the claim.",
       "When keyProductFeatures is non-empty, prepare every requested feature exactly once and preserve its exact text in requestedFeature. Make every entryPaths route browser-reachable under local demo mode.",
-      "When keyProductFeatures is empty, stop after identifying up to three strong source-backed, browser-demonstrable feature candidates.",
+      "When keyProductFeatures is empty, select and fully prepare up to three strong source-backed browser features. Each selected feature must be reachable with deterministic local authentication and data fixtures where needed; candidate identification alone is not sufficient.",
       "For a feature blocked by authentication, use an ephemeral demo-only bypass or deterministic local identity and record authStrategy. Keep registration or login visible when authentication itself is a requested feature.",
       "Do not invent core product behavior that is absent from the source. If a requested capability is truly absent, leave concrete evidence in knownLimitations rather than fabricating it.",
       "Every feature sourcePaths list must cite at least one original browser route, page, component, or UI module used by the prepared route. If the original app cannot be prepared through the allowed seams, do not synthesize a substitute product.",
@@ -2488,6 +2648,7 @@ function createRepoPreparationRepairPrompt(input: {
       "Do not finish until the manifest exists at that exact path.",
       "Do not write secrets into files. Replace external services with local fixtures or mocks.",
       "Omit buildCommandUsed for development-server starts. If a monorepo build is required, select an app-scoped package script instead of the root aggregate build.",
+      "Do not add command-level working directory flags; workspace command resolution is backend-owned.",
       `Use this local runtime URL in the manifest: ${input.runPlan.expectedLocalUrl}`,
       `Use this install command unless you have a stronger repo-specific reason: ${input.runPlan.installCommand}`,
       `Use this start command unless you have a stronger repo-specific reason: ${input.runPlan.startCommand}`,
@@ -2540,11 +2701,13 @@ function createRuntimePreparationRepairPrompt(input: {
           ]),
       "Do not run the app, install dependencies, or use the network. The backend will rerun install, build, start, and browser validation in the isolated submitted-code sandbox.",
       "Omit buildCommandUsed for development-server starts. If validation reports that a root aggregate build is too broad, use the exact app-scoped command from the failure summary.",
-      "For browser network failures, repair every unique blocked URL shown above. Handle protocol-relative //host/path assets as external, and make the browser attempt zero outbound requests by removing, vendoring, mocking, or replacing them locally.",
+      "Preserve backend-resolved appDir, install, build, start, port, and base URL fields unless the failure summary explicitly reports a runtime-configuration error.",
+      "For dependency-source failures, change package metadata or overrides but do not synthesize lockfile entries by hand; the backend performs controlled lockfile reconciliation and then reruns the frozen install.",
+      "For browser network failures, repair only unresolved URLs in the failure report. The backend already replays safe public GET resources, so preserve original product images, media, fonts, styles, and scripts. Adapt authenticated or stateful APIs at their service/data seams and never substitute visible assets.",
       "You may edit /workspace/repo and must rewrite /workspace/.makeademo/preparation-manifest.json to match the actual repaired state.",
       "The repaired runtime must still be the original product. Preserve its route tree, UI components, design system, styles, brand assets, and interaction logic; remove alternate demo servers, replacement pages, and commands that bypass the original app.",
       "Repair only authentication/session, data/API, external-service, fixture/seed, local asset, environment, or configuration seams. Do not remove workspace configuration or replace the package graph or lockfile with a smaller demo project.",
-      "Preserve every requested productContext feature. If browser evidence shows an auth barrier or missing entry route, modify only the ephemeral demo runtime to make that feature reachable, update its authStrategy and entryPaths, and retain source evidence.",
+      "Preserve every selected productContext feature, including every requested feature. If browser evidence shows an auth barrier or missing entry route, modify only the ephemeral demo runtime to make that feature reachable, update its authStrategy and entryPaths, and retain source evidence.",
       "Read /workspace/.makeademo/preparation-manifest-contract.json and use /workspace/.makeademo/preparation-manifest-template.json as the canonical shape.",
       "Do not patch only the reported failure. Revalidate the complete manifest and every productContext.featureInventory entry before finishing.",
       'appDir must remain relative to /workspace/repo: use "." for the repo root or a path such as "frontend"; never use an absolute path.',

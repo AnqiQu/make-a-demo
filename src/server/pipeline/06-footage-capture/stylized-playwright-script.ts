@@ -1,5 +1,10 @@
+import { createBrowserRuntimeNetworkPolicySource } from "../../shared/external-resources/browser-runtime-network-policy";
+import type { ExternalResourceManifest } from "../../shared/external-resources/external-resource-manifest.schema";
+
 export type PrepareStylizedPlaywrightScriptInput = {
   baseUrl: string;
+  externalResourceManifest?: ExternalResourceManifest;
+  externalResourceRoot?: string;
   headed: boolean;
   mode?: "recording" | "validation";
   sceneHoldMsById?: Readonly<Record<string, number>>;
@@ -68,7 +73,7 @@ const context = await browser.newContext({
     size: { width: 1280, height: 720 },
   },
 });
-${runtimeNetworkLockdownSource()}
+${runtimeNetworkLockdownSource(input.externalResourceManifest, input.externalResourceRoot)}
 const page = await context.newPage();
 const makeADemoCaptureStartedAt = performance.now();
 const makeADemoCaptureContext = { page, baseUrl, expect };
@@ -108,7 +113,7 @@ const context = await browser.newContext({
   serviceWorkers: "block",
   viewport: { width: 1280, height: 720 },
 });
-${runtimeNetworkLockdownSource()}
+${runtimeNetworkLockdownSource(input.externalResourceManifest, input.externalResourceRoot)}
 const page = await context.newPage();
 const makeADemoCaptureStartedAt = performance.now();
 const makeADemoCaptureContext = { page, baseUrl, expect };
@@ -151,9 +156,11 @@ void step;
 `;
 }
 
-function runtimeNetworkLockdownSource() {
-  return `const makeADemoAllowedRuntimeOrigin = new URL(baseUrl).origin;
-const makeADemoOriginalFetch = globalThis.fetch?.bind(globalThis);
+function runtimeNetworkLockdownSource(
+  externalResourceManifest?: ExternalResourceManifest,
+  externalResourceRoot?: string,
+) {
+  return `const makeADemoOriginalFetch = globalThis.fetch?.bind(globalThis);
 if (makeADemoOriginalFetch !== undefined) {
   globalThis.fetch = async (resource, init) => {
     const requestUrl = typeof resource === "string" || resource instanceof URL
@@ -164,6 +171,7 @@ if (makeADemoOriginalFetch !== undefined) {
       console.error("[makeademo:network-blocked]", JSON.stringify({
         direction: "outbound",
         host: new URL(requestUrl).host,
+        method: init?.method ?? (typeof resource === "object" && "method" in resource ? resource.method : "GET"),
         phase: "runtime",
         resourceType: "fetch",
         url: requestUrl,
@@ -174,63 +182,15 @@ if (makeADemoOriginalFetch !== undefined) {
     return await makeADemoOriginalFetch(resource, init);
   };
 }
-
-await context.route("**/*", async (route) => {
-  const request = route.request();
-  const requestUrl = request.url();
-  if (isMakeADemoAllowedRuntimeRequest(requestUrl)) {
-    await route.continue();
-    return;
-  }
-
-  // Generated protocol: parent validation/capture parses blocked-network markers from stderr.
-  console.error("[makeademo:network-blocked]", JSON.stringify({
-    direction: "outbound",
-    host: new URL(requestUrl).host,
-    phase: "runtime",
-    resourceType: request.resourceType(),
-    url: requestUrl,
-  }));
-  await route.abort("blockedbyclient");
-});
-
-await context.routeWebSocket(/.*/, async (webSocket) => {
-  const requestUrl = webSocket.url();
-  if (isMakeADemoAllowedRuntimeWebSocket(requestUrl)) {
-    webSocket.connectToServer();
-    return;
-  }
-
-  // Generated protocol: parent validation/capture parses blocked-network markers from stderr.
-  console.error("[makeademo:network-blocked]", JSON.stringify({
-    direction: "outbound",
-    host: new URL(requestUrl).host,
-    phase: "runtime",
-    resourceType: "websocket",
-    url: requestUrl,
-  }));
-  await webSocket.close({ code: 1008, reason: "External network access blocked by MakeADemo" });
-});
-
-function isMakeADemoAllowedRuntimeRequest(requestUrl) {
-  const parsedUrl = new URL(requestUrl);
-  if (parsedUrl.protocol === "about:" || parsedUrl.protocol === "blob:" || parsedUrl.protocol === "data:") {
-    return true;
-  }
-
-  return parsedUrl.origin === makeADemoAllowedRuntimeOrigin;
-}
-
-function isMakeADemoAllowedRuntimeWebSocket(requestUrl) {
-  const parsedUrl = new URL(requestUrl);
-  if (parsedUrl.protocol !== "ws:" && parsedUrl.protocol !== "wss:") {
-    return false;
-  }
-
-  parsedUrl.protocol = parsedUrl.protocol === "ws:" ? "http:" : "https:";
-  return parsedUrl.origin === makeADemoAllowedRuntimeOrigin;
-}
-`;
+${createBrowserRuntimeNetworkPolicySource({
+  ...(externalResourceManifest === undefined
+    ? {}
+    : { manifest: externalResourceManifest }),
+  mode: "capture",
+  ...(externalResourceRoot === undefined
+    ? {}
+    : { replayRoot: externalResourceRoot }),
+})}`;
 }
 
 function removeCaptureSdkImportsFromBody(script: string) {

@@ -47,7 +47,9 @@ export type CaptureRuntimeProtocol = {
   actions: CaptureActionMarker[];
   blockedNetworkAttempts: Array<{
     direction: "outbound";
+    hasCredentials?: boolean;
     host: string;
+    method?: string;
     phase: "runtime";
     resourceType?: string;
     url?: string;
@@ -550,6 +552,10 @@ function readNetworkMarker(
     typeof value.host !== "string" ||
     value.host.length === 0 ||
     value.phase !== "runtime" ||
+    (value.hasCredentials !== undefined &&
+      typeof value.hasCredentials !== "boolean") ||
+    (value.method !== undefined &&
+      (typeof value.method !== "string" || value.method.length === 0)) ||
     (value.resourceType !== undefined &&
       (typeof value.resourceType !== "string" ||
         value.resourceType.length === 0)) ||
@@ -562,7 +568,11 @@ function readNetworkMarker(
   }
   return {
     direction: "outbound",
+    ...(typeof value.hasCredentials === "boolean"
+      ? { hasCredentials: value.hasCredentials }
+      : {}),
     host: value.host,
+    ...(typeof value.method === "string" ? { method: value.method } : {}),
     phase: "runtime",
     ...(typeof value.resourceType === "string"
       ? { resourceType: value.resourceType }

@@ -57,6 +57,7 @@ export function profileRepo(input: RepoProfileInput): RepoProfile {
     ...readDependencyRecord(packageJson?.devDependencies),
   };
   const workspacePatterns = readWorkspacePatterns(packageJson?.workspaces);
+  const workspacePackages = readWorkspacePackages(files);
   const candidatePorts = readCandidatePorts(packageScripts);
   const envExamples = files
     .filter((file) => /^\.env(?:\..+)?$/.test(file.path))
@@ -119,7 +120,38 @@ export function profileRepo(input: RepoProfileInput): RepoProfile {
       isMonorepo: workspacePatterns.length > 0,
       packageDirectories: workspacePatterns,
     },
+    workspacePackages,
   };
+}
+
+function readWorkspacePackages(files: RepoProfileFile[]) {
+  return files.flatMap((file) => {
+    if (file.path === "package.json" || !file.path.endsWith("/package.json")) {
+      return [];
+    }
+    const packageJson = readJsonObject(file.text);
+    if (packageJson === undefined) {
+      return [];
+    }
+    const scripts = readScripts(packageJson.scripts);
+    const runtimeScripts = Object.fromEntries(
+      Object.entries(scripts).filter(([name]) =>
+        ["build", "dev", "preview", "start"].includes(name),
+      ),
+    );
+    const name =
+      typeof packageJson.name === "string" && packageJson.name.length > 0
+        ? packageJson.name
+        : undefined;
+    return [
+      {
+        dir: file.path.slice(0, -"/package.json".length),
+        ...(name === undefined ? {} : { name }),
+        ports: readCandidatePorts(runtimeScripts),
+        scripts: runtimeScripts,
+      },
+    ];
+  });
 }
 
 function detectPackageManager(

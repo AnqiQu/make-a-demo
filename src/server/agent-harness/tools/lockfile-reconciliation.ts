@@ -23,6 +23,13 @@ export function planLockfileReconciliation(
   }
 
   const output = `${input.stderr}\n${input.stdout}`.toLowerCase();
+  if (
+    /connectionclosed|econn(?:refused|reset)|enotfound|downloading tarball|failed to resolve|network timeout|socket hang up|tls handshake/.test(
+      output,
+    )
+  ) {
+    return undefined;
+  }
   switch (manager) {
     case "npm":
       return output.includes("package-lock.json") &&

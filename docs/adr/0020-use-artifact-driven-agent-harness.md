@@ -4,6 +4,12 @@
 
 Accepted, amended 2026-07-10
 
+### External resource replay amendment (2026-07-14)
+
+Runtime Network Lockdown continues to physically block submitted-app egress. App Exploration and Capture Path Validation may inventory credential-free public HTTPS GET requests and ask a backend-owned hydrator to snapshot eligible browser resources into a content-addressed External Resource Cache. App Exploration, Capture Path Validation, and Footage Capture fulfill exact cached URLs from hash-verified local bytes; they never reopen Sandbox networking for replay.
+
+Uncached traffic remains blocked and is retained as validation evidence. A suppressed request is not by itself proof that a demo is broken: observable page, feature, action, and resource-hydration failures determine whether repair is required. Authenticated requests, mutations, private destinations, and WebSockets are never hydrated. This preserves original product assets without asking Repo Preparation to remove or substitute presentation code.
+
 ## Amendment
 
 The original decision remains valid about durable artifacts, backend-owned validation, stage-specific agent work, and the separation between agent and submitted-code sandboxes. Its earlier description of a generated Playwright script as part of the agent-facing contract is no longer optimal and is superseded by this amendment.
@@ -77,7 +83,7 @@ Daytona remains the execution substrate. The harness keeps a two-boundary model:
 - The agent/OpenCode sandbox may receive provider credentials and may edit the ephemeral repo only during stages that allow mutation.
 - The submitted-code sandbox runs install, build, runtime, browser exploration, validation, and capture with a scrubbed environment and no agent, model, or provider secrets.
 
-Dependency installation may open network only through a backend-controlled, allowlisted package-manager install window. The dependency network window reseals in `finally`. Runtime and capture network are blocked by default. External browser or app network attempts are logged as validation evidence and fail unless they are explicitly local and allowed.
+Dependency installation may open network only through a backend-controlled, allowlisted package-manager install window. The dependency network window reseals in `finally`. Runtime and capture network are blocked by default. External browser or app network attempts are logged as validation evidence; exact External Resource Cache hits are fulfilled locally, while uncached traffic remains blocked and fails only when it prevents the required observable flow from passing.
 
 The backend owns success and failure. Agents may propose plans, workspace edits, declarative Demo Scripts, and repairs, but backend validation decides whether a stage may proceed.
 

@@ -41,6 +41,7 @@ describe("validatePreparedWorkspaceCapturePath", () => {
                 '[makeademo:scene] {"elapsedMs":10,"event":"started","sceneId":"scene-main"}',
                 '[makeademo:action] {"elapsedMs":12,"event":"started","label":"expect.toBeVisible(locator(main))","sceneId":"scene-main"}',
                 '[makeademo:action] {"elapsedMs":18,"event":"succeeded","label":"expect.toBeVisible(locator(main))","sceneId":"scene-main"}',
+                '[makeademo:network-blocked] {"direction":"outbound","host":"analytics.example.com","method":"POST","phase":"runtime","resourceType":"fetch","url":"https://analytics.example.com/events"}',
                 '[makeademo:scene] {"elapsedMs":20,"event":"succeeded","sceneId":"scene-main"}',
                 '[makeademo:validation] script succeeded {"title":"Demo","url":"http://127.0.0.1:3000/"}',
               ].join("\n"),
@@ -77,6 +78,9 @@ describe("validatePreparedWorkspaceCapturePath", () => {
     });
 
     expect(result.status).toBe("succeeded");
+    expect(result.warnings).toEqual([
+      "Runtime Network Lockdown suppressed 1 uncached external request(s).",
+    ]);
     expect(genericUploadCalled).toBe(false);
     expect(uploadedDestinations).toEqual([
       expect.stringMatching(/capture-inputs\.tgz$/),

@@ -148,55 +148,6 @@ describe("DefaultPlaywrightSceneRecorder", () => {
     }
   }, 10_000);
 
-  it("fails Footage Capture when generated Demo Scripts attempt runtime network access", async () => {
-    const runDirectory = await mkdtemp(
-      join(tmpdir(), "makeademo-recorder-test-"),
-    );
-    await symlink(
-      join(process.cwd(), "node_modules"),
-      join(runDirectory, "node_modules"),
-    );
-    const recorder = new DefaultPlaywrightSceneRecorder({
-      rawVideoFinder: async () => {
-        throw new Error("raw video discovery must not run after network block");
-      },
-      sceneScriptRunner: async () => ({
-        exitCode: 0,
-        stderr: "",
-        stdout:
-          '[makeademo:network-blocked] {"direction":"outbound","host":"analytics.example.com","phase":"runtime"}',
-        timedOut: false,
-      }),
-    });
-
-    try {
-      await expect(
-        recorder.recordScenes({
-          baseUrl: "data:text/html,<main>MakeADemo</main>",
-          demoPlaywrightScript: [
-            "import { setup, scene } from './makeademo-capture-sdk';",
-            "await setup(async () => {});",
-            "await scene('scene-network', async () => {});",
-          ].join("\n"),
-          runDirectory,
-          scenes: [
-            {
-              expectedVisibleOutcome: "Main content is visible.",
-              humanReadableDescription: "Try analytics.",
-              id: "scene-network",
-              type: "playwright-recording",
-            },
-          ],
-          sectionId: "section-network",
-        }),
-      ).rejects.toThrow(
-        "Footage Capture blocked runtime network access from the generated Demo Script: analytics.example.com",
-      );
-    } finally {
-      await rm(runDirectory, { force: true, recursive: true });
-    }
-  }, 20_000);
-
   it("records one continuous take and trims declared Scenes from helper markers", async () => {
     const runDirectory = await mkdtemp(
       join(tmpdir(), "makeademo-recorder-test-"),

@@ -306,6 +306,41 @@ describe("createPipelineEventLogger", () => {
       "[2026-06-17T00:00:00.000Z] INFO  full-pipeline/repo-preparation/stage-progress Repo Preparation started.\n",
     ]);
   });
+
+  it("colors succeeded messages green and failed messages red", async () => {
+    const prettyLines: string[] = [];
+    const logger = createPipelineEventLogger({
+      base: { component: "full-pipeline" },
+      sinks: [
+        createPrettyPipelineLogSink({
+          write(text) {
+            prettyLines.push(text);
+          },
+        }),
+      ],
+      timestamp: () => "2026-06-17T00:00:00.000Z",
+    });
+
+    await logger.info(
+      {
+        event: "repo-preparation.succeeded",
+        stage: "repo-preparation",
+      },
+      "Repo Preparation succeeded.",
+    );
+    await logger.info(
+      {
+        event: "script-generation.failed",
+        stage: "script-generation",
+      },
+      "Script Generation failed.",
+    );
+
+    expect(prettyLines).toEqual([
+      "\u001b[32m[2026-06-17T00:00:00.000Z] INFO  full-pipeline/repo-preparation/repo-preparation.succeeded Repo Preparation succeeded.\u001b[39m\n",
+      "\u001b[31m[2026-06-17T00:00:00.000Z] INFO  full-pipeline/script-generation/script-generation.failed Script Generation failed.\u001b[39m\n",
+    ]);
+  });
 });
 
 function countOccurrences(text: string, needle: string): number {

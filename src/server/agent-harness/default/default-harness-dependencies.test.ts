@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -17,6 +17,7 @@ import type {
   PreparationManifest,
   RepoProfile,
   RunPlan,
+  ScriptCandidate,
   ValidationReport,
 } from "../schemas/artifacts";
 import { createPreparationManifestTemplate } from "../schemas/preparation-manifest-template";
@@ -1376,6 +1377,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
           packageScripts: {
             build: "turbo build",
             "build:dashboard": "turbo build --filter=@midday/dashboard",
+            dev: "turbo dev",
           },
           workspaces: {
             isMonorepo: true,
@@ -1457,7 +1459,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(shellCommands.join("\n")).not.toMatch(/nohup|app\.pid/);
   });
 
-  it("reports server-side runtime egress attempts even when the page still responds", async () => {
+  it("reports suppressed server egress without failing a responsive runtime", async () => {
     const commands: string[] = [];
     const workspace: AgentHarnessWorkspace = {
       async destroy() {},
@@ -1505,10 +1507,200 @@ describe("createDefaultAgentHarnessDependencies", () => {
           url: "https://api.example.com/data",
         },
       ],
-      failureClassification: "external network attempted",
-      status: "failed",
+      failureClassification: "none",
+      status: "passed",
     });
     expect(commands.join("\n")).toContain("runtime-network-guard.cjs");
+  });
+
+  it("hydrates and replays safe browser resources before accepting exploration", async () => {
+    const outputRoot = await mkdtemp(
+      join(tmpdir(), "makeademo-resource-hydration-"),
+    );
+    let explorationRuns = 0;
+    const uploadedDestinations: string[] = [];
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode(command) {
+        if (!command.includes("explore-app.mjs")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        explorationRuns += 1;
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout: JSON.stringify({
+            blockedNetworkAttempts:
+              explorationRuns === 1
+                ? [
+                    {
+                      direction: "outbound",
+                      hasCredentials: false,
+                      host: "assets.example.com",
+                      method: "GET",
+                      phase: "browser",
+                      resourceType: "image",
+                      url: "https://assets.example.com/dashboard.png",
+                    },
+                  ]
+                : [],
+            consoleErrors: [],
+            pageErrors: [],
+            routes: [
+              {
+                buttonLocatorEvidence: [null],
+                buttons: ["Open Dashboard"],
+                featureIds: ["dashboard"],
+                forms: [],
+                headings: ["Dashboard"],
+                inputs: [],
+                links: [],
+                path: "/",
+                primaryNavigation: [],
+                requestedPath: "/",
+                screenshot: "/workspace/.makeademo/exploration/root.png",
+                snapshot: "/workspace/.makeademo/exploration/root.aria.yml",
+                text: ["Dashboard"],
+                title: "Dashboard",
+              },
+            ],
+          }),
+        };
+      },
+      async uploadSubmittedCodeFiles(files) {
+        uploadedDestinations.push(...files.map((file) => file.destinationPath));
+      },
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      externalResourceFetcher: async () => ({
+        body: new TextEncoder().encode("original-dashboard-image"),
+        contentType: "image/png",
+        headers: {},
+        status: 200,
+      }),
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot,
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    try {
+      const result = await harness.dependencies.exploreApp({
+        actionCatalogPath: "/workspace/.makeademo/action-catalog.json",
+        appMapPath: "/workspace/.makeademo/app-map.json",
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        preparationManifest: preparationManifest(),
+        preparationValidation: validationReport(
+          "preparation-preflight",
+          "passed",
+        ),
+        repoProfile: repoProfile(),
+        workspace,
+      });
+
+      expect(explorationRuns).toBe(2);
+      expect(result.validationReport.status).toBe("passed");
+      expect(uploadedDestinations).toEqual(
+        expect.arrayContaining([
+          "/workspace/.makeademo/external-resources/external-resource-manifest.json",
+          expect.stringMatching(
+            /^\/workspace\/\.makeademo\/external-resources\/resources\/[a-f0-9]{64}$/,
+          ),
+        ]),
+      );
+      expect(
+        harness.getExternalResourceCache?.()?.manifest.entries,
+      ).toHaveLength(1);
+    } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("hydrates resources first discovered by capture actions and validates again", async () => {
+    const outputRoot = await mkdtemp(
+      join(tmpdir(), "makeademo-capture-resource-hydration-"),
+    );
+    let captureRuns = 0;
+    const uploadedDestinations: string[] = [];
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode(command) {
+        if (!command.includes("NODE_PATH=")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        captureRuns += 1;
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout: [
+            '[makeademo:validation] script started {"baseUrl":"http://127.0.0.1:3000"}',
+            '[makeademo:scene] {"elapsedMs":10,"event":"started","sceneId":"scene_one"}',
+            '[makeademo:action] {"elapsedMs":12,"event":"started","label":"expect.toBeVisible(locator(main))","sceneId":"scene_one"}',
+            '[makeademo:action] {"elapsedMs":18,"event":"succeeded","label":"expect.toBeVisible(locator(main))","sceneId":"scene_one"}',
+            ...(captureRuns === 1
+              ? [
+                  '[makeademo:network-blocked] {"direction":"outbound","hasCredentials":false,"host":"assets.example.com","method":"GET","phase":"runtime","resourceType":"image","url":"https://assets.example.com/reveal.png"}',
+                ]
+              : []),
+            '[makeademo:scene] {"elapsedMs":20,"event":"succeeded","sceneId":"scene_one"}',
+            '[makeademo:validation] script succeeded {"title":"Demo"}',
+          ].join("\n"),
+        };
+      },
+      async uploadSubmittedCodeFiles(files) {
+        uploadedDestinations.push(...files.map((file) => file.destinationPath));
+      },
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      externalResourceFetcher: async () => ({
+        body: new TextEncoder().encode("action-reveal-image"),
+        contentType: "image/png",
+        headers: {},
+        status: 200,
+      }),
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot,
+      repoSourceArchive: await repoSourceArchive(),
+      workspaceProvider: {
+        async create() {
+          return { async destroy() {}, id: "workspace", workspace };
+        },
+      },
+    });
+
+    try {
+      await harness.dependencies.createWorkspace({
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+      });
+      const report = await harness.dependencies.validateCapturePath({
+        actionCatalog: actionCatalog(),
+        appMap: appMap(),
+        flowSpec: flowSpec(),
+        preparationManifest: preparationManifest(),
+        scriptCandidate: capturePathScriptCandidate(),
+        workspace,
+      });
+
+      expect(captureRuns).toBe(2);
+      expect(report.status).toBe("passed");
+      expect(uploadedDestinations).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(
+            /^\/workspace\/\.makeademo\/external-resources\/resources\/[a-f0-9]{64}$/,
+          ),
+        ]),
+      );
+    } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+    }
   });
 
   it("classifies readiness-probe execution errors as harness failures without a shell retry loop", async () => {
@@ -2010,6 +2202,43 @@ function validationReport(
   };
 }
 
+function capturePathScriptCandidate(): ScriptCandidate {
+  return {
+    assumptions: [],
+    browserActionCompilerVersion: "test",
+    bunRuntimeVersion: "test",
+    captureSdkVersion: "test",
+    conformanceResult: validationReport("script-contract", "passed"),
+    contractVersion: "test",
+    outputPath: "/workspace/.makeademo/demo-script.json",
+    playwrightRuntimeVersion: "test",
+    scriptJsonContent: {
+      demoPlaywrightScript: [
+        "import { setup, scene } from './makeademo-capture-sdk';",
+        "await setup(async ({ page, baseUrl }) => { await page.goto(baseUrl); });",
+        "await scene('scene_one', async ({ page, expect }) => { await expect(page.locator('main')).toBeVisible(); });",
+      ].join("\n"),
+      format: "16:9",
+      presentation: {},
+      scenes: [
+        {
+          expectedVisibleOutcome: "The reveal is visible.",
+          humanReadableDescription: "Show the reveal.",
+          id: "scene_one",
+        },
+      ],
+      scriptId: "script_capture_path",
+      title: "Demo",
+      version: 1,
+    },
+    sourceAppMapId: "app_map",
+    sourceFlowSpecId: "flow_spec",
+    sourcePreparationManifestId: "prep_001",
+    unsupportedPieces: [],
+    validationArtifacts: [],
+  };
+}
+
 function actionCatalog(): ActionCatalog {
   return {
     actions: [
@@ -2248,7 +2477,9 @@ function repoPreparationRunner(): OpenCodeHarnessRunner {
       expect(input.prompt).toContain(
         "envUsed must be a flat JSON object whose keys and values are strings",
       );
-      expect(input.prompt).toContain("attempt zero outbound browser requests");
+      expect(input.prompt).toContain(
+        "backend snapshots and replays them locally",
+      );
       expect(input.prompt).toContain(
         "protocol-relative URLs beginning with //",
       );

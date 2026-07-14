@@ -7,8 +7,11 @@ import {
 type CapturePathValidationResult = {
   blockedNetworkAttempts: Array<{
     direction: "inbound" | "outbound";
+    hasCredentials?: boolean;
     host: string;
+    method?: string;
     phase: "install" | "runtime";
+    resourceType?: string;
     url?: string;
   }>;
   browserUrl?: string;
@@ -99,8 +102,15 @@ function normalizeNetworkAttempts(
 ): NetworkAttempt[] {
   return attempts.map((attempt) => ({
     direction: attempt.direction,
+    ...(attempt.hasCredentials === undefined
+      ? {}
+      : { hasCredentials: attempt.hasCredentials }),
     host: attempt.host,
+    ...(attempt.method === undefined ? {} : { method: attempt.method }),
     phase: attempt.phase === "install" ? "dependency-install" : attempt.phase,
+    ...(attempt.resourceType === undefined
+      ? {}
+      : { resourceType: attempt.resourceType }),
     ...(attempt.url === undefined ? {} : { url: attempt.url }),
   }));
 }

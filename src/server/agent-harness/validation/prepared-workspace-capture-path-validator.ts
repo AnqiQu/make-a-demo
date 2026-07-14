@@ -19,6 +19,7 @@ import {
   writeGeneratedCaptureSdkHarness,
 } from "../../pipeline/06-footage-capture/capture-sdk-contract";
 import { prepareStylizedPlaywrightScript } from "../../pipeline/06-footage-capture/stylized-playwright-script";
+import type { ExternalResourceManifest } from "../../shared/external-resources/external-resource-manifest.schema";
 import { uploadSubmittedCodeArchive } from "../daytona/submitted-code-artifact-archive";
 import { executeSubmittedCode } from "../daytona/submitted-code-execution";
 import type { AgentHarnessWorkspaceHandle } from "../daytona/workspace.interface";
@@ -26,7 +27,9 @@ import type { AgentHarnessWorkspaceHandle } from "../daytona/workspace.interface
 export type PreparedWorkspaceCapturePathResult = {
   blockedNetworkAttempts: Array<{
     direction: "outbound";
+    hasCredentials?: boolean;
     host: string;
+    method?: string;
     phase: "runtime";
     resourceType?: string;
     url?: string;
@@ -57,6 +60,7 @@ export type PreparedWorkspaceCapturePathResult = {
 export async function validatePreparedWorkspaceCapturePath(input: {
   baseUrl: string;
   demoPlaywrightScript: string;
+  externalResourceManifest?: ExternalResourceManifest;
   expectedStepIdsByScene?: Readonly<Record<string, readonly string[]>>;
   localRunDirectory: string;
   onEvent?: (entry: Record<string, unknown>) => Promise<void>;
@@ -80,6 +84,9 @@ export async function validatePreparedWorkspaceCapturePath(input: {
     localScriptPath,
     prepareStylizedPlaywrightScript(input.demoPlaywrightScript, {
       baseUrl: input.baseUrl,
+      ...(input.externalResourceManifest === undefined
+        ? {}
+        : { externalResourceManifest: input.externalResourceManifest }),
       headed: false,
       mode: "validation",
     }),
@@ -144,17 +151,13 @@ export async function validatePreparedWorkspaceCapturePath(input: {
     ...(screenshotArtifactId === undefined ? {} : { screenshotArtifactId }),
     stderrPath: localStderrPath,
     stdoutPath: localStdoutPath,
-    warnings: [],
+    warnings:
+      blockedNetworkAttempts.length === 0
+        ? []
+        : [
+            `Runtime Network Lockdown suppressed ${blockedNetworkAttempts.length} uncached external request(s).`,
+          ],
   };
-
-  if (blockedNetworkAttempts.length > 0) {
-    return {
-      ...common,
-      failureReason:
-        "Capture Path Validation blocked runtime network access from the generated Demo Script.",
-      status: "failed",
-    };
-  }
   if (
     result.exitCode !== 0 &&
     protocol.runtimeEvents.some((event) => event.event === "failed")

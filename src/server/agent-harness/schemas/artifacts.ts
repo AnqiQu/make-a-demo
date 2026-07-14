@@ -13,10 +13,20 @@ type HarnessStageStatus =
   | "running"
   | "skipped";
 
+export type RepoWorkspacePackage = {
+  dir: string;
+  name?: string;
+  ports: number[];
+  scripts: Record<string, string>;
+};
+
 export type NetworkAttempt = {
   direction: "inbound" | "outbound";
+  hasCredentials?: boolean;
   host: string;
+  method?: string;
   phase: "browser" | "dependency-install" | "runtime";
+  resourceType?: string;
   route?: string;
   url?: string;
 };
@@ -31,6 +41,7 @@ export type RepoProfile = {
     isMonorepo: boolean;
     packageDirectories: string[];
   };
+  workspacePackages?: RepoWorkspacePackage[];
   detectedFrameworks: string[];
   packageScripts: Record<string, string>;
   candidateAppDirs: string[];
@@ -342,6 +353,32 @@ export function readRepoProfile(value: unknown): RepoProfile {
     securityWarnings: readStringArray(record, "securityWarnings"),
     unsupportedReasons: readStringArray(record, "unsupportedReasons"),
     workspaces: readWorkspaces(record.workspaces),
+    ...readOptionalWorkspacePackages(record.workspacePackages),
+  };
+}
+
+function readOptionalWorkspacePackages(
+  value: unknown,
+): Pick<RepoProfile, "workspacePackages"> {
+  if (value === undefined) {
+    return {};
+  }
+  if (!Array.isArray(value)) {
+    throw new Error("RepoProfile.workspacePackages must be an array");
+  }
+  return {
+    workspacePackages: value.map((entry, index) => {
+      const record = assertRecord(
+        entry,
+        `RepoProfile.workspacePackages[${index}]`,
+      );
+      return {
+        dir: readRepoRelativePath(record, "dir"),
+        ...optionalString(record, "name"),
+        ports: readPortArray(record, "ports"),
+        scripts: readStringRecord(record, "scripts"),
+      };
+    }),
   };
 }
 
@@ -1094,13 +1131,26 @@ function readNetworkAttempts(
     const attempt = assertRecord(value, path);
     return {
       direction: readEnum(attempt, "direction", ["inbound", "outbound"], path),
+      ...(attempt.hasCredentials === undefined
+        ? {}
+        : {
+            hasCredentials: readBoolean(attempt, "hasCredentials", path),
+          }),
       host: readNonEmptyString(attempt, "host", path),
+      ...(attempt.method === undefined
+        ? {}
+        : { method: readNonEmptyString(attempt, "method", path) }),
       phase: readEnum(
         attempt,
         "phase",
         ["browser", "dependency-install", "runtime"],
         path,
       ),
+      ...(attempt.resourceType === undefined
+        ? {}
+        : {
+            resourceType: readNonEmptyString(attempt, "resourceType", path),
+          }),
       ...(attempt.route === undefined
         ? {}
         : { route: readNonEmptyString(attempt, "route", path) }),

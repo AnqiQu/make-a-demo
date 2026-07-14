@@ -74,4 +74,36 @@ describe("profileRepo", () => {
       "npm run dev -- --port 4173",
     ]);
   });
+
+  it("profiles executable workspace scripts and their ports", () => {
+    const profile = profileRepo({
+      files: [
+        {
+          path: "package.json",
+          text: JSON.stringify({
+            scripts: { "dev:web": "turbo dev --filter=@acme/web" },
+            workspaces: ["apps/*"],
+          }),
+        },
+        {
+          path: "apps/web/package.json",
+          text: JSON.stringify({
+            name: "@acme/web",
+            scripts: { build: "next build", dev: "next dev -p 3100" },
+          }),
+        },
+        { path: "bun.lock", text: "" },
+      ],
+      repoUrl: "https://github.com/example/workspace",
+    });
+
+    expect(profile.workspacePackages).toEqual([
+      {
+        dir: "apps/web",
+        name: "@acme/web",
+        ports: [3100],
+        scripts: { build: "next build", dev: "next dev -p 3100" },
+      },
+    ]);
+  });
 });

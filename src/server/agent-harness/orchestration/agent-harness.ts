@@ -12,6 +12,7 @@ import { validatePreparationFidelity } from "../repo-preparation/preparation-fid
 import type { PreparationWorkspaceDiff } from "../repo-preparation/preparation-workspace-diff";
 import { profileRepo } from "../repo-profiler/repo-profiler";
 import { screenStaticRepoSecurity } from "../repo-security/static-repo-security";
+import { resolvePreparationRuntime } from "../run-planner/runtime-target-resolution";
 import {
   type ActionCatalog,
   type AppMap,
@@ -196,6 +197,8 @@ const artifactPaths = {
   captureRuntimeReset:
     "/workspace/.makeademo/capture-runtime-reset-validation-report.json",
   demoScript: DEMO_SCRIPT_OUTPUT_PATH,
+  externalResourceManifest:
+    "/workspace/.makeademo/external-resource-manifest.json",
   flowSpec: "/workspace/.makeademo/flow-spec.json",
   pipelineRunManifest: "/workspace/.makeademo/pipeline-run-manifest.json",
   preparationFallback: "/workspace/.makeademo/preparation-fallback.json",
@@ -1092,6 +1095,18 @@ async function ensureValidPreparation(input: {
       );
     }
 
+    const resolvedPreparation = resolvePreparationRuntime({
+      preparationManifest,
+      repoProfile: input.repoProfile,
+    }).preparationManifest;
+    if (!sameRuntimeConfiguration(preparationManifest, resolvedPreparation)) {
+      preparationManifest = await writeArtifact(
+        input.dependencies,
+        artifactPaths.preparationManifest,
+        resolvedPreparation,
+      );
+    }
+
     const workspaceDiff = await input.capturePreparationWorkspaceDiff();
     if (workspaceDiff !== undefined) {
       const fidelityValidation = await runValidationStage(
@@ -1144,6 +1159,21 @@ async function ensureValidPreparation(input: {
     }
     failure = preparationValidation;
   }
+}
+
+function sameRuntimeConfiguration(
+  left: PreparationManifest,
+  right: PreparationManifest,
+): boolean {
+  return (
+    left.appDir === right.appDir &&
+    left.baseUrl === right.baseUrl &&
+    left.buildCommandUsed === right.buildCommandUsed &&
+    left.installCommandUsed === right.installCommandUsed &&
+    left.startCommandUsed === right.startCommandUsed &&
+    left.ports.length === right.ports.length &&
+    left.ports.every((port, index) => port === right.ports[index])
+  );
 }
 
 async function repairPreparationManifest(input: {

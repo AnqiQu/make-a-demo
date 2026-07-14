@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -278,6 +279,18 @@ describe("captureScenesFromScript", () => {
     const submittedCommands: string[] = [];
     const uploadedDestinations: string[] = [];
     const downloadedSources: string[] = [];
+    const externalResourceDirectory = join(workspace, "external-resources");
+    const externalResourceBody = Buffer.from("original-logo");
+    const externalResourceDigest = createHash("sha256")
+      .update(externalResourceBody)
+      .digest("hex");
+    await mkdir(join(externalResourceDirectory, "resources"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(externalResourceDirectory, "resources", externalResourceDigest),
+      externalResourceBody,
+    );
     const preparationWorkspace: AgentHarnessWorkspaceHandle = {
       async destroy() {},
       id: "daytona_workspace",
@@ -376,6 +389,23 @@ describe("captureScenesFromScript", () => {
         stage: "capture-runtime-reset",
         status: "passed",
       },
+      externalResourceCache: {
+        directory: externalResourceDirectory,
+        manifest: {
+          entries: [
+            {
+              contentType: "image/svg+xml",
+              headers: {},
+              relativePath: `resources/${externalResourceDigest}`,
+              sha256: `sha256:${externalResourceDigest}`,
+              sizeBytes: externalResourceBody.byteLength,
+              status: 200,
+              url: "https://assets.example.com/logo.svg",
+            },
+          ],
+          version: "2026-07-14",
+        },
+      },
       keepTemp: false,
       preparationWorkspace,
       runId: "capture-sandbox",
@@ -395,9 +425,16 @@ describe("captureScenesFromScript", () => {
     expect(manifest.captureRuntimeResetArtifactPath).toBe(
       "/workspace/.makeademo/capture-runtime-reset.json",
     );
-    expect(uploadedDestinations).toEqual([
-      expect.stringMatching(/capture-inputs\.tgz$/),
-    ]);
+    expect(uploadedDestinations).toEqual(
+      expect.arrayContaining([
+        "/workspace/.makeademo/external-resources/external-resource-manifest.json",
+        `/workspace/.makeademo/external-resources/resources/${externalResourceDigest}`,
+        expect.stringMatching(/capture-inputs\.tgz$/),
+      ]),
+    );
+    expect(manifest.externalResourceManifestSha256).toMatch(
+      /^sha256:[a-f0-9]{64}$/,
+    );
     expect(submittedCommands.join("\n")).toContain(
       "/workspace/.makeademo/footage-capture-runs/capture-sandbox",
     );
@@ -431,90 +468,6 @@ describe("captureScenesFromScript", () => {
         "utf8",
       ),
     ).resolves.toBe("downloaded video");
-  });
-
-  it("fails prepared-workspace Footage Capture when the submitted app attempts server-side egress", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
-    const tempRoot = join(workspace, "runs");
-    const submittedCommands: string[] = [];
-    const downloadedSources: string[] = [];
-    const preparationWorkspace: AgentHarnessWorkspaceHandle = {
-      async destroy() {},
-      id: "daytona_workspace",
-      workspace: {
-        async destroy() {},
-        async downloadFiles(files) {
-          downloadedSources.push(...files.map((file) => file.sourcePath));
-        },
-        async downloadSubmittedCodeFiles(files) {
-          downloadedSources.push(...files.map((file) => file.sourcePath));
-        },
-        async execute() {
-          throw new Error(
-            "outer workspace execution must not run capture commands",
-          );
-        },
-        async executeSubmittedCode(command) {
-          submittedCommands.push(command);
-          if (command.includes("bun ")) {
-            return {
-              exitCode: 0,
-              stderr: "",
-              stdout: [
-                '[makeademo:scene] {"elapsedMs":100,"event":"started","sceneId":"scene-001"}',
-                '[makeademo:scene] {"elapsedMs":900,"event":"succeeded","sceneId":"scene-001"}',
-              ].join("\n"),
-            };
-          }
-          if (
-            command.includes("find ") ||
-            command.includes("ffmpeg") ||
-            command.includes("ffprobe")
-          ) {
-            throw new Error(
-              `post-network-block capture command must not run: ${command}`,
-            );
-          }
-          return { exitCode: 0, stderr: "", stdout: "" };
-        },
-        async getPreviewUrl() {
-          return "https://preview.example.test/";
-        },
-        async readSubmittedCodeAppStatus() {
-          return {
-            running: true,
-            stderr:
-              '[makeademo:network-blocked] {"direction":"outbound","host":"api.example.com","phase":"runtime"}',
-            stdout: "",
-          };
-        },
-        async setOutboundNetworkAccess() {},
-        async uploadFiles() {},
-        async uploadSubmittedCodeFiles() {},
-      },
-    };
-
-    await expect(
-      captureScenesFromScript({
-        baseUrl: "https://preview.example.test/",
-        captureRuntimeReset: {
-          artifactPath: "/workspace/.makeademo/capture-runtime-reset.json",
-          stage: "capture-runtime-reset",
-          status: "passed",
-        },
-        keepTemp: true,
-        preparationWorkspace,
-        runId: "capture-sandbox",
-        scriptPackage: validDemoScript(),
-        tempRoot,
-      }),
-    ).rejects.toThrow(
-      "Footage Capture blocked server-side runtime network access from the submitted app: api.example.com",
-    );
-    expect(submittedCommands.join("\n")).toContain("bun ");
-    expect(submittedCommands.join("\n")).not.toContain("ffmpeg");
-    expect(submittedCommands.join("\n")).not.toContain("ffprobe");
-    expect(downloadedSources).toEqual([]);
   });
 
   it("requires a prepared workspace when no explicit test recorder is injected", async () => {

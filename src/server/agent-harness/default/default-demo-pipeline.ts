@@ -197,6 +197,7 @@ export async function runDefaultDemoPipeline(
 
     const captureManifest = await runFootageCapture({
       captureScenes: options.captureScenes ?? captureScenesFromScript,
+      externalResourceCache: harnessDependencies.getExternalResourceCache?.(),
       pipelineResult,
       runDirectory,
       scriptPackage,
@@ -350,6 +351,9 @@ async function persistSandboxLogs(
 
 async function runFootageCapture(input: {
   captureScenes: typeof captureScenesFromScript;
+  externalResourceCache?: ReturnType<
+    NonNullable<DefaultHarnessDependencies["getExternalResourceCache"]>
+  >;
   pipelineResult: AgentHarnessPipelineResult;
   runDirectory: string;
   scriptPackage: unknown;
@@ -361,6 +365,9 @@ async function runFootageCapture(input: {
       "http://127.0.0.1:3000",
     keepTemp: false,
     captureRuntimeReset: readCaptureRuntimeResetProof(input.pipelineResult),
+    ...(input.externalResourceCache === undefined
+      ? {}
+      : { externalResourceCache: input.externalResourceCache }),
     preparationWorkspace: input.workspaceHandle,
     runId: "capture",
     scriptPackage: input.scriptPackage,

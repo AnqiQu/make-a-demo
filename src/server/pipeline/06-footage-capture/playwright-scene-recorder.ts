@@ -6,11 +6,12 @@ import {
   uploadSubmittedCodeArchive,
 } from "../../agent-harness/daytona/submitted-code-artifact-archive";
 import { executeSubmittedCode } from "../../agent-harness/daytona/submitted-code-execution";
+import { uploadSubmittedCodeExternalResourceCache } from "../../agent-harness/daytona/submitted-code-external-resource-cache";
 import type {
   AgentHarnessWorkspace,
   AgentHarnessWorkspaceHandle,
 } from "../../agent-harness/daytona/workspace.interface";
-import { readRuntimeNetworkAttempts } from "../../agent-harness/validation/runtime-network-guard";
+import type { ExternalResourceManifest } from "../../shared/external-resources/external-resource-manifest.schema";
 import {
   CAPTURE_COMMAND_TIMEOUT_MS,
   CAPTURE_SCRIPT_TIMEOUT_MS,
@@ -116,6 +117,9 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
       scenePath,
       prepareStylizedPlaywrightScript(input.demoPlaywrightScript, {
         baseUrl: input.baseUrl,
+        ...(input.externalResourceManifest === undefined
+          ? {}
+          : { externalResourceManifest: input.externalResourceManifest }),
         headed: this.headed,
         sceneHoldMsById,
         videoDirectory: videoScratchDirectory,
@@ -129,13 +133,6 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
       writeFile(join(input.runDirectory, "stdout.log"), result.stdout),
       writeFile(join(input.runDirectory, "stderr.log"), result.stderr),
     ]);
-    const blockedNetworkAttempts = protocol.blockedNetworkAttempts;
-    if (blockedNetworkAttempts.length > 0) {
-      throw new Error(
-        `Footage Capture blocked runtime network access from the generated Demo Script: ${blockedNetworkAttempts.map((attempt) => attempt.host).join(", ")}`,
-      );
-    }
-
     if (result.exitCode !== 0) {
       throw new Error(formatSceneFailure("continuous-take", result));
     }
@@ -206,6 +203,10 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
   constructor(
     private readonly options: {
       headed?: boolean;
+      externalResourceCache?: {
+        directory: string;
+        manifest: ExternalResourceManifest;
+      };
       postRollMs?: number;
       preRollMs?: number;
       preparationWorkspace: AgentHarnessWorkspaceHandle;
@@ -263,11 +264,22 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
       localScenePath,
       prepareStylizedPlaywrightScript(input.demoPlaywrightScript, {
         baseUrl: input.baseUrl,
+        ...(input.externalResourceManifest === undefined
+          ? {}
+          : { externalResourceManifest: input.externalResourceManifest }),
         headed: this.headed,
         sceneHoldMsById,
         videoDirectory: remoteVideoScratchDirectory,
       }),
     );
+
+    if (this.options.externalResourceCache !== undefined) {
+      await uploadSubmittedCodeExternalResourceCache({
+        directory: this.options.externalResourceCache.directory,
+        manifest: this.options.externalResourceCache.manifest,
+        workspace,
+      });
+    }
 
     await executeSubmittedCode(
       workspace,
@@ -310,18 +322,6 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
       await writeFile(
         join(input.runDirectory, "submitted-app-runtime.log"),
         appOutput,
-      );
-      const serverNetworkAttempts = readRuntimeNetworkAttempts(appOutput);
-      if (serverNetworkAttempts.length > 0) {
-        throw new Error(
-          `Footage Capture blocked server-side runtime network access from the submitted app: ${serverNetworkAttempts.map((attempt) => attempt.host).join(", ")}`,
-        );
-      }
-    }
-    const blockedNetworkAttempts = protocol.blockedNetworkAttempts;
-    if (blockedNetworkAttempts.length > 0) {
-      throw new Error(
-        `Footage Capture blocked runtime network access from the generated Demo Script: ${blockedNetworkAttempts.map((attempt) => attempt.host).join(", ")}`,
       );
     }
     if (result.exitCode !== 0) {

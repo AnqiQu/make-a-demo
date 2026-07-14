@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -192,6 +192,77 @@ describe("prepareStylizedPlaywrightScript", () => {
 
       expect(result, result.stderr).toMatchObject({ exitCode: 0 });
       expect(requestedPaths).not.toContain("/sw.js");
+    } finally {
+      server.close();
+      await rm(runDirectory, { force: true, recursive: true });
+    }
+  }, 20_000);
+
+  it("replays an exact external browser resource without outbound access", async () => {
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+XwX9WQAAAABJRU5ErkJggg==",
+      "base64",
+    );
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(
+        '<main><img alt="Original product" src="https://assets.example.com/product.png"></main>',
+      );
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("Test server did not expose a TCP port");
+    }
+    const runDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-resource-replay-test-"),
+    );
+    const resourcesDirectory = join(runDirectory, "external-resources");
+    await mkdir(join(resourcesDirectory, "resources"), { recursive: true });
+    await writeFile(join(resourcesDirectory, "resources", "image"), png);
+    await symlink(
+      join(process.cwd(), "node_modules"),
+      join(runDirectory, "node_modules"),
+    );
+    const scriptPath = join(runDirectory, "demo-script.ts");
+    await writeGeneratedCaptureSdkHarness(runDirectory);
+    await writeFile(
+      scriptPath,
+      prepareStylizedPlaywrightScript(
+        [
+          "await page.goto(baseUrl);",
+          "await expect(page.getByRole('img', { name: 'Original product' })).toHaveJSProperty('naturalWidth', 1);",
+        ].join("\n"),
+        {
+          baseUrl: `http://127.0.0.1:${address.port}`,
+          externalResourceManifest: {
+            entries: [
+              {
+                contentType: "image/png",
+                headers: {},
+                relativePath: "resources/image",
+                sha256:
+                  "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                sizeBytes: png.byteLength,
+                status: 200,
+                url: "https://assets.example.com/product.png",
+              },
+            ],
+            version: "2026-07-14",
+          },
+          externalResourceRoot: resourcesDirectory,
+          headed: false,
+          mode: "validation",
+        },
+      ),
+    );
+
+    try {
+      const result = await runPreparedScript(scriptPath);
+      expect(result, result.stderr).toMatchObject({ exitCode: 0 });
+      expect(result.stderr).not.toContain("[makeademo:network-blocked]");
     } finally {
       server.close();
       await rm(runDirectory, { force: true, recursive: true });

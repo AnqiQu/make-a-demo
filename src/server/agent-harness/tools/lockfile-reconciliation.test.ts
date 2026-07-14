@@ -43,4 +43,15 @@ describe("lockfile reconciliation", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("does not rewrite a lockfile when dependency transport failed", () => {
+    expect(
+      planLockfileReconciliation({
+        installCommand: "bun install --frozen-lockfile",
+        stderr:
+          "ConnectionClosed downloading tarball xlsx; Lockfile had changes, but lockfile is frozen",
+        stdout: "",
+      }),
+    ).toBeUndefined();
+  });
 });

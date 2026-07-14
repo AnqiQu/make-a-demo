@@ -16,8 +16,11 @@ describe("validateDynamicCapturePath", () => {
             blockedNetworkAttempts: [
               {
                 direction: "outbound" as const,
+                hasCredentials: false,
                 host: "api.example.com",
+                method: "GET",
                 phase: "runtime" as const,
+                resourceType: "fetch",
                 url: "https://api.example.com/data",
               },
             ],
@@ -35,8 +38,11 @@ describe("validateDynamicCapturePath", () => {
       blockedNetworkAttempts: [
         {
           direction: "outbound",
+          hasCredentials: false,
           host: "api.example.com",
+          method: "GET",
           phase: "runtime",
+          resourceType: "fetch",
           url: "https://api.example.com/data",
         },
       ],

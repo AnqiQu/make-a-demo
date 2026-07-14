@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentHarnessWorkspaceHandle } from "../../agent-harness/daytona/workspace.interface";
+import type { ExternalResourceManifest } from "../../shared/external-resources/external-resource-manifest.schema";
 import { assertDemoScriptCaptureSdkContract } from "./capture-sdk-contract";
 import { createDemoScriptDigest } from "./demo-script-identity";
 import { type DemoScript, parseDemoScript } from "./demo-script.schema";
@@ -18,6 +20,7 @@ export type CaptureManifest = {
   baseUrl: string;
   captureRuntimeResetArtifactPath?: string;
   createdAt: string;
+  externalResourceManifestSha256?: string;
   keepTemp: boolean;
   qualityFindings: string[];
   manifestPath: string;
@@ -40,6 +43,10 @@ export type CaptureScenesFromScriptInput = {
     artifactPath: string;
     stage: "capture-runtime-reset";
     status: "passed";
+  };
+  externalResourceCache?: {
+    directory: string;
+    manifest: ExternalResourceManifest;
   };
   keepTemp?: boolean;
   preparationWorkspace?: AgentHarnessWorkspaceHandle;
@@ -94,6 +101,11 @@ export async function captureScenesFromScript(
       const recordedScenes = await recorder.recordScenes({
         baseUrl: input.baseUrl,
         demoPlaywrightScript: scriptPackage.demoPlaywrightScript,
+        ...(input.externalResourceCache === undefined
+          ? {}
+          : {
+              externalResourceManifest: input.externalResourceCache.manifest,
+            }),
         retainRawTake: keepTemp,
         runDirectory,
         scenes: browserScenes,
@@ -116,6 +128,13 @@ export async function captureScenesFromScript(
               input.captureRuntimeReset.artifactPath,
           }),
       createdAt: new Date().toISOString(),
+      ...(input.externalResourceCache === undefined
+        ? {}
+        : {
+            externalResourceManifestSha256: `sha256:${createHash("sha256")
+              .update(JSON.stringify(input.externalResourceCache.manifest))
+              .digest("hex")}`,
+          }),
       keepTemp,
       manifestPath,
       runDirectory,
@@ -162,6 +181,9 @@ function createPreparedWorkspaceRecorder(input: CaptureScenesFromScriptInput) {
   }
 
   return new PreparedWorkspacePlaywrightSceneRecorder({
+    ...(input.externalResourceCache === undefined
+      ? {}
+      : { externalResourceCache: input.externalResourceCache }),
     preparationWorkspace: input.preparationWorkspace,
   });
 }

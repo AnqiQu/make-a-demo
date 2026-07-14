@@ -17,7 +17,7 @@ describe("Capture Runtime Protocol", () => {
           "expect.toBeVisible(locator(main))",
         ),
         sceneMarker(20, "succeeded", "scene-one"),
-        '[makeademo:network-blocked] {"direction":"outbound","host":"analytics.example.com","phase":"runtime","resourceType":"fetch","url":"https://analytics.example.com/track"}',
+        '[makeademo:network-blocked] {"direction":"outbound","hasCredentials":false,"host":"analytics.example.com","method":"GET","phase":"runtime","resourceType":"fetch","url":"https://analytics.example.com/track"}',
         '[makeademo:validation] script succeeded {"title":"Demo"}',
       ].join("\n"),
       stdout: [
@@ -35,7 +35,9 @@ describe("Capture Runtime Protocol", () => {
     expect(protocol.blockedNetworkAttempts).toEqual([
       {
         direction: "outbound",
+        hasCredentials: false,
         host: "analytics.example.com",
+        method: "GET",
         phase: "runtime",
         resourceType: "fetch",
         url: "https://analytics.example.com/track",
