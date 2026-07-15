@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import {
   BROWSER_ACTION_COMPILER_VERSION,
   BUN_RUNTIME_VERSION,
@@ -14,6 +14,8 @@ import {
 } from "../../pipeline/06-footage-capture/demo-script.schema";
 import {
   type ExternalResourceFetcher,
+  type ExternalResourceHostResolver,
+  authorizeExternalResourcePassthrough,
   hydrateExternalResourceCache,
   isHydratableExternalResource,
 } from "../../shared/external-resources/external-resource-cache";
@@ -24,7 +26,10 @@ import {
 } from "../../shared/integrations/agents/opencode-provider-secrets";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../../shared/integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import type { PipelineEventLogger } from "../../shared/logging/pipeline-event-logger";
-import { exploreSubmittedApp } from "../app-explorer/submitted-app-explorer";
+import {
+  type SubmittedAppExplorationResult,
+  exploreSubmittedApp,
+} from "../app-explorer/submitted-app-explorer";
 import { uploadSubmittedCodeExternalResourceCache } from "../daytona/submitted-code-external-resource-cache";
 import {
   AgentHarnessCommandTimeoutError,
@@ -95,11 +100,16 @@ import {
   type RepoSourceArchive,
   assertRepoSourceArchiveIntegrity,
 } from "./repo-snapshot";
+import {
+  type AgentHarnessRetryPolicy,
+  readAgentHarnessRetryPolicy,
+} from "./retry-policy";
 
 export type DefaultHarnessDependenciesOptions = {
   artifactStore: NonNullable<AgentHarnessPipelineDependencies["artifactStore"]>;
   env?: Record<string, string | undefined>;
   externalResourceFetcher?: ExternalResourceFetcher;
+  externalResourceHostResolver?: ExternalResourceHostResolver;
   logger?: PipelineEventLogger;
   modelID?: string;
   openCodeRunner?: OpenCodeHarnessRunner;
@@ -107,6 +117,7 @@ export type DefaultHarnessDependenciesOptions = {
   providerID?: string;
   /** Exact screened revision to materialize; production callers must provide it. */
   repoSourceArchive?: RepoSourceArchive;
+  retryPolicy?: Partial<AgentHarnessRetryPolicy>;
   staticImageAssets?: Readonly<Record<string, { sourcePath: string }>>;
   workspaceProvider?: AgentHarnessWorkspaceProvider;
 };
@@ -128,7 +139,6 @@ const maxShellArtifactWriteBytes = 120 * 1024;
 const openCodeInactivityTimeoutMs = 5 * 60_000;
 const preparationDiffCommandTimeoutMs = 60_000;
 const preparationPatchMarker = "\0MAKEADEMO_PATCH\0";
-const maximumExternalResourceHydrationPasses = 3;
 
 const artifactPaths = {
   actionCatalog: "/workspace/.makeademo/action-catalog.json",
@@ -164,6 +174,7 @@ export async function createDefaultAgentHarnessDependencies(
   options: DefaultHarnessDependenciesOptions,
 ): Promise<DefaultHarnessDependencies> {
   const env = options.env ?? process.env;
+  const retryPolicy = readAgentHarnessRetryPolicy(env, options.retryPolicy);
   const providerID = options.providerID ?? "openai";
   const modelID =
     options.modelID ?? (env.MAKEADEMO_OPENAI_MODEL?.trim() || "gpt-5.6-terra");
@@ -226,6 +237,88 @@ export async function createDefaultAgentHarnessDependencies(
     });
     return addedResources > 0;
   };
+  const authorizeExternalResources = async (attempts: NetworkAttempt[]) => {
+    const plan = await authorizeExternalResourcePassthrough({
+      attempts,
+      ...(options.externalResourceHostResolver === undefined
+        ? {}
+        : { resolveHost: options.externalResourceHostResolver }),
+      onFailure: async ({ error, url }) => {
+        await options.logger?.warn({
+          error: readUnknownErrorMessage(error),
+          event: "external-resource.passthrough.denied",
+          url,
+        });
+      },
+    });
+    await options.logger?.info({
+      event: "external-resource.passthrough.authorized",
+      hostCount: plan.hosts.length,
+      resourceCount: plan.urls.length,
+    });
+    return plan;
+  };
+  const runWithExternalResourceBroker = async <T>(input: {
+    markUnresolved?: (result: T) => T;
+    readBlockedAttempts: (result: T) => NetworkAttempt[];
+    run: (passthroughUrls?: string[]) => Promise<T>;
+    workspace: AgentHarnessWorkspace;
+  }): Promise<T> => {
+    const uploadCache = async () =>
+      await uploadSubmittedCodeExternalResourceCache({
+        directory: externalResourceDirectory,
+        ...(externalResourceManifest === undefined
+          ? {}
+          : { manifest: externalResourceManifest }),
+        workspace: input.workspace,
+      });
+    const runOffline = async () => {
+      await uploadCache();
+      return await input.run();
+    };
+    const readUncachedAttempts = (result: T) =>
+      input
+        .readBlockedAttempts(result)
+        .filter(isHydratableExternalResource)
+        .filter(
+          (attempt) =>
+            !externalResourceManifest?.entries.some(
+              (entry) => entry.url === attempt.url,
+            ),
+        );
+    const unresolved = (result: T) => input.markUnresolved?.(result) ?? result;
+
+    for (
+      let pass = 1;
+      pass <= retryPolicy.externalResourceBrokerPasses;
+      pass += 1
+    ) {
+      const offlineResult = await runOffline();
+      const uncached = readUncachedAttempts(offlineResult);
+      if (uncached.length === 0) return offlineResult;
+
+      if (input.workspace.setSubmittedCodeResourceHosts === undefined) {
+        if (await hydrateExternalResources(uncached, pass)) continue;
+        return unresolved(offlineResult);
+      }
+
+      const passthrough = await authorizeExternalResources(uncached);
+      if (passthrough.urls.length === 0) return unresolved(offlineResult);
+      await withSubmittedCodeResourceHosts({
+        hosts: passthrough.hosts,
+        run: () => input.run(passthrough.urls),
+        workspace: input.workspace,
+      });
+      if (!(await hydrateExternalResources(passthrough.attempts, pass))) {
+        return unresolved(offlineResult);
+      }
+    }
+
+    const finalResult = await runOffline();
+    return readUncachedAttempts(finalResult).length === 0
+      ? finalResult
+      : unresolved(finalResult);
+  };
 
   const dependencies: AgentHarnessPipelineDependencies = {
     artifactStore: options.artifactStore,
@@ -280,44 +373,23 @@ export async function createDefaultAgentHarnessDependencies(
       return workspaceHandle.workspace;
     },
     async exploreApp({ preparationManifest, workspace }) {
-      for (
-        let pass = 0;
-        pass <= maximumExternalResourceHydrationPasses;
-        pass += 1
-      ) {
-        await uploadSubmittedCodeExternalResourceCache({
-          directory: externalResourceDirectory,
-          ...(externalResourceManifest === undefined
-            ? {}
-            : { manifest: externalResourceManifest }),
-          workspace,
-        });
-        const exploration = await exploreSubmittedApp({
-          baseUrl: preparationManifest.baseUrl,
-          ...(externalResourceManifest === undefined
-            ? {}
-            : { externalResourceManifest }),
-          featureInventory: preparationManifest.productContext.featureInventory,
-          preparationManifestId: preparationManifest.id,
-          workspace,
-        });
-        const blocked = exploration.validationReport.blockedNetworkAttempts;
-        const eligible = blocked.filter(isHydratableExternalResource);
-        if (
-          pass === maximumExternalResourceHydrationPasses ||
-          eligible.every((attempt) =>
-            externalResourceManifest?.entries.some(
-              (entry) => entry.url === attempt.url,
-            ),
-          )
-        ) {
-          return exploration;
-        }
-        if (!(await hydrateExternalResources(eligible, pass + 1))) {
-          return exploration;
-        }
-      }
-      throw new Error("External resource hydration loop did not terminate.");
+      return await runWithExternalResourceBroker({
+        readBlockedAttempts: (result: SubmittedAppExplorationResult) =>
+          result.validationReport.blockedNetworkAttempts,
+        run: (passthroughUrls) =>
+          exploreSubmittedApp({
+            baseUrl: preparationManifest.baseUrl,
+            ...(externalResourceManifest === undefined
+              ? {}
+              : { externalResourceManifest }),
+            featureInventory:
+              preparationManifest.productContext.featureInventory,
+            ...(passthroughUrls === undefined ? {} : { passthroughUrls }),
+            preparationManifestId: preparationManifest.id,
+            workspace,
+          }),
+        workspace,
+      });
     },
     async planFlow({
       actionCatalog,
@@ -350,7 +422,11 @@ export async function createDefaultAgentHarnessDependencies(
         createFlowSpecContract(),
       );
       let artifactError = "FlowSpec was not produced.";
-      for (let attempt = 1; attempt <= 3; attempt += 1) {
+      for (
+        let attempt = 1;
+        attempt <= retryPolicy.agentArtifactAttempts;
+        attempt += 1
+      ) {
         const result = await runOpenCode({
           availableTools: ["read", "write"],
           configDir: openCodeConfigDirectory,
@@ -394,7 +470,7 @@ export async function createDefaultAgentHarnessDependencies(
           result,
           stage: "Flow Planning",
         });
-        if (attempt === 3) {
+        if (attempt === retryPolicy.agentArtifactAttempts) {
           throw new Error(
             formatOpenCodeArtifactContractError({
               path: artifactPaths.flowSpec,
@@ -452,7 +528,11 @@ export async function createDefaultAgentHarnessDependencies(
       let readError = "PreparationManifest was not produced.";
       let repairBaselineFingerprint: string | undefined;
       let primaryAgentTimeout: AgentHarnessCommandTimeoutError | undefined;
-      for (let attempt = 1; attempt <= 3; attempt += 1) {
+      for (
+        let attempt = 1;
+        attempt <= retryPolicy.agentArtifactAttempts;
+        attempt += 1
+      ) {
         const stage =
           attempt === 1 ? "repo-preparation" : "repo-preparation-repair";
         let result: OpenCodeHarnessRunResult;
@@ -532,7 +612,7 @@ export async function createDefaultAgentHarnessDependencies(
           !manifestResult.ok &&
           manifestResult.failureClassification === "invalid-json" &&
           manifestResult.rawCandidate !== undefined &&
-          attempt < 3
+          attempt < retryPolicy.agentArtifactAttempts
         ) {
           syntaxEvidencePath = `${makeADemoDirectory}/invalid-preparation-manifest-attempt-${attempt}.json`;
           await writeWorkspaceText(
@@ -585,7 +665,7 @@ export async function createDefaultAgentHarnessDependencies(
           result,
           stage: "Repo Preparation",
         });
-        if (attempt === 3) {
+        if (attempt === retryPolicy.agentArtifactAttempts) {
           throw attachOpenCodeSession(
             new Error(
               formatOpenCodeArtifactContractError({
@@ -638,7 +718,12 @@ export async function createDefaultAgentHarnessDependencies(
         createPreparationManifestTemplate(runPlan, demoBrief),
       );
       let artifactError: string | undefined;
-      for (let attempt = 1; attempt <= 3; attempt += 1) {
+      let timeoutRetryUsed = false;
+      for (
+        let attempt = 1;
+        attempt <= retryPolicy.agentArtifactAttempts;
+        attempt += 1
+      ) {
         const result = await runOpenCode({
           availableTools: ["read", "write"],
           configDir: openCodeConfigDirectory,
@@ -686,6 +771,20 @@ export async function createDefaultAgentHarnessDependencies(
           sessionId: opencodeSessionId,
           workspace,
         });
+        if (result.timeoutError !== undefined) {
+          if (
+            timeoutRetryUsed ||
+            attempt === retryPolicy.agentArtifactAttempts
+          ) {
+            throw result.timeoutError;
+          }
+          timeoutRetryUsed = true;
+          opencodeSessionId = undefined;
+          artifactError = manifestResult.ok
+            ? result.timeoutError.message
+            : manifestResult.error;
+          continue;
+        }
         if (manifestResult.ok) {
           return {
             manifest: manifestResult.manifest,
@@ -698,7 +797,7 @@ export async function createDefaultAgentHarnessDependencies(
           result,
           stage: "Repo Preparation Repair",
         });
-        if (attempt === 3) {
+        if (attempt === retryPolicy.agentArtifactAttempts) {
           throw new Error(
             formatOpenCodeArtifactContractError({
               path: artifactPaths.preparationManifest,
@@ -749,7 +848,11 @@ export async function createDefaultAgentHarnessDependencies(
         includeMakeADemoArtifacts: false,
       });
       let artifactError: string | undefined;
-      for (let attempt = 1; attempt <= 3; attempt += 1) {
+      for (
+        let attempt = 1;
+        attempt <= retryPolicy.agentArtifactAttempts;
+        attempt += 1
+      ) {
         const result = await runOpenCode({
           availableTools: ["read", "write"],
           configDir: openCodeConfigDirectory,
@@ -788,7 +891,7 @@ export async function createDefaultAgentHarnessDependencies(
           result,
           stage: "Script Repair",
         });
-        if (attempt === 3) {
+        if (attempt === retryPolicy.agentArtifactAttempts) {
           throw new Error(
             formatOpenCodeArtifactContractError({
               path: DEMO_SCRIPT_OUTPUT_PATH,
@@ -847,84 +950,70 @@ export async function createDefaultAgentHarnessDependencies(
                   warnings: [],
                 };
               }
-              if (demoScript.demoPlaywrightScript === undefined) {
+              const demoPlaywrightScript = demoScript.demoPlaywrightScript;
+              if (demoPlaywrightScript === undefined) {
                 throw new Error(
                   "Demo Script browser Scenes did not compile to Playwright source.",
                 );
               }
-              for (
-                let pass = 0;
-                pass <= maximumExternalResourceHydrationPasses;
-                pass += 1
-              ) {
-                await uploadSubmittedCodeExternalResourceCache({
-                  directory: externalResourceDirectory,
-                  ...(externalResourceManifest === undefined
-                    ? {}
-                    : { manifest: externalResourceManifest }),
-                  workspace: handle.workspace,
-                });
-                const result = await validatePreparedWorkspaceCapturePath({
-                  baseUrl: preparationManifest.baseUrl,
-                  demoPlaywrightScript: demoScript.demoPlaywrightScript,
-                  ...(externalResourceManifest === undefined
-                    ? {}
-                    : { externalResourceManifest }),
-                  expectedStepIdsByScene: Object.fromEntries([
-                    [
-                      "setup",
-                      demoScript.setupActions?.map((action) => action.id) ?? [],
-                    ],
-                    ...browserScenes.map((scene) => [
-                      scene.id,
-                      scene.actions?.map((action) => action.id) ?? [],
-                    ]),
-                  ]),
-                  localRunDirectory: join(
-                    options.outputRoot,
-                    "capture-path-validation",
-                    `capture-path-validation-${Date.now()}-${pass}`,
-                  ),
-                  onEvent: async (entry) => {
-                    const level =
-                      entry.level === "error"
-                        ? "error"
-                        : entry.level === "warn"
-                          ? "warn"
-                          : "info";
-                    await options.logger?.[level](entry);
-                  },
-                  sceneIds: browserScenes.map((scene) => scene.id),
-                  workspace: handle,
-                });
-                const eligible = result.blockedNetworkAttempts.filter(
-                  isHydratableExternalResource,
-                );
-                if (eligible.length === 0) {
-                  return result;
-                }
-                const uncached = eligible.filter(
-                  (attempt) =>
-                    !externalResourceManifest?.entries.some(
-                      (entry) => entry.url === attempt.url,
+              const expectedStepIdsByScene = Object.fromEntries([
+                [
+                  "setup",
+                  demoScript.setupActions?.map((action) => action.id) ?? [],
+                ],
+                ...browserScenes.map((scene) => [
+                  scene.id,
+                  scene.actions?.map((action) => action.id) ?? [],
+                ]),
+              ]);
+              let captureValidationRun = 0;
+              return await runWithExternalResourceBroker({
+                markUnresolved: (result) => ({
+                  ...result,
+                  failureReason:
+                    "Capture Path Validation could not replay required external browser resources.",
+                  status: "failed" as const,
+                }),
+                readBlockedAttempts: (result) =>
+                  result.blockedNetworkAttempts.map((attempt) => ({
+                    ...attempt,
+                    phase:
+                      attempt.phase === "install"
+                        ? "dependency-install"
+                        : attempt.phase,
+                  })),
+                run: async (passthroughUrls) => {
+                  captureValidationRun += 1;
+                  return await validatePreparedWorkspaceCapturePath({
+                    baseUrl: preparationManifest.baseUrl,
+                    demoPlaywrightScript,
+                    ...(externalResourceManifest === undefined
+                      ? {}
+                      : { externalResourceManifest }),
+                    expectedStepIdsByScene,
+                    localRunDirectory: join(
+                      options.outputRoot,
+                      "capture-path-validation",
+                      `capture-path-validation-${Date.now()}-${captureValidationRun}`,
                     ),
-                );
-                if (
-                  pass === maximumExternalResourceHydrationPasses ||
-                  uncached.length === 0 ||
-                  !(await hydrateExternalResources(uncached, pass + 1))
-                ) {
-                  return {
-                    ...result,
-                    failureReason:
-                      "Capture Path Validation could not replay required external browser resources.",
-                    status: "failed",
-                  };
-                }
-              }
-              throw new Error(
-                "Capture Path Validation resource hydration loop did not terminate.",
-              );
+                    onEvent: async (entry) => {
+                      const level =
+                        entry.level === "error"
+                          ? "error"
+                          : entry.level === "warn"
+                            ? "warn"
+                            : "info";
+                      await options.logger?.[level](entry);
+                    },
+                    ...(passthroughUrls === undefined
+                      ? {}
+                      : { passthroughUrls }),
+                    sceneIds: browserScenes.map((scene) => scene.id),
+                    workspace: handle,
+                  });
+                },
+                workspace: handle.workspace,
+              });
             } catch (error) {
               const diagnostic = readErrorDiagnostic(error);
               return {
@@ -1001,7 +1090,11 @@ export async function createDefaultAgentHarnessDependencies(
         includeMakeADemoArtifacts: false,
       });
       let artifactError = "Demo Script was not produced.";
-      for (let attempt = 1; attempt <= 3; attempt += 1) {
+      for (
+        let attempt = 1;
+        attempt <= retryPolicy.agentArtifactAttempts;
+        attempt += 1
+      ) {
         const stage = attempt === 1 ? "script-writing" : "script-repair";
         const result = await runOpenCode({
           availableTools: ["read", "write"],
@@ -1047,7 +1140,7 @@ export async function createDefaultAgentHarnessDependencies(
           stage:
             stage === "script-writing" ? "Script Writing" : "Script Repair",
         });
-        if (attempt === 3) {
+        if (attempt === retryPolicy.agentArtifactAttempts) {
           throw new Error(
             formatOpenCodeArtifactContractError({
               path: DEMO_SCRIPT_OUTPUT_PATH,
@@ -1437,7 +1530,28 @@ async function validateSubmittedCodeRuntime(input: {
     if (reconciliationCommand !== undefined) {
       const reconciliation = await runInstall(reconciliationCommand);
       if (reconciliation.status === "succeeded") {
-        result = await runInstall(installCommand);
+        try {
+          if (input.workspace.promoteSubmittedCodeFiles === undefined) {
+            throw new Error(
+              "Workspace cannot persist an automatic lockfile reconciliation.",
+            );
+          }
+          await input.workspace.promoteSubmittedCodeFiles(
+            readReconciledLockfilePaths({
+              installCommand,
+              installDirectory: runtimeTarget?.install.cwd ?? manifest.appDir,
+              lockfiles: input.repoProfile.lockfiles,
+            }),
+          );
+          result = await runInstall(installCommand);
+        } catch (error) {
+          result = {
+            exitCode: 1,
+            status: "failed",
+            stderr: `Automatic lockfile reconciliation could not be persisted: ${readErrorMessage(error)}`,
+            stdout: "",
+          };
+        }
       } else if (reconciliation.status === "failed") {
         result = {
           ...reconciliation,
@@ -1610,6 +1724,75 @@ async function validateSubmittedCodeRuntime(input: {
       : [],
     urlChecked: manifest.baseUrl,
   });
+}
+
+function readReconciledLockfilePaths(input: {
+  installCommand: string;
+  installDirectory: string;
+  lockfiles: string[];
+}): string[] {
+  const manager = /^(?:corepack\s+)?(bun|npm|pnpm|yarn)\b/.exec(
+    input.installCommand.trim(),
+  )?.[1];
+  const expectedNames: Record<string, string[]> = {
+    bun: ["bun.lock", "bun.lockb"],
+    npm: ["package-lock.json"],
+    pnpm: ["pnpm-lock.yaml"],
+    yarn: ["yarn.lock"],
+  };
+  const names = expectedNames[manager ?? ""] ?? [];
+  const known = input.lockfiles.filter(
+    (path) =>
+      posix.dirname(path) === input.installDirectory &&
+      names.includes(posix.basename(path)),
+  );
+  if (known.length > 0) return known.sort();
+  const fallback = names[0];
+  if (fallback === undefined) {
+    throw new Error("Package manager lockfile type could not be determined.");
+  }
+  return [
+    input.installDirectory === "."
+      ? fallback
+      : posix.join(input.installDirectory, fallback),
+  ];
+}
+
+async function withSubmittedCodeResourceHosts<T>(input: {
+  hosts: string[];
+  run: () => Promise<T>;
+  workspace: AgentHarnessWorkspace;
+}): Promise<T> {
+  if (input.hosts.length === 0) return await input.run();
+  const setResourceHosts = input.workspace.setSubmittedCodeResourceHosts;
+  if (setResourceHosts === undefined) {
+    throw new Error(
+      "Filtered submitted-code resource passthrough is unavailable.",
+    );
+  }
+  await setResourceHosts.call(input.workspace, input.hosts);
+  const outcome = await input.run().then(
+    (value) => ({ status: "succeeded" as const, value }),
+    (error: unknown) => ({ error, status: "failed" as const }),
+  );
+  let cleanupError: unknown;
+  try {
+    await setResourceHosts.call(input.workspace, []);
+  } catch (error) {
+    cleanupError = error;
+  }
+  if (outcome.status === "failed") {
+    if (outcome.error instanceof Error && cleanupError !== undefined) {
+      attachSecondaryFailure(
+        outcome.error,
+        "resourceNetworkCleanupError",
+        cleanupError,
+      );
+    }
+    throw outcome.error;
+  }
+  if (cleanupError !== undefined) throw cleanupError;
+  return outcome.value;
 }
 
 function findBuildScopeViolation(input: {
@@ -2609,7 +2792,7 @@ function createRepoPreparationPrompt(input: {
       "Read /workspace/.makeademo/preparation-manifest-contract.json first and satisfy the complete contract, including every required field on every featureInventory entry.",
       "Start by copying /workspace/.makeademo/preparation-manifest-template.json; preserve every field type and replace or enrich its values.",
       "Complete all inspection, edits, and checks before the final manifest write. Writing /workspace/.makeademo/preparation-manifest.json is the terminal action: after writing it, do not call another tool; return a concise completion response immediately.",
-      "The manifest must include id, appDir, installCommandUsed, startCommandUsed, baseUrl, ports, envUsed, localDemoModeChanges, createdFiles, modifiedFiles, mocksAndFixturesAdded, blockedExternalServicesReplaced, requiredLocalOnlyAssumptions, knownLimitations, appExplorationHints, productContext, scriptGenerationContext, validationEvidence, and cleanupAndReproInstructions.",
+      "The manifest must include every field required by the backend-owned contract. Changed files and validation evidence are recorded by the backend, not authored in the manifest.",
       'appDir must be relative to /workspace/repo: use "." for the repo root or a path such as "frontend"; never use an absolute path.',
       'envUsed must be a flat JSON object whose keys and values are strings, such as {"NODE_ENV":"development"}; use {} when no environment values are used. Do not put arrays or nested objects under envUsed.',
       `Demo brief: ${JSON.stringify(input.demoBrief)}`,
@@ -2652,7 +2835,7 @@ function createRepoPreparationRepairPrompt(input: {
       `Use this local runtime URL in the manifest: ${input.runPlan.expectedLocalUrl}`,
       `Use this install command unless you have a stronger repo-specific reason: ${input.runPlan.installCommand}`,
       `Use this start command unless you have a stronger repo-specific reason: ${input.runPlan.startCommand}`,
-      "The manifest must include id, appDir, installCommandUsed, startCommandUsed, baseUrl, ports, envUsed, localDemoModeChanges, createdFiles, modifiedFiles, mocksAndFixturesAdded, blockedExternalServicesReplaced, requiredLocalOnlyAssumptions, knownLimitations, appExplorationHints, productContext, scriptGenerationContext, validationEvidence, and cleanupAndReproInstructions.",
+      "The manifest must include every field required by the backend-owned contract. Changed files and validation evidence are recorded by the backend, not authored in the manifest.",
       'appDir must be relative to /workspace/repo: use "." for the repo root or a path such as "frontend"; never use an absolute path.',
       'envUsed must be a flat JSON object whose keys and values are strings, such as {"NODE_ENV":"development"}; use {} when no environment values are used. Do not put arrays or nested objects under envUsed.',
       `Previous OpenCode output excerpt:\n${formatOpenCodeOutputExcerpt(
@@ -2702,7 +2885,7 @@ function createRuntimePreparationRepairPrompt(input: {
       "Do not run the app, install dependencies, or use the network. The backend will rerun install, build, start, and browser validation in the isolated submitted-code sandbox.",
       "Omit buildCommandUsed for development-server starts. If validation reports that a root aggregate build is too broad, use the exact app-scoped command from the failure summary.",
       "Preserve backend-resolved appDir, install, build, start, port, and base URL fields unless the failure summary explicitly reports a runtime-configuration error.",
-      "For dependency-source failures, change package metadata or overrides but do not synthesize lockfile entries by hand; the backend performs controlled lockfile reconciliation and then reruns the frozen install.",
+      "For dependency-source failures, change only package metadata, lockfiles, or package-manager configuration. Do not edit executable source files or replace a library API to make installation pass; the backend performs controlled lockfile reconciliation and reruns the frozen install.",
       "For browser network failures, repair only unresolved URLs in the failure report. The backend already replays safe public GET resources, so preserve original product images, media, fonts, styles, and scripts. Adapt authenticated or stateful APIs at their service/data seams and never substitute visible assets.",
       "You may edit /workspace/repo and must rewrite /workspace/.makeademo/preparation-manifest.json to match the actual repaired state.",
       "The repaired runtime must still be the original product. Preserve its route tree, UI components, design system, styles, brand assets, and interaction logic; remove alternate demo servers, replacement pages, and commands that bypass the original app.",

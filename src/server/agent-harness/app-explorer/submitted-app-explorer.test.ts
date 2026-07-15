@@ -19,6 +19,14 @@ describe("exploreSubmittedApp", () => {
             },
           ],
           inputs: ["Search"],
+          interactions: [
+            {
+              kind: "fill",
+              locator: { strategy: "placeholder", value: "Search" },
+              name: "Search",
+              outcome: "Search contained the observed demo value",
+            },
+          ],
           links: [
             {
               href: "/dashboard",
@@ -52,6 +60,10 @@ describe("exploreSubmittedApp", () => {
     expect(commands[0]).toContain(
       'NODE_PATH="$(npm root -g)" bun /workspace/.makeademo/exploration/explore-app.mjs',
     );
+    expect(readExplorerScript(commands)).toContain(
+      "await interactionLocator.click",
+    );
+    expect(readExplorerScript(commands)).toContain("observed.interactions");
     expect(artifacts.validationReport.status).toBe("passed");
     expect(artifacts.appMap).toMatchObject({
       baseUrl,
@@ -94,6 +106,13 @@ describe("exploreSubmittedApp", () => {
           forms: ["editor"],
           headings: ["New Article"],
           inputs: ["Article Title"],
+          interactions: [
+            {
+              kind: "click",
+              name: "Publish Article",
+              outcome: "Published article confirmation became visible",
+            },
+          ],
           path: "/#/editor",
           requestedPath: "/#/editor",
         }),
@@ -115,6 +134,90 @@ describe("exploreSubmittedApp", () => {
         }),
       ]),
     );
+  });
+
+  it("grounds controls to the matching feature when several features share one route", async () => {
+    const invoice = preparedFeature({
+      description: "Create an invoice for a customer.",
+      entryPaths: ["/"],
+      id: "create-invoice",
+      label: "Creating invoices",
+      requestedFeature: "creating invoices",
+    });
+    const teammate = preparedFeature({
+      description: "Invite a teammate to the workspace.",
+      entryPaths: ["/"],
+      id: "invite-teammate",
+      label: "Inviting teammates",
+      requestedFeature: "inviting teammates",
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [invoice, teammate],
+      routes: [
+        observedRoute({
+          buttons: ["Create invoice", "Invite teammate"],
+          featureIds: [invoice.id, teammate.id],
+          headings: ["Workspace"],
+          interactions: [
+            {
+              kind: "click",
+              name: "Create invoice",
+              outcome: "New invoice form became visible",
+            },
+            {
+              kind: "click",
+              name: "Invite teammate",
+              outcome: "Invite teammate dialog became visible",
+            },
+          ],
+        }),
+      ],
+    });
+    const actions = requireArtifacts(result).actionCatalog.actions;
+
+    expect(
+      actions.find(
+        (action) =>
+          action.kind === "click" &&
+          action.preferredLocator.name === "Create invoice",
+      )?.featureIds,
+    ).toEqual([invoice.id]);
+    expect(
+      actions.find(
+        (action) =>
+          action.kind === "click" &&
+          action.preferredLocator.name === "Invite teammate",
+      )?.featureIds,
+    ).toEqual([teammate.id]);
+  });
+
+  it("catalogs only exercised controls and preserves their observed visible outcome", async () => {
+    const { result } = await exploreObservation({
+      routes: [
+        observedRoute({
+          buttons: ["Open settings", "Delete account"],
+          headings: ["Account"],
+          interactions: [
+            {
+              kind: "click",
+              name: "Open settings",
+              outcome: "Settings dialog became visible",
+            },
+          ],
+        }),
+      ],
+    });
+    const clickActions = requireArtifacts(result).actionCatalog.actions.filter(
+      (action) => action.kind === "click",
+    );
+
+    expect(clickActions).toEqual([
+      expect.objectContaining({
+        evidence: expect.stringContaining("Playwright exercised"),
+        expectedResult: "Settings dialog became visible",
+        preferredLocator: expect.objectContaining({ name: "Open settings" }),
+      }),
+    ]);
   });
 
   it("routes a protected feature login wall back to Repo Preparation", async () => {

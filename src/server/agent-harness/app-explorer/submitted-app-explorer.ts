@@ -41,6 +41,7 @@ type ObservedLink = {
 };
 type ObservedInputLocator = {
   controlKind: "fill" | "select";
+  inputType?: string;
   locatorEvidence?: ObservedLocatorEvidence | null;
   locator: {
     reason?: string;
@@ -68,6 +69,7 @@ type ObservedRoute = {
   headingLocatorEvidence?: Array<ObservedLocatorEvidence | null>;
   inputLocators?: ObservedInputLocator[];
   inputs: string[];
+  interactions?: ObservedInteraction[];
   links: ObservedLink[];
   path: string;
   primaryNavigation: string[];
@@ -78,6 +80,18 @@ type ObservedRoute = {
   text: string[];
   textLocatorEvidence?: Array<ObservedLocatorEvidence | null>;
   title: string;
+};
+type ObservedInteraction = {
+  kind: "click" | "fill" | "select";
+  locator?: {
+    name?: string;
+    reason?: string;
+    strategy: "css" | "label" | "placeholder" | "role";
+    value: string;
+  };
+  locatorEvidence?: ObservedLocatorEvidence | null;
+  name: string;
+  outcome: string;
 };
 type BrowserExplorationProtocol = {
   blockedNetworkAttempts: Array<
@@ -100,6 +114,7 @@ export async function exploreSubmittedApp(input: {
   baseUrl: string;
   externalResourceManifest?: ExternalResourceManifest;
   featureInventory?: PreparedDemoFeature[];
+  passthroughUrls?: string[];
   preparationManifestId: string;
   workspace: AgentHarnessWorkspace;
 }): Promise<SubmittedAppExplorationResult> {
@@ -107,6 +122,7 @@ export async function exploreSubmittedApp(input: {
     input.baseUrl,
     input.featureInventory ?? [],
     input.externalResourceManifest,
+    input.passthroughUrls,
   );
   const encodedScript = Buffer.from(script).toString("base64");
   const result = await executeSubmittedCode(
@@ -213,7 +229,7 @@ function createExplorationArtifacts(input: {
     ),
   });
   const actionCatalog = readActionCatalog({
-    actions: createActions(input.observation.routes),
+    actions: createActions(input.observation.routes, input.featureInventory),
     appMapId,
     id: actionCatalogId,
   });
@@ -258,7 +274,10 @@ function createRepairableExplorationFailure(input: {
   };
 }
 
-function createActions(routes: ObservedRoute[]) {
+function createActions(
+  routes: ObservedRoute[],
+  featureInventory: PreparedDemoFeature[],
+) {
   const actions: Array<Record<string, unknown>> = [];
   routes.forEach((route, routeIndex) => {
     actions.push({
@@ -286,7 +305,7 @@ function createActions(routes: ObservedRoute[]) {
         confidence: 0.95,
         evidence: `Playwright observed heading on ${route.path}`,
         expectedResult: `${heading} remains visible`,
-        featureIds: route.featureIds ?? [],
+        featureIds: matchActionFeatureIds(route, heading, featureInventory),
         id,
         kind: "assert",
         ...createLocatorCandidateFields(id, locatorEvidence),
@@ -313,7 +332,11 @@ function createActions(routes: ObservedRoute[]) {
           confidence: 0.85,
           evidence: `Playwright observed visible text on ${route.path}`,
           expectedResult: `${visibleText} remains visible`,
-          featureIds: route.featureIds ?? [],
+          featureIds: matchActionFeatureIds(
+            route,
+            visibleText,
+            featureInventory,
+          ),
           id,
           kind: "assert",
           ...createLocatorCandidateFields(
@@ -338,7 +361,11 @@ function createActions(routes: ObservedRoute[]) {
             confidence: 0.85,
             evidence: `Playwright observed a visible control on ${route.path}`,
             expectedResult: `${visibleButton} remains visible`,
-            featureIds: route.featureIds ?? [],
+            featureIds: matchActionFeatureIds(
+              route,
+              visibleButton,
+              featureInventory,
+            ),
             id,
             kind: "assert",
             ...createLocatorCandidateFields(
@@ -356,25 +383,32 @@ function createActions(routes: ObservedRoute[]) {
         }
       }
     }
-    route.buttons.forEach((button, index) => {
-      const locatorEvidence = route.buttonLocatorEvidence?.[index];
-      if (route.buttonLocatorEvidence !== undefined && !locatorEvidence) {
-        return;
-      }
-      const id = `click-button-${routeIndex + 1}-${index + 1}`;
+    (route.interactions ?? []).forEach((interaction, index) => {
+      if (interaction.locatorEvidence === null) return;
+      const id = `${interaction.kind}-interaction-${routeIndex + 1}-${index + 1}`;
+      const preferredLocator =
+        interaction.locator ??
+        (interaction.kind === "click"
+          ? {
+              name: interaction.name,
+              strategy: "role" as const,
+              value: "button",
+            }
+          : undefined);
+      if (preferredLocator === undefined) return;
       actions.push({
-        confidence: 0.9,
-        evidence: `Playwright observed button on ${route.path}`,
-        expectedResult: `Clicking ${button} changes visible app state`,
-        featureIds: route.featureIds ?? [],
+        confidence: 0.98,
+        evidence: `Playwright exercised ${interaction.name} on ${route.path} and observed: ${interaction.outcome}`,
+        expectedResult: interaction.outcome,
+        featureIds: matchActionFeatureIds(
+          route,
+          `${interaction.name} ${interaction.outcome}`,
+          featureInventory,
+        ),
         id,
-        kind: "click",
-        ...createLocatorCandidateFields(id, locatorEvidence),
-        preferredLocator: {
-          name: button,
-          strategy: "role",
-          value: "button",
-        },
+        kind: interaction.kind,
+        ...createLocatorCandidateFields(id, interaction.locatorEvidence),
+        preferredLocator,
         risks: [],
         route: route.path,
       });
@@ -392,7 +426,11 @@ function createActions(routes: ObservedRoute[]) {
         confidence: 0.9,
         evidence: `Playwright observed link to ${link.href}`,
         expectedResult: `${link.href} becomes visible`,
-        featureIds: route.featureIds ?? [],
+        featureIds: matchActionFeatureIds(
+          route,
+          `${link.name} ${link.href}`,
+          featureInventory,
+        ),
         id,
         kind: "click",
         ...createLocatorCandidateFields(id, link.locatorEvidence),
@@ -401,27 +439,6 @@ function createActions(routes: ObservedRoute[]) {
           strategy: "role",
           value: "link",
         },
-        risks: [],
-        route: route.path,
-      });
-    });
-    (route.inputLocators ?? []).forEach((input, index) => {
-      if (input.locatorEvidence === null) {
-        return;
-      }
-      const id = `${input.controlKind}-input-${routeIndex + 1}-${index + 1}`;
-      actions.push({
-        confidence: 0.9,
-        evidence: `Playwright observed ${input.name} control on ${route.path}`,
-        expectedResult:
-          input.controlKind === "select"
-            ? `Selecting an option in ${input.name} changes visible app state`
-            : `Entering a value in ${input.name} changes visible app state`,
-        featureIds: route.featureIds ?? [],
-        id,
-        kind: input.controlKind,
-        ...createLocatorCandidateFields(id, input.locatorEvidence),
-        preferredLocator: input.locator,
         risks: [],
         route: route.path,
       });
@@ -435,7 +452,7 @@ function createActions(routes: ObservedRoute[]) {
         confidence: 0.95,
         evidence: `Playwright observed scrollable content on ${route.path}`,
         expectedResult: `Scrolling ${target.name} reveals more visible content`,
-        featureIds: route.featureIds ?? [],
+        featureIds: matchActionFeatureIds(route, target.name, featureInventory),
         id,
         kind: "scroll",
         ...createLocatorCandidateFields(id, target.locatorEvidence),
@@ -448,6 +465,53 @@ function createActions(routes: ObservedRoute[]) {
   });
 
   return actions;
+}
+
+function matchActionFeatureIds(
+  route: ObservedRoute,
+  actionEvidence: string,
+  featureInventory: PreparedDemoFeature[],
+): string[] {
+  const routeFeatureIds = route.featureIds ?? [];
+  if (routeFeatureIds.length <= 1) return routeFeatureIds;
+  const actionTokens = semanticTokens(actionEvidence);
+  const matches = featureInventory
+    .filter((feature) => routeFeatureIds.includes(feature.id))
+    .map((feature) => ({
+      id: feature.id,
+      score: semanticTokens(
+        `${feature.id} ${feature.label} ${feature.requestedFeature ?? ""} ${feature.description}`,
+      ).filter((token) => actionTokens.includes(token)).length,
+    }));
+  const bestScore = Math.max(0, ...matches.map(({ score }) => score));
+  return bestScore === 0
+    ? []
+    : matches.filter(({ score }) => score === bestScore).map(({ id }) => id);
+}
+
+function semanticTokens(value: string): string[] {
+  const stopWords = new Set([
+    "about",
+    "after",
+    "before",
+    "button",
+    "create",
+    "demonstrate",
+    "feature",
+    "show",
+    "the",
+    "this",
+    "with",
+  ]);
+  return [
+    ...new Set(
+      value
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((token) => token.length >= 4 && !stopWords.has(token))
+        .map((token) => token.slice(0, 5)),
+    ),
+  ];
 }
 
 function createLocatorCandidateFields(
@@ -745,6 +809,7 @@ function createExplorerScript(
   baseUrl: string,
   featureInventory: PreparedDemoFeature[],
   externalResourceManifest?: ExternalResourceManifest,
+  passthroughUrls?: string[],
 ): string {
   const featureEntryTargets = createFeatureEntryTargets(
     baseUrl,
@@ -767,6 +832,7 @@ try {
       ? {}
       : { manifest: externalResourceManifest }),
     mode: "exploration",
+    ...(passthroughUrls === undefined ? {} : { passthroughUrls }),
   })}
   const page = await context.newPage();
   const readAriaRootName = (snapshot) => {
@@ -839,6 +905,45 @@ try {
       verification: { matchCount: 1, route, visible: true },
     };
   };
+  const createInteractionLocator = (locator) => locator.strategy === "label"
+    ? page.getByLabel(locator.value, { exact: true })
+    : locator.strategy === "placeholder"
+      ? page.getByPlaceholder(locator.value, { exact: true })
+      : page.locator(locator.value);
+  const readVisibleState = async () => await page.evaluate(() => {
+    const clean = (value) => (value || "").replace(/\\s+/g, " ").trim();
+    const visible = (element) => {
+      const style = getComputedStyle(element);
+      const box = element.getBoundingClientRect();
+      return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
+    };
+    const read = (selector) => Array.from(document.querySelectorAll(selector))
+      .filter(visible)
+      .map((element) => clean(element.textContent || element.getAttribute("aria-label")))
+      .filter(Boolean)
+      .slice(0, 80);
+    return {
+      dialogs: read("[role=dialog], dialog[open]"),
+      headings: read("h1, h2, h3, [role=heading]"),
+      text: read("main p, main li, article p, [role=main] p, [role=status], [role=alert]"),
+      title: document.title,
+      url: location.href,
+    };
+  });
+  const describeVisibleOutcome = (before, after) => {
+    if (after.url !== before.url) {
+      const target = new URL(after.url);
+      return target.pathname + target.search + target.hash + " became visible";
+    }
+    const newDialog = after.dialogs.find((value) => !before.dialogs.includes(value));
+    if (newDialog) return newDialog + " dialog became visible";
+    const newHeading = after.headings.find((value) => !before.headings.includes(value));
+    if (newHeading) return newHeading + " became visible";
+    const newText = after.text.find((value) => !before.text.includes(value));
+    if (newText) return newText + " became visible";
+    if (after.title !== before.title) return after.title + " became visible";
+    return undefined;
+  };
   page.on("console", (message) => {
     if (message.type() === "error") result.consoleErrors.push(page.url() + ": " + message.text());
   });
@@ -895,7 +1000,7 @@ try {
                   : undefined;
           return locator === undefined
             ? []
-            : [{ controlKind: tag === "select" ? "select" : "fill", locator, name }];
+            : [{ controlKind: tag === "select" ? "select" : "fill", inputType: clean(element.getAttribute("type")).toLowerCase(), locator, name }];
         });
         const inputs = inputLocators.map((input) => input.name);
         const scrollTargets = document.documentElement.scrollHeight > window.innerHeight + 40
@@ -985,6 +1090,74 @@ try {
           route: path,
         })) ?? null,
       })));
+      observed.interactions = [];
+      const routeUrl = page.url();
+      for (let index = 0; index < observed.buttons.length; index += 1) {
+        const name = observed.buttons[index];
+        const locatorEvidence = observed.buttonLocatorEvidence[index];
+        if (!name || !locatorEvidence || /\\b(?:buy|checkout|delete|destroy|disconnect|log out|logout|pay|purchase|remove|revoke|sign out)\\b/i.test(name)) continue;
+        try {
+          await page.goto(routeUrl, { timeout: 20000, waitUntil: "domcontentloaded" });
+          await page.waitForTimeout(250);
+          const interactionLocator = page.getByRole("button", { name, exact: false });
+          if (await interactionLocator.count() !== 1 || !(await interactionLocator.isVisible())) continue;
+          const before = await readVisibleState();
+          await interactionLocator.click({ timeout: 4000 });
+          await page.waitForTimeout(350);
+          const outcome = describeVisibleOutcome(before, await readVisibleState());
+          if (!outcome) continue;
+          observed.interactions.push({
+            kind: "click",
+            locator: { name, strategy: "role", value: "button" },
+            locatorEvidence,
+            name,
+            outcome,
+          });
+        } catch {}
+      }
+      for (const input of observed.inputLocators) {
+        if (!input.locatorEvidence || ["button", "checkbox", "file", "hidden", "radio", "submit"].includes(input.inputType)) continue;
+        try {
+          await page.goto(routeUrl, { timeout: 20000, waitUntil: "domcontentloaded" });
+          await page.waitForTimeout(250);
+          const interactionLocator = createInteractionLocator(input.locator);
+          if (await interactionLocator.count() !== 1 || !(await interactionLocator.isVisible())) continue;
+          let outcome;
+          if (input.controlKind === "select") {
+            const options = await interactionLocator.locator("option").evaluateAll((entries) => entries.map((option) => ({
+              disabled: option.disabled,
+              label: (option.textContent || "").trim(),
+              value: option.value,
+            })));
+            const currentValue = await interactionLocator.inputValue();
+            const option = options.find((entry) => !entry.disabled && entry.value && entry.value !== currentValue);
+            if (!option) continue;
+            await interactionLocator.selectOption(option.value);
+            if (await interactionLocator.inputValue() !== option.value) continue;
+            outcome = input.name + " selected " + (option.label || option.value);
+          } else {
+            const value = input.inputType === "email"
+              ? "demo@example.com"
+              : input.inputType === "number"
+                ? "1"
+                : input.inputType === "password"
+                  ? "makeademo-demo-password"
+                  : "MakeADemo sample";
+            await interactionLocator.fill(value);
+            if (await interactionLocator.inputValue() !== value) continue;
+            outcome = input.name + " contained the observed demo value";
+          }
+          observed.interactions.push({
+            kind: input.controlKind,
+            locator: input.locator,
+            locatorEvidence: input.locatorEvidence,
+            name: input.name,
+            outcome,
+          });
+        } catch {}
+      }
+      await page.goto(routeUrl, { timeout: 20000, waitUntil: "domcontentloaded" });
+      await page.waitForTimeout(250);
       const slug = path === "/" ? "root" : path.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || "route";
       const screenshot = outputDirectory + "/" + slug + ".png";
       const snapshot = outputDirectory + "/" + slug + ".aria.yml";

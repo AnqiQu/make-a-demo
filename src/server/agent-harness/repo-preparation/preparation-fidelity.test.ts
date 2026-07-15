@@ -52,6 +52,17 @@ describe("validatePreparationFidelity", () => {
     expect(report.logsSummary).toContain(featurePath);
   });
 
+  it("rejects changes to non-JavaScript backend feature logic", () => {
+    const featurePath = "backend/billing/calculator.py";
+    const report = validateDiff({
+      modifiedFiles: [featurePath],
+      patch: `diff --git a/${featurePath} b/${featurePath}\n+return demo_invoice_total`,
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(featurePath);
+  });
+
   it("rejects newly authored replacement product routes", () => {
     const replacementPath = "src/pages/demo-dashboard.tsx";
     const report = validateDiff({
@@ -61,6 +72,27 @@ describe("validatePreparationFidelity", () => {
 
     expect(report.status).toBe("failed");
     expect(report.logsSummary).toContain(replacementPath);
+  });
+
+  it("rejects replacement UI hidden behind seam-like names or public directories", () => {
+    const report = validateDiff({
+      createdFiles: ["src/data-grid.tsx", "public/index.html"],
+      modifiedFiles: ["src/components/data-grid.tsx"],
+      patch: [
+        "diff --git a/src/data-grid.tsx b/src/data-grid.tsx",
+        "+export const DataGrid = () => <main>Replacement dashboard</main>;",
+        "diff --git a/public/index.html b/public/index.html",
+        "+<main>Replacement dashboard</main>",
+        "diff --git a/src/components/data-grid.tsx b/src/components/data-grid.tsx",
+        "-return <OriginalGrid />;",
+        "+return <main>Replacement dashboard</main>;",
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain("src/data-grid.tsx");
+    expect(report.logsSummary).toContain("public/index.html");
+    expect(report.logsSummary).toContain("src/components/data-grid.tsx");
   });
 
   it("allows deterministic auth, data, and vendored-asset adaptations", () => {
@@ -81,6 +113,33 @@ describe("validatePreparationFidelity", () => {
     });
 
     expect(report.status).toBe("passed");
+  });
+
+  it("rejects executable source introduced by an install repair without blaming prior demo adaptations", () => {
+    const authPath = "src/auth/session-provider.ts";
+    const exportPath = "src/service/export.ts";
+    const baselinePatch = `diff --git a/${authPath} b/${authPath}\n+export const demoIdentity = localIdentity;`;
+    const report = validatePreparationFidelity({
+      installRepairBaseline: workspaceDiff([authPath], baselinePatch),
+      preparationManifest: manifest(),
+      repoSourcePaths: new Set([authPath, exportPath, "package.json"]),
+      workspaceDiff: workspaceDiff(
+        [authPath, exportPath, "package.json"],
+        [
+          baselinePatch,
+          `diff --git a/${exportPath} b/${exportPath}`,
+          '+export const workbook = "replacement";',
+          "diff --git a/package.json b/package.json",
+          '+  "xlsx": "0.18.5"',
+        ].join("\n"),
+      ),
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(exportPath);
+    expect(report.logsSummary).not.toContain(
+      `${authPath} was modified by dependency installation repair`,
+    );
   });
 
   it("allows package commands for deterministic preparation seams", () => {
@@ -125,17 +184,22 @@ function validateDiff(input: {
   const createdFiles = input.createdFiles ?? [];
   const modifiedFiles = input.modifiedFiles ?? [];
   return validatePreparationFidelity({
-    preparationManifest: manifest({ createdFiles, modifiedFiles }),
+    preparationManifest: manifest(),
     repoSourcePaths: new Set(["package.json", routePath, ...modifiedFiles]),
-    workspaceDiff: {
-      changedPaths: [...createdFiles, ...modifiedFiles].map(
-        (path) => `/workspace/repo/${path}`,
-      ),
-      patch: input.patch,
-      patchSha256: `sha256:${"a".repeat(64)}`,
-      sourceCommitSha: "abc123",
-    },
+    workspaceDiff: workspaceDiff(
+      [...createdFiles, ...modifiedFiles],
+      input.patch,
+    ),
   });
+}
+
+function workspaceDiff(changedPaths: string[], patch: string) {
+  return {
+    changedPaths: changedPaths.map((path) => `/workspace/repo/${path}`),
+    patch,
+    patchSha256: `sha256:${"a".repeat(64)}` as const,
+    sourceCommitSha: "abc123",
+  };
 }
 
 function manifest(
@@ -147,14 +211,12 @@ function manifest(
     baseUrl: "http://127.0.0.1:3000",
     blockedExternalServicesReplaced: [],
     cleanupAndReproInstructions: [],
-    createdFiles: [],
     envUsed: {},
     id: "prep",
     installCommandUsed: "bun install --frozen-lockfile",
     knownLimitations: [],
     localDemoModeChanges: [],
     mocksAndFixturesAdded: [],
-    modifiedFiles: [],
     ports: [3000],
     productContext: {
       evidencePaths: [routePath],
@@ -175,7 +237,6 @@ function manifest(
     requiredLocalOnlyAssumptions: [],
     scriptGenerationContext: [],
     startCommandUsed: "bun run dev",
-    validationEvidence: [],
     ...overrides,
   };
 }

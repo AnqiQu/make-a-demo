@@ -447,6 +447,9 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(contractWrite).toContain('"fixtureNotes"');
     expect(contractWrite).toContain('"label"');
     expect(contractWrite).toContain('"demo-identity"');
+    expect(contractWrite).not.toContain('"createdFiles"');
+    expect(contractWrite).not.toContain('"modifiedFiles"');
+    expect(contractWrite).not.toContain('"validationEvidence"');
   });
 
   it("promotes a valid manifest written under the repo to the canonical artifact path", async () => {
@@ -745,6 +748,117 @@ describe("createDefaultAgentHarnessDependencies", () => {
       "Daytona command did not finish within 1200000ms.",
     );
     expect(prompts[1]).toContain("inspecting package manifests");
+  });
+
+  it("retries a runtime repair timeout once without the stalled session", async () => {
+    const workspace = repairableRepoPreparationWorkspace();
+    const sessionIds: Array<string | undefined> = [];
+    let runs = 0;
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(input) {
+          runs += 1;
+          sessionIds.push(input.sessionId);
+          if (runs === 1) {
+            workspace.writePreparationManifest();
+            return {
+              exitCode: 0,
+              sessionId: "stalled_session",
+              stderr: "",
+              stdout: "prepared",
+            };
+          }
+          if (runs === 2) {
+            throw new AgentHarnessCommandTimeoutError(300_000, "inactivity");
+          }
+          return {
+            exitCode: 0,
+            sessionId: "fresh_session",
+            stderr: "",
+            stdout: "repaired",
+          };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+    await harness.dependencies.prepareRepo({
+      demoBrief: { keyProductFeatures: ["dashboard"] },
+      normalizedSupportingDocuments: undefined,
+      repoProfile: repoProfile(),
+      repoSourcePaths: ["package.json", "src/App.tsx"],
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    await expect(
+      harness.dependencies.repairPreparation?.({
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        failureReport: {
+          ...validationReport("preparation-preflight", "failed"),
+          failureClassification: "start failure",
+        },
+        normalizedSupportingDocuments: undefined,
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+        repoSourcePaths: ["package.json", "src/App.tsx"],
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).resolves.toMatchObject({ opencodeSessionId: "fresh_session" });
+    expect(sessionIds).toEqual([undefined, "stalled_session", undefined]);
+  });
+
+  it("preserves a runtime repair timeout when artifact retries are disabled", async () => {
+    const workspace = repairableRepoPreparationWorkspace();
+    const timeout = new AgentHarnessCommandTimeoutError(300_000, "inactivity");
+    let runs = 0;
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run() {
+          runs += 1;
+          if (runs === 1) {
+            workspace.writePreparationManifest();
+            return {
+              exitCode: 0,
+              sessionId: "prepared_session",
+              stderr: "",
+              stdout: "prepared",
+            };
+          }
+          throw timeout;
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+      retryPolicy: { agentArtifactAttempts: 1 },
+    });
+    await harness.dependencies.prepareRepo({
+      demoBrief: { keyProductFeatures: ["dashboard"] },
+      normalizedSupportingDocuments: undefined,
+      repoProfile: repoProfile(),
+      repoSourcePaths: ["package.json", "src/App.tsx"],
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    await expect(
+      harness.dependencies.repairPreparation?.({
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        failureReport: {
+          ...validationReport("preparation-preflight", "failed"),
+          failureClassification: "start failure",
+        },
+        normalizedSupportingDocuments: undefined,
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+        repoSourcePaths: ["package.json", "src/App.tsx"],
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).rejects.toBe(timeout);
   });
 
   it("preserves the initial timeout when its repair cannot restart the sandbox", async () => {
@@ -1258,6 +1372,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
 
   it("reconciles an npm lockfile safely before retrying a clean install", async () => {
     const commands: string[] = [];
+    const promotedFiles: string[][] = [];
     let cleanInstallAttempts = 0;
     const workspace: AgentHarnessWorkspace = {
       async destroy() {},
@@ -1280,6 +1395,9 @@ describe("createDefaultAgentHarnessDependencies", () => {
         }
         return { exitCode: 0, stderr: "", stdout: "" };
       },
+      async promoteSubmittedCodeFiles(paths) {
+        promotedFiles.push(paths);
+      },
       async setSubmittedCodeNetworkAccess() {},
       async startSubmittedCodeApp() {},
       async stopSubmittedCodeApp() {},
@@ -1299,7 +1417,11 @@ describe("createDefaultAgentHarnessDependencies", () => {
           installCommandUsed: "npm ci --no-audit",
           startCommandUsed: "npm run dev",
         },
-        repoProfile: { ...repoProfile(), packageManager: "npm" },
+        repoProfile: {
+          ...repoProfile(),
+          lockfiles: ["package-lock.json"],
+          packageManager: "npm",
+        },
         runPlan: {
           ...runPlan(),
           installCommand: "npm ci --no-audit",
@@ -1310,6 +1432,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
       }),
     ).resolves.toMatchObject({ status: "passed" });
     expect(cleanInstallAttempts).toBe(2);
+    expect(promotedFiles).toEqual([["package-lock.json"]]);
     expect(commands).toEqual(
       expect.arrayContaining([
         expect.stringContaining(
@@ -1518,6 +1641,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
       join(tmpdir(), "makeademo-resource-hydration-"),
     );
     let explorationRuns = 0;
+    const resourceHosts: string[][] = [];
     const uploadedDestinations: string[] = [];
     const workspace: AgentHarnessWorkspace = {
       async destroy() {},
@@ -1570,6 +1694,9 @@ describe("createDefaultAgentHarnessDependencies", () => {
           }),
         };
       },
+      async setSubmittedCodeResourceHosts(hosts) {
+        resourceHosts.push(hosts);
+      },
       async uploadSubmittedCodeFiles(files) {
         uploadedDestinations.push(...files.map((file) => file.destinationPath));
       },
@@ -1582,9 +1709,11 @@ describe("createDefaultAgentHarnessDependencies", () => {
         headers: {},
         status: 200,
       }),
+      externalResourceHostResolver: async () => ["93.184.216.34"],
       openCodeRunner: repoPreparationRunner(),
       outputRoot,
       repoSourceArchive: await repoSourceArchive(),
+      retryPolicy: { externalResourceBrokerPasses: 1 },
     });
 
     try {
@@ -1601,7 +1730,8 @@ describe("createDefaultAgentHarnessDependencies", () => {
         workspace,
       });
 
-      expect(explorationRuns).toBe(2);
+      expect(explorationRuns).toBe(3);
+      expect(resourceHosts).toEqual([["assets.example.com"], []]);
       expect(result.validationReport.status).toBe("passed");
       expect(uploadedDestinations).toEqual(
         expect.arrayContaining([
@@ -1619,11 +1749,101 @@ describe("createDefaultAgentHarnessDependencies", () => {
     }
   });
 
+  it("preserves a live exploration failure when closing filtered egress also fails", async () => {
+    let explorationRuns = 0;
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode(command) {
+        if (!command.includes("explore-app.mjs")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        explorationRuns += 1;
+        if (explorationRuns > 1) {
+          throw new Error("live exploration failed");
+        }
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout: JSON.stringify({
+            blockedNetworkAttempts: [
+              {
+                direction: "outbound",
+                hasCredentials: false,
+                host: "assets.example.com",
+                method: "GET",
+                phase: "browser",
+                resourceType: "image",
+                url: "https://assets.example.com/dashboard.png",
+              },
+            ],
+            consoleErrors: [],
+            pageErrors: [],
+            routes: [
+              {
+                buttons: [],
+                forms: [],
+                headings: ["Dashboard"],
+                inputs: [],
+                links: [],
+                path: "/",
+                primaryNavigation: [],
+                requestedPath: "/",
+                screenshot: "/workspace/.makeademo/exploration/root.png",
+                snapshot: "/workspace/.makeademo/exploration/root.aria.yml",
+                text: [],
+                title: "Dashboard",
+              },
+            ],
+          }),
+        };
+      },
+      async setSubmittedCodeResourceHosts(hosts) {
+        if (hosts.length === 0) {
+          throw new Error("resource network cleanup failed");
+        }
+      },
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      externalResourceHostResolver: async () => ["93.184.216.34"],
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    let caught: unknown;
+    try {
+      await harness.dependencies.exploreApp({
+        actionCatalogPath: "/workspace/.makeademo/action-catalog.json",
+        appMapPath: "/workspace/.makeademo/app-map.json",
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest: preparationManifest(),
+        preparationValidation: validationReport(
+          "preparation-preflight",
+          "passed",
+        ),
+        repoProfile: repoProfile(),
+        workspace,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({ message: "live exploration failed" });
+    expect(
+      Reflect.get(caught as object, "resourceNetworkCleanupError"),
+    ).toMatchObject({ message: "resource network cleanup failed" });
+  });
+
   it("hydrates resources first discovered by capture actions and validates again", async () => {
     const outputRoot = await mkdtemp(
       join(tmpdir(), "makeademo-capture-resource-hydration-"),
     );
     let captureRuns = 0;
+    const resourceHosts: string[][] = [];
     const uploadedDestinations: string[] = [];
     const workspace: AgentHarnessWorkspace = {
       async destroy() {},
@@ -1653,6 +1873,9 @@ describe("createDefaultAgentHarnessDependencies", () => {
           ].join("\n"),
         };
       },
+      async setSubmittedCodeResourceHosts(hosts) {
+        resourceHosts.push(hosts);
+      },
       async uploadSubmittedCodeFiles(files) {
         uploadedDestinations.push(...files.map((file) => file.destinationPath));
       },
@@ -1665,6 +1888,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         headers: {},
         status: 200,
       }),
+      externalResourceHostResolver: async () => ["93.184.216.34"],
       openCodeRunner: repoPreparationRunner(),
       outputRoot,
       repoSourceArchive: await repoSourceArchive(),
@@ -1689,7 +1913,8 @@ describe("createDefaultAgentHarnessDependencies", () => {
         workspace,
       });
 
-      expect(captureRuns).toBe(2);
+      expect(captureRuns).toBe(3);
+      expect(resourceHosts).toEqual([["assets.example.com"], []]);
       expect(report.status).toBe("passed");
       expect(uploadedDestinations).toEqual(
         expect.arrayContaining([
@@ -2637,14 +2862,12 @@ function preparationManifest(): PreparationManifest {
     baseUrl: "http://127.0.0.1:3000",
     blockedExternalServicesReplaced: [],
     cleanupAndReproInstructions: [],
-    createdFiles: [],
     envUsed: {},
     id: "prep_001",
     installCommandUsed: "bun install --frozen-lockfile",
     knownLimitations: [],
     localDemoModeChanges: [],
     mocksAndFixturesAdded: [],
-    modifiedFiles: [],
     ports: [3000],
     productContext: {
       evidencePaths: ["package.json"],
@@ -2666,6 +2889,5 @@ function preparationManifest(): PreparationManifest {
     requiredLocalOnlyAssumptions: [],
     scriptGenerationContext: [],
     startCommandUsed: "bun run dev --host 127.0.0.1 --port 3000",
-    validationEvidence: ["prepared"],
   };
 }

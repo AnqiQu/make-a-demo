@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  authorizeExternalResourcePassthrough,
   fetchExternalResource,
   hydrateExternalResourceCache,
   verifyExternalResourceCache,
@@ -18,6 +19,84 @@ describe("hydrateExternalResourceCache", () => {
         .splice(0)
         .map((directory) => rm(directory, { force: true, recursive: true })),
     );
+  });
+
+  it("authorizes exact credential-free resource URLs only after public DNS resolution", async () => {
+    const failures: string[] = [];
+    const resolvedHosts: string[] = [];
+    const plan = await authorizeExternalResourcePassthrough({
+      attempts: [
+        {
+          direction: "outbound",
+          hasCredentials: false,
+          host: "assets.example.com",
+          method: "GET",
+          phase: "browser",
+          resourceType: "image",
+          url: "https://assets.example.com/product.png",
+        },
+        {
+          direction: "outbound",
+          hasCredentials: false,
+          host: "assets.example.com",
+          method: "GET",
+          phase: "browser",
+          resourceType: "stylesheet",
+          url: "https://assets.example.com/product.css",
+        },
+        {
+          direction: "outbound",
+          hasCredentials: false,
+          host: "internal.example.com",
+          method: "GET",
+          phase: "browser",
+          resourceType: "image",
+          url: "https://internal.example.com/secret.png",
+        },
+        {
+          direction: "outbound",
+          hasCredentials: false,
+          host: "assets.example.com",
+          method: "GET",
+          phase: "browser",
+          resourceType: "image",
+          url: "https://user:pass@assets.example.com/private.png",
+        },
+      ],
+      onFailure: ({ url }) => {
+        failures.push(url);
+      },
+      resolveHost: async (host) => {
+        resolvedHosts.push(host);
+        return host === "assets.example.com"
+          ? ["93.184.216.34"]
+          : ["127.0.0.1"];
+      },
+    });
+
+    expect(plan).toEqual({
+      attempts: [
+        expect.objectContaining({
+          url: "https://assets.example.com/product.png",
+        }),
+        expect.objectContaining({
+          url: "https://assets.example.com/product.css",
+        }),
+      ],
+      hosts: ["assets.example.com"],
+      urls: [
+        "https://assets.example.com/product.css",
+        "https://assets.example.com/product.png",
+      ],
+    });
+    expect(failures).toEqual([
+      "https://internal.example.com/secret.png",
+      "https://user:pass@assets.example.com/private.png",
+    ]);
+    expect(resolvedHosts).toEqual([
+      "assets.example.com",
+      "internal.example.com",
+    ]);
   });
 
   it("stores an eligible browser resource once under its content hash", async () => {

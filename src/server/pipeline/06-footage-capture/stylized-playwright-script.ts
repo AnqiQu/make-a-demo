@@ -7,6 +7,7 @@ export type PrepareStylizedPlaywrightScriptInput = {
   externalResourceRoot?: string;
   headed: boolean;
   mode?: "recording" | "validation";
+  passthroughUrls?: string[];
   sceneHoldMsById?: Readonly<Record<string, number>>;
   videoDirectory?: string;
 };
@@ -73,7 +74,7 @@ const context = await browser.newContext({
     size: { width: 1280, height: 720 },
   },
 });
-${runtimeNetworkLockdownSource(input.externalResourceManifest, input.externalResourceRoot)}
+${runtimeNetworkLockdownSource(input.externalResourceManifest, input.externalResourceRoot, input.passthroughUrls)}
 const page = await context.newPage();
 const makeADemoCaptureStartedAt = performance.now();
 const makeADemoCaptureContext = { page, baseUrl, expect };
@@ -113,7 +114,7 @@ const context = await browser.newContext({
   serviceWorkers: "block",
   viewport: { width: 1280, height: 720 },
 });
-${runtimeNetworkLockdownSource(input.externalResourceManifest, input.externalResourceRoot)}
+${runtimeNetworkLockdownSource(input.externalResourceManifest, input.externalResourceRoot, input.passthroughUrls)}
 const page = await context.newPage();
 const makeADemoCaptureStartedAt = performance.now();
 const makeADemoCaptureContext = { page, baseUrl, expect };
@@ -159,6 +160,7 @@ void step;
 function runtimeNetworkLockdownSource(
   externalResourceManifest?: ExternalResourceManifest,
   externalResourceRoot?: string,
+  passthroughUrls?: string[],
 ) {
   return `const makeADemoOriginalFetch = globalThis.fetch?.bind(globalThis);
 if (makeADemoOriginalFetch !== undefined) {
@@ -187,6 +189,7 @@ ${createBrowserRuntimeNetworkPolicySource({
     ? {}
     : { manifest: externalResourceManifest }),
   mode: "capture",
+  ...(passthroughUrls === undefined ? {} : { passthroughUrls }),
   ...(externalResourceRoot === undefined
     ? {}
     : { replayRoot: externalResourceRoot }),

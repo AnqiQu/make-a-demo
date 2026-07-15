@@ -31,6 +31,10 @@ export type ExternalResourceFetcher = (
   url: string,
 ) => Promise<ExternalResourceFetchResult>;
 
+export type ExternalResourceHostResolver = (
+  hostname: string,
+) => Promise<string[]>;
+
 const maximumResourceBytes = 128 * 1024 * 1024;
 const maximumCacheBytes = 512 * 1024 * 1024;
 const maximumCacheEntries = 256;
@@ -49,6 +53,72 @@ export function isHydratableExternalResource(attempt: NetworkAttempt): boolean {
     attempt.resourceType !== undefined &&
     eligibleResourceTypes.has(attempt.resourceType)
   );
+}
+
+/**
+ * Produces an exact browser pass-through allowlist after resolving every host
+ * to public addresses. The browser must still enforce method, credential, and
+ * resource-type checks for the live request.
+ */
+export async function authorizeExternalResourcePassthrough(input: {
+  attempts: NetworkAttempt[];
+  onFailure?: (input: { error: unknown; url: string }) => Promise<void> | void;
+  resolveHost?: ExternalResourceHostResolver;
+}): Promise<{
+  attempts: NetworkAttempt[];
+  hosts: string[];
+  urls: string[];
+}> {
+  const resolveHost =
+    input.resolveHost ??
+    (async (hostname: string) =>
+      (await lookup(hostname, { all: true, verbatim: true })).map(
+        ({ address }) => address,
+      ));
+  const attemptsByUrl = new Map(
+    input.attempts
+      .filter(isHydratableExternalResource)
+      .map((attempt) => [attempt.url as string, attempt]),
+  );
+  const approvedAttempts: NetworkAttempt[] = [];
+  const approvedHosts = new Set<string>();
+  const addressResolutions = new Map<string, Promise<string[]>>();
+  for (const [url, attempt] of attemptsByUrl) {
+    try {
+      const destination = new URL(url);
+      if (
+        destination.protocol !== "https:" ||
+        destination.username.length > 0 ||
+        destination.password.length > 0
+      ) {
+        throw new Error(
+          `External resource ${url} must be a credential-free HTTPS URL.`,
+        );
+      }
+      const hostname = destination.hostname.toLowerCase();
+      const addressesPromise =
+        addressResolutions.get(hostname) ?? resolveHost(hostname);
+      addressResolutions.set(hostname, addressesPromise);
+      const addresses = await addressesPromise;
+      if (
+        addresses.length === 0 ||
+        addresses.some((address) => !isPublicIp(address))
+      ) {
+        throw new Error(
+          `External resource ${url} did not resolve exclusively to public addresses.`,
+        );
+      }
+      approvedAttempts.push(attempt);
+      approvedHosts.add(hostname);
+    } catch (error) {
+      await input.onFailure?.({ error, url });
+    }
+  }
+  return {
+    attempts: approvedAttempts,
+    hosts: [...approvedHosts].sort(),
+    urls: approvedAttempts.map((attempt) => attempt.url as string).sort(),
+  };
 }
 
 /**

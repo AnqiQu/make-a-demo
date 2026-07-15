@@ -10,6 +10,7 @@ export const externalResourceReplayRoot =
 export function createBrowserRuntimeNetworkPolicySource(input: {
   manifest?: ExternalResourceManifest;
   mode: "capture" | "exploration";
+  passthroughUrls?: string[];
   replayRoot?: string;
 }): string {
   const replayRoot = input.replayRoot ?? externalResourceReplayRoot;
@@ -30,6 +31,7 @@ export function createBrowserRuntimeNetworkPolicySource(input: {
 
   return `const makeADemoAllowedRuntimeOrigin = new URL(baseUrl).origin;
 const makeADemoExternalResourceReplay = new Map(${JSON.stringify(replayEntries)});
+const makeADemoExternalResourcePassthrough = new Set(${JSON.stringify(input.passthroughUrls ?? [])});
 
 await context.route("**/*", async (route) => {
   const request = route.request();
@@ -55,7 +57,15 @@ await context.route("**/*", async (route) => {
   try { initiatorRoute = request.frame().url(); } catch {}
   const makeADemoAttempt = {
     direction: "outbound",
-    hasCredentials: Boolean(headers.authorization || headers.cookie),
+    hasCredentials: Boolean(
+      headers.authorization ||
+      headers.cookie ||
+      headers["proxy-authorization"] ||
+      headers["x-api-key"] ||
+      headers["x-auth-token"] ||
+      parsedUrl.username ||
+      parsedUrl.password
+    ),
     host: parsedUrl.host,
     method: request.method(),
     phase: ${JSON.stringify(attemptPhase)},
@@ -63,6 +73,16 @@ await context.route("**/*", async (route) => {
     ...(initiatorRoute ? { route: initiatorRoute } : {}),
     url: requestUrl,
   };
+  if (
+    makeADemoExternalResourcePassthrough.has(requestUrl) &&
+    parsedUrl.protocol === "https:" &&
+    request.method() === "GET" &&
+    !makeADemoAttempt.hasCredentials &&
+    ["fetch", "font", "image", "media", "script", "stylesheet", "xhr"].includes(request.resourceType())
+  ) {
+    await route.continue();
+    return;
+  }
   ${reportBlocked}
   await route.abort("blockedbyclient");
 });

@@ -6,14 +6,22 @@ import type { PreparationWorkspaceDiff } from "./preparation-workspace-diff";
 
 /**
  * Verifies that Repo Preparation adapted the screened product rather than
- * replacing it with a newly authored demo application.
+ * replacing it with a newly authored demo application. When an install-repair
+ * baseline is supplied, executable source must remain unchanged from it.
  */
 export function validatePreparationFidelity(input: {
+  installRepairBaseline?: PreparationWorkspaceDiff;
   preparationManifest: PreparationManifest;
   repoSourcePaths: ReadonlySet<string>;
   workspaceDiff: PreparationWorkspaceDiff;
 }): ValidationReport {
   const violations: string[] = [];
+  const installRepairSourcePaths = readInstallRepairSourcePaths(input);
+  for (const path of installRepairSourcePaths) {
+    violations.push(
+      `${path} was modified by dependency installation repair, which may change only package metadata, lockfiles, or package-manager configuration.`,
+    );
+  }
   const createdPaths = input.workspaceDiff.changedPaths
     .map(toRepoRelativePath)
     .filter((path) => !input.repoSourcePaths.has(path));
@@ -22,9 +30,10 @@ export function validatePreparationFidelity(input: {
     .filter((path) => input.repoSourcePaths.has(path));
 
   for (const path of modifiedOriginalPaths) {
+    if (installRepairSourcePaths.has(path)) continue;
     const patch = readFilePatch(input.workspaceDiff.patch, path);
     if (isProductPresentationPath(path)) {
-      if (!isDemoSeamPath(path) && !onlyLocalizesExternalAssets(patch)) {
+      if (!onlyLocalizesExternalAssets(patch)) {
         violations.push(
           `${path} modifies original product UI, styling, or brand assets instead of preserving them.`,
         );
@@ -37,12 +46,9 @@ export function validatePreparationFidelity(input: {
   }
 
   for (const path of createdPaths) {
+    if (installRepairSourcePaths.has(path)) continue;
     const patch = readFilePatch(input.workspaceDiff.patch, path);
-    if (
-      isProductPresentationPath(path) &&
-      !isDemoSeamPath(path) &&
-      !isVendoredAssetPath(path)
-    ) {
+    if (isProductPresentationPath(path) && !isVendoredAssetPath(path)) {
       violations.push(
         `${path} creates replacement product UI instead of adapting the original application.`,
       );
@@ -76,6 +82,26 @@ export function validatePreparationFidelity(input: {
   }
 
   return createFidelityReport(violations);
+}
+
+function readInstallRepairSourcePaths(input: {
+  installRepairBaseline?: PreparationWorkspaceDiff;
+  workspaceDiff: PreparationWorkspaceDiff;
+}): Set<string> {
+  const baseline = input.installRepairBaseline;
+  if (baseline === undefined) {
+    return new Set();
+  }
+  return new Set(
+    input.workspaceDiff.changedPaths
+      .map(toRepoRelativePath)
+      .filter(
+        (path) =>
+          isExecutableSourcePath(path) &&
+          readFilePatch(input.workspaceDiff.patch, path) !==
+            readFilePatch(baseline.patch, path),
+      ),
+  );
 }
 
 function createFidelityReport(violations: string[]): ValidationReport {
@@ -165,12 +191,19 @@ function isDemoSeamPath(path: string) {
 }
 
 function isExecutableSourcePath(path: string) {
-  return /\.(?:cjs|js|jsx|mjs|mts|svelte|ts|tsx|vue)$/i.test(path);
+  return /\.(?:cjs|cs|go|java|js|jsx|mjs|mts|php|py|rb|rs|sh|svelte|ts|tsx|vue)$/i.test(
+    path,
+  );
 }
 
 function isVendoredAssetPath(path: string) {
-  return /(?:^|\/)(?:assets|fonts|images|public|static|vendor)(?:\/|$)/i.test(
-    path,
+  return (
+    /(?:^|\/)(?:assets|fonts|images|public|static|vendor)(?:\/|$)/i.test(
+      path,
+    ) &&
+    /\.(?:avif|eot|gif|ico|jpe?g|mp3|mp4|ogg|otf|png|svg|ttf|wav|webm|webp|woff2?)$/i.test(
+      path,
+    )
   );
 }
 
