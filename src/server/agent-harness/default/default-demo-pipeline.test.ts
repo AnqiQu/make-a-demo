@@ -67,6 +67,10 @@ describe("runDefaultDemoPipeline", () => {
               commitSha: sourceArchive.commitSha,
               files: [{ path: "package.json", text: "{}" }],
               repoStats: { fileCount: 1, sizeBytes: 2 },
+              secretQuarantineManifest: {
+                entries: [],
+                version: "2026-07-15",
+              },
               sourceArchive,
             };
           },
@@ -233,6 +237,16 @@ describe("runDefaultDemoPipeline", () => {
             commitSha: "abc123def456",
             files: [{ path: "package.json", text: "{}" }],
             repoStats: { fileCount: 1, sizeBytes: 2 },
+            secretQuarantineManifest: {
+              entries: [
+                {
+                  environmentKeys: ["DATABASE_URL"],
+                  kind: "environment-file",
+                  path: ".env",
+                },
+              ],
+              version: "2026-07-15",
+            },
             sourceArchive: {
               commitSha: "abc123def456",
               path: join(outputRoot, "screened-repo.tar"),
@@ -241,9 +255,28 @@ describe("runDefaultDemoPipeline", () => {
           };
         },
         runId: "terminal-run-001",
+        retryPolicy: {
+          repoPreparationRepairs: 2,
+          scriptRepairs: 1,
+        },
         staticImageAssets,
-        async runHarnessPipeline(input, dependencies) {
+        async runHarnessPipeline(input, dependencies, harnessOptions) {
           calls.push(`harness:${input.repoUrl}:${input.runId}`);
+          expect(harnessOptions).toEqual({
+            destroyWorkspaceOnCompletion: false,
+            repoPreparationRepairLimit: 2,
+            scriptRepairLimit: 1,
+          });
+          expect(input.secretQuarantineManifest).toEqual({
+            entries: [
+              {
+                environmentKeys: ["DATABASE_URL"],
+                kind: "environment-file",
+                path: ".env",
+              },
+            ],
+            version: "2026-07-15",
+          });
           await dependencies.artifactStore?.writeJson(
             "/workspace/.makeademo/pipeline-run-manifest.json",
             { finalStatus: "passed" },
@@ -269,14 +302,12 @@ describe("runDefaultDemoPipeline", () => {
               baseUrl: "http://127.0.0.1:3000",
               blockedExternalServicesReplaced: [],
               cleanupAndReproInstructions: [],
-              createdFiles: [],
               envUsed: {},
               id: "prep-1",
               installCommandUsed: "bun install",
               knownLimitations: [],
               localDemoModeChanges: [],
               mocksAndFixturesAdded: [],
-              modifiedFiles: [],
               ports: [3000],
               productContext: {
                 evidencePaths: ["package.json"],
@@ -287,7 +318,6 @@ describe("runDefaultDemoPipeline", () => {
               requiredLocalOnlyAssumptions: [],
               scriptGenerationContext: [],
               startCommandUsed: "bun run dev",
-              validationEvidence: [],
             },
             scriptCandidate: {
               assumptions: [],
@@ -393,6 +423,9 @@ describe("runDefaultDemoPipeline", () => {
         (content) => JSON.parse(content),
       ),
     ).resolves.toMatchObject({
+      secretQuarantineManifest: {
+        entries: [{ kind: "environment-file", path: ".env" }],
+      },
       sourceArchive: {
         commitSha: "abc123def456",
         sha256: "screened-repo-sha256",
@@ -463,6 +496,10 @@ describe("runDefaultDemoPipeline", () => {
             commitSha: "abc123def456",
             files: [{ path: "package.json", text: "{}" }],
             repoStats: { fileCount: 1, sizeBytes: 2 },
+            secretQuarantineManifest: {
+              entries: [],
+              version: "2026-07-15",
+            },
             sourceArchive: {
               commitSha: "abc123def456",
               path: join(outputRoot, "screened-repo.tar"),
@@ -497,14 +534,12 @@ describe("runDefaultDemoPipeline", () => {
               baseUrl: "http://127.0.0.1:3000",
               blockedExternalServicesReplaced: [],
               cleanupAndReproInstructions: [],
-              createdFiles: [],
               envUsed: {},
               id: "prep-synthetic",
               installCommandUsed: "bun install",
               knownLimitations: [],
               localDemoModeChanges: [],
               mocksAndFixturesAdded: [],
-              modifiedFiles: [],
               ports: [3000],
               productContext: {
                 evidencePaths: ["package.json"],
@@ -515,7 +550,6 @@ describe("runDefaultDemoPipeline", () => {
               requiredLocalOnlyAssumptions: [],
               scriptGenerationContext: [],
               startCommandUsed: "bun run dev",
-              validationEvidence: [],
             },
             scriptCandidate: {
               assumptions: [],
@@ -634,6 +668,10 @@ describe("runDefaultDemoPipeline", () => {
               commitSha: "abc123def456",
               files: [{ path: "package.json", text: "{}" }],
               repoStats: { fileCount: 1, sizeBytes: 2 },
+              secretQuarantineManifest: {
+                entries: [],
+                version: "2026-07-15",
+              },
               sourceArchive: {
                 commitSha: "abc123def456",
                 path: join(outputRoot, "screened-repo.tar"),

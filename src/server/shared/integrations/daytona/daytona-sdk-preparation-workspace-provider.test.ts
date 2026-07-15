@@ -1215,6 +1215,44 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     );
   });
 
+  it("limits submitted-code resource passthrough to explicit public domains", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.setSubmittedCodeResourceHosts?.([
+      "fonts.example.com",
+      "assets.example.com",
+      "assets.example.com",
+    ]);
+    await handle.workspace.setSubmittedCodeResourceHosts?.([]);
+
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        {
+          updateNetworkSettings: {
+            sandbox: "submitted_sandbox",
+            settings: {
+              domainAllowList: "assets.example.com,fonts.example.com",
+            },
+          },
+        },
+        {
+          updateNetworkSettings: {
+            sandbox: "submitted_sandbox",
+            settings: { networkBlockAll: true },
+          },
+        },
+      ]),
+    );
+    await expect(
+      handle.workspace.setSubmittedCodeResourceHosts?.(["127.0.0.1"]),
+    ).rejects.toThrow("public domain");
+  });
+
   it("manages the submitted app through a Daytona process session", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -1576,6 +1614,48 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     }
   });
 
+  it("promotes only an approved reconciled lockfile into the prepared workspace", async () => {
+    const root = await mkdtemp(join(tmpdir(), "makeademo-lockfile-promotion-"));
+    const parentWorkspace = join(root, "parent");
+    const submittedWorkspace = join(root, "submitted");
+    await mkdir(join(parentWorkspace, "repo", "apps", "web"), {
+      recursive: true,
+    });
+    await mkdir(join(submittedWorkspace, "repo", "apps", "web"), {
+      recursive: true,
+    });
+    await writeFile(
+      join(submittedWorkspace, "repo", "apps", "web", "package-lock.json"),
+      "reconciled lockfile",
+    );
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLocalShellLinkedClient([], {
+        parentWorkspace,
+        submittedWorkspace,
+      }),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+
+    try {
+      const handle = await provider.create();
+      await handle.workspace.promoteSubmittedCodeFiles?.([
+        "apps/web/package-lock.json",
+      ]);
+
+      await expect(
+        readFile(
+          join(parentWorkspace, "repo", "apps", "web", "package-lock.json"),
+          "utf8",
+        ),
+      ).resolves.toBe("reconciled lockfile");
+      await expect(
+        handle.workspace.promoteSubmittedCodeFiles?.(["apps/web/package.json"]),
+      ).rejects.toThrow("recognized lockfile");
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
   it("reports parent archive stdout, stderr, and exit code when archiving prepared files fails", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -1899,15 +1979,22 @@ function fakeLocalShellSandbox(
         calls.push({ downloadFiles: { files, sandbox: id, timeoutSec } });
         for (const file of files) {
           await mkdir(dirname(file.destination), { recursive: true });
-          await copyFile(file.source, file.destination);
+          await copyFile(
+            file.source.replace(/^\/workspace(?=\/|$)/, workspacePath),
+            file.destination,
+          );
         }
         return files.map((file) => ({ source: file.source }));
       },
       async uploadFiles(files: Array<{ destination: string; source: string }>) {
         calls.push({ uploadFiles: { files, sandbox: id } });
         for (const file of files) {
-          await mkdir(dirname(file.destination), { recursive: true });
-          await copyFile(file.source, file.destination);
+          const destination = file.destination.replace(
+            /^\/workspace(?=\/|$)/,
+            workspacePath,
+          );
+          await mkdir(dirname(destination), { recursive: true });
+          await copyFile(file.source, destination);
         }
       },
     },

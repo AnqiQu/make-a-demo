@@ -8,7 +8,9 @@ describe("dependency install gate", () => {
   it("allows package-manager install commands and rejects shell syntax or dangerous commands", () => {
     for (const command of [
       "bun install --frozen-lockfile",
+      "bun install --frozen-lockfile --filter=@midday/website",
       "npm ci --no-audit",
+      "npm ci --no-audit --workspace=@acme/web",
       "npm install --package-lock-only --ignore-scripts --no-audit --no-fund",
       "pnpm install --frozen-lockfile",
       "yarn install --immutable",

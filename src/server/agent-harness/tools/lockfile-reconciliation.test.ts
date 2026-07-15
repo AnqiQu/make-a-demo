@@ -5,13 +5,13 @@ describe("lockfile reconciliation", () => {
   it("plans script-free lockfile repair only for recognized frozen-lockfile failures", () => {
     expect(
       planLockfileReconciliation({
-        installCommand: "npm ci --no-audit",
+        installCommand: "npm ci --no-audit --workspace=@acme/web",
         stderr:
           "npm ci can only install packages when package.json and package-lock.json are in sync. Missing: sqlite3 from lock file",
         stdout: "",
       }),
     ).toBe(
-      "npm install --package-lock-only --ignore-scripts --no-audit --no-fund",
+      "npm install --package-lock-only --ignore-scripts --no-audit --no-fund --workspace=@acme/web",
     );
     expect(
       planLockfileReconciliation({
@@ -23,11 +23,14 @@ describe("lockfile reconciliation", () => {
     ).toBe("corepack pnpm install --lockfile-only --ignore-scripts");
     expect(
       planLockfileReconciliation({
-        installCommand: "bun install --frozen-lockfile",
+        installCommand:
+          "bun install --frozen-lockfile --filter=@midday/website",
         stderr: "Lockfile had changes, but lockfile is frozen",
         stdout: "",
       }),
-    ).toBe("bun install --lockfile-only --ignore-scripts");
+    ).toBe(
+      "bun install --lockfile-only --ignore-scripts --filter=@midday/website",
+    );
     expect(
       planLockfileReconciliation({
         installCommand: "yarn install --immutable",

@@ -36,6 +36,10 @@ import {
   type RepoSourceArchive,
   readGithubRepoSnapshot,
 } from "./repo-snapshot";
+import {
+  type AgentHarnessRetryPolicy,
+  readAgentHarnessRetryPolicy,
+} from "./retry-policy";
 
 export type DefaultDemoPipelineInput = {
   demoLengthSeconds: number;
@@ -63,14 +67,18 @@ export type DefaultDemoPipelineOptions = {
   compositeVideo?: typeof compositeVideoFromScript;
   createHarnessDependencies?: (input: {
     artifactStore: LocalJsonArtifactStore;
+    env?: Record<string, string | undefined>;
     logger: PipelineEventLogger;
     outputRoot: string;
     repoSourceArchive: RepoSourceArchive;
+    retryPolicy: AgentHarnessRetryPolicy;
     staticImageAssets?: CompositeVideoFromScriptInput["staticImageAssets"];
   }) => Promise<DefaultHarnessDependencies>;
+  env?: Record<string, string | undefined>;
   installationTokenProvider?: GithubInstallationTokenProvider;
   outputRoot?: string;
   readRepoSnapshot?: typeof readGithubRepoSnapshot;
+  retryPolicy?: Partial<AgentHarnessRetryPolicy>;
   runHarnessPipeline?: typeof runAgentHarnessPipeline;
   runId?: string;
   staticImageAssets?: CompositeVideoFromScriptInput["staticImageAssets"];
@@ -87,6 +95,10 @@ export async function runDefaultDemoPipeline(
 
   const runId = options.runId ?? createRunId();
   const outputRoot = options.outputRoot ?? defaultOutputRoot;
+  const retryPolicy = readAgentHarnessRetryPolicy(
+    options.env ?? process.env,
+    options.retryPolicy,
+  );
   const runDirectory = join(outputRoot, runId);
   const artifactDirectory = join(runDirectory, "artifacts");
   const logPath = join(runDirectory, "pipeline-log.jsonl");
@@ -143,9 +155,11 @@ export async function runDefaultDemoPipeline(
     options.createHarnessDependencies ?? createDefaultAgentHarnessDependencies
   )({
     artifactStore,
+    ...(options.env === undefined ? {} : { env: options.env }),
     logger,
     outputRoot: runDirectory,
     repoSourceArchive: repoSnapshot.sourceArchive,
+    retryPolicy,
     ...(options.staticImageAssets === undefined
       ? {}
       : { staticImageAssets: options.staticImageAssets }),
@@ -183,9 +197,14 @@ export async function runDefaultDemoPipeline(
         repoStats: repoSnapshot.repoStats,
         repoUrl: input.repoUrl,
         runId,
+        secretQuarantineManifest: repoSnapshot.secretQuarantineManifest,
       },
       harnessDependencies.dependencies,
-      { destroyWorkspaceOnCompletion: false },
+      {
+        destroyWorkspaceOnCompletion: false,
+        repoPreparationRepairLimit: retryPolicy.repoPreparationRepairs,
+        scriptRepairLimit: retryPolicy.scriptRepairs,
+      },
     );
     assertHarnessPassed(pipelineResult, logPath);
 
@@ -442,6 +461,7 @@ async function writeRepoSnapshotSummary(
       textBytes: file.text?.length ?? 0,
     })),
     repoStats: repoSnapshot.repoStats,
+    secretQuarantineManifest: repoSnapshot.secretQuarantineManifest,
     sourceArchive: repoSnapshot.sourceArchive,
   });
 }

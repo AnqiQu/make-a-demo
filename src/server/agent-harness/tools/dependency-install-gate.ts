@@ -131,7 +131,7 @@ function isAllowedInstallArgument(argument: string): boolean {
     return true;
   }
 
-  return /^--(cache|cache-dir|cwd|filter|modules-folder|network-concurrency|store-dir|virtual-store-dir)=[A-Za-z0-9._/@:-]+$/.test(
+  return /^--(cache|cache-dir|cwd|filter|modules-folder|network-concurrency|store-dir|virtual-store-dir|workspace)=[A-Za-z0-9._/@:-]+$/.test(
     argument,
   );
 }

@@ -125,6 +125,8 @@ export type AgentHarnessNetworkStateTransition = {
   state:
     | "dependency-install-closed"
     | "dependency-install-open"
+    | "resource-passthrough-closed"
+    | "resource-passthrough-open"
     | "runtime-locked"
     | "runtime-unlocked";
 };
@@ -160,11 +162,20 @@ export interface AgentHarnessWorkspace {
   readSubmittedCodeAppStatus?(): Promise<AgentHarnessSubmittedCodeAppStatus>;
   stopSubmittedCodeApp?(): Promise<void>;
   syncSubmittedCodeWorkspace?(): Promise<void>;
+  /**
+   * Copies only backend-approved dependency metadata from the submitted-code
+   * sandbox into the prepared agent workspace so a later clean sync retains a
+   * deterministic package-manager repair. Implementations must reject paths
+   * outside the repository and files other than recognized lockfiles.
+   */
+  promoteSubmittedCodeFiles?(paths: string[]): Promise<void>;
   openSubmittedCodeDependencyNetwork?(): Promise<void>;
   closeSubmittedCodeDependencyNetwork?(): Promise<void>;
   enforceSubmittedCodeRuntimeNetworkLockdown?(): Promise<void>;
   setOutboundNetworkAccess?(enabled: boolean): Promise<void>;
   setSubmittedCodeNetworkAccess?(enabled: boolean): Promise<void>;
+  /** Temporarily restricts submitted-code egress to exact public asset hosts. */
+  setSubmittedCodeResourceHosts?(hosts: string[]): Promise<void>;
   getPreviewUrl?(port: number): Promise<string>;
   writeSandboxLog?(entry: AgentHarnessWorkspaceLogEntry): Promise<void>;
   /**

@@ -42,10 +42,16 @@ export function createPreparationFallbackArtifact(input: {
   runId: string;
   validationReports: ValidationReport[];
 }): PreparationFallbackArtifact {
-  const failedReports = input.validationReports.filter(
-    (report) =>
-      report.status === "failed" && report.stage === input.failedStage,
-  );
+  let latestFailedReport: ValidationReport | undefined;
+  for (let index = input.validationReports.length - 1; index >= 0; index -= 1) {
+    const report = input.validationReports[index];
+    if (report?.status === "failed" && report.stage === input.failedStage) {
+      latestFailedReport = report;
+      break;
+    }
+  }
+  const failedReports =
+    latestFailedReport === undefined ? [] : [latestFailedReport];
   const blockers =
     failedReports.length === 0
       ? [

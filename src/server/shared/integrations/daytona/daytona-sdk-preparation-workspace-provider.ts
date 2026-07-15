@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { isIP } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, posix } from "node:path";
 
 import { Daytona } from "@daytona/sdk";
 
@@ -108,7 +109,11 @@ type DaytonaSdkSandbox = {
     ): Promise<{ stderr?: string; stdout?: string } | undefined>;
   };
   start?(timeout?: number): Promise<void>;
-  updateNetworkSettings(settings: { networkBlockAll: boolean }): Promise<void>;
+  updateNetworkSettings(settings: {
+    domainAllowList?: string;
+    networkAllowList?: string;
+    networkBlockAll?: boolean;
+  }): Promise<void>;
 };
 
 type DaytonaSdkPty = Awaited<
@@ -761,6 +766,23 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     );
   }
 
+  async setSubmittedCodeResourceHosts(hosts: string[]): Promise<void> {
+    const sandbox = this.requireSubmittedCodeSandbox();
+    const domains = [...new Set(hosts.map(assertPublicResourceDomain))].sort();
+    await sandbox.updateNetworkSettings(
+      domains.length === 0
+        ? { networkBlockAll: true }
+        : { domainAllowList: domains.join(",") },
+    );
+    this.networkStateTransitions.push({
+      at: new Date().toISOString(),
+      state:
+        domains.length === 0
+          ? "resource-passthrough-closed"
+          : "resource-passthrough-open",
+    });
+  }
+
   async collectNetworkStateLog(): Promise<
     AgentHarnessNetworkStateTransition[]
   > {
@@ -865,6 +887,49 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
         ),
         rm(localDirectory, { force: true, recursive: true }),
       ]);
+    }
+  }
+
+  async promoteSubmittedCodeFiles(paths: string[]): Promise<void> {
+    const submittedCodeSandbox = this.requireSubmittedCodeSandbox();
+    const approvedPaths = [...new Set(paths)].sort().map(assertLockfilePath);
+    if (approvedPaths.length === 0) return;
+    const localDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-lockfile-promotion-"),
+    );
+    const transfers = approvedPaths.map((path, index) => ({
+      destination: `/workspace/repo/${path}`,
+      localPath: join(localDirectory, String(index)),
+      source: `/workspace/repo/${path}`,
+    }));
+    try {
+      const downloads = await this.runSubmittedCodeArtifactTransfer({
+        fileCount: transfers.length,
+        operation: "download",
+        run: () =>
+          submittedCodeSandbox.fs.downloadFiles(
+            transfers.map(({ localPath, source }) => ({
+              destination: localPath,
+              source,
+            })),
+            defaultArtifactTransferTimeoutSeconds,
+          ),
+      });
+      const failed = downloads.find((result) => result.error !== undefined);
+      if (failed !== undefined) {
+        throw new Error(
+          `Failed to download reconciled lockfile ${failed.source}: ${failed.error}`,
+        );
+      }
+      await this.sandbox.fs.uploadFiles(
+        transfers.map(({ destination, localPath }) => ({
+          destination,
+          source: localPath,
+        })),
+        defaultArtifactTransferTimeoutSeconds,
+      );
+    } finally {
+      await rm(localDirectory, { force: true, recursive: true });
     }
   }
 
@@ -1483,6 +1548,49 @@ function createManagedAppCommand(
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function assertLockfilePath(path: string): string {
+  const normalized = path.replaceAll("\\", "/");
+  const lockfileNames = new Set([
+    "bun.lock",
+    "bun.lockb",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+  ]);
+  if (
+    normalized.length === 0 ||
+    posix.isAbsolute(normalized) ||
+    posix.normalize(normalized) !== normalized ||
+    normalized.startsWith("../") ||
+    !lockfileNames.has(posix.basename(normalized))
+  ) {
+    throw new Error(
+      `Submitted-code promotion path must be a repository-relative recognized lockfile: ${path}`,
+    );
+  }
+  return normalized;
+}
+
+function assertPublicResourceDomain(host: string): string {
+  const normalized = host.trim().toLowerCase().replace(/\.$/, "");
+  if (
+    normalized.length > 253 ||
+    isIP(normalized) !== 0 ||
+    normalized === "localhost" ||
+    normalized.endsWith(".localhost") ||
+    normalized.endsWith(".local") ||
+    !normalized.includes(".") ||
+    !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(
+      normalized,
+    )
+  ) {
+    throw new Error(
+      `Resource passthrough host must be a public domain: ${host}`,
+    );
+  }
+  return normalized;
 }
 
 function createPreparedWorkspaceArchiveCommand(archivePath: string): string {

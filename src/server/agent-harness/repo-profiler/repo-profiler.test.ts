@@ -2,6 +2,73 @@ import { describe, expect, it } from "vitest";
 import { profileRepo } from "./repo-profiler";
 
 describe("profileRepo", () => {
+  it("profiles a nested standalone app from its own package and lockfile", () => {
+    const profile = profileRepo({
+      files: [
+        { path: "README.md", text: "Examples" },
+        {
+          path: "examples/storefront/package.json",
+          text: JSON.stringify({
+            dependencies: { vite: "latest" },
+            name: "storefront",
+            scripts: { build: "vite build", dev: "vite --port 4173" },
+          }),
+        },
+        { path: "examples/storefront/package-lock.json", text: "{}" },
+        {
+          path: "examples/storefront/.env.example",
+          text: "PUBLIC_API_ORIGIN=\n",
+        },
+      ],
+      repoUrl: "https://github.com/example/examples",
+    });
+
+    expect(profile).toMatchObject({
+      candidateAppDirs: ["examples/storefront"],
+      candidateBuildCommands: ["npm run build"],
+      candidateInstallCommands: ["npm ci --no-audit"],
+      candidatePorts: [4173],
+      candidateStartCommands: ["npm run dev -- --port 4173"],
+      envExamples: ["examples/storefront/.env.example"],
+      lockfiles: ["examples/storefront/package-lock.json"],
+      packageManager: "npm",
+      requiredEnvHints: ["PUBLIC_API_ORIGIN"],
+      workspacePackages: [
+        {
+          dir: "examples/storefront",
+          installDir: "examples/storefront",
+          isWorkspace: false,
+          name: "storefront",
+          packageManager: "npm",
+          ports: [4173],
+          scripts: { build: "vite build", dev: "vite --port 4173" },
+        },
+      ],
+      workspaces: { isMonorepo: false, packageDirectories: [] },
+    });
+    expect(profile.confidence.overall).toBe(1);
+  });
+
+  it("retains quarantined environment key names without retaining their values", () => {
+    const profile = profileRepo({
+      files: [
+        { path: ".env" },
+        {
+          path: "package.json",
+          text: JSON.stringify({ scripts: { dev: "vite" } }),
+        },
+        { path: "bun.lock", text: "" },
+      ],
+      quarantinedEnvironmentKeys: ["DATABASE_URL", "OPENAI_API_KEY"],
+      repoUrl: "https://github.com/example/quarantined-env",
+    });
+
+    expect(profile.requiredEnvHints).toEqual([
+      "DATABASE_URL",
+      "OPENAI_API_KEY",
+    ]);
+  });
+
   it("derives a deterministic RepoProfile from package metadata and repo files", () => {
     const profile = profileRepo({
       commitSha: "abc123",
@@ -100,10 +167,100 @@ describe("profileRepo", () => {
     expect(profile.workspacePackages).toEqual([
       {
         dir: "apps/web",
+        installDir: ".",
+        isWorkspace: true,
         name: "@acme/web",
+        packageManager: "bun",
         ports: [3100],
         scripts: { build: "next build", dev: "next dev -p 3100" },
       },
     ]);
+  });
+
+  it("uses pnpm-workspace membership instead of treating every nested package as a workspace", () => {
+    const profile = profileRepo({
+      files: [
+        { path: "package.json", text: JSON.stringify({ private: true }) },
+        {
+          path: "pnpm-workspace.yaml",
+          text: "packages:\n  - 'apps/*'\n  - '!apps/legacy'\n",
+        },
+        { path: "pnpm-lock.yaml", text: "" },
+        {
+          path: "apps/web/package.json",
+          text: JSON.stringify({ name: "@acme/web", scripts: { dev: "vite" } }),
+        },
+        {
+          path: "apps/legacy/package.json",
+          text: JSON.stringify({ name: "legacy", scripts: { dev: "vite" } }),
+        },
+      ],
+      repoUrl: "https://github.com/example/pnpm-workspace",
+    });
+
+    expect(profile.workspaces).toEqual({
+      isMonorepo: true,
+      packageDirectories: ["apps/*", "!apps/legacy"],
+    });
+    expect(
+      profile.workspacePackages?.find(({ dir }) => dir === "apps/web"),
+    ).toMatchObject({
+      installDir: ".",
+      isWorkspace: true,
+      packageManager: "pnpm",
+    });
+    expect(
+      profile.workspacePackages?.find(({ dir }) => dir === "apps/legacy"),
+    ).toMatchObject({
+      installDir: "apps/legacy",
+      isWorkspace: false,
+      packageManager: "npm",
+    });
+  });
+
+  it("profiles declared and source-observed internal workspace dependencies", () => {
+    const profile = profileRepo({
+      files: [
+        {
+          path: "package.json",
+          text: JSON.stringify({ workspaces: ["apps/*", "packages/*"] }),
+        },
+        {
+          path: "apps/web/package.json",
+          text: JSON.stringify({
+            dependencies: { "@acme/ui": "workspace:*" },
+            name: "@acme/web",
+            scripts: { dev: "vite" },
+          }),
+        },
+        {
+          path: "apps/web/src/app.tsx",
+          text: [
+            'import { track } from "@acme/events/client";',
+            'const documentationExample = "@acme/unused";',
+          ].join("\n"),
+        },
+        {
+          path: "packages/events/package.json",
+          text: JSON.stringify({ name: "@acme/events" }),
+        },
+        {
+          path: "packages/ui/package.json",
+          text: JSON.stringify({ name: "@acme/ui" }),
+        },
+        {
+          path: "packages/unused/package.json",
+          text: JSON.stringify({ name: "@acme/unused" }),
+        },
+        { path: "bun.lock", text: "" },
+      ],
+      repoUrl: "https://github.com/example/workspace",
+    });
+
+    expect(
+      profile.workspacePackages?.find(({ name }) => name === "@acme/web"),
+    ).toMatchObject({
+      workspaceDependencies: ["@acme/events", "@acme/ui"],
+    });
   });
 });

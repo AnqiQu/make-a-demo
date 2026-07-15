@@ -1,13 +1,47 @@
 import { describe, expect, it } from "vitest";
 import type { PreparationManifest, RepoProfile } from "../schemas/artifacts";
 import {
+  expandPreparationInstallScopeForMissingWorkspace,
   findRuntimeConfigurationIssue,
   resolvePreparationRuntime,
   resolveRuntimeTarget,
 } from "./runtime-target-resolution";
 
 describe("resolveRuntimeTarget", () => {
-  it("selects the scoped root script and workspace port for one prepared app", () => {
+  it("uses a nested standalone app's package manager even inside a different root workspace", () => {
+    const target = resolveRuntimeTarget({
+      preparationManifest: manifest("examples/storefront/src/main.tsx"),
+      repoProfile: profile({
+        packageManager: "bun",
+        packageScripts: {
+          "dev:storefront": "turbo dev --filter=unrelated-storefront",
+        },
+        workspacePackages: [
+          {
+            dir: "examples/storefront",
+            installDir: "examples/storefront",
+            isWorkspace: false,
+            name: "storefront",
+            packageManager: "npm",
+            ports: [4173],
+            scripts: { build: "vite build", dev: "vite --port 4173" },
+          },
+        ],
+        workspaces: { isMonorepo: true, packageDirectories: ["apps/*"] },
+      }),
+    });
+
+    expect(target).toEqual({
+      baseUrl: "http://127.0.0.1:4173",
+      build: undefined,
+      install: { command: "npm ci --no-audit", cwd: "examples/storefront" },
+      ports: [4173],
+      start: { command: "npm run dev", cwd: "examples/storefront" },
+      targetId: "examples/storefront",
+    });
+  });
+
+  it("runs the selected workspace directly when its install is scoped", () => {
     const preparationManifest = manifest("apps/dashboard/src/app/page.tsx");
     preparationManifest.productContext.featureInventory[0]?.sourcePaths.push(
       "packages/ui/src/button.tsx",
@@ -39,11 +73,14 @@ describe("resolveRuntimeTarget", () => {
     });
 
     expect(target).toEqual({
-      baseUrl: "http://127.0.0.1:3101",
+      baseUrl: "http://127.0.0.1:3001",
       build: undefined,
-      install: { command: "bun install --frozen-lockfile", cwd: "." },
-      ports: [3101],
-      start: { command: "bun run dev:dashboard", cwd: "." },
+      install: {
+        command: "bun install --frozen-lockfile --filter=@midday/dashboard",
+        cwd: ".",
+      },
+      ports: [3001],
+      start: { command: "bun run dev", cwd: "apps/dashboard" },
       targetId: "apps/dashboard",
     });
   });
@@ -67,7 +104,7 @@ describe("resolveRuntimeTarget", () => {
     });
 
     expect(target?.install).toEqual({
-      command: "pnpm install --frozen-lockfile",
+      command: "pnpm install --frozen-lockfile --filter=web",
       cwd: ".",
     });
     expect(target?.start).toEqual({
@@ -75,6 +112,228 @@ describe("resolveRuntimeTarget", () => {
       cwd: "packages/web",
     });
     expect(target?.baseUrl).toBe("http://127.0.0.1:5173");
+  });
+
+  it("installs the selected workspace and its complete internal dependency closure", () => {
+    const target = resolveRuntimeTarget({
+      preparationManifest: manifest("apps/web/src/page.tsx"),
+      repoProfile: profile({
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "@acme/web",
+            ports: [],
+            scripts: { dev: "vite" },
+            workspaceDependencies: ["@acme/events"],
+          },
+          {
+            dir: "packages/events",
+            name: "@acme/events",
+            ports: [],
+            scripts: {},
+            workspaceDependencies: ["@acme/logger"],
+          },
+          {
+            dir: "packages/logger",
+            name: "@acme/logger",
+            ports: [],
+            scripts: {},
+          },
+        ],
+      }),
+    });
+
+    expect(target?.install.command).toBe(
+      "bun install --frozen-lockfile --filter=@acme/web --filter=@acme/events --filter=@acme/logger",
+    );
+  });
+
+  it("uses npm workspace selection when the target is unambiguous", () => {
+    const target = resolveRuntimeTarget({
+      preparationManifest: manifest("apps/web/src/page.tsx"),
+      repoProfile: profile({
+        candidateInstallCommands: ["npm ci --no-audit"],
+        lockfiles: ["package-lock.json"],
+        packageManager: "npm",
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "@acme/web",
+            ports: [],
+            scripts: { dev: "vite" },
+          },
+        ],
+      }),
+    });
+
+    expect(target?.install.command).toBe(
+      "npm ci --no-audit --workspace=@acme/web",
+    );
+    expect(target?.start).toEqual({
+      command: "npm run dev",
+      cwd: "apps/web",
+    });
+  });
+
+  it("preserves a backend-expanded internal workspace scope", () => {
+    const preparationManifest = manifest("apps/web/src/page.tsx");
+    preparationManifest.installCommandUsed =
+      "bun install --frozen-lockfile --filter=@acme/web --filter=@acme/events";
+
+    const resolution = resolvePreparationRuntime({
+      preparationManifest,
+      repoProfile: profile({
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "@acme/web",
+            ports: [],
+            scripts: { dev: "vite" },
+          },
+          {
+            dir: "packages/events",
+            name: "@acme/events",
+            ports: [],
+            scripts: {},
+          },
+        ],
+      }),
+    });
+
+    expect(resolution.preparationManifest.installCommandUsed).toBe(
+      preparationManifest.installCommandUsed,
+    );
+  });
+
+  it("expands scoped installation for a proven missing internal workspace", () => {
+    const preparationManifest = manifest("apps/web/src/page.tsx");
+    const expanded = expandPreparationInstallScopeForMissingWorkspace({
+      failureReport: {
+        ...validationReport(),
+        failureClassification: "start failure",
+        logsSummary:
+          "Module not found: Can't resolve '@acme/events/client'\nCould not resolve \"external-package\" from app.tsx",
+      },
+      preparationManifest,
+      repoProfile: profile({
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "@acme/web",
+            ports: [],
+            scripts: { dev: "vite" },
+          },
+          {
+            dir: "packages/events",
+            name: "@acme/events",
+            ports: [],
+            scripts: {},
+            workspaceDependencies: ["@acme/logger"],
+          },
+          {
+            dir: "packages/logger",
+            name: "@acme/logger",
+            ports: [],
+            scripts: {},
+          },
+        ],
+      }),
+    });
+
+    expect(expanded?.installCommandUsed).toBe(
+      "bun install --frozen-lockfile --filter=@acme/web --filter=@acme/events --filter=@acme/logger",
+    );
+    expect(
+      expandPreparationInstallScopeForMissingWorkspace({
+        failureReport: {
+          ...validationReport(),
+          failureClassification: "start failure",
+          logsSummary: 'Could not resolve "external-package" from app.tsx',
+        },
+        preparationManifest,
+        repoProfile: profile(),
+      }),
+    ).toBeUndefined();
+  });
+
+  it("expands scoped installation when a build proves an internal workspace is missing", () => {
+    const expanded = expandPreparationInstallScopeForMissingWorkspace({
+      failureReport: {
+        ...validationReport(),
+        failureClassification: "build failure",
+        logsSummary: "Failed to resolve import '@acme/design-system/button'",
+      },
+      preparationManifest: manifest("apps/web/src/page.tsx"),
+      repoProfile: profile({
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "@acme/web",
+            ports: [],
+            scripts: { start: "next start" },
+          },
+          {
+            dir: "packages/design-system",
+            name: "@acme/design-system",
+            ports: [],
+            scripts: {},
+          },
+        ],
+      }),
+    });
+
+    expect(expanded?.installCommandUsed).toContain(
+      "--filter=@acme/design-system",
+    );
+  });
+
+  it("uses a nested project lockfile without workspace filtering", () => {
+    const target = resolveRuntimeTarget({
+      preparationManifest: manifest("apps/web/src/page.tsx"),
+      repoProfile: profile({
+        candidateInstallCommands: ["bun install --frozen-lockfile"],
+        lockfiles: ["apps/web/bun.lock"],
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "web",
+            ports: [],
+            scripts: { dev: "vite" },
+          },
+        ],
+        workspaces: { isMonorepo: false, packageDirectories: [] },
+      }),
+    });
+
+    expect(target?.install).toEqual({
+      command: "bun install --frozen-lockfile",
+      cwd: "apps/web",
+    });
+  });
+
+  it("keeps a full install when focused installation is not safely supported", () => {
+    const target = resolveRuntimeTarget({
+      preparationManifest: manifest("apps/web/src/page.tsx"),
+      repoProfile: profile({
+        candidateInstallCommands: ["yarn install --immutable"],
+        lockfiles: ["yarn.lock"],
+        packageManager: "yarn",
+        packageScripts: {
+          "dev:web": "turbo dev --filter=@acme/web",
+        },
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "@acme/web",
+            ports: [],
+            scripts: { dev: "vite" },
+          },
+        ],
+      }),
+    });
+
+    expect(target?.install.command).toBe("yarn install --immutable");
+    expect(target?.start).toEqual({ command: "yarn run dev:web", cwd: "." });
   });
 
   it("replaces agent-authored runtime fields with the resolved target", () => {
@@ -98,11 +357,12 @@ describe("resolveRuntimeTarget", () => {
     });
 
     expect(resolution.preparationManifest).toMatchObject({
-      appDir: ".",
+      appDir: "apps/dashboard",
       baseUrl: "http://127.0.0.1:3001",
-      installCommandUsed: "bun install --frozen-lockfile",
+      installCommandUsed:
+        "bun install --frozen-lockfile --filter=./apps/dashboard",
       ports: [3001],
-      startCommandUsed: "bun run dev:dashboard",
+      startCommandUsed: "bun run dev",
     });
     expect(resolution.preparationManifest).not.toHaveProperty(
       "buildCommandUsed",
@@ -169,14 +429,12 @@ function manifest(sourcePath: string): PreparationManifest {
     baseUrl: "http://127.0.0.1:3000",
     blockedExternalServicesReplaced: [],
     cleanupAndReproInstructions: [],
-    createdFiles: [],
     envUsed: {},
     id: "prep",
     installCommandUsed: "bun install --frozen-lockfile",
     knownLimitations: [],
     localDemoModeChanges: [],
     mocksAndFixturesAdded: [],
-    modifiedFiles: [],
     ports: [3000],
     productContext: {
       evidencePaths: [sourcePath],
@@ -197,6 +455,24 @@ function manifest(sourcePath: string): PreparationManifest {
     requiredLocalOnlyAssumptions: [],
     scriptGenerationContext: [],
     startCommandUsed: "bun --cwd apps/dashboard x next dev -p 3000",
-    validationEvidence: [],
+  };
+}
+
+function validationReport() {
+  return {
+    artifactReferences: [],
+    blockedNetworkAttempts: [],
+    browserObservations: [],
+    consoleErrors: [],
+    logsSummary: "failed",
+    networkAttempts: [],
+    pageErrors: [],
+    retryCount: 0,
+    screenshots: [],
+    stage: "preparation-preflight",
+    status: "failed" as const,
+    stderrExcerpts: [],
+    stdoutExcerpts: [],
+    suggestedRepairHints: [],
   };
 }

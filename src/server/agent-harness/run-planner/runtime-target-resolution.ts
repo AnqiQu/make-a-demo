@@ -3,12 +3,19 @@ import type {
   PreparationManifest,
   RepoProfile,
   RepoWorkspacePackage,
+  ValidationReport,
 } from "../schemas/artifacts";
 
 type RuntimeCommand = {
   command: string;
   cwd: string;
 };
+
+const scopedInstallManagers = new Set<RepoProfile["packageManager"]>([
+  "bun",
+  "npm",
+  "pnpm",
+]);
 
 export type ResolvedRuntimeTarget = {
   baseUrl: string;
@@ -94,6 +101,63 @@ export function resolvePreparationRuntime(input: {
   };
 }
 
+/**
+ * Expands a focused install only when runtime output proves that a known
+ * internal workspace is missing. Unknown registry packages remain agent work.
+ */
+export function expandPreparationInstallScopeForMissingWorkspace(input: {
+  failureReport: ValidationReport;
+  preparationManifest: PreparationManifest;
+  repoProfile: RepoProfile;
+}): PreparationManifest | undefined {
+  if (
+    !["build failure", "start failure"].includes(
+      input.failureReport.failureClassification ?? "",
+    ) ||
+    !input.repoProfile.workspaces.isMonorepo ||
+    !scopedInstallManagers.has(input.repoProfile.packageManager) ||
+    resolveRuntimeTarget(input) === undefined
+  ) {
+    return undefined;
+  }
+  const knownWorkspaceNames = new Set(
+    (input.repoProfile.workspacePackages ?? []).flatMap(({ name }) =>
+      name === undefined ? [] : [name],
+    ),
+  );
+  const selectedWorkspaceNames = new Set(
+    readSelectedWorkspaceNames(input.preparationManifest.installCommandUsed),
+  );
+  const missingWorkspaceNames = [
+    ...input.failureReport.logsSummary.matchAll(
+      /(?:can't resolve|cannot find (?:module|package)|could not resolve|failed to resolve import)[^"'`\r\n]*["'`]([^"'`\r\n]+)["'`]/gi,
+    ),
+  ]
+    .map((match) => readPackageName(match[1] ?? ""))
+    .filter(
+      (name): name is string =>
+        name !== undefined &&
+        knownWorkspaceNames.has(name) &&
+        !selectedWorkspaceNames.has(name),
+    );
+  if (missingWorkspaceNames.length === 0) {
+    return undefined;
+  }
+  const scopeName =
+    input.repoProfile.packageManager === "npm" ? "workspace" : "filter";
+  return resolvePreparationRuntime({
+    preparationManifest: {
+      ...input.preparationManifest,
+      installCommandUsed: `${input.preparationManifest.installCommandUsed}${[
+        ...new Set(missingWorkspaceNames),
+      ]
+        .map((name) => ` --${scopeName}=${name}`)
+        .join("")}`,
+    },
+    repoProfile: input.repoProfile,
+  }).preparationManifest;
+}
+
 /** Resolves one prepared browser application to repository-backed commands. */
 export function resolveRuntimeTarget(input: {
   preparationManifest: PreparationManifest;
@@ -103,7 +167,30 @@ export function resolveRuntimeTarget(input: {
   if (workspacePackage === undefined) {
     return undefined;
   }
-  const start = findStartCommand(input.repoProfile, workspacePackage);
+  const packageManager =
+    workspacePackage.packageManager ?? input.repoProfile.packageManager;
+  const baseInstallCommand =
+    workspacePackage.isWorkspace === false ||
+    packageManager !== input.repoProfile.packageManager
+      ? createInstallCommand(packageManager)
+      : (input.repoProfile.candidateInstallCommands[0] ??
+        input.preparationManifest.installCommandUsed);
+  const installCommand = createTargetInstallCommand(
+    input.repoProfile,
+    workspacePackage,
+    baseInstallCommand,
+    readSelectedWorkspaceNames(input.preparationManifest.installCommandUsed),
+    packageManager,
+  );
+  const scopedInstall = installCommand !== baseInstallCommand;
+  const preferPackageLocalCommands =
+    scopedInstall || workspacePackage.isWorkspace === false;
+  const start = findStartCommand(
+    input.repoProfile,
+    workspacePackage,
+    preferPackageLocalCommands,
+    packageManager,
+  );
   if (start === undefined) {
     return undefined;
   }
@@ -120,17 +207,120 @@ export function resolveRuntimeTarget(input: {
     build:
       start.scriptName === "dev"
         ? undefined
-        : findBuildCommand(input.repoProfile, workspacePackage),
+        : findBuildCommand(
+            input.repoProfile,
+            workspacePackage,
+            preferPackageLocalCommands,
+            packageManager,
+          ),
     install: {
-      command:
-        input.repoProfile.candidateInstallCommands[0] ??
-        input.preparationManifest.installCommandUsed,
-      cwd: findInstallDirectory(input.repoProfile, workspacePackage.dir),
+      command: installCommand,
+      cwd:
+        workspacePackage.installDir ??
+        findInstallDirectory(input.repoProfile, workspacePackage.dir),
     },
     ports: [port],
     start: { command: start.command, cwd: start.cwd },
     targetId: workspacePackage.dir,
   };
+}
+
+function createTargetInstallCommand(
+  repoProfile: RepoProfile,
+  workspacePackage: RepoWorkspacePackage,
+  command: string,
+  additionalWorkspaceNames: string[],
+  packageManager: RepoProfile["packageManager"],
+): string {
+  if (
+    !scopedInstallManagers.has(packageManager) ||
+    !repoProfile.workspaces.isMonorepo ||
+    workspacePackage.isWorkspace === false ||
+    workspacePackage.dir === "." ||
+    /(?:^|\s)--(?:filter|workspace)(?:=|\s)/.test(command)
+  ) {
+    return command;
+  }
+  const filters = readWorkspaceDependencyClosure(
+    repoProfile,
+    workspacePackage,
+    additionalWorkspaceNames,
+  ).map(readWorkspaceFilter);
+  return filters.some((filter) => filter === undefined)
+    ? command
+    : `${command}${filters
+        .map(
+          (filter) =>
+            ` --${packageManager === "npm" ? "workspace" : "filter"}=${filter}`,
+        )
+        .join("")}`;
+}
+
+function readWorkspaceDependencyClosure(
+  repoProfile: RepoProfile,
+  target: RepoWorkspacePackage,
+  additionalWorkspaceNames: string[],
+): RepoWorkspacePackage[] {
+  const packagesByName = new Map(
+    (repoProfile.workspacePackages ?? []).flatMap((workspacePackage) =>
+      workspacePackage.name === undefined
+        ? []
+        : [[workspacePackage.name, workspacePackage] as const],
+    ),
+  );
+  const closure: RepoWorkspacePackage[] = [];
+  const queue = [
+    target,
+    ...additionalWorkspaceNames.flatMap((name) => {
+      const workspacePackage = packagesByName.get(name);
+      return workspacePackage === undefined ? [] : [workspacePackage];
+    }),
+  ];
+  const seen = new Set<string>();
+  while (queue.length > 0) {
+    const workspacePackage = queue.shift();
+    if (workspacePackage === undefined || seen.has(workspacePackage.dir)) {
+      continue;
+    }
+    seen.add(workspacePackage.dir);
+    closure.push(workspacePackage);
+    for (const dependency of workspacePackage.workspaceDependencies ?? []) {
+      const dependencyPackage = packagesByName.get(dependency);
+      if (dependencyPackage !== undefined) {
+        queue.push(dependencyPackage);
+      }
+    }
+  }
+  return closure;
+}
+
+function readSelectedWorkspaceNames(command: string): string[] {
+  return command.split(/\s+/).flatMap((argument) => {
+    const match = /^--(?:filter|workspace)=([A-Za-z0-9._/@:-]+)$/.exec(
+      argument,
+    );
+    return match?.[1] === undefined ? [] : [match[1]];
+  });
+}
+
+function readPackageName(specifier: string): string | undefined {
+  if (specifier.startsWith("@")) {
+    const [scope, name] = specifier.split("/");
+    return scope !== undefined && name !== undefined
+      ? `${scope}/${name}`
+      : undefined;
+  }
+  const [name] = specifier.split("/");
+  return name?.length === 0 || specifier.startsWith(".") ? undefined : name;
+}
+
+function readWorkspaceFilter(
+  workspacePackage: RepoWorkspacePackage,
+): string | undefined {
+  return [workspacePackage.name, `./${workspacePackage.dir}`].find(
+    (candidate): candidate is string =>
+      candidate !== undefined && /^[A-Za-z0-9._/@:-]+$/.test(candidate),
+  );
 }
 
 function readFrameworkDefaultPort(command: string): number | undefined {
@@ -174,6 +364,8 @@ function findPreparedWorkspacePackage(input: {
 function findStartCommand(
   repoProfile: RepoProfile,
   workspacePackage: RepoWorkspacePackage,
+  preferWorkspaceLocal: boolean,
+  packageManager: RepoProfile["packageManager"],
 ):
   | { command: string; cwd: string; port?: number; scriptName: string }
   | undefined {
@@ -181,21 +373,23 @@ function findStartCommand(
     if (workspacePackage.scripts[scriptName] === undefined) {
       continue;
     }
-    const rootScriptName = findScopedRootScript(
-      repoProfile.packageScripts,
-      workspacePackage,
-      scriptName,
-    );
+    const rootScriptName = preferWorkspaceLocal
+      ? undefined
+      : findScopedRootScript(
+          repoProfile.packageScripts,
+          workspacePackage,
+          scriptName,
+        );
     if (rootScriptName !== undefined) {
       return {
-        command: scriptCommand(repoProfile.packageManager, rootScriptName),
+        command: scriptCommand(packageManager, rootScriptName),
         cwd: ".",
         ...readCommandPort(repoProfile.packageScripts[rootScriptName] ?? ""),
         scriptName,
       };
     }
     return {
-      command: scriptCommand(repoProfile.packageManager, scriptName),
+      command: scriptCommand(packageManager, scriptName),
       cwd: workspacePackage.dir,
       scriptName,
     };
@@ -213,22 +407,26 @@ function readCommandPort(command: string): { port?: number } {
 function findBuildCommand(
   repoProfile: RepoProfile,
   workspacePackage: RepoWorkspacePackage,
+  preferWorkspaceLocal: boolean,
+  packageManager: RepoProfile["packageManager"],
 ): RuntimeCommand | undefined {
   if (workspacePackage.scripts.build === undefined) {
     return undefined;
   }
-  const rootScriptName = findScopedRootScript(
-    repoProfile.packageScripts,
-    workspacePackage,
-    "build",
-  );
+  const rootScriptName = preferWorkspaceLocal
+    ? undefined
+    : findScopedRootScript(
+        repoProfile.packageScripts,
+        workspacePackage,
+        "build",
+      );
   return rootScriptName === undefined
     ? {
-        command: scriptCommand(repoProfile.packageManager, "build"),
+        command: scriptCommand(packageManager, "build"),
         cwd: workspacePackage.dir,
       }
     : {
-        command: scriptCommand(repoProfile.packageManager, rootScriptName),
+        command: scriptCommand(packageManager, rootScriptName),
         cwd: ".",
       };
 }
@@ -259,6 +457,23 @@ function scriptCommand(
 ): string {
   const runner = packageManager === "unknown" ? "npm" : packageManager;
   return `${runner} run ${scriptName}`;
+}
+
+function createInstallCommand(
+  packageManager: RepoProfile["packageManager"],
+): string {
+  switch (packageManager) {
+    case "bun":
+      return "bun install --frozen-lockfile";
+    case "npm":
+      return "npm ci --no-audit";
+    case "pnpm":
+      return "pnpm install --frozen-lockfile";
+    case "yarn":
+      return "yarn install --immutable";
+    case "unknown":
+      return "npm install --no-audit";
+  }
 }
 
 function findInstallDirectory(

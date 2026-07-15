@@ -21,6 +21,17 @@ export function planLockfileReconciliation(
   if (manager === undefined) {
     return undefined;
   }
+  const workspaceScope = command
+    .split(/\s+/)
+    .filter(
+      (argument) =>
+        argument.startsWith("--filter=") || argument.startsWith("--workspace="),
+    )
+    .join(" ");
+  const scoped = (reconciliationCommand: string) =>
+    workspaceScope.length === 0
+      ? reconciliationCommand
+      : `${reconciliationCommand} ${workspaceScope}`;
 
   const output = `${input.stderr}\n${input.stdout}`.toLowerCase();
   if (
@@ -34,19 +45,23 @@ export function planLockfileReconciliation(
     case "npm":
       return output.includes("package-lock.json") &&
         (output.includes("in sync") || output.includes("missing:"))
-        ? "npm install --package-lock-only --ignore-scripts --no-audit --no-fund"
+        ? scoped(
+            "npm install --package-lock-only --ignore-scripts --no-audit --no-fund",
+          )
         : undefined;
     case "pnpm":
       return output.includes("err_pnpm_outdated_lockfile") ||
         (output.includes("frozen-lockfile") &&
           output.includes("cannot install"))
-        ? `${match?.groups?.corepack ?? ""}pnpm install --lockfile-only --ignore-scripts`
+        ? scoped(
+            `${match?.groups?.corepack ?? ""}pnpm install --lockfile-only --ignore-scripts`,
+          )
         : undefined;
     case "bun":
       return output.includes("lockfile") &&
         output.includes("frozen") &&
         (output.includes("change") || output.includes("outdated"))
-        ? "bun install --lockfile-only --ignore-scripts"
+        ? scoped("bun install --lockfile-only --ignore-scripts")
         : undefined;
     case "yarn":
       return output.includes("yn0028") ||

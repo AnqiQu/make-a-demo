@@ -1,13 +1,24 @@
-import type { RepoProfile } from "../schemas/artifacts";
+import { posix } from "node:path";
+import type { PackageManager, RepoProfile } from "../schemas/artifacts";
 
 type RepoProfileFile = {
   path: string;
   text?: string;
 };
 
+type PackageRecord = {
+  dependencies: Record<string, string>;
+  dir: string;
+  json: Record<string, unknown>;
+  name?: string;
+  packageManagerDeclaration?: PackageManager;
+  scripts: Record<string, string>;
+};
+
 export type RepoProfileInput = {
   commitSha?: string;
   files: RepoProfileFile[];
+  quarantinedEnvironmentKeys?: string[];
   repoUrl: string;
   rootDir?: string;
 };
@@ -47,20 +58,35 @@ export function profileRepo(input: RepoProfileInput): RepoProfile {
     path: normalizePath(file.path),
   }));
   const paths = new Set(files.map((file) => file.path));
-  const packageManager = detectPackageManager(paths);
-  const packageJson = readJsonObject(
-    files.find((file) => file.path === "package.json")?.text,
+  const packages = readPackages(files);
+  const rootPackage = packages.find(({ dir }) => dir === ".");
+  const workspacePatterns = [
+    ...readWorkspacePatterns(rootPackage?.json.workspaces),
+    ...readPnpmWorkspacePatterns(files),
+  ].filter((pattern, index, patterns) => patterns.indexOf(pattern) === index);
+  const lockfiles = [...paths]
+    .filter((path) => lockfileManager(path) !== undefined)
+    .sort();
+  const primaryPackage = selectPrimaryPackage(packages);
+  const packageManager =
+    primaryPackage === undefined
+      ? "unknown"
+      : resolvePackageManager(primaryPackage, lockfiles, workspacePatterns);
+  const packageJson = primaryPackage?.json;
+  const packageScripts = primaryPackage?.scripts ?? {};
+  const dependencies = Object.assign(
+    {},
+    ...packages.map((entry) => entry.dependencies),
   );
-  const packageScripts = readScripts(packageJson?.scripts);
-  const dependencies = {
-    ...readDependencyRecord(packageJson?.dependencies),
-    ...readDependencyRecord(packageJson?.devDependencies),
-  };
-  const workspacePatterns = readWorkspacePatterns(packageJson?.workspaces);
-  const workspacePackages = readWorkspacePackages(files);
+  const workspacePackages = readWorkspacePackages(
+    files,
+    packages,
+    lockfiles,
+    workspacePatterns,
+  );
   const candidatePorts = readCandidatePorts(packageScripts);
   const envExamples = files
-    .filter((file) => /^\.env(?:\..+)?$/.test(file.path))
+    .filter((file) => /^\.env(?:\..+)?$/.test(posix.basename(file.path)))
     .map((file) => file.path);
 
   return {
@@ -100,20 +126,30 @@ export function profileRepo(input: RepoProfileInput): RepoProfile {
     externalServiceHints: Object.keys(dependencies).filter((name) =>
       externalServicePackages.includes(name.toLowerCase()),
     ),
-    lockfiles: [...paths].filter((path) =>
-      lockfileManagers.some(([lockfile]) => lockfile === path),
-    ),
+    lockfiles,
     packageManager,
     packageScripts,
     repoUrl: input.repoUrl,
-    requiredEnvHints: readEnvKeys(files),
+    requiredEnvHints: [
+      ...new Set([
+        ...readEnvKeys(files),
+        ...(input.quarantinedEnvironmentKeys ?? []).filter((key) =>
+          /^[A-Za-z_][A-Za-z0-9_]*$/.test(key),
+        ),
+      ]),
+    ].sort(),
     rootDir: input.rootDir ?? "/workspace",
-    securityWarnings:
-      packageScripts.postinstall === undefined
+    securityWarnings: packages.flatMap((entry) =>
+      entry.scripts.postinstall === undefined
         ? []
-        : ["package script postinstall runs during install"],
+        : [
+            entry.dir === "."
+              ? "package script postinstall runs during install"
+              : `package script postinstall in ${entry.dir}/package.json runs during install`,
+          ],
+    ),
     unsupportedReasons:
-      packageJson === undefined
+      packages.length === 0
         ? ["package.json is required for JavaScript/TypeScript repos"]
         : [],
     workspaces: {
@@ -124,45 +160,218 @@ export function profileRepo(input: RepoProfileInput): RepoProfile {
   };
 }
 
-function readWorkspacePackages(files: RepoProfileFile[]) {
-  return files.flatMap((file) => {
-    if (file.path === "package.json" || !file.path.endsWith("/package.json")) {
-      return [];
-    }
-    const packageJson = readJsonObject(file.text);
-    if (packageJson === undefined) {
-      return [];
-    }
-    const scripts = readScripts(packageJson.scripts);
+function readWorkspacePackages(
+  files: RepoProfileFile[],
+  packages: PackageRecord[],
+  lockfiles: string[],
+  workspacePatterns: string[],
+) {
+  const nestedPackages = packages.flatMap((packageRecord) => {
+    if (packageRecord.dir === ".") return [];
+    const scripts = packageRecord.scripts;
     const runtimeScripts = Object.fromEntries(
       Object.entries(scripts).filter(([name]) =>
         ["build", "dev", "preview", "start"].includes(name),
       ),
     );
-    const name =
-      typeof packageJson.name === "string" && packageJson.name.length > 0
-        ? packageJson.name
-        : undefined;
+    const isWorkspace = matchesWorkspacePatterns(
+      packageRecord.dir,
+      workspacePatterns,
+    );
     return [
       {
-        dir: file.path.slice(0, -"/package.json".length),
-        ...(name === undefined ? {} : { name }),
+        declaredDependencies: Object.keys(packageRecord.dependencies),
+        dir: packageRecord.dir,
+        installDir: isWorkspace ? "." : packageRecord.dir,
+        isWorkspace,
+        ...(packageRecord.name === undefined
+          ? {}
+          : { name: packageRecord.name }),
+        packageManager: resolvePackageManager(
+          packageRecord,
+          lockfiles,
+          workspacePatterns,
+        ),
         ports: readCandidatePorts(runtimeScripts),
         scripts: runtimeScripts,
       },
     ];
   });
+  const workspaceNames = new Set(
+    nestedPackages
+      .map(({ name }) => name)
+      .filter((name): name is string => name !== undefined),
+  );
+  return nestedPackages.map(({ declaredDependencies, ...workspacePackage }) => {
+    const observedDependencies = files
+      .filter(
+        ({ path, text }) =>
+          text !== undefined &&
+          path.startsWith(`${workspacePackage.dir}/`) &&
+          isSourceModulePath(path),
+      )
+      .flatMap(({ text }) => readModuleSpecifiers(text ?? ""));
+    const workspaceDependencies = [
+      ...new Set([...declaredDependencies, ...observedDependencies]),
+    ]
+      .map(readPackageName)
+      .filter(
+        (name): name is string =>
+          name !== undefined &&
+          name !== workspacePackage.name &&
+          workspaceNames.has(name),
+      )
+      .sort();
+    return {
+      ...workspacePackage,
+      ...(workspaceDependencies.length === 0 ? {} : { workspaceDependencies }),
+    };
+  });
 }
 
-function detectPackageManager(
-  paths: Set<string>,
-): RepoProfile["packageManager"] {
-  for (const [lockfile, packageManager] of lockfileManagers) {
-    if (paths.has(lockfile)) {
-      return packageManager;
-    }
+function isSourceModulePath(path: string): boolean {
+  return /\.(?:[cm]?[jt]sx?|astro|svelte|vue)$/.test(path);
+}
+
+function readModuleSpecifiers(source: string): string[] {
+  return [
+    /\b(?:import|export)\s+(?:type\s+)?[^"'`;]*?\sfrom\s*["'`]([^"'`\r\n]+)["'`]/g,
+    /\bimport\s*["'`]([^"'`\r\n]+)["'`]/g,
+    /\b(?:import|require)\s*\(\s*["'`]([^"'`\r\n]+)["'`]\s*\)/g,
+  ].flatMap((pattern) =>
+    [...source.matchAll(pattern)].map((match) => match[1] ?? ""),
+  );
+}
+
+function readPackageName(specifier: string): string | undefined {
+  if (specifier.startsWith("@")) {
+    const [scope, name] = specifier.split("/");
+    return scope !== undefined && name !== undefined
+      ? `${scope}/${name}`
+      : undefined;
   }
-  return paths.has("package.json") ? "npm" : "unknown";
+  const [name] = specifier.split("/");
+  return name?.length === 0 || specifier.startsWith(".") ? undefined : name;
+}
+
+function readPackages(files: RepoProfileFile[]): PackageRecord[] {
+  return files.flatMap((file) => {
+    if (file.path !== "package.json" && !file.path.endsWith("/package.json")) {
+      return [];
+    }
+    const json = readJsonObject(file.text);
+    if (json === undefined) return [];
+    const dir = file.path === "package.json" ? "." : posix.dirname(file.path);
+    const name =
+      typeof json.name === "string" && json.name.trim().length > 0
+        ? json.name
+        : undefined;
+    return [
+      {
+        dependencies: {
+          ...readDependencyRecord(json.dependencies),
+          ...readDependencyRecord(json.devDependencies),
+          ...readDependencyRecord(json.optionalDependencies),
+          ...readDependencyRecord(json.peerDependencies),
+        },
+        dir,
+        json,
+        ...(name === undefined ? {} : { name }),
+        ...readPackageManagerDeclaration(json.packageManager),
+        scripts: readScripts(json.scripts),
+      },
+    ];
+  });
+}
+
+function selectPrimaryPackage(
+  packages: PackageRecord[],
+): PackageRecord | undefined {
+  const hasRuntimeScript = ({ scripts }: PackageRecord) =>
+    ["dev", "start", "preview"].some((name) => scripts[name] !== undefined);
+  return (
+    packages.find((entry) => entry.dir === "." && hasRuntimeScript(entry)) ??
+    packages.find(hasRuntimeScript) ??
+    packages.find(({ dir }) => dir === ".") ??
+    packages[0]
+  );
+}
+
+function resolvePackageManager(
+  packageRecord: PackageRecord,
+  lockfiles: string[],
+  workspacePatterns: string[],
+): PackageManager {
+  const installDir = matchesWorkspacePatterns(
+    packageRecord.dir,
+    workspacePatterns,
+  )
+    ? "."
+    : packageRecord.dir;
+  const ownedLockfile = lockfiles.find(
+    (lockfile) => posix.dirname(lockfile) === installDir,
+  );
+  return (
+    (ownedLockfile === undefined
+      ? undefined
+      : lockfileManager(ownedLockfile)) ??
+    packageRecord.packageManagerDeclaration ??
+    "npm"
+  );
+}
+
+function lockfileManager(path: string): PackageManager | undefined {
+  const filename = posix.basename(path);
+  return lockfileManagers.find(([lockfile]) => lockfile === filename)?.[1];
+}
+
+function readPackageManagerDeclaration(
+  value: unknown,
+): Pick<PackageRecord, "packageManagerDeclaration"> {
+  if (typeof value !== "string") return {};
+  const name = /^([a-z]+)@/i.exec(value)?.[1]?.toLowerCase();
+  return ["bun", "npm", "pnpm", "yarn"].includes(name ?? "")
+    ? { packageManagerDeclaration: name as PackageManager }
+    : {};
+}
+
+function readPnpmWorkspacePatterns(files: RepoProfileFile[]): string[] {
+  const text = files.find(({ path }) => path === "pnpm-workspace.yaml")?.text;
+  if (text === undefined) return [];
+  const packagesBlock =
+    /(?:^|\n)packages\s*:\s*\n((?:[ \t]+-[^\n]*(?:\n|$))+)/.exec(text)?.[1];
+  if (packagesBlock === undefined) return [];
+  return [
+    ...packagesBlock.matchAll(
+      /^[ \t]+-[ \t]+["']?([^"'\n#]+?)["']?[ \t]*(?:#.*)?$/gm,
+    ),
+  ]
+    .map((match) => match[1]?.trim())
+    .filter((pattern): pattern is string =>
+      pattern === undefined ? false : pattern.length > 0,
+    );
+}
+
+function matchesWorkspacePatterns(dir: string, patterns: string[]): boolean {
+  let included = false;
+  for (const rawPattern of patterns) {
+    const excluded = rawPattern.startsWith("!");
+    const pattern = (excluded ? rawPattern.slice(1) : rawPattern).replace(
+      /^\.\//,
+      "",
+    );
+    if (globMatches(pattern, dir)) included = !excluded;
+  }
+  return included;
+}
+
+function globMatches(pattern: string, value: string): boolean {
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  const expression = escaped
+    .replaceAll("**", "\0")
+    .replaceAll("*", "[^/]*")
+    .replaceAll("\0", ".*");
+  return new RegExp(`^${expression}$`).test(value);
 }
 
 function createInstallCommand(packageManager: RepoProfile["packageManager"]) {
@@ -248,7 +457,7 @@ function readCandidateAppDirs(files: RepoProfileFile[]): string[] {
 function readEnvKeys(files: RepoProfileFile[]): string[] {
   const keys = new Set<string>();
   for (const file of files) {
-    if (!/^\.env(?:\..+)?$/.test(file.path)) {
+    if (!/^\.env(?:\..+)?$/.test(posix.basename(file.path))) {
       continue;
     }
     for (const line of (file.text ?? "").split("\n")) {
@@ -338,7 +547,11 @@ function calculateConfidence(
     score += 0.25;
   }
   if (
-    [...paths].some((path) => lockfileManagers.some(([lock]) => lock === path))
+    [...paths].some((path) =>
+      lockfileManagers.some(
+        ([lockfile]) => path === lockfile || path.endsWith(`/${lockfile}`),
+      ),
+    )
   ) {
     score += 0.2;
   }
