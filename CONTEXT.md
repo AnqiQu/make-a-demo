@@ -56,16 +56,18 @@
 - **Supporting Documents** are normalized into text artifacts before **Repo Preparation** begins.
 - **Repo Security Screen** runs before **Repo Preparation** and does not use an agent.
 - **Repo Security Screen** does not install dependencies or execute submitted repo code.
+- Repository snapshots quarantine committed private environment files and private-key material from every agent and submitted-code archive while retaining only safe environment variable names as preparation hints. Static rejection is terminal only for unsafe content that remains executable or otherwise cannot be safely quarantined.
 - **Repo Preparation** happens in an ephemeral cloud workspace and does not modify the maker's source repo.
 - During **Repo Preparation**, the preparation agent may edit and execute the ephemeral workspace, but the prepared output must still pass non-agent **Capture Path Validation** before Footage Capture trusts it.
 - During **Repo Preparation**, the preparation agent may use controlled network access for setup and research, but the prepared app runtime must pass **Runtime Network Lockdown** before Footage Capture trusts it.
-- **App Exploration** may ask the backend to hydrate eligible public HTTPS GET resources into the **External Resource Cache**. The backend never forwards submitted-code cookies or authorization, and replay never opens runtime network access.
-- **Capture Path Validation** and **Footage Capture** use the same hash-verified **External Resource Cache**. Uncached requests remain blocked and observable; a blocked side effect alone does not fail a feature flow when its visible assertions still pass.
+- **App Exploration** and **Capture Path Validation** may ask the backend resource broker to authorize an exact, credential-free public HTTPS GET after public-address resolution. The submitted-code sandbox then receives a temporary domain allowlist while the browser permits only those exact URLs; the window closes immediately after that browser pass.
+- The backend pins authorized responses into the hash-verified **External Resource Cache** and reruns the browser path offline. **Footage Capture** uses only this cache: uncached traffic remains blocked and observable, and a required visual resource that cannot be replayed fails validation.
 - The preparation agent can invoke **Runtime Network Lockdown** as an iterative tool/check; app runtime network attempts return structured tool-call failures so the agent can mock or remove dependencies before retrying.
 - **Repo Preparation** first checks whether the submitted project already contains a prepared demo command, MakeADemo Config, or existing demo flow before creating a new one.
 - **Repo Preparation** mutates the ephemeral workspace directly and stores the resulting diff as an artifact for auditability, fallback prompts, and future apply-to-repo flows.
 - **Repo Preparation** may gather context for later script and capture stages, but **Script Generation** remains a separate stage.
 - **Repo Preparation** records source-backed **Product Context** and makes every maker-requested feature browser-reachable in its ephemeral demo runtime. Authentication prerequisites may use a demo-only bypass or deterministic local identity, while authentication remains visible when it is itself requested.
+- In a supported monorepo, backend Runtime Target Resolution keeps dependency installation at the lockfile owner while restricting it to the selected browser workspace and the internal workspace closure proven by package metadata, source imports, or missing-module preflight evidence. Scoped runtimes execute the selected workspace's own scripts; unrelated workspaces are not installed or repaired merely because they share the repository.
 - If **Repo Preparation** cannot produce a plausible deterministic demo runtime, MakeADemo returns a **Preparation Fallback Prompt** and does not proceed to Script Generation.
 - **Capture Path Validation** and **Footage Capture** run Playwright inside the **Sandbox** rather than from the backend host.
 - **Preparation Manifest** supplies the prepared demo command and local URL used by **Capture Path Validation**.
@@ -81,6 +83,7 @@
 - **Capture Path Validation** first runs **Demo Runtime Preflight** to prove the prepared app can load without external network access, then proves that the backend-compiled browser path in a **Demo Script** can run while **Runtime Network Lockdown** is enforced.
 - **Capture Path Validation** does not produce final browser footage; **Footage Capture** records one continuous presentation-oriented take for Browser Scenes, including human-like typing and cursor movement, and derives their Captured Scene Clips from that take.
 - **Footage Capture** starts from fresh deterministic app state after **Capture Path Validation** succeeds, so validation dry-runs cannot pollute the final recorded take.
+- Every repaired **Capture Path Validation** attempt also starts from a freshly synchronized app runtime, so one failed dry-run cannot make a later retry pass or fail because of leftover state.
 - If **Capture Path Validation** fails, the agent may repair the prepared workspace or **Demo Script**, but the full **Capture Path Validation** stage must rerun before **Footage Capture** trusts the result.
 - If **Capture Path Validation** still fails after repair attempts are exhausted, the **Pipeline Job** fails and tells the user to report the issue to MakeADemo rather than returning a partially trusted script or preparation fallback.
 - If **Draft Composite** review requires changing the prepared workspace, **Capture Path Validation** must rerun before **Footage Capture** records a new take.
