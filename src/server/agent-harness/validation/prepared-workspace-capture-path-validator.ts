@@ -64,6 +64,7 @@ export async function validatePreparedWorkspaceCapturePath(input: {
   expectedStepIdsByScene?: Readonly<Record<string, readonly string[]>>;
   localRunDirectory: string;
   onEvent?: (entry: Record<string, unknown>) => Promise<void>;
+  passthroughUrls?: string[];
   sceneIds: string[];
   workspace: AgentHarnessWorkspaceHandle;
 }): Promise<PreparedWorkspaceCapturePathResult> {
@@ -89,6 +90,9 @@ export async function validatePreparedWorkspaceCapturePath(input: {
         : { externalResourceManifest: input.externalResourceManifest }),
       headed: false,
       mode: "validation",
+      ...(input.passthroughUrls === undefined
+        ? {}
+        : { passthroughUrls: input.passthroughUrls }),
     }),
   );
 

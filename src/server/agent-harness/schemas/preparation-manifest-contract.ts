@@ -11,20 +11,17 @@ const requiredFields = [
   "baseUrl",
   "blockedExternalServicesReplaced",
   "cleanupAndReproInstructions",
-  "createdFiles",
   "envUsed",
   "id",
   "installCommandUsed",
   "knownLimitations",
   "localDemoModeChanges",
   "mocksAndFixturesAdded",
-  "modifiedFiles",
   "ports",
   "productContext",
   "requiredLocalOnlyAssumptions",
   "scriptGenerationContext",
   "startCommandUsed",
-  "validationEvidence",
 ] as const satisfies readonly (keyof PreparationManifest)[];
 
 /**
@@ -36,7 +33,7 @@ export function createPreparationManifestContract() {
   return {
     $schema: "https://json-schema.org/draft/2020-12/schema",
     additionalProperties: false,
-    contractVersion: "2026-07-12",
+    contractVersion: "2026-07-15",
     invariants: [
       "all paths must reference the screened repository and must not be absolute",
       "every maker-requested feature must appear exactly once and preserve its exact text in requestedFeature",
@@ -55,7 +52,6 @@ export function createPreparationManifestContract() {
       blockedExternalServicesReplaced: stringArray,
       buildCommandUsed: { type: "string" },
       cleanupAndReproInstructions: stringArray,
-      createdFiles: stringArray,
       envUsed: {
         additionalProperties: { type: "string" },
         type: "object",
@@ -65,7 +61,6 @@ export function createPreparationManifestContract() {
       knownLimitations: stringArray,
       localDemoModeChanges: stringArray,
       mocksAndFixturesAdded: stringArray,
-      modifiedFiles: stringArray,
       ports: {
         items: { maximum: 65_535, minimum: 1, type: "integer" },
         type: "array",
@@ -116,7 +111,6 @@ export function createPreparationManifestContract() {
       requiredLocalOnlyAssumptions: stringArray,
       scriptGenerationContext: stringArray,
       startCommandUsed: { minLength: 1, type: "string" },
-      validationEvidence: stringArray,
     } satisfies Record<keyof PreparationManifest, unknown>,
     required: requiredFields,
     type: "object",

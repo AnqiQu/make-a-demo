@@ -7,6 +7,71 @@ import { DEMO_SCRIPT_OUTPUT_PATH } from "../schemas/artifacts";
 import { runAgentHarnessPipeline } from "./agent-harness";
 
 describe("runAgentHarnessPipeline", () => {
+  it("stops before planning or workspace creation when static security rejects the repository", async () => {
+    const downstreamCalls: string[] = [];
+
+    const result = await runAgentHarnessPipeline(
+      {
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        files: [
+          { path: ".env", text: "DATABASE_URL=postgres://live-secret" },
+          { path: "package.json", text: "{}" },
+        ],
+        repoStats: { fileCount: 2, sizeBytes: 200 },
+        repoUrl: "https://github.com/example/unsafe-app",
+        runId: "run_security_rejected",
+      },
+      {
+        artifactStore: {
+          async writeJson() {
+            return undefined;
+          },
+        },
+        async createWorkspace() {
+          downstreamCalls.push("workspace");
+          return workspace();
+        },
+        async exploreApp() {
+          throw new Error("App Exploration must not run after rejection.");
+        },
+        async planFlow() {
+          throw new Error("Flow Planning must not run after rejection.");
+        },
+        async prepareRepo() {
+          throw new Error("Repo Preparation must not run after rejection.");
+        },
+        async resetCaptureRuntime() {
+          throw new Error("Capture reset must not run after rejection.");
+        },
+        async synthesizeRunPlan() {
+          downstreamCalls.push("run-plan");
+          return runPlan();
+        },
+        async validateCapturePath() {
+          throw new Error(
+            "Capture Path Validation must not run after rejection.",
+          );
+        },
+        async validatePreparation() {
+          throw new Error(
+            "Preparation Preflight must not run after rejection.",
+          );
+        },
+        async validateScriptContract() {
+          throw new Error(
+            "Script Contract Validation must not run after rejection.",
+          );
+        },
+        async writeScript() {
+          throw new Error("Script Writing must not run after rejection.");
+        },
+      },
+    );
+
+    expect(result.status).toBe("security-rejected");
+    expect(downstreamCalls).toEqual([]);
+  });
+
   it("runs the artifact-driven pipeline in order and hands durable artifacts to each stage", async () => {
     const calls: string[] = [];
     const artifacts: Record<string, unknown> = {};
@@ -120,6 +185,7 @@ describe("runAgentHarnessPipeline", () => {
       "flow:appmap_001:actions_001",
       "script:flow_001:http://127.0.0.1:3001",
       `static:${"flow_001"}`,
+      "reset:prep_001",
       `dynamic:${DEMO_SCRIPT_OUTPUT_PATH}`,
       "reset:prep_001",
     ]);
@@ -139,10 +205,12 @@ describe("runAgentHarnessPipeline", () => {
     expect(
       artifacts["/workspace/.makeademo/preparation-manifest.json"],
     ).toMatchObject({
-      appDir: ".",
+      appDir: "apps/dashboard",
       baseUrl: "http://127.0.0.1:3001",
+      installCommandUsed:
+        "bun install --frozen-lockfile --filter=@acme/dashboard",
       ports: [3001],
-      startCommandUsed: "bun run dev:dashboard",
+      startCommandUsed: "bun run dev",
     });
     expect(
       artifacts["/workspace/.makeademo/preparation-workspace-diff.json"],
@@ -498,6 +566,7 @@ describe("runAgentHarnessPipeline", () => {
           return scriptCandidate();
         },
         async resetCaptureRuntime() {
+          calls.push("reset");
           return report("capture-runtime-reset", "passed");
         },
         async synthesizeRunPlan() {
@@ -532,12 +601,15 @@ describe("runAgentHarnessPipeline", () => {
       "explore:1",
       "flow:1",
       "static",
+      "reset",
       "dynamic:1",
       "explore:2",
       "flow:2",
       "repair:Dashboard locator did not resolve",
       "static",
+      "reset",
       "dynamic:2",
+      "reset",
     ]);
     expect(result.validationReports).toEqual(
       expect.arrayContaining([
@@ -648,6 +720,124 @@ describe("runAgentHarnessPipeline", () => {
     );
   });
 
+  it("expands a missing internal workspace before invoking preparation repair", async () => {
+    const installCommands: string[] = [];
+    let preflightAttempts = 0;
+    let repairAttempts = 0;
+    const result = await runAgentHarnessPipeline(
+      {
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        files: [
+          {
+            path: "package.json",
+            text: JSON.stringify({ workspaces: ["apps/*", "packages/*"] }),
+          },
+          {
+            path: "apps/web/package.json",
+            text: JSON.stringify({
+              name: "@acme/web",
+              scripts: { dev: "vite" },
+            }),
+          },
+          { path: "apps/web/src/page.tsx", text: "export default 1" },
+          {
+            path: "packages/events/package.json",
+            text: JSON.stringify({ name: "@acme/events" }),
+          },
+          {
+            path: "packages/ui/package.json",
+            text: JSON.stringify({ name: "@acme/ui" }),
+          },
+          {
+            path: "packages/data/package.json",
+            text: JSON.stringify({ name: "@acme/data" }),
+          },
+          {
+            path: "packages/auth/package.json",
+            text: JSON.stringify({ name: "@acme/auth" }),
+          },
+          { path: "bun.lock", text: "" },
+        ],
+        repoStats: { fileCount: 8, sizeBytes: 800 },
+        repoUrl: "https://github.com/example/app",
+        runId: "run_workspace_scope_recovery",
+      },
+      {
+        async capturePreparationWorkspaceDiff() {
+          return unchangedWorkspaceDiff();
+        },
+        async createWorkspace() {
+          return workspace();
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          const manifest = preparationManifest();
+          const feature = manifest.productContext.featureInventory[0];
+          if (feature !== undefined) {
+            feature.sourcePaths = ["apps/web/src/page.tsx"];
+          }
+          return { manifest };
+        },
+        async repairPreparation() {
+          repairAttempts += 1;
+          return { manifest: preparationManifest() };
+        },
+        async resetCaptureRuntime() {
+          return report("capture-runtime-reset", "passed");
+        },
+        async synthesizeRunPlan() {
+          return runPlan();
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation({ preparationManifest: manifest }) {
+          preflightAttempts += 1;
+          installCommands.push(manifest.installCommandUsed);
+          const missingWorkspace = [
+            "@acme/events/client",
+            "@acme/ui/button",
+            "@acme/data/client",
+            "@acme/auth/session",
+          ][preflightAttempts - 1];
+          return missingWorkspace === undefined
+            ? report("preparation-preflight", "passed")
+            : {
+                ...report("preparation-preflight", "failed"),
+                failureClassification: "start failure",
+                logsSummary: `Module not found: Can't resolve '${missingWorkspace}'`,
+              };
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(repairAttempts).toBe(0);
+    expect(installCommands).toEqual([
+      "bun install --frozen-lockfile --filter=@acme/web",
+      "bun install --frozen-lockfile --filter=@acme/web --filter=@acme/events",
+      "bun install --frozen-lockfile --filter=@acme/web --filter=@acme/events --filter=@acme/ui",
+      "bun install --frozen-lockfile --filter=@acme/web --filter=@acme/events --filter=@acme/ui --filter=@acme/data",
+      "bun install --frozen-lockfile --filter=@acme/web --filter=@acme/events --filter=@acme/ui --filter=@acme/data --filter=@acme/auth",
+    ]);
+  });
+
   it("repairs a product fidelity violation before runtime preflight", async () => {
     const calls: string[] = [];
     let diffAttempts = 0;
@@ -689,8 +879,6 @@ describe("runAgentHarnessPipeline", () => {
           return {
             manifest: {
               ...preparationManifest(),
-              createdFiles: ["demo/server.ts"],
-              modifiedFiles: ["package.json"],
             },
           };
         },
@@ -740,6 +928,80 @@ describe("runAgentHarnessPipeline", () => {
         }),
       ]),
     );
+  });
+
+  it("reports the terminal validation stage after an earlier stage also failed", async () => {
+    const artifacts: Record<string, unknown> = {};
+    let state: "initial-fidelity-failure" | "install-failure" | "source-edit" =
+      "initial-fidelity-failure";
+
+    await expect(
+      runAgentHarnessPipeline(
+        {
+          demoBrief: { keyProductFeatures: ["dashboard"] },
+          files: [
+            { path: "package.json", text: "{}" },
+            { path: "bun.lock", text: "" },
+            { path: "src/service/export.ts", text: "export const value = 1" },
+          ],
+          repoStats: { fileCount: 3, sizeBytes: 300 },
+          repoUrl: "https://github.com/example/app",
+          runId: "run_terminal_preparation_stage",
+        },
+        {
+          ...failingPreparationDependencies(
+            new Error("Unexpected pipeline stage."),
+            artifacts,
+          ),
+          async capturePreparationWorkspaceDiff() {
+            if (state === "initial-fidelity-failure") {
+              return replacementWorkspaceDiff();
+            }
+            if (state === "install-failure") return unchangedWorkspaceDiff();
+            return {
+              changedPaths: ["/workspace/repo/src/service/export.ts"],
+              patch:
+                "diff --git a/src/service/export.ts b/src/service/export.ts\n+export const value = 2;",
+              patchSha256: `sha256:${"f".repeat(64)}` as const,
+              sourceCommitSha: "abc123def456",
+            };
+          },
+          async prepareRepo() {
+            return {
+              manifest: {
+                ...preparationManifest(),
+              },
+            };
+          },
+          async repairPreparation({ failureReport }) {
+            state =
+              failureReport.stage === "preparation-fidelity"
+                ? "install-failure"
+                : "source-edit";
+            return { manifest: preparationManifest() };
+          },
+          async validatePreparation() {
+            return {
+              ...report("preparation-preflight", "failed"),
+              failureClassification: "install failure",
+              logsSummary: "Dependency install failed",
+            };
+          },
+        },
+      ),
+    ).rejects.toThrow("preparation-fidelity failed");
+
+    expect(
+      artifacts["/workspace/.makeademo/preparation-fallback.json"],
+    ).toMatchObject({
+      blockers: [
+        {
+          failureClassification: "product fidelity violation",
+          summary: expect.stringContaining("src/service/export.ts"),
+        },
+      ],
+      failedStage: "preparation-fidelity",
+    });
   });
 
   it("rejects Script Repair when it mutates app source", async () => {
@@ -1297,14 +1559,12 @@ function preparationManifest() {
     baseUrl: "http://127.0.0.1:3000",
     blockedExternalServicesReplaced: [],
     cleanupAndReproInstructions: [],
-    createdFiles: [],
     envUsed: {},
     id: "prep_001",
     installCommandUsed: "bun install --frozen-lockfile",
     knownLimitations: [],
     localDemoModeChanges: [],
     mocksAndFixturesAdded: [],
-    modifiedFiles: [],
     ports: [3000],
     productContext: {
       evidencePaths: ["package.json"],
@@ -1326,7 +1586,6 @@ function preparationManifest() {
     requiredLocalOnlyAssumptions: [],
     scriptGenerationContext: [],
     startCommandUsed: "bun run dev --host 127.0.0.1 --port 3000",
-    validationEvidence: ["passed"],
   };
 }
 

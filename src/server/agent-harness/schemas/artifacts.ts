@@ -5,7 +5,7 @@ import {
 
 export const DEMO_SCRIPT_OUTPUT_PATH = "/workspace/.makeademo/demo-script.json";
 
-type PackageManager = "bun" | "npm" | "pnpm" | "unknown" | "yarn";
+export type PackageManager = "bun" | "npm" | "pnpm" | "unknown" | "yarn";
 type HarnessStageStatus =
   | "failed"
   | "passed"
@@ -15,9 +15,17 @@ type HarnessStageStatus =
 
 export type RepoWorkspacePackage = {
   dir: string;
+  /** Directory where dependencies for this package must be installed. */
+  installDir?: string;
+  /** Whether a declared workspace root owns this package. */
+  isWorkspace?: boolean;
   name?: string;
+  /** Package manager selected from the owning lockfile or package metadata. */
+  packageManager?: PackageManager;
   ports: number[];
   scripts: Record<string, string>;
+  /** Known internal workspaces required by metadata or source imports. */
+  workspaceDependencies?: string[];
 };
 
 export type NetworkAttempt = {
@@ -105,8 +113,6 @@ export type PreparationManifest = {
   ports: number[];
   envUsed: Record<string, string>;
   localDemoModeChanges: string[];
-  createdFiles: string[];
-  modifiedFiles: string[];
   mocksAndFixturesAdded: string[];
   authBypassOrDemoIdentity?: string;
   blockedExternalServicesReplaced: string[];
@@ -115,7 +121,6 @@ export type PreparationManifest = {
   appExplorationHints: string[];
   productContext: ProductContext;
   scriptGenerationContext: string[];
-  validationEvidence: string[];
   cleanupAndReproInstructions: string[];
 };
 
@@ -312,6 +317,8 @@ export type PipelineRunManifest = {
     state:
       | "dependency-install-closed"
       | "dependency-install-open"
+      | "resource-passthrough-closed"
+      | "resource-passthrough-open"
       | "runtime-locked"
       | "runtime-unlocked";
   }>;
@@ -374,9 +381,34 @@ function readOptionalWorkspacePackages(
       );
       return {
         dir: readRepoRelativePath(record, "dir"),
+        ...(record.installDir === undefined
+          ? {}
+          : { installDir: readRepoRelativePath(record, "installDir") }),
+        ...(record.isWorkspace === undefined
+          ? {}
+          : { isWorkspace: readBoolean(record, "isWorkspace") }),
         ...optionalString(record, "name"),
+        ...(record.packageManager === undefined
+          ? {}
+          : {
+              packageManager: readEnum(record, "packageManager", [
+                "bun",
+                "npm",
+                "pnpm",
+                "unknown",
+                "yarn",
+              ]),
+            }),
         ports: readPortArray(record, "ports"),
         scripts: readStringRecord(record, "scripts"),
+        ...(record.workspaceDependencies === undefined
+          ? {}
+          : {
+              workspaceDependencies: readStringArray(
+                record,
+                "workspaceDependencies",
+              ),
+            }),
       };
     }),
   };
@@ -417,14 +449,12 @@ export function readPreparationManifest(value: unknown): PreparationManifest {
       record,
       "cleanupAndReproInstructions",
     ),
-    createdFiles: readStringArray(record, "createdFiles"),
     envUsed: readStringRecord(record, "envUsed"),
     id: readNonEmptyString(record, "id"),
     installCommandUsed: readNonEmptyString(record, "installCommandUsed"),
     knownLimitations: readStringArray(record, "knownLimitations"),
     localDemoModeChanges: readStringArray(record, "localDemoModeChanges"),
     mocksAndFixturesAdded: readStringArray(record, "mocksAndFixturesAdded"),
-    modifiedFiles: readStringArray(record, "modifiedFiles"),
     ports: readPortArray(record, "ports"),
     requiredLocalOnlyAssumptions: readStringArray(
       record,
@@ -433,7 +463,6 @@ export function readPreparationManifest(value: unknown): PreparationManifest {
     productContext: readProductContext(record.productContext),
     scriptGenerationContext: readStringArray(record, "scriptGenerationContext"),
     startCommandUsed: readNonEmptyString(record, "startCommandUsed"),
-    validationEvidence: readStringArray(record, "validationEvidence"),
   };
 }
 
@@ -452,8 +481,6 @@ function assertValidPreparationManifestFields(
     () => readPortArray(record, "ports"),
     () => readStringRecord(record, "envUsed"),
     () => readStringArray(record, "localDemoModeChanges"),
-    () => readStringArray(record, "createdFiles"),
-    () => readStringArray(record, "modifiedFiles"),
     () => readStringArray(record, "mocksAndFixturesAdded"),
     ...(record.authBypassOrDemoIdentity === undefined
       ? []
@@ -464,7 +491,6 @@ function assertValidPreparationManifestFields(
     () => readStringArray(record, "appExplorationHints"),
     () => readProductContext(record.productContext),
     () => readStringArray(record, "scriptGenerationContext"),
-    () => readStringArray(record, "validationEvidence"),
     () => readStringArray(record, "cleanupAndReproInstructions"),
   ];
   const errors: string[] = [];
@@ -1185,6 +1211,8 @@ function readNetworkStateTransitions(
         [
           "dependency-install-closed",
           "dependency-install-open",
+          "resource-passthrough-closed",
+          "resource-passthrough-open",
           "runtime-locked",
           "runtime-unlocked",
         ],

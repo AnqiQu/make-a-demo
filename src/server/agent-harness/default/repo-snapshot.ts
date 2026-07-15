@@ -1,8 +1,14 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { readFile, readdir, rm, stat } from "node:fs/promises";
+import { lstat, readFile, readdir, readlink, rm, stat } from "node:fs/promises";
 import { basename, extname, join, resolve } from "node:path";
+import {
+  type SecretQuarantineManifest,
+  containsPrivateKeyMaterial,
+  isSecretCandidatePath,
+  quarantineRepoSecrets,
+} from "../repo-security/secret-quarantine";
 import { assertSafeGithubRepoUrl } from "./github-repo-url";
 
 export type RepoSourceArchive = {
@@ -13,11 +19,12 @@ export type RepoSourceArchive = {
 
 export type RepoSnapshot = {
   commitSha: string;
-  files: Array<{ path: string; text?: string }>;
+  files: Array<{ path: string; symlinkTarget?: string; text?: string }>;
   repoStats: {
     fileCount: number;
     sizeBytes: number;
   };
+  secretQuarantineManifest: SecretQuarantineManifest;
   sourceArchive: RepoSourceArchive;
 };
 
@@ -41,6 +48,7 @@ export interface RepoSnapshotGit {
     archivePath: string;
     checkoutPath: string;
     commitSha: string;
+    excludedPaths?: string[];
   }): Promise<void>;
   clone(input: {
     checkoutPath: string;
@@ -61,18 +69,9 @@ export type RepoSnapshotDependencies = {
 };
 
 const maxReadableFileBytes = 128 * 1024;
-const ignoredDirectoryNames = new Set([
-  ".git",
-  ".makeademo",
-  ".next",
-  ".turbo",
-  ".vercel",
-  "artifacts",
-  "build",
-  "coverage",
-  "dist",
-  "node_modules",
-]);
+const ignoredDirectoryNames = new Set([".git"]);
+const privateKeyScanTailLength = 128;
+const privateKeySentinel = "-----BEGIN PRIVATE KEY-----";
 const readableFileNames = new Set([
   ".env",
   ".env.example",
@@ -81,6 +80,7 @@ const readableFileNames = new Set([
   "package-lock.json",
   "package.json",
   "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
   "vite.config.js",
   "vite.config.ts",
   "yarn.lock",
@@ -145,8 +145,16 @@ export async function readGithubRepoSnapshot(
     });
     const commitSha = readCommitSha(await git.readHead(checkoutPath));
     await input.log("repo.clone.succeeded", { commitSha });
-    const files = await readRepoFiles(checkoutPath);
-    await git.archiveRevision({ archivePath, checkoutPath, commitSha });
+    const repoFiles = await readRepoFiles(checkoutPath);
+    const quarantine = quarantineRepoSecrets(repoFiles.files);
+    await git.archiveRevision({
+      archivePath,
+      checkoutPath,
+      commitSha,
+      ...(quarantine.excludedPaths.length === 0
+        ? {}
+        : { excludedPaths: quarantine.excludedPaths }),
+    });
     const sourceArchive = {
       commitSha,
       path: archivePath,
@@ -155,10 +163,17 @@ export async function readGithubRepoSnapshot(
     await input.log("repo.archive.succeeded", {
       commitSha,
       path: archivePath,
+      quarantinedFileCount: quarantine.manifest.entries.length,
       sha256: sourceArchive.sha256,
     });
     snapshotComplete = true;
-    return { commitSha, ...files, sourceArchive };
+    return {
+      commitSha,
+      files: quarantine.files,
+      repoStats: repoFiles.repoStats,
+      secretQuarantineManifest: quarantine.manifest,
+      sourceArchive,
+    };
   } finally {
     await rm(checkoutPath, { force: true, recursive: true });
     if (!snapshotComplete) {
@@ -169,6 +184,9 @@ export async function readGithubRepoSnapshot(
 
 const defaultRepoSnapshotGit: RepoSnapshotGit = {
   async archiveRevision(input) {
+    const excludedPathspecs = (input.excludedPaths ?? []).map(
+      (path) => `:(exclude,top,literal)${path}`,
+    );
     await runCommand("git", [
       "-C",
       input.checkoutPath,
@@ -177,6 +195,9 @@ const defaultRepoSnapshotGit: RepoSnapshotGit = {
       "--output",
       input.archivePath,
       input.commitSha,
+      ...(excludedPathspecs.length === 0
+        ? []
+        : ["--", ".", ...excludedPathspecs]),
     ]);
   },
   async clone(input) {
@@ -195,10 +216,14 @@ const defaultRepoSnapshotGit: RepoSnapshotGit = {
 };
 
 async function readRepoFiles(root: string): Promise<{
-  files: Array<{ path: string; text?: string }>;
+  files: Array<{ path: string; symlinkTarget?: string; text?: string }>;
   repoStats: { fileCount: number; sizeBytes: number };
 }> {
-  const files: Array<{ path: string; text?: string }> = [];
+  const files: Array<{
+    path: string;
+    symlinkTarget?: string;
+    text?: string;
+  }> = [];
   let fileCount = 0;
   let sizeBytes = 0;
 
@@ -215,19 +240,31 @@ async function readRepoFiles(root: string): Promise<{
         continue;
       }
 
-      if (!entry.isFile()) {
-        continue;
-      }
-
       const relativePath = join(relativeDirectory, entry.name).replaceAll(
         "\\",
         "/",
       );
       const absolutePath = join(directory, entry.name);
+      if (entry.isSymbolicLink()) {
+        const fileStat = await lstat(absolutePath);
+        fileCount += 1;
+        sizeBytes += fileStat.size;
+        files.push({
+          path: relativePath,
+          symlinkTarget: await readlink(absolutePath),
+        });
+        continue;
+      }
+      if (!entry.isFile()) continue;
+
       const fileStat = await stat(absolutePath);
       fileCount += 1;
       sizeBytes += fileStat.size;
-      const text = await readFileTextIfUseful(absolutePath, relativePath);
+      const text = await readFileTextIfUseful(
+        absolutePath,
+        relativePath,
+        fileStat.size,
+      );
       files.push(
         text === undefined
           ? { path: relativePath }
@@ -243,23 +280,36 @@ async function readRepoFiles(root: string): Promise<{
 async function readFileTextIfUseful(
   path: string,
   relativePath: string,
+  sizeBytes: number,
 ): Promise<string | undefined> {
-  const fileStat = await stat(path);
-  if (fileStat.size > maxReadableFileBytes) {
-    return undefined;
+  if (sizeBytes <= maxReadableFileBytes) {
+    const text = await readFile(path, "utf8");
+    return isUsefulTextPath(relativePath) || containsPrivateKeyMaterial(text)
+      ? text
+      : undefined;
   }
-  if (
-    !readableFileNames.has(basename(relativePath)) &&
-    !readableExtensions.has(extname(relativePath))
-  ) {
-    return undefined;
-  }
+  return (await fileContainsPrivateKeyMaterial(path))
+    ? privateKeySentinel
+    : undefined;
+}
 
-  try {
-    return await readFile(path, "utf8");
-  } catch {
-    return undefined;
+function isUsefulTextPath(relativePath: string): boolean {
+  return (
+    /^\.env(?:\..+)?$/i.test(basename(relativePath)) ||
+    readableFileNames.has(basename(relativePath)) ||
+    readableExtensions.has(extname(relativePath)) ||
+    isSecretCandidatePath(relativePath)
+  );
+}
+
+async function fileContainsPrivateKeyMaterial(path: string): Promise<boolean> {
+  let tail = "";
+  for await (const chunk of createReadStream(path, { encoding: "utf8" })) {
+    const sample = tail + chunk;
+    if (containsPrivateKeyMaterial(sample)) return true;
+    tail = sample.slice(-privateKeyScanTailLength);
   }
+  return false;
 }
 
 async function createRepoCloneCredential(input: {

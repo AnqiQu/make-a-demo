@@ -253,14 +253,12 @@ function validPreparationManifest() {
     blockedExternalServicesReplaced: ["stripe"],
     buildCommandUsed: "bun run build",
     cleanupAndReproInstructions: ["bun run dev --host 127.0.0.1 --port 3000"],
-    createdFiles: ["makeademo.demo.ts"],
     envUsed: { NODE_ENV: "development", VITE_MAKEADEMO_DEMO: "true" },
     id: "prep_001",
     installCommandUsed: "bun install --frozen-lockfile",
     knownLimitations: ["payments are mocked"],
     localDemoModeChanges: ["seed dashboard data"],
     mocksAndFixturesAdded: ["stripe fixture"],
-    modifiedFiles: ["src/demo.ts"],
     ports: [3000],
     productContext: {
       evidencePaths: ["README.md"],
@@ -282,7 +280,6 @@ function validPreparationManifest() {
     requiredLocalOnlyAssumptions: ["no external APIs"],
     scriptGenerationContext: ["Demo dashboard onboarding"],
     startCommandUsed: "bun run dev --host 127.0.0.1 --port 3000",
-    validationEvidence: ["preflight passed"],
   };
 }
 

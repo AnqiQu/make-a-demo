@@ -707,14 +707,12 @@ function preparationManifest() {
     baseUrl: "http://127.0.0.1:3000",
     blockedExternalServicesReplaced: [],
     cleanupAndReproInstructions: [],
-    createdFiles: [],
     envUsed: {},
     id: "prep_001",
     installCommandUsed: "bun install --frozen-lockfile",
     knownLimitations: [],
     localDemoModeChanges: [],
     mocksAndFixturesAdded: [],
-    modifiedFiles: [],
     ports: [3000],
     productContext: {
       evidencePaths: ["package.json"],
@@ -736,7 +734,6 @@ function preparationManifest() {
     requiredLocalOnlyAssumptions: [],
     scriptGenerationContext: [],
     startCommandUsed: "bun run dev --host 127.0.0.1 --port 3000",
-    validationEvidence: ["passed"],
   };
 }
 

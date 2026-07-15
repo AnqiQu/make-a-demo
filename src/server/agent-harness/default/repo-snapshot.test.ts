@@ -5,6 +5,7 @@ import {
   readFile,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -17,6 +18,145 @@ import {
 } from "./repo-snapshot";
 
 describe("readGithubRepoSnapshot", () => {
+  it("reads workspace declarations needed to classify nested packages", async () => {
+    const runDirectory = join(
+      tmpdir(),
+      `makeademo-workspace-snapshot-${crypto.randomUUID()}`,
+    );
+    await mkdir(runDirectory, { recursive: true });
+    const snapshot = await readGithubRepoSnapshot(
+      {
+        log: async () => undefined,
+        repoUrl: "https://github.com/acme/workspace-app",
+        runDirectory,
+      },
+      {
+        git: {
+          async archiveRevision(input) {
+            await writeFile(input.archivePath, "workspace archive");
+          },
+          async clone(input) {
+            await mkdir(input.checkoutPath, { recursive: true });
+            await writeFile(join(input.checkoutPath, "package.json"), "{}");
+            await symlink(
+              "package.json",
+              join(input.checkoutPath, "package-link.json"),
+            );
+            await writeFile(
+              join(input.checkoutPath, "pnpm-workspace.yaml"),
+              "packages:\n  - 'apps/*'\n",
+            );
+          },
+          async readHead() {
+            return "abc123def456";
+          },
+        },
+      },
+    );
+
+    expect(
+      snapshot.files.find(({ path }) => path === "pnpm-workspace.yaml")?.text,
+    ).toContain("apps/*");
+    expect(
+      snapshot.files.find(({ path }) => path === "package-link.json"),
+    ).toEqual({ path: "package-link.json", symlinkTarget: "package.json" });
+  });
+
+  it("quarantines environment files and private keys from the execution archive without rejecting public certificates", async () => {
+    const runDirectory = join(
+      tmpdir(),
+      `makeademo-secret-quarantine-${crypto.randomUUID()}`,
+    );
+    await mkdir(runDirectory, { recursive: true });
+    let excludedPaths: string[] = [];
+    const git: RepoSnapshotGit = {
+      async archiveRevision(input) {
+        excludedPaths = input.excludedPaths ?? [];
+        await writeFile(input.archivePath, "sanitized execution archive");
+      },
+      async clone(input) {
+        await mkdir(join(input.checkoutPath, "certificates"), {
+          recursive: true,
+        });
+        await mkdir(join(input.checkoutPath, "dist"), { recursive: true });
+        await writeFile(join(input.checkoutPath, "package.json"), "{}");
+        await writeFile(
+          join(input.checkoutPath, ".env"),
+          "DATABASE_URL=postgres://production-secret\nFEATURE_FLAG=true\n",
+        );
+        await writeFile(
+          join(input.checkoutPath, ".env.example"),
+          "DATABASE_URL=postgres://localhost/demo\n",
+        );
+        await writeFile(
+          join(input.checkoutPath, "certificates", "public.pem"),
+          "-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----\n",
+        );
+        await writeFile(
+          join(input.checkoutPath, "certificates", "signing.pem"),
+          "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----\n",
+        );
+        await writeFile(
+          join(input.checkoutPath, "dist", ".env.production"),
+          "DEPLOY_TOKEN=secret\n",
+        );
+        await writeFile(
+          join(input.checkoutPath, "certificates", "credentials.conf"),
+          "-----BEGIN OPENSSH PRIVATE KEY-----\nsecret\n-----END OPENSSH PRIVATE KEY-----\n",
+        );
+      },
+      async readHead() {
+        return "abc123def456";
+      },
+    };
+
+    const snapshot = await readGithubRepoSnapshot(
+      {
+        log: async () => undefined,
+        repoUrl: "https://github.com/acme/quarantined-app",
+        runDirectory,
+      },
+      { git },
+    );
+
+    expect(excludedPaths).toEqual([
+      ".env",
+      "certificates/credentials.conf",
+      "certificates/signing.pem",
+      "dist/.env.production",
+    ]);
+    expect(snapshot.secretQuarantineManifest).toEqual({
+      entries: [
+        {
+          environmentKeys: ["DATABASE_URL", "FEATURE_FLAG"],
+          kind: "environment-file",
+          path: ".env",
+        },
+        {
+          kind: "private-key-file",
+          path: "certificates/credentials.conf",
+        },
+        {
+          kind: "private-key-file",
+          path: "certificates/signing.pem",
+        },
+        {
+          environmentKeys: ["DEPLOY_TOKEN"],
+          kind: "environment-file",
+          path: "dist/.env.production",
+        },
+      ],
+      version: "2026-07-15",
+    });
+    expect(
+      snapshot.files.find((file) => file.path === ".env")?.text,
+    ).toBeUndefined();
+    expect(
+      snapshot.files.find((file) => file.path === ".env.example")?.text,
+    ).toContain("localhost");
+    expect(excludedPaths).not.toContain("certificates/public.pem");
+  });
+
   it("passes absolute checkout and archive paths to Git when the run directory is relative", async () => {
     await rm(".makeademo-test-runs", { force: true, recursive: true });
     const receivedPaths: string[] = [];

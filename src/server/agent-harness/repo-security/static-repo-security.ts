@@ -1,5 +1,12 @@
+import { posix } from "node:path";
+import {
+  type SecretQuarantineManifest,
+  containsPrivateKeyMaterial,
+} from "./secret-quarantine";
+
 type StaticRepoSecurityFile = {
   path: string;
+  symlinkTarget?: string;
   text?: string;
 };
 
@@ -9,6 +16,7 @@ export type StaticRepoSecurityInput = {
     fileCount: number;
     sizeBytes: number;
   };
+  secretQuarantineManifest?: SecretQuarantineManifest;
 };
 
 export type StaticRepoSecurityResult = {
@@ -27,8 +35,7 @@ const lockfiles = new Set([
   "yarn.lock",
 ]);
 const secretFileNames = new Set(["id_ed25519", "id_rsa"]);
-const privateKeyFileExtensions = new Set([".key", ".p12", ".pem", ".pfx"]);
-const safeEnvFileSuffixes = new Set(["example", "sample", "template"]);
+const privateKeyContainerExtensions = new Set([".key", ".p12", ".pfx"]);
 const externalServicePackages = [
   "airtable",
   "aws-sdk",
@@ -48,23 +55,40 @@ export function screenStaticRepoSecurity(
     path: normalizePath(file.path),
   }));
   const paths = new Set(files.map((file) => file.path));
+  const quarantinedPaths = new Set(
+    input.secretQuarantineManifest?.entries.map((entry) =>
+      normalizePath(entry.path),
+    ) ?? [],
+  );
   const rejections: string[] = [];
   const warnings: string[] = [];
 
-  if (!paths.has("package.json")) {
+  const packageJsonFiles = files.filter(
+    (file) =>
+      file.path === "package.json" || file.path.endsWith("/package.json"),
+  );
+  if (packageJsonFiles.length === 0) {
     rejections.push("package.json is required for JavaScript/TypeScript repos");
   }
 
   for (const file of files) {
-    inspectFileSecurity(file, rejections, warnings);
+    inspectFileSecurity(file, quarantinedPaths, rejections, warnings);
   }
 
-  const packageJson = files.find((file) => file.path === "package.json");
-  if (packageJson?.text !== undefined) {
-    inspectPackageJson(packageJson.text, rejections, warnings);
+  for (const packageJson of packageJsonFiles) {
+    if (packageJson.text !== undefined) {
+      inspectPackageJson(
+        packageJson.path,
+        packageJson.text,
+        rejections,
+        warnings,
+      );
+    }
   }
 
-  if (![...paths].some((path) => lockfiles.has(path))) {
+  if (
+    ![...paths].some((path) => lockfiles.has(path.split("/").at(-1) ?? path))
+  ) {
     warnings.push(
       "repo has no lockfile; dependency installation may be less deterministic",
     );
@@ -88,16 +112,31 @@ export function screenStaticRepoSecurity(
 
 function inspectFileSecurity(
   file: StaticRepoSecurityFile,
+  quarantinedPaths: ReadonlySet<string>,
   rejections: string[],
   warnings: string[],
 ): void {
   const filename = file.path.split("/").at(-1) ?? file.path;
-  if (isCommittedSecretFile(filename)) {
-    rejections.push(`repo contains committed secret file ${file.path}`);
+  if (
+    file.symlinkTarget !== undefined &&
+    symlinkEscapesRepo(file.path, file.symlinkTarget)
+  ) {
+    rejections.push(`repo symlink ${file.path} escapes the repository`);
   }
-
-  if (isPrivateKeyPath(filename) || isPrivateKeyText(file.text)) {
-    rejections.push(`repo contains private key material in ${file.path}`);
+  const containsSecretMaterial =
+    isCommittedSecretFile(filename) ||
+    isPrivateKeyPath(filename) ||
+    containsPrivateKeyMaterial(file.text);
+  if (containsSecretMaterial) {
+    if (quarantinedPaths.has(file.path)) {
+      warnings.push(
+        `repo secret file ${file.path} was quarantined before agent or runtime execution`,
+      );
+    } else if (isCommittedSecretFile(filename)) {
+      rejections.push(`repo contains committed secret file ${file.path}`);
+    } else {
+      rejections.push(`repo contains private key material in ${file.path}`);
+    }
   }
 
   if (
@@ -108,13 +147,19 @@ function inspectFileSecurity(
   }
 }
 
-function isCommittedSecretFile(filename: string): boolean {
-  if (!filename.startsWith(".env")) {
-    return false;
-  }
+function symlinkEscapesRepo(path: string, target: string): boolean {
+  if (posix.isAbsolute(target)) return true;
+  const resolvedTarget = posix.normalize(
+    posix.join(posix.dirname(path), target),
+  );
+  return resolvedTarget === ".." || resolvedTarget.startsWith("../");
+}
 
-  const suffix = filename.slice(".env.".length);
-  return !safeEnvFileSuffixes.has(suffix);
+function isCommittedSecretFile(filename: string): boolean {
+  const normalized = filename.toLowerCase();
+  if (normalized === ".env") return true;
+  if (!normalized.startsWith(".env.")) return false;
+  return !/\.(?:example|sample|template)$/.test(normalized);
 }
 
 function isPrivateKeyPath(filename: string): boolean {
@@ -122,17 +167,13 @@ function isPrivateKeyPath(filename: string): boolean {
   const extensionIndex = normalized.lastIndexOf(".");
   const extension = extensionIndex < 0 ? "" : normalized.slice(extensionIndex);
   return (
-    secretFileNames.has(normalized) || privateKeyFileExtensions.has(extension)
-  );
-}
-
-function isPrivateKeyText(text: string | undefined): boolean {
-  return /-----BEGIN (?:OPENSSH|RSA|DSA|EC|PRIVATE) PRIVATE KEY-----/.test(
-    text ?? "",
+    secretFileNames.has(normalized) ||
+    privateKeyContainerExtensions.has(extension)
   );
 }
 
 function inspectPackageJson(
+  path: string,
   text: string,
   rejections: string[],
   warnings: string[],
@@ -151,12 +192,13 @@ function inspectPackageJson(
   }
 
   const packageRecord = parsed as Record<string, unknown>;
-  inspectScripts(packageRecord.scripts, rejections, warnings);
+  inspectScripts(path, packageRecord.scripts, rejections, warnings);
   inspectDependencies(packageRecord.dependencies, warnings);
   inspectDependencies(packageRecord.devDependencies, warnings);
 }
 
 function inspectScripts(
+  packageJsonPath: string,
   scripts: unknown,
   rejections: string[],
   warnings: string[],
@@ -178,7 +220,11 @@ function inspectScripts(
       /rm\s+-rf\s+\//.test(command) ||
       /mkfs|forkbomb|crypto.?miner/i.test(command)
     ) {
-      rejections.push(`package script ${name} contains a destructive command`);
+      const location =
+        packageJsonPath === "package.json" ? "" : ` in ${packageJsonPath}`;
+      rejections.push(
+        `package script ${name}${location} contains a destructive command`,
+      );
     }
 
     if (name === "postinstall") {

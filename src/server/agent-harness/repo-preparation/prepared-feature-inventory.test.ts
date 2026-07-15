@@ -76,14 +76,12 @@ function manifestWithFeatures(
     baseUrl: "http://127.0.0.1:3000",
     blockedExternalServicesReplaced: [],
     cleanupAndReproInstructions: [],
-    createdFiles: [],
     envUsed: {},
     id: "prepared",
     installCommandUsed: "npm ci",
     knownLimitations: [],
     localDemoModeChanges: [],
     mocksAndFixturesAdded: [],
-    modifiedFiles: [],
     ports: [3000],
     productContext: {
       evidencePaths: ["README.md"],
@@ -101,6 +99,5 @@ function manifestWithFeatures(
     requiredLocalOnlyAssumptions: [],
     scriptGenerationContext: [],
     startCommandUsed: "npm start",
-    validationEvidence: [],
   };
 }

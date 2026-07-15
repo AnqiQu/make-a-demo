@@ -11,8 +11,12 @@ import {
 import { validatePreparationFidelity } from "../repo-preparation/preparation-fidelity";
 import type { PreparationWorkspaceDiff } from "../repo-preparation/preparation-workspace-diff";
 import { profileRepo } from "../repo-profiler/repo-profiler";
+import type { SecretQuarantineManifest } from "../repo-security/secret-quarantine";
 import { screenStaticRepoSecurity } from "../repo-security/static-repo-security";
-import { resolvePreparationRuntime } from "../run-planner/runtime-target-resolution";
+import {
+  expandPreparationInstallScopeForMissingWorkspace,
+  resolvePreparationRuntime,
+} from "../run-planner/runtime-target-resolution";
 import {
   type ActionCatalog,
   type AppMap,
@@ -47,7 +51,7 @@ export type AgentHarnessPipelineInput = {
     productSummary?: string;
     targetUsers?: string;
   };
-  files: Array<{ path: string; text?: string }>;
+  files: Array<{ path: string; symlinkTarget?: string; text?: string }>;
   normalizedSupportingDocuments?: Array<Record<string, unknown>>;
   repoStats: {
     fileCount: number;
@@ -56,6 +60,7 @@ export type AgentHarnessPipelineInput = {
   repoUrl: string;
   rootDir?: string;
   runId: string;
+  secretQuarantineManifest?: SecretQuarantineManifest;
 };
 
 type AgentHarnessArtifactStore = {
@@ -194,6 +199,8 @@ const artifactPaths = {
     "/workspace/.makeademo/app-exploration-validation-report.json",
   capturePathValidation:
     "/workspace/.makeademo/capture-path-validation-report.json",
+  capturePathPreflight:
+    "/workspace/.makeademo/capture-path-preflight-validation-report.json",
   captureRuntimeReset:
     "/workspace/.makeademo/capture-runtime-reset-validation-report.json",
   demoScript: DEMO_SCRIPT_OUTPUT_PATH,
@@ -233,7 +240,6 @@ export async function runAgentHarnessPipeline(
   const stageTimings: PipelineRunManifest["stageTimings"] = [];
   const validationReports: ValidationReport[] = [];
   const opencodeSessionIds: string[] = [];
-  let completedResult: AgentHarnessPipelineResult | undefined;
   let cleanupFailure: unknown;
   let primaryError: unknown;
   let preparationWorkspaceDiff: PreparationWorkspaceDiff | undefined;
@@ -265,6 +271,9 @@ export async function runAgentHarnessPipeline(
       screenStaticRepoSecurity({
         files: input.files,
         repoStats: input.repoStats,
+        ...(input.secretQuarantineManifest === undefined
+          ? {}
+          : { secretQuarantineManifest: input.secretQuarantineManifest }),
       }),
   );
   if (security.status === "rejected") {
@@ -278,7 +287,7 @@ export async function runAgentHarnessPipeline(
       unsupportedOrFailureReason: security.rejections.join("; "),
       workspace,
     });
-    completedResult = {
+    return {
       pipelineRunManifest,
       status: "security-rejected",
       validationReports,
@@ -294,6 +303,14 @@ export async function runAgentHarnessPipeline(
       profileRepo({
         ...optionalString("commitSha", input.commitSha),
         files: input.files,
+        ...(input.secretQuarantineManifest === undefined
+          ? {}
+          : {
+              quarantinedEnvironmentKeys:
+                input.secretQuarantineManifest.entries.flatMap(
+                  (entry) => entry.environmentKeys ?? [],
+                ),
+            }),
         repoUrl: input.repoUrl,
         ...(input.rootDir === undefined ? {} : { rootDir: input.rootDir }),
       }),
@@ -562,6 +579,47 @@ export async function runAgentHarnessPipeline(
 
         const captureRepairAttempts =
           scriptRepairAttemptsByPhase["capture-path-validation"] ?? 0;
+        const capturePathPreflight = await runValidationStage(
+          "capture-path-preflight",
+          dependencies,
+          artifactPaths.capturePathPreflight,
+          validationReports,
+          stageStatuses,
+          stageTimings,
+          async () => ({
+            ...(await dependencies.resetCaptureRuntime({
+              preparationManifest,
+              repoProfile,
+              runPlan,
+              workspace: requireWorkspace(workspace),
+            })),
+            stage: "capture-path-preflight",
+          }),
+          validationAttemptCounts,
+          captureRepairAttempts,
+        );
+        if (capturePathPreflight.status === "failed") {
+          preparationState = await ensureValidPreparation({
+            capturePreparationWorkspaceDiff,
+            dependencies,
+            initialFailure: capturePathPreflight,
+            input,
+            preparationManifest,
+            preparationRepairAttemptsByPhase,
+            repoPreparationRepairLimit,
+            repoProfile,
+            runPlan,
+            stageStatuses,
+            stageTimings,
+            validationReports,
+            validationAttemptCounts,
+            workspace: requireWorkspace(workspace),
+          });
+          preparationManifest = preparationState.preparationManifest;
+          preparationValidation = preparationState.preparationValidation;
+          opencodeSessionIds.push(...preparationState.opencodeSessionIds);
+          continue pipelineAttempt;
+        }
         const capturePathValidation = await runValidationStage(
           "capture-path-validation",
           dependencies,
@@ -777,7 +835,10 @@ export async function runAgentHarnessPipeline(
       }
     }
     stageStatuses["agent-harness"] = "failed";
-    const preparationFailedStage = readPreparationFailedStage(stageStatuses);
+    const preparationFailedStage = readPreparationFailedStage(
+      stageStatuses,
+      validationReports,
+    );
     let surfacedError = error;
     if (
       preparationFailedStage !== undefined &&
@@ -879,25 +940,37 @@ export async function runAgentHarnessPipeline(
   if (cleanupFailure !== undefined) {
     throw cleanupFailure;
   }
-  if (completedResult === undefined) {
-    throw new Error("Agent harness finished without a result.");
-  }
-  return completedResult;
+  throw new Error("Agent harness finished without a result.");
 }
 
 function readPreparationFailedStage(
   stageStatuses: Record<string, string>,
+  validationReports: ValidationReport[],
 ): string | undefined {
+  for (let index = validationReports.length - 1; index >= 0; index -= 1) {
+    const report = validationReports[index];
+    if (
+      report?.status === "failed" &&
+      stageStatuses[report.stage] === "failed" &&
+      isPreparationStage(report.stage)
+    ) {
+      return report.stage;
+    }
+  }
   return Object.entries(stageStatuses)
     .reverse()
     .find(
-      ([stage, status]) =>
-        status === "failed" &&
-        (stage === "repo-preparation" ||
-          stage === "preparation-fidelity" ||
-          stage === "preparation-preflight" ||
-          stage === "app-exploration"),
+      ([stage, status]) => status === "failed" && isPreparationStage(stage),
     )?.[0];
+}
+
+function isPreparationStage(stage: string): boolean {
+  return (
+    stage === "repo-preparation" ||
+    stage === "preparation-fidelity" ||
+    stage === "preparation-preflight" ||
+    stage === "app-exploration"
+  );
 }
 
 function attachCleanupError(primaryError: unknown, cleanupError: unknown) {
@@ -1064,35 +1137,64 @@ async function ensureValidPreparation(input: {
 }> {
   let preparationManifest = input.preparationManifest;
   let failure = input.initialFailure;
+  let installRepairBaseline: PreparationWorkspaceDiff | undefined;
+  let lastWorkspaceDiff: PreparationWorkspaceDiff | undefined;
+  const attemptedInstallScopes = new Set([
+    input.preparationManifest.installCommandUsed,
+  ]);
   const opencodeSessionIds: string[] = [];
 
   for (;;) {
     if (failure !== undefined) {
-      const phase = failure.stage;
-      const phaseRepairAttempts =
-        input.preparationRepairAttemptsByPhase[phase] ?? 0;
-      const repair = await repairPreparationManifest({
-        dependencies: input.dependencies,
-        failureReport: failure,
-        input: input.input,
-        preparationManifest,
-        phaseRepairAttempts,
-        repoPreparationRepairLimit: input.repoPreparationRepairLimit,
-        repoProfile: input.repoProfile,
-        runPlan: input.runPlan,
-        stageStatuses: input.stageStatuses,
-        stageTimings: input.stageTimings,
-        workspace: input.workspace,
-      });
-      input.preparationRepairAttemptsByPhase[phase] = phaseRepairAttempts + 1;
-      if (repair.opencodeSessionId !== undefined) {
-        opencodeSessionIds.push(repair.opencodeSessionId);
+      const expandedPreparation =
+        expandPreparationInstallScopeForMissingWorkspace({
+          failureReport: failure,
+          preparationManifest,
+          repoProfile: input.repoProfile,
+        });
+      if (
+        expandedPreparation !== undefined &&
+        !attemptedInstallScopes.has(expandedPreparation.installCommandUsed)
+      ) {
+        attemptedInstallScopes.add(expandedPreparation.installCommandUsed);
+        preparationManifest = await writeArtifact(
+          input.dependencies,
+          artifactPaths.preparationManifest,
+          expandedPreparation,
+        );
+        failure = undefined;
+      } else {
+        const workspaceDiffBeforeRepair =
+          failure.failureClassification === "install failure"
+            ? lastWorkspaceDiff
+            : undefined;
+        const phase = failure.stage;
+        const phaseRepairAttempts =
+          input.preparationRepairAttemptsByPhase[phase] ?? 0;
+        const repair = await repairPreparationManifest({
+          dependencies: input.dependencies,
+          failureReport: failure,
+          input: input.input,
+          preparationManifest,
+          phaseRepairAttempts,
+          repoPreparationRepairLimit: input.repoPreparationRepairLimit,
+          repoProfile: input.repoProfile,
+          runPlan: input.runPlan,
+          stageStatuses: input.stageStatuses,
+          stageTimings: input.stageTimings,
+          workspace: input.workspace,
+        });
+        input.preparationRepairAttemptsByPhase[phase] = phaseRepairAttempts + 1;
+        if (repair.opencodeSessionId !== undefined) {
+          opencodeSessionIds.push(repair.opencodeSessionId);
+        }
+        preparationManifest = await writeArtifact(
+          input.dependencies,
+          artifactPaths.preparationManifest,
+          readPreparationManifest(repair.manifest),
+        );
+        installRepairBaseline = workspaceDiffBeforeRepair;
       }
-      preparationManifest = await writeArtifact(
-        input.dependencies,
-        artifactPaths.preparationManifest,
-        readPreparationManifest(repair.manifest),
-      );
     }
 
     const resolvedPreparation = resolvePreparationRuntime({
@@ -1108,6 +1210,7 @@ async function ensureValidPreparation(input: {
     }
 
     const workspaceDiff = await input.capturePreparationWorkspaceDiff();
+    lastWorkspaceDiff = workspaceDiff;
     if (workspaceDiff !== undefined) {
       const fidelityValidation = await runValidationStage(
         "preparation-fidelity",
@@ -1118,6 +1221,9 @@ async function ensureValidPreparation(input: {
         input.stageTimings,
         async () =>
           validatePreparationFidelity({
+            ...(installRepairBaseline === undefined
+              ? {}
+              : { installRepairBaseline }),
             preparationManifest,
             repoSourcePaths: new Set(
               input.input.files.map((file) => file.path),
@@ -1127,6 +1233,7 @@ async function ensureValidPreparation(input: {
         input.validationAttemptCounts,
         input.preparationRepairAttemptsByPhase["preparation-fidelity"] ?? 0,
       );
+      installRepairBaseline = undefined;
       if (fidelityValidation.status === "failed") {
         failure = fidelityValidation;
         continue;

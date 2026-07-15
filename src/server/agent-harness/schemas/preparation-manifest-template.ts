@@ -19,14 +19,12 @@ export function createPreparationManifestTemplate(
       ? {}
       : { buildCommandUsed: runPlan.buildCommand }),
     cleanupAndReproInstructions: [],
-    createdFiles: [],
     envUsed: runPlan.env,
     id: "replace-with-preparation-id",
     installCommandUsed: runPlan.installCommand,
     knownLimitations: [],
     localDemoModeChanges: [],
     mocksAndFixturesAdded: [],
-    modifiedFiles: [],
     ports: runPlan.allowedPorts,
     requiredLocalOnlyAssumptions: [],
     productContext: {
@@ -46,6 +44,5 @@ export function createPreparationManifestTemplate(
     },
     scriptGenerationContext: [],
     startCommandUsed: runPlan.startCommand,
-    validationEvidence: [],
   };
 }
