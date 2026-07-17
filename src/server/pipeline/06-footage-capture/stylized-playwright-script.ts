@@ -7,7 +7,6 @@ export type PrepareStylizedPlaywrightScriptInput = {
   externalResourceRoot?: string;
   headed: boolean;
   mode?: "recording" | "validation";
-  passthroughUrls?: string[];
   sceneHoldMsById?: Readonly<Record<string, number>>;
   videoDirectory?: string;
 };
@@ -60,6 +59,7 @@ function wrapActionBody(
   const sceneHoldMsById = JSON.stringify(input.sceneHoldMsById ?? {});
 
   return `import { chromium, expect } from "@playwright/test";
+import { readFile as makeADemoReadReplayFile } from "node:fs/promises";
 import { setup, scene, step } from "./makeademo-capture-sdk.js";
 
 ${recordingHelperSource()}
@@ -74,7 +74,7 @@ const context = await browser.newContext({
     size: { width: 1280, height: 720 },
   },
 });
-${runtimeNetworkLockdownSource(input.externalResourceManifest, input.externalResourceRoot, input.passthroughUrls)}
+${runtimeNetworkLockdownSource(input.externalResourceManifest, input.externalResourceRoot)}
 const page = await context.newPage();
 const makeADemoCaptureStartedAt = performance.now();
 const makeADemoCaptureContext = { page, baseUrl, expect };
@@ -104,6 +104,7 @@ function prepareValidationPlaywrightScript(
   const launchOptions = input.headed ? "{ headless: false }" : "";
 
   return `import { chromium, expect } from "@playwright/test";
+import { readFile as makeADemoReadReplayFile } from "node:fs/promises";
 import { setup, scene, step } from "./makeademo-capture-sdk.js";
 
 ${recordingHelperSource()}
@@ -114,7 +115,7 @@ const context = await browser.newContext({
   serviceWorkers: "block",
   viewport: { width: 1280, height: 720 },
 });
-${runtimeNetworkLockdownSource(input.externalResourceManifest, input.externalResourceRoot, input.passthroughUrls)}
+${runtimeNetworkLockdownSource(input.externalResourceManifest, input.externalResourceRoot)}
 const page = await context.newPage();
 const makeADemoCaptureStartedAt = performance.now();
 const makeADemoCaptureContext = { page, baseUrl, expect };
@@ -160,7 +161,6 @@ void step;
 function runtimeNetworkLockdownSource(
   externalResourceManifest?: ExternalResourceManifest,
   externalResourceRoot?: string,
-  passthroughUrls?: string[],
 ) {
   return `const makeADemoOriginalFetch = globalThis.fetch?.bind(globalThis);
 if (makeADemoOriginalFetch !== undefined) {
@@ -189,7 +189,6 @@ ${createBrowserRuntimeNetworkPolicySource({
     ? {}
     : { manifest: externalResourceManifest }),
   mode: "capture",
-  ...(passthroughUrls === undefined ? {} : { passthroughUrls }),
   ...(externalResourceRoot === undefined
     ? {}
     : { replayRoot: externalResourceRoot }),

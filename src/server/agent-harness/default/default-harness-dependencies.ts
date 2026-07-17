@@ -14,12 +14,13 @@ import {
 } from "../../pipeline/06-footage-capture/demo-script.schema";
 import {
   type ExternalResourceFetcher,
-  type ExternalResourceHostResolver,
-  authorizeExternalResourcePassthrough,
   hydrateExternalResourceCache,
   isHydratableExternalResource,
 } from "../../shared/external-resources/external-resource-cache";
-import type { ExternalResourceManifest } from "../../shared/external-resources/external-resource-manifest.schema";
+import {
+  type ExternalResourceManifest,
+  externalResourceManifestVersion,
+} from "../../shared/external-resources/external-resource-manifest.schema";
 import {
   createOpenCodeProviderSandboxSecrets,
   ensureOpenCodeProviderDaytonaSecret,
@@ -33,6 +34,7 @@ import {
 import { uploadSubmittedCodeExternalResourceCache } from "../daytona/submitted-code-external-resource-cache";
 import {
   AgentHarnessCommandTimeoutError,
+  type AgentHarnessSubmittedCodeAppStartInput,
   type AgentHarnessWorkspace,
   type AgentHarnessWorkspaceCommandResult,
   type AgentHarnessWorkspaceHandle,
@@ -109,7 +111,6 @@ export type DefaultHarnessDependenciesOptions = {
   artifactStore: NonNullable<AgentHarnessPipelineDependencies["artifactStore"]>;
   env?: Record<string, string | undefined>;
   externalResourceFetcher?: ExternalResourceFetcher;
-  externalResourceHostResolver?: ExternalResourceHostResolver;
   logger?: PipelineEventLogger;
   modelID?: string;
   openCodeRunner?: OpenCodeHarnessRunner;
@@ -154,6 +155,8 @@ const artifactPaths = {
   demoScriptContract: "/workspace/.makeademo/demo-script-contract.json",
   externalResourceManifest:
     "/workspace/.makeademo/external-resource-manifest.json",
+  externalResourceHydrationReport:
+    "/workspace/.makeademo/external-resource-hydration-report.json",
   flowSpec: "/workspace/.makeademo/flow-spec.json",
   flowSpecContract: "/workspace/.makeademo/flow-spec-contract.json",
   preparationFidelity:
@@ -181,6 +184,9 @@ export async function createDefaultAgentHarnessDependencies(
   const openCodeRunner =
     options.openCodeRunner ?? new DefaultOpenCodeHarnessRunner();
   let workspaceHandle: AgentHarnessWorkspaceHandle | undefined;
+  let submittedCodeAppStartInput:
+    | AgentHarnessSubmittedCodeAppStartInput
+    | undefined;
   let opencodeSessionId: string | undefined;
   let runtimeRepairArtifactAttempt = 0;
   let scriptWritingBaseline: ScriptWritingContentSnapshot = {};
@@ -189,6 +195,21 @@ export async function createDefaultAgentHarnessDependencies(
     "external-resources",
   );
   let externalResourceManifest: ExternalResourceManifest | undefined;
+  const policyDeniedExternalResourceUrls = new Set<string>();
+  const externalResourceHydrationOutcomes: Array<{
+    error?: string;
+    method?: string;
+    outcome: "cached" | "policy-denied" | "retrieval-failed";
+    pass: number;
+    phase: NetworkAttempt["phase"];
+    resourceType?: string;
+    responseUrl?: string;
+    route?: string;
+    sha256?: string;
+    sizeBytes?: number;
+    stage: string;
+    url: string;
+  }> = [];
   const trustedStaticImageAssetIds = Object.keys(
     options.staticImageAssets ?? {},
   ).sort();
@@ -204,8 +225,17 @@ export async function createDefaultAgentHarnessDependencies(
   const hydrateExternalResources = async (
     attempts: NetworkAttempt[],
     pass: number,
+    stage: string,
   ) => {
-    const previousEntryCount = externalResourceManifest?.entries.length ?? 0;
+    const previousEntries = externalResourceManifest?.entries ?? [];
+    const previousEntryCount = previousEntries.length;
+    const previousUrls = new Set(previousEntries.map((entry) => entry.url));
+    const previousPolicyDeniedCount = policyDeniedExternalResourceUrls.size;
+    const attemptsByUrl = new Map(
+      attempts.flatMap((attempt) =>
+        attempt.url === undefined ? [] : [[attempt.url, attempt] as const],
+      ),
+    );
     externalResourceManifest = await hydrateExternalResourceCache({
       attempts,
       directory: externalResourceDirectory,
@@ -215,78 +245,219 @@ export async function createDefaultAgentHarnessDependencies(
       ...(options.externalResourceFetcher === undefined
         ? {}
         : { fetchResource: options.externalResourceFetcher }),
-      onFailure: async ({ error, url }) => {
+      onFailure: async ({ error, reason, url }) => {
+        if (reason === "policy-denied") {
+          policyDeniedExternalResourceUrls.add(url);
+        }
+        const attempt = attemptsByUrl.get(url);
+        externalResourceHydrationOutcomes.push({
+          error: readUnknownErrorMessage(error),
+          outcome: reason,
+          pass,
+          phase: attempt?.phase ?? "browser",
+          ...(attempt?.method === undefined ? {} : { method: attempt.method }),
+          ...(attempt?.resourceType === undefined
+            ? {}
+            : { resourceType: attempt.resourceType }),
+          ...(attempt?.route === undefined ? {} : { route: attempt.route }),
+          stage,
+          url,
+        });
         await options.logger?.warn({
           error: readUnknownErrorMessage(error),
           event: "external-resource.hydration.failed",
+          reason,
+          stage,
           url,
         });
       },
     });
-    await options.artifactStore.writeJson(
-      artifactPaths.externalResourceManifest,
-      externalResourceManifest,
-    );
+    for (const entry of externalResourceManifest.entries) {
+      if (previousUrls.has(entry.url)) continue;
+      const attempt = attemptsByUrl.get(entry.url);
+      externalResourceHydrationOutcomes.push({
+        outcome: "cached",
+        pass,
+        phase: attempt?.phase ?? "browser",
+        ...(attempt?.method === undefined ? {} : { method: attempt.method }),
+        ...(attempt?.resourceType === undefined
+          ? {}
+          : { resourceType: attempt.resourceType }),
+        ...(attempt?.route === undefined ? {} : { route: attempt.route }),
+        ...(entry.responseUrl === undefined
+          ? {}
+          : { responseUrl: entry.responseUrl }),
+        sha256: entry.sha256,
+        sizeBytes: entry.sizeBytes,
+        stage,
+        url: entry.url,
+      });
+    }
+    await Promise.all([
+      options.artifactStore.writeJson(
+        artifactPaths.externalResourceManifest,
+        externalResourceManifest,
+      ),
+      options.artifactStore.writeJson(
+        artifactPaths.externalResourceHydrationReport,
+        {
+          outcomes: externalResourceHydrationOutcomes,
+          version: externalResourceManifestVersion,
+        },
+      ),
+    ]);
     const addedResources =
       externalResourceManifest.entries.length - previousEntryCount;
+    const policyDeniedResources =
+      policyDeniedExternalResourceUrls.size - previousPolicyDeniedCount;
     await options.logger?.info({
       addedResources,
       event: "external-resource.hydration.completed",
       pass,
+      policyDeniedResources,
       resourceCount: externalResourceManifest.entries.length,
+      stage,
     });
-    return addedResources > 0;
+    return { addedResources };
   };
-  const authorizeExternalResources = async (attempts: NetworkAttempt[]) => {
-    const plan = await authorizeExternalResourcePassthrough({
-      attempts,
-      ...(options.externalResourceHostResolver === undefined
-        ? {}
-        : { resolveHost: options.externalResourceHostResolver }),
-      onFailure: async ({ error, url }) => {
-        await options.logger?.warn({
-          error: readUnknownErrorMessage(error),
-          event: "external-resource.passthrough.denied",
-          url,
-        });
-      },
-    });
-    await options.logger?.info({
-      event: "external-resource.passthrough.authorized",
-      hostCount: plan.hosts.length,
-      resourceCount: plan.urls.length,
-    });
-    return plan;
+  const readUncachedExternalResourceAttempts = (
+    attempts: NetworkAttempt[],
+  ): NetworkAttempt[] => {
+    const cachedUrls = new Set(
+      (externalResourceManifest?.entries ?? []).flatMap((entry) => [
+        entry.url,
+        ...(entry.responseUrl === undefined ? [] : [entry.responseUrl]),
+      ]),
+    );
+    const uncached = attempts
+      .filter(isHydratableExternalResource)
+      .filter((attempt) => !policyDeniedExternalResourceUrls.has(attempt.url))
+      .filter((attempt) => !cachedUrls.has(attempt.url));
+    return [
+      ...new Map(uncached.map((attempt) => [attempt.url, attempt])).values(),
+    ];
+  };
+  const validateRuntimeWithExternalResources = async (
+    input: Omit<
+      Parameters<typeof validateSubmittedCodeRuntime>[0],
+      "buildApp" | "externalResourceCache" | "onAppStart" | "resetWorkspace"
+    >,
+  ): Promise<ValidationReport> => {
+    const runValidation = async (initialRun: boolean) =>
+      await validateSubmittedCodeRuntime({
+        ...input,
+        buildApp: initialRun,
+        ...(externalResourceManifest === undefined
+          ? {}
+          : {
+              externalResourceCache: {
+                directory: externalResourceDirectory,
+                manifest: externalResourceManifest,
+              },
+            }),
+        ...(!initialRun || input.installDependencies === false
+          ? { installDependencies: false }
+          : {}),
+        onAppStart: (appStartInput) => {
+          submittedCodeAppStartInput = appStartInput;
+        },
+        resetWorkspace: initialRun,
+      });
+    const readUncachedAttempts = (report: ValidationReport) =>
+      readUncachedExternalResourceAttempts(report.blockedNetworkAttempts);
+
+    for (
+      let pass = 1;
+      pass <= retryPolicy.externalResourceBrokerPasses;
+      pass += 1
+    ) {
+      const report = await runValidation(pass === 1);
+      const uncached = readUncachedAttempts(report);
+      if (uncached.length === 0) return report;
+      const hydration = await hydrateExternalResources(
+        uncached,
+        pass,
+        input.stage ?? "preparation-preflight",
+      );
+      if (hydration.addedResources > 0) continue;
+      const remainingAttempts = readUncachedAttempts(report);
+      return remainingAttempts.length === 0
+        ? report
+        : unresolvedExternalResourceValidation(
+            report,
+            remainingAttempts,
+            "runtime",
+          );
+    }
+
+    const finalReport = await runValidation(false);
+    const uncached = readUncachedAttempts(finalReport);
+    return uncached.length === 0
+      ? finalReport
+      : unresolvedExternalResourceValidation(finalReport, uncached, "runtime");
   };
   const runWithExternalResourceBroker = async <T>(input: {
-    markUnresolved?: (result: T) => T;
+    markUnresolved?: (result: T, attempts: NetworkAttempt[]) => T;
     readBlockedAttempts: (result: T) => NetworkAttempt[];
-    run: (passthroughUrls?: string[]) => Promise<T>;
+    run: () => Promise<T>;
+    stage: string;
     workspace: AgentHarnessWorkspace;
   }): Promise<T> => {
-    const uploadCache = async () =>
+    let uploadedManifest: ExternalResourceManifest | undefined;
+    const uploadCache = async () => {
+      if (uploadedManifest === externalResourceManifest) return;
       await uploadSubmittedCodeExternalResourceCache({
         directory: externalResourceDirectory,
         ...(externalResourceManifest === undefined
           ? {}
           : { manifest: externalResourceManifest }),
+        ...(uploadedManifest === undefined
+          ? {}
+          : { previousManifest: uploadedManifest }),
         workspace: input.workspace,
       });
+      uploadedManifest = externalResourceManifest;
+    };
     const runOffline = async () => {
       await uploadCache();
       return await input.run();
     };
-    const readUncachedAttempts = (result: T) =>
-      input
-        .readBlockedAttempts(result)
-        .filter(isHydratableExternalResource)
-        .filter(
-          (attempt) =>
-            !externalResourceManifest?.entries.some(
-              (entry) => entry.url === attempt.url,
-            ),
-        );
-    const unresolved = (result: T) => input.markUnresolved?.(result) ?? result;
+    const readUncachedAttempts = async (result: T) => {
+      let runtimeAttempts: NetworkAttempt[] = [];
+      if (input.workspace.readSubmittedCodeAppStatus !== undefined) {
+        try {
+          const status = await input.workspace.readSubmittedCodeAppStatus();
+          runtimeAttempts = readRuntimeNetworkAttempts(
+            [status.stderr, status.stdout].filter(Boolean).join("\n"),
+          );
+        } catch (error) {
+          await options.logger?.warn({
+            error: readUnknownErrorMessage(error),
+            event: "external-resource.runtime-attempts.unavailable",
+          });
+        }
+      }
+      const attempts = new Map(
+        [...input.readBlockedAttempts(result), ...runtimeAttempts].map(
+          (attempt) => [JSON.stringify(attempt), attempt],
+        ),
+      );
+      return readUncachedExternalResourceAttempts([...attempts.values()]);
+    };
+    const restartSubmittedCodeApp = async () => {
+      if (
+        submittedCodeAppStartInput === undefined ||
+        input.workspace.startSubmittedCodeApp === undefined ||
+        input.workspace.stopSubmittedCodeApp === undefined
+      ) {
+        return;
+      }
+      await input.workspace.stopSubmittedCodeApp();
+      await uploadCache();
+      await input.workspace.startSubmittedCodeApp(submittedCodeAppStartInput);
+    };
+    const unresolved = (result: T, attempts: NetworkAttempt[]) =>
+      input.markUnresolved?.(result, attempts) ?? result;
 
     for (
       let pass = 1;
@@ -294,30 +465,29 @@ export async function createDefaultAgentHarnessDependencies(
       pass += 1
     ) {
       const offlineResult = await runOffline();
-      const uncached = readUncachedAttempts(offlineResult);
+      const uncached = await readUncachedAttempts(offlineResult);
       if (uncached.length === 0) return offlineResult;
 
-      if (input.workspace.setSubmittedCodeResourceHosts === undefined) {
-        if (await hydrateExternalResources(uncached, pass)) continue;
-        return unresolved(offlineResult);
+      const hydration = await hydrateExternalResources(
+        uncached,
+        pass,
+        input.stage,
+      );
+      if (hydration.addedResources === 0) {
+        const remainingAttempts =
+          readUncachedExternalResourceAttempts(uncached);
+        return remainingAttempts.length === 0
+          ? offlineResult
+          : unresolved(offlineResult, remainingAttempts);
       }
-
-      const passthrough = await authorizeExternalResources(uncached);
-      if (passthrough.urls.length === 0) return unresolved(offlineResult);
-      await withSubmittedCodeResourceHosts({
-        hosts: passthrough.hosts,
-        run: () => input.run(passthrough.urls),
-        workspace: input.workspace,
-      });
-      if (!(await hydrateExternalResources(passthrough.attempts, pass))) {
-        return unresolved(offlineResult);
-      }
+      await restartSubmittedCodeApp();
     }
 
     const finalResult = await runOffline();
-    return readUncachedAttempts(finalResult).length === 0
+    const remainingAttempts = await readUncachedAttempts(finalResult);
+    return remainingAttempts.length === 0
       ? finalResult
-      : unresolved(finalResult);
+      : unresolved(finalResult, remainingAttempts);
   };
 
   const dependencies: AgentHarnessPipelineDependencies = {
@@ -374,9 +544,17 @@ export async function createDefaultAgentHarnessDependencies(
     },
     async exploreApp({ preparationManifest, workspace }) {
       return await runWithExternalResourceBroker({
+        markUnresolved: (result, attempts) => ({
+          ...result,
+          validationReport: unresolvedExternalResourceValidation(
+            result.validationReport,
+            attempts,
+            "browser",
+          ),
+        }),
         readBlockedAttempts: (result: SubmittedAppExplorationResult) =>
           result.validationReport.blockedNetworkAttempts,
-        run: (passthroughUrls) =>
+        run: () =>
           exploreSubmittedApp({
             baseUrl: preparationManifest.baseUrl,
             ...(externalResourceManifest === undefined
@@ -384,10 +562,10 @@ export async function createDefaultAgentHarnessDependencies(
               : { externalResourceManifest }),
             featureInventory:
               preparationManifest.productContext.featureInventory,
-            ...(passthroughUrls === undefined ? {} : { passthroughUrls }),
             preparationManifestId: preparationManifest.id,
             workspace,
           }),
+        stage: "app-exploration",
         workspace,
       });
     },
@@ -910,7 +1088,7 @@ export async function createDefaultAgentHarnessDependencies(
       runPlan,
       workspace,
     }) {
-      return await validateSubmittedCodeRuntime({
+      return await validateRuntimeWithExternalResources({
         installDependencies: false,
         preparationManifest,
         repoProfile,
@@ -974,15 +1152,8 @@ export async function createDefaultAgentHarnessDependencies(
                     "Capture Path Validation could not replay required external browser resources.",
                   status: "failed" as const,
                 }),
-                readBlockedAttempts: (result) =>
-                  result.blockedNetworkAttempts.map((attempt) => ({
-                    ...attempt,
-                    phase:
-                      attempt.phase === "install"
-                        ? "dependency-install"
-                        : attempt.phase,
-                  })),
-                run: async (passthroughUrls) => {
+                readBlockedAttempts: (result) => result.blockedNetworkAttempts,
+                run: async () => {
                   captureValidationRun += 1;
                   return await validatePreparedWorkspaceCapturePath({
                     baseUrl: preparationManifest.baseUrl,
@@ -1005,13 +1176,11 @@ export async function createDefaultAgentHarnessDependencies(
                             : "info";
                       await options.logger?.[level](entry);
                     },
-                    ...(passthroughUrls === undefined
-                      ? {}
-                      : { passthroughUrls }),
                     sceneIds: browserScenes.map((scene) => scene.id),
                     workspace: handle,
                   });
                 },
+                stage: "capture-path-validation",
                 workspace: handle.workspace,
               });
             } catch (error) {
@@ -1036,7 +1205,7 @@ export async function createDefaultAgentHarnessDependencies(
       runPlan,
       workspace,
     }) {
-      return await validateSubmittedCodeRuntime({
+      return await validateRuntimeWithExternalResources({
         preparationManifest,
         repoProfile,
         runPlan,
@@ -1448,9 +1617,16 @@ async function materializeScreenedRepo(input: {
 }
 
 async function validateSubmittedCodeRuntime(input: {
+  buildApp?: boolean;
+  externalResourceCache?: {
+    directory: string;
+    manifest: ExternalResourceManifest;
+  };
   installDependencies?: boolean;
+  onAppStart?: (input: AgentHarnessSubmittedCodeAppStartInput) => void;
   preparationManifest: PreparationManifest;
   repoProfile: RepoProfile;
+  resetWorkspace?: boolean;
   runPlan: RunPlan;
   stage?: string;
   workspace: AgentHarnessWorkspace;
@@ -1491,7 +1667,9 @@ async function validateSubmittedCodeRuntime(input: {
   try {
     await stopSubmittedCodeApp(input.workspace);
     await setSubmittedCodeNetwork(input.workspace, false);
-    await input.workspace.syncSubmittedCodeWorkspace?.();
+    if (input.resetWorkspace !== false) {
+      await input.workspace.syncSubmittedCodeWorkspace?.();
+    }
   } catch (error) {
     return failedPreparationValidation({
       classification: "harness/internal failure",
@@ -1587,7 +1765,7 @@ async function validateSubmittedCodeRuntime(input: {
     }
   }
 
-  if (manifest.buildCommandUsed !== undefined) {
+  if (input.buildApp !== false && manifest.buildCommandUsed !== undefined) {
     const buildResult = await executeSubmitted(
       input.workspace,
       commandInAppDirectory(
@@ -1620,6 +1798,22 @@ async function validateSubmittedCodeRuntime(input: {
       stage,
     });
   }
+  if (input.externalResourceCache !== undefined) {
+    try {
+      await uploadSubmittedCodeExternalResourceCache({
+        directory: input.externalResourceCache.directory,
+        manifest: input.externalResourceCache.manifest,
+        workspace: input.workspace,
+      });
+    } catch (error) {
+      return failedPreparationValidation({
+        classification: "harness/internal failure",
+        logsSummary: `Failed to upload the submitted-code External Resource Cache: ${readErrorMessage(error)}`,
+        manifest,
+        stage,
+      });
+    }
+  }
   const networkGuardInstallation = await installRuntimeNetworkGuard(
     input.workspace,
   );
@@ -1634,19 +1828,20 @@ async function validateSubmittedCodeRuntime(input: {
   const existingNodeOptions = manifest.envUsed.NODE_OPTIONS?.trim();
   const guardedRuntimeEnv = {
     ...manifest.envUsed,
-    MAKEADEMO_ALLOWED_RUNTIME_HOSTS: readRuntimeAllowedHosts(manifest.baseUrl),
     NODE_OPTIONS: [existingNodeOptions, `--require=${runtimeNetworkGuardPath}`]
       .filter(
         (value): value is string => value !== undefined && value.length > 0,
       )
       .join(" "),
   };
+  const appStartInput = {
+    command: manifest.startCommandUsed,
+    cwd: absoluteAppDirectory(runtimeTarget?.start.cwd ?? manifest.appDir),
+    env: guardedRuntimeEnv,
+  };
+  input.onAppStart?.(appStartInput);
   try {
-    await input.workspace.startSubmittedCodeApp({
-      command: manifest.startCommandUsed,
-      cwd: absoluteAppDirectory(runtimeTarget?.start.cwd ?? manifest.appDir),
-      env: guardedRuntimeEnv,
-    });
+    await input.workspace.startSubmittedCodeApp(appStartInput);
   } catch (error) {
     return failedPreparationValidation({
       attemptedCommand: manifest.startCommandUsed,
@@ -1726,6 +1921,24 @@ async function validateSubmittedCodeRuntime(input: {
   });
 }
 
+function unresolvedExternalResourceValidation(
+  report: ValidationReport,
+  attempts: NetworkAttempt[],
+  resourceContext: "browser" | "runtime",
+): ValidationReport {
+  const resources = attempts.map((attempt) => attempt.url ?? attempt.host);
+  return {
+    ...report,
+    failureClassification: "external network attempted",
+    logsSummary: `The controller could not cache ${resources.length} required external ${resourceContext} resource${resources.length === 1 ? "" : "s"}: ${resources.join(", ")}.`,
+    status: "failed",
+    suggestedRepairHints: [
+      ...report.suggestedRepairHints,
+      "Make the required presentation resource public and credential-free, or provide it locally in the prepared runtime.",
+    ],
+  };
+}
+
 function readReconciledLockfilePaths(input: {
   installCommand: string;
   installDirectory: string;
@@ -1756,43 +1969,6 @@ function readReconciledLockfilePaths(input: {
       ? fallback
       : posix.join(input.installDirectory, fallback),
   ];
-}
-
-async function withSubmittedCodeResourceHosts<T>(input: {
-  hosts: string[];
-  run: () => Promise<T>;
-  workspace: AgentHarnessWorkspace;
-}): Promise<T> {
-  if (input.hosts.length === 0) return await input.run();
-  const setResourceHosts = input.workspace.setSubmittedCodeResourceHosts;
-  if (setResourceHosts === undefined) {
-    throw new Error(
-      "Filtered submitted-code resource passthrough is unavailable.",
-    );
-  }
-  await setResourceHosts.call(input.workspace, input.hosts);
-  const outcome = await input.run().then(
-    (value) => ({ status: "succeeded" as const, value }),
-    (error: unknown) => ({ error, status: "failed" as const }),
-  );
-  let cleanupError: unknown;
-  try {
-    await setResourceHosts.call(input.workspace, []);
-  } catch (error) {
-    cleanupError = error;
-  }
-  if (outcome.status === "failed") {
-    if (outcome.error instanceof Error && cleanupError !== undefined) {
-      attachSecondaryFailure(
-        outcome.error,
-        "resourceNetworkCleanupError",
-        cleanupError,
-      );
-    }
-    throw outcome.error;
-  }
-  if (cleanupError !== undefined) throw cleanupError;
-  return outcome.value;
 }
 
 function findBuildScopeViolation(input: {
@@ -1849,13 +2025,6 @@ async function installRuntimeNetworkGuard(workspace: AgentHarnessWorkspace) {
   );
 }
 
-function readRuntimeAllowedHosts(baseUrl: string): string {
-  const host = new URL(baseUrl).hostname;
-  return [...new Set([host, "localhost", "127.0.0.1", "::1", "0.0.0.0"])].join(
-    ",",
-  );
-}
-
 async function stopSubmittedCodeApp(
   workspace: AgentHarnessWorkspace,
 ): Promise<void> {
@@ -1871,24 +2040,7 @@ async function setSubmittedCodeNetwork(
   workspace: AgentHarnessWorkspace,
   enabled: boolean,
 ): Promise<void> {
-  if (enabled) {
-    if (workspace.openSubmittedCodeDependencyNetwork !== undefined) {
-      await workspace.openSubmittedCodeDependencyNetwork();
-      return;
-    }
-    await workspace.setSubmittedCodeNetworkAccess?.(true);
-    return;
-  }
-
-  if (workspace.closeSubmittedCodeDependencyNetwork !== undefined) {
-    await workspace.closeSubmittedCodeDependencyNetwork();
-    return;
-  }
-  if (workspace.enforceSubmittedCodeRuntimeNetworkLockdown !== undefined) {
-    await workspace.enforceSubmittedCodeRuntimeNetworkLockdown();
-    return;
-  }
-  await workspace.setSubmittedCodeNetworkAccess?.(false);
+  await workspace.setSubmittedCodeNetworkAccess?.(enabled);
 }
 
 async function executeSubmitted(

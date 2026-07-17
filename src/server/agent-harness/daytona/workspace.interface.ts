@@ -125,10 +125,7 @@ export type AgentHarnessNetworkStateTransition = {
   state:
     | "dependency-install-closed"
     | "dependency-install-open"
-    | "resource-passthrough-closed"
-    | "resource-passthrough-open"
-    | "runtime-locked"
-    | "runtime-unlocked";
+    | "runtime-locked";
 };
 
 /**
@@ -148,14 +145,6 @@ export interface AgentHarnessWorkspace {
     command: string,
     options?: AgentHarnessWorkspaceExecuteOptions,
   ): Promise<AgentHarnessWorkspaceCommandResult>;
-  executeInAgentSandbox?(
-    command: string,
-    options?: { env?: Record<string, string> },
-  ): Promise<AgentHarnessWorkspaceCommandResult>;
-  executeInSubmittedCodeSandbox?(
-    command: string,
-    options?: { env?: Record<string, string> },
-  ): Promise<AgentHarnessWorkspaceCommandResult>;
   startSubmittedCodeApp?(
     input: AgentHarnessSubmittedCodeAppStartInput,
   ): Promise<void>;
@@ -169,13 +158,7 @@ export interface AgentHarnessWorkspace {
    * outside the repository and files other than recognized lockfiles.
    */
   promoteSubmittedCodeFiles?(paths: string[]): Promise<void>;
-  openSubmittedCodeDependencyNetwork?(): Promise<void>;
-  closeSubmittedCodeDependencyNetwork?(): Promise<void>;
-  enforceSubmittedCodeRuntimeNetworkLockdown?(): Promise<void>;
-  setOutboundNetworkAccess?(enabled: boolean): Promise<void>;
   setSubmittedCodeNetworkAccess?(enabled: boolean): Promise<void>;
-  /** Temporarily restricts submitted-code egress to exact public asset hosts. */
-  setSubmittedCodeResourceHosts?(hosts: string[]): Promise<void>;
   getPreviewUrl?(port: number): Promise<string>;
   writeSandboxLog?(entry: AgentHarnessWorkspaceLogEntry): Promise<void>;
   /**
@@ -198,13 +181,6 @@ export interface AgentHarnessWorkspace {
   downloadSubmittedCodeFiles?(
     files: AgentHarnessWorkspaceDownloadFile[],
   ): Promise<void>;
-  uploadArtifacts?(
-    files: Array<{ destinationPath: string; sourcePath: string }>,
-  ): Promise<void>;
-  downloadArtifacts?(
-    files: Array<{ destinationPath: string; sourcePath: string }>,
-  ): Promise<void>;
-  exposeLocalPreviewUrl?(port: number): Promise<string>;
   collectSandboxLogs?(): Promise<string[]>;
   collectNetworkStateLog?(): Promise<AgentHarnessNetworkStateTransition[]>;
   cancelActiveCommands?(): Promise<void>;

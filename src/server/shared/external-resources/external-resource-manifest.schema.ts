@@ -1,9 +1,16 @@
-export const externalResourceManifestVersion = "2026-07-14" as const;
+export const externalResourceManifestVersion = "2026-07-15" as const;
+const replaySafeHeaders = new Set([
+  "access-control-allow-origin",
+  "cache-control",
+  "cross-origin-resource-policy",
+  "timing-allow-origin",
+]);
 
 type ExternalResourceEntry = {
   contentType: string;
   headers: Record<string, string>;
   relativePath: string;
+  responseUrl?: string;
   sha256: `sha256:${string}`;
   sizeBytes: number;
   status: number;
@@ -32,10 +39,42 @@ export function readExternalResourceManifest(
   if (!Array.isArray(record.entries)) {
     throw new Error("External Resource Manifest entries must be an array.");
   }
-  return {
-    entries: record.entries.map(readEntry),
-    version: externalResourceManifestVersion,
-  };
+  const entries = record.entries.map(readEntry);
+  const urls = new Set<string>();
+  const replaySignatures = new Map<string, string>();
+  for (const [index, entry] of entries.entries()) {
+    if (urls.has(entry.url)) {
+      throw new Error(
+        `External Resource Manifest entries[${index}].url URL must be unique.`,
+      );
+    }
+    urls.add(entry.url);
+    const responseSignature = JSON.stringify({
+      contentType: entry.contentType,
+      headers: Object.fromEntries(Object.entries(entry.headers).sort()),
+      relativePath: entry.relativePath,
+      sha256: entry.sha256,
+      sizeBytes: entry.sizeBytes,
+      status: entry.status,
+    });
+    const mappings: Array<readonly [string, string]> =
+      entry.responseUrl === undefined
+        ? [[entry.url, responseSignature]]
+        : [
+            [entry.url, `redirect:${entry.responseUrl}`],
+            [entry.responseUrl, responseSignature],
+          ];
+    for (const [url, signature] of mappings) {
+      const previous = replaySignatures.get(url);
+      if (previous !== undefined && previous !== signature) {
+        throw new Error(
+          `External Resource Manifest URL ${url} has conflicting replay responses.`,
+        );
+      }
+      replaySignatures.set(url, signature);
+    }
+  }
+  return { entries, version: externalResourceManifestVersion };
 }
 
 function readEntry(value: unknown, index: number): ExternalResourceEntry {
@@ -45,10 +84,11 @@ function readEntry(value: unknown, index: number): ExternalResourceEntry {
     );
   }
   const entry = value as Record<string, unknown>;
-  const url = readString(entry, "url", index);
-  if (!url.startsWith("https://")) {
+  const url = readHttpsUrl(entry, "url", index);
+  const contentType = readString(entry, "contentType", index);
+  if (!/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/i.test(contentType)) {
     throw new Error(
-      `External Resource Manifest entries[${index}].url must use HTTPS.`,
+      `External Resource Manifest entries[${index}].contentType is invalid.`,
     );
   }
   const sha256 = readString(entry, "sha256", index);
@@ -93,23 +133,59 @@ function readEntry(value: unknown, index: number): ExternalResourceEntry {
     );
   }
   return {
-    contentType: readString(entry, "contentType", index),
+    contentType,
     headers: Object.fromEntries(
       Object.entries(headers).map(([key, header]) => {
+        if (key !== key.toLowerCase() || !replaySafeHeaders.has(key)) {
+          throw new Error(
+            `External Resource Manifest entries[${index}] header ${key} is not replay-safe.`,
+          );
+        }
         if (typeof header !== "string") {
           throw new Error(
             `External Resource Manifest entries[${index}].headers.${key} must be a string.`,
+          );
+        }
+        if (/[\r\n]/.test(header)) {
+          throw new Error(
+            `External Resource Manifest entries[${index}].headers.${key} contains a line break.`,
           );
         }
         return [key, header];
       }),
     ),
     relativePath,
+    ...(entry.responseUrl === undefined
+      ? {}
+      : { responseUrl: readHttpsUrl(entry, "responseUrl", index) }),
     sha256: sha256 as `sha256:${string}`,
     sizeBytes: entry.sizeBytes,
     status: entry.status,
     url,
   };
+}
+
+function readHttpsUrl(
+  record: Record<string, unknown>,
+  key: string,
+  index: number,
+): string {
+  const value = readString(record, key, index);
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol !== "https:" ||
+      url.username.length > 0 ||
+      url.password.length > 0
+    ) {
+      throw new Error();
+    }
+  } catch {
+    throw new Error(
+      `External Resource Manifest entries[${index}].${key} must be a credential-free HTTPS URL.`,
+    );
+  }
+  return value;
 }
 
 function readString(

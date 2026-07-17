@@ -317,10 +317,7 @@ export type PipelineRunManifest = {
     state:
       | "dependency-install-closed"
       | "dependency-install-open"
-      | "resource-passthrough-closed"
-      | "resource-passthrough-open"
-      | "runtime-locked"
-      | "runtime-unlocked";
+      | "runtime-locked";
   }>;
   artifactPaths: Record<string, string>;
   finalStatus: "failed" | "passed" | "unsupported";
@@ -1211,10 +1208,7 @@ function readNetworkStateTransitions(
         [
           "dependency-install-closed",
           "dependency-install-open",
-          "resource-passthrough-closed",
-          "resource-passthrough-open",
           "runtime-locked",
-          "runtime-unlocked",
         ],
         path,
       ),

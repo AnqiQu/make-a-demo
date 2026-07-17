@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { isIP } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, posix } from "node:path";
 
@@ -110,8 +109,6 @@ type DaytonaSdkSandbox = {
   };
   start?(timeout?: number): Promise<void>;
   updateNetworkSettings(settings: {
-    domainAllowList?: string;
-    networkAllowList?: string;
     networkBlockAll?: boolean;
   }): Promise<void>;
 };
@@ -742,10 +739,6 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     );
   }
 
-  async setOutboundNetworkAccess(enabled: boolean): Promise<void> {
-    await this.setSandboxNetworkAccess(this.sandbox, enabled);
-  }
-
   async setSubmittedCodeNetworkAccess(enabled: boolean): Promise<void> {
     if (this.submittedCodeSandbox === undefined) {
       throw new Error("Submitted-code Daytona sandbox is not configured.");
@@ -764,23 +757,6 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       { at, state: "dependency-install-closed" },
       { at, state: "runtime-locked" },
     );
-  }
-
-  async setSubmittedCodeResourceHosts(hosts: string[]): Promise<void> {
-    const sandbox = this.requireSubmittedCodeSandbox();
-    const domains = [...new Set(hosts.map(assertPublicResourceDomain))].sort();
-    await sandbox.updateNetworkSettings(
-      domains.length === 0
-        ? { networkBlockAll: true }
-        : { domainAllowList: domains.join(",") },
-    );
-    this.networkStateTransitions.push({
-      at: new Date().toISOString(),
-      state:
-        domains.length === 0
-          ? "resource-passthrough-closed"
-          : "resource-passthrough-open",
-    });
   }
 
   async collectNetworkStateLog(): Promise<
@@ -1568,26 +1544,6 @@ function assertLockfilePath(path: string): string {
   ) {
     throw new Error(
       `Submitted-code promotion path must be a repository-relative recognized lockfile: ${path}`,
-    );
-  }
-  return normalized;
-}
-
-function assertPublicResourceDomain(host: string): string {
-  const normalized = host.trim().toLowerCase().replace(/\.$/, "");
-  if (
-    normalized.length > 253 ||
-    isIP(normalized) !== 0 ||
-    normalized === "localhost" ||
-    normalized.endsWith(".localhost") ||
-    normalized.endsWith(".local") ||
-    !normalized.includes(".") ||
-    !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(
-      normalized,
-    )
-  ) {
-    throw new Error(
-      `Resource passthrough host must be a public domain: ${host}`,
     );
   }
   return normalized;

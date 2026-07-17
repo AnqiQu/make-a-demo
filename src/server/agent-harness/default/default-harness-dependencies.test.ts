@@ -14,6 +14,7 @@ import type {
   ActionCatalog,
   AppMap,
   FlowSpec,
+  NetworkAttempt,
   PreparationManifest,
   RepoProfile,
   RunPlan,
@@ -415,7 +416,6 @@ describe("createDefaultAgentHarnessDependencies", () => {
         }
         return { exitCode: 0, stderr: "", stdout: "" };
       },
-      async setOutboundNetworkAccess() {},
     };
     const harness = await createDefaultAgentHarnessDependencies({
       artifactStore: { async writeJson() {} },
@@ -496,7 +496,6 @@ describe("createDefaultAgentHarnessDependencies", () => {
         }
         return { exitCode: 0, stderr: "", stdout: "" };
       },
-      async setOutboundNetworkAccess() {},
     };
     const harness = await createDefaultAgentHarnessDependencies({
       artifactStore: { async writeJson() {} },
@@ -555,8 +554,6 @@ describe("createDefaultAgentHarnessDependencies", () => {
       manifest: { id: "prep_001" },
       opencodeSessionId: "session_prepare",
     });
-
-    expect(workspace.networkAccessRequests).toEqual([]);
   });
 
   it("runs Repo Preparation repair when OpenCode succeeds without writing the manifest", async () => {
@@ -994,7 +991,6 @@ describe("createDefaultAgentHarnessDependencies", () => {
         }
         return { exitCode: 0, stderr: "", stdout: "" };
       },
-      async setOutboundNetworkAccess() {},
     };
     const harness = await createDefaultAgentHarnessDependencies({
       artifactStore: { async writeJson() {} },
@@ -1067,7 +1063,6 @@ describe("createDefaultAgentHarnessDependencies", () => {
         }
         return { exitCode: 0, stderr: "", stdout: "" };
       },
-      async setOutboundNetworkAccess() {},
     };
     let attempts = 0;
     const harness = await createDefaultAgentHarnessDependencies({
@@ -1152,7 +1147,6 @@ describe("createDefaultAgentHarnessDependencies", () => {
         }
         return { exitCode: 0, stderr: "", stdout: "" };
       },
-      async setOutboundNetworkAccess() {},
     };
     let attempts = 0;
     const harness = await createDefaultAgentHarnessDependencies({
@@ -1254,7 +1248,6 @@ describe("createDefaultAgentHarnessDependencies", () => {
         }
         return { exitCode: 0, stderr: "", stdout: "" };
       },
-      async setOutboundNetworkAccess() {},
     };
     let attempts = 0;
     const harness = await createDefaultAgentHarnessDependencies({
@@ -1332,7 +1325,6 @@ describe("createDefaultAgentHarnessDependencies", () => {
       async executeSubmittedCode() {
         return { exitCode: 0, stderr: "", stdout: "" };
       },
-      async setOutboundNetworkAccess() {},
       async setSubmittedCodeNetworkAccess(enabled) {
         submittedNetworkRequests.push(enabled);
       },
@@ -1571,7 +1563,6 @@ describe("createDefaultAgentHarnessDependencies", () => {
           command: "npm run dev -- --host 0.0.0.0",
           cwd: "/workspace/repo",
           env: {
-            MAKEADEMO_ALLOWED_RUNTIME_HOSTS: "127.0.0.1,localhost,::1,0.0.0.0",
             MAKEADEMO_OFFLINE: "1",
             NODE_OPTIONS:
               "--require=/workspace/.makeademo/runtime-network-guard.cjs",
@@ -1636,12 +1627,184 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(commands.join("\n")).toContain("runtime-network-guard.cjs");
   });
 
-  it("hydrates and replays safe browser resources before accepting exploration", async () => {
+  it("hydrates server-side presentation resources and reruns preflight offline", async () => {
+    const outputRoot = await mkdtemp(
+      join(tmpdir(), "makeademo-server-resource-hydration-"),
+    );
+    let starts = 0;
+    let syncs = 0;
+    const uploadedDestinations: string[] = [];
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async readSubmittedCodeAppStatus() {
+        return {
+          running: true,
+          stderr:
+            starts === 1
+              ? '[makeademo:network-blocked] {"direction":"outbound","hasCredentials":false,"host":"assets.example.com","method":"GET","phase":"runtime","resourceType":"fetch","url":"https://assets.example.com/logo.svg"}'
+              : "",
+          stdout: "",
+        };
+      },
+      async setSubmittedCodeNetworkAccess() {},
+      async startSubmittedCodeApp() {
+        starts += 1;
+      },
+      async stopSubmittedCodeApp() {},
+      async syncSubmittedCodeWorkspace() {
+        syncs += 1;
+      },
+      async uploadSubmittedCodeFiles(files) {
+        uploadedDestinations.push(...files.map((file) => file.destinationPath));
+      },
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      externalResourceFetcher: async () => ({
+        body: new TextEncoder().encode("original-logo"),
+        contentType: "image/svg+xml",
+        headers: {},
+        status: 200,
+      }),
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot,
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    try {
+      const report = await harness.dependencies.validatePreparation({
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      });
+
+      expect(report).toMatchObject({
+        blockedNetworkAttempts: [],
+        failureClassification: "none",
+        status: "passed",
+      });
+      expect(starts).toBe(2);
+      expect(syncs).toBe(1);
+      expect(uploadedDestinations).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(
+            /^\/workspace\/\.makeademo\/external-resources\/resources\/[a-f0-9]{64}$/,
+          ),
+        ]),
+      );
+      expect(
+        harness.getExternalResourceCache?.()?.manifest.entries,
+      ).toHaveLength(1);
+    } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("hydrates server-side resources first requested during app exploration", async () => {
+    const outputRoot = await mkdtemp(
+      join(tmpdir(), "makeademo-exploration-server-resource-"),
+    );
+    let explorationRuns = 0;
+    let starts = 0;
+    let uploadBatches = 0;
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode(command) {
+        if (!command.includes("explore-app.mjs")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        explorationRuns += 1;
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout: explorationProtocol(),
+        };
+      },
+      async readSubmittedCodeAppStatus() {
+        return {
+          running: true,
+          stderr:
+            explorationRuns === 1 && starts === 1
+              ? '[makeademo:network-blocked] {"direction":"outbound","hasCredentials":false,"host":"assets.example.com","method":"GET","phase":"runtime","resourceType":"fetch","url":"https://assets.example.com/logo.svg"}'
+              : "",
+          stdout: "",
+        };
+      },
+      async setSubmittedCodeNetworkAccess() {},
+      async startSubmittedCodeApp() {
+        starts += 1;
+      },
+      async stopSubmittedCodeApp() {},
+      async syncSubmittedCodeWorkspace() {},
+      async uploadSubmittedCodeFiles() {
+        uploadBatches += 1;
+      },
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      externalResourceFetcher: async () => ({
+        body: new TextEncoder().encode("original-logo"),
+        contentType: "image/svg+xml",
+        headers: {},
+        status: 200,
+      }),
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot,
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    try {
+      const manifest = preparationManifest();
+      await harness.dependencies.validatePreparation({
+        preparationManifest: manifest,
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      });
+      const result = await harness.dependencies.exploreApp({
+        actionCatalogPath: "/workspace/.makeademo/action-catalog.json",
+        appMapPath: "/workspace/.makeademo/app-map.json",
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest: manifest,
+        preparationValidation: validationReport(
+          "preparation-preflight",
+          "passed",
+        ),
+        repoProfile: repoProfile(),
+        workspace,
+      });
+
+      expect(explorationRuns).toBe(2);
+      expect(starts).toBe(2);
+      expect(uploadBatches).toBe(1);
+      expect(result.validationReport).toMatchObject({
+        blockedNetworkAttempts: [],
+        status: "passed",
+      });
+      expect(
+        harness.getExternalResourceCache?.()?.manifest.entries,
+      ).toHaveLength(1);
+    } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("hydrates nested browser resources without opening sandbox egress", async () => {
     const outputRoot = await mkdtemp(
       join(tmpdir(), "makeademo-resource-hydration-"),
     );
     let explorationRuns = 0;
-    const resourceHosts: string[][] = [];
+    const requestedUrls: string[] = [];
     const uploadedDestinations: string[] = [];
     const workspace: AgentHarnessWorkspace = {
       async destroy() {},
@@ -1656,46 +1819,34 @@ describe("createDefaultAgentHarnessDependencies", () => {
         return {
           exitCode: 0,
           stderr: "",
-          stdout: JSON.stringify({
-            blockedNetworkAttempts:
-              explorationRuns === 1
+          stdout: explorationProtocol(
+            explorationRuns === 1
+              ? [
+                  {
+                    direction: "outbound",
+                    hasCredentials: false,
+                    host: "assets.example.com",
+                    method: "GET",
+                    phase: "browser",
+                    resourceType: "stylesheet",
+                    url: "https://assets.example.com/dashboard.css",
+                  },
+                ]
+              : explorationRuns === 2
                 ? [
                     {
                       direction: "outbound",
                       hasCredentials: false,
-                      host: "assets.example.com",
+                      host: "fonts.example.com",
                       method: "GET",
                       phase: "browser",
-                      resourceType: "image",
-                      url: "https://assets.example.com/dashboard.png",
+                      resourceType: "font",
+                      url: "https://fonts.example.com/dashboard.woff2",
                     },
                   ]
                 : [],
-            consoleErrors: [],
-            pageErrors: [],
-            routes: [
-              {
-                buttonLocatorEvidence: [null],
-                buttons: ["Open Dashboard"],
-                featureIds: ["dashboard"],
-                forms: [],
-                headings: ["Dashboard"],
-                inputs: [],
-                links: [],
-                path: "/",
-                primaryNavigation: [],
-                requestedPath: "/",
-                screenshot: "/workspace/.makeademo/exploration/root.png",
-                snapshot: "/workspace/.makeademo/exploration/root.aria.yml",
-                text: ["Dashboard"],
-                title: "Dashboard",
-              },
-            ],
-          }),
+          ),
         };
-      },
-      async setSubmittedCodeResourceHosts(hosts) {
-        resourceHosts.push(hosts);
       },
       async uploadSubmittedCodeFiles(files) {
         uploadedDestinations.push(...files.map((file) => file.destinationPath));
@@ -1703,17 +1854,21 @@ describe("createDefaultAgentHarnessDependencies", () => {
     };
     const harness = await createDefaultAgentHarnessDependencies({
       artifactStore: { async writeJson() {} },
-      externalResourceFetcher: async () => ({
-        body: new TextEncoder().encode("original-dashboard-image"),
-        contentType: "image/png",
-        headers: {},
-        status: 200,
-      }),
-      externalResourceHostResolver: async () => ["93.184.216.34"],
+      externalResourceFetcher: async (url) => {
+        requestedUrls.push(url);
+        return {
+          body: new TextEncoder().encode(
+            url.endsWith(".css") ? "@font-face {}" : "original-font",
+          ),
+          contentType: url.endsWith(".css") ? "text/css" : "font/woff2",
+          headers: {},
+          status: 200,
+        };
+      },
       openCodeRunner: repoPreparationRunner(),
       outputRoot,
       repoSourceArchive: await repoSourceArchive(),
-      retryPolicy: { externalResourceBrokerPasses: 1 },
+      retryPolicy: { externalResourceBrokerPasses: 2 },
     });
 
     try {
@@ -1731,7 +1886,10 @@ describe("createDefaultAgentHarnessDependencies", () => {
       });
 
       expect(explorationRuns).toBe(3);
-      expect(resourceHosts).toEqual([["assets.example.com"], []]);
+      expect(requestedUrls).toEqual([
+        "https://assets.example.com/dashboard.css",
+        "https://fonts.example.com/dashboard.woff2",
+      ]);
       expect(result.validationReport.status).toBe("passed");
       expect(uploadedDestinations).toEqual(
         expect.arrayContaining([
@@ -1743,14 +1901,18 @@ describe("createDefaultAgentHarnessDependencies", () => {
       );
       expect(
         harness.getExternalResourceCache?.()?.manifest.entries,
-      ).toHaveLength(1);
+      ).toHaveLength(2);
     } finally {
       await rm(outputRoot, { force: true, recursive: true });
     }
   });
 
-  it("preserves a live exploration failure when closing filtered egress also fails", async () => {
+  it("keeps blocked JSON APIs observable without treating them as visual resources", async () => {
+    const outputRoot = await mkdtemp(
+      join(tmpdir(), "makeademo-json-resource-policy-"),
+    );
     let explorationRuns = 0;
+    const writtenArtifacts = new Map<string, unknown>();
     const workspace: AgentHarnessWorkspace = {
       async destroy() {},
       async execute() {
@@ -1761,65 +1923,45 @@ describe("createDefaultAgentHarnessDependencies", () => {
           return { exitCode: 0, stderr: "", stdout: "" };
         }
         explorationRuns += 1;
-        if (explorationRuns > 1) {
-          throw new Error("live exploration failed");
-        }
         return {
           exitCode: 0,
           stderr: "",
-          stdout: JSON.stringify({
-            blockedNetworkAttempts: [
-              {
-                direction: "outbound",
-                hasCredentials: false,
-                host: "assets.example.com",
-                method: "GET",
-                phase: "browser",
-                resourceType: "image",
-                url: "https://assets.example.com/dashboard.png",
-              },
-            ],
-            consoleErrors: [],
-            pageErrors: [],
-            routes: [
-              {
-                buttons: [],
-                forms: [],
-                headings: ["Dashboard"],
-                inputs: [],
-                links: [],
-                path: "/",
-                primaryNavigation: [],
-                requestedPath: "/",
-                screenshot: "/workspace/.makeademo/exploration/root.png",
-                snapshot: "/workspace/.makeademo/exploration/root.aria.yml",
-                text: [],
-                title: "Dashboard",
-              },
-            ],
-          }),
+          stdout: explorationProtocol([
+            {
+              direction: "outbound",
+              hasCredentials: false,
+              host: "api.example.com",
+              method: "GET",
+              phase: "browser",
+              resourceType: "fetch",
+              url: "https://api.example.com/analytics",
+            },
+          ]),
         };
-      },
-      async setSubmittedCodeResourceHosts(hosts) {
-        if (hosts.length === 0) {
-          throw new Error("resource network cleanup failed");
-        }
       },
     };
     const harness = await createDefaultAgentHarnessDependencies({
-      artifactStore: { async writeJson() {} },
-      externalResourceHostResolver: async () => ["93.184.216.34"],
+      artifactStore: {
+        async writeJson(path, value) {
+          writtenArtifacts.set(path, value);
+        },
+      },
+      externalResourceFetcher: async () => ({
+        body: new TextEncoder().encode('{"event":"page-view"}'),
+        contentType: "application/json",
+        headers: {},
+        status: 200,
+      }),
       openCodeRunner: repoPreparationRunner(),
-      outputRoot: "/tmp/makeademo-test",
+      outputRoot,
       repoSourceArchive: await repoSourceArchive(),
     });
 
-    let caught: unknown;
     try {
-      await harness.dependencies.exploreApp({
+      const result = await harness.dependencies.exploreApp({
         actionCatalogPath: "/workspace/.makeademo/action-catalog.json",
         appMapPath: "/workspace/.makeademo/app-map.json",
-        demoBrief: { keyProductFeatures: [] },
+        demoBrief: { keyProductFeatures: ["dashboard"] },
         preparationManifest: preparationManifest(),
         preparationValidation: validationReport(
           "preparation-preflight",
@@ -1828,14 +1970,113 @@ describe("createDefaultAgentHarnessDependencies", () => {
         repoProfile: repoProfile(),
         workspace,
       });
-    } catch (error) {
-      caught = error;
-    }
 
-    expect(caught).toMatchObject({ message: "live exploration failed" });
-    expect(
-      Reflect.get(caught as object, "resourceNetworkCleanupError"),
-    ).toMatchObject({ message: "resource network cleanup failed" });
+      expect(explorationRuns).toBe(1);
+      expect(result.validationReport).toMatchObject({
+        blockedNetworkAttempts: [{ url: "https://api.example.com/analytics" }],
+        status: "passed",
+      });
+      expect(harness.getExternalResourceCache?.()?.manifest.entries).toEqual(
+        [],
+      );
+      expect(
+        writtenArtifacts.get(
+          "/workspace/.makeademo/external-resource-hydration-report.json",
+        ),
+      ).toMatchObject({
+        outcomes: [
+          {
+            outcome: "policy-denied",
+            resourceType: "fetch",
+            url: "https://api.example.com/analytics",
+          },
+        ],
+      });
+    } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("fails exploration when a required presentation resource cannot be cached", async () => {
+    const outputRoot = await mkdtemp(
+      join(tmpdir(), "makeademo-resource-retrieval-failure-"),
+    );
+    let explorationRuns = 0;
+    const workspace = blockedImageExplorationWorkspace(() => {
+      explorationRuns += 1;
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      externalResourceFetcher: async () => {
+        throw new Error("controller fetch failed");
+      },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot,
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    try {
+      const result = await harness.dependencies.exploreApp({
+        actionCatalogPath: "/workspace/.makeademo/action-catalog.json",
+        appMapPath: "/workspace/.makeademo/app-map.json",
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        preparationManifest: preparationManifest(),
+        preparationValidation: validationReport(
+          "preparation-preflight",
+          "passed",
+        ),
+        repoProfile: repoProfile(),
+        workspace,
+      });
+
+      expect(explorationRuns).toBe(1);
+      expect(result.validationReport).toMatchObject({
+        failureClassification: "external network attempted",
+        status: "failed",
+      });
+    } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("propagates controller programming errors instead of requesting repo repair", async () => {
+    const outputRoot = await mkdtemp(
+      join(tmpdir(), "makeademo-resource-controller-failure-"),
+    );
+    const failure = new TypeError("controller adapter contract failed");
+    let explorationRuns = 0;
+    const workspace = blockedImageExplorationWorkspace(() => {
+      explorationRuns += 1;
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      externalResourceFetcher: async () => {
+        throw failure;
+      },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot,
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    try {
+      await expect(
+        harness.dependencies.exploreApp({
+          actionCatalogPath: "/workspace/.makeademo/action-catalog.json",
+          appMapPath: "/workspace/.makeademo/app-map.json",
+          demoBrief: { keyProductFeatures: ["dashboard"] },
+          preparationManifest: preparationManifest(),
+          preparationValidation: validationReport(
+            "preparation-preflight",
+            "passed",
+          ),
+          repoProfile: repoProfile(),
+          workspace,
+        }),
+      ).rejects.toBe(failure);
+      expect(explorationRuns).toBe(1);
+    } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+    }
   });
 
   it("hydrates resources first discovered by capture actions and validates again", async () => {
@@ -1843,7 +2084,6 @@ describe("createDefaultAgentHarnessDependencies", () => {
       join(tmpdir(), "makeademo-capture-resource-hydration-"),
     );
     let captureRuns = 0;
-    const resourceHosts: string[][] = [];
     const uploadedDestinations: string[] = [];
     const workspace: AgentHarnessWorkspace = {
       async destroy() {},
@@ -1873,9 +2113,6 @@ describe("createDefaultAgentHarnessDependencies", () => {
           ].join("\n"),
         };
       },
-      async setSubmittedCodeResourceHosts(hosts) {
-        resourceHosts.push(hosts);
-      },
       async uploadSubmittedCodeFiles(files) {
         uploadedDestinations.push(...files.map((file) => file.destinationPath));
       },
@@ -1888,7 +2125,6 @@ describe("createDefaultAgentHarnessDependencies", () => {
         headers: {},
         status: 200,
       }),
-      externalResourceHostResolver: async () => ["93.184.216.34"],
       openCodeRunner: repoPreparationRunner(),
       outputRoot,
       repoSourceArchive: await repoSourceArchive(),
@@ -1913,8 +2149,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         workspace,
       });
 
-      expect(captureRuns).toBe(3);
-      expect(resourceHosts).toEqual([["assets.example.com"], []]);
+      expect(captureRuns).toBe(2);
       expect(report.status).toBe("passed");
       expect(uploadedDestinations).toEqual(
         expect.arrayContaining([
@@ -2028,7 +2263,6 @@ describe("createDefaultAgentHarnessDependencies", () => {
         }
         return { exitCode: 0, stderr: "", stdout: "" };
       },
-      async setOutboundNetworkAccess() {},
     };
     const harness = await createDefaultAgentHarnessDependencies({
       artifactStore: { async writeJson() {} },
@@ -2427,6 +2661,64 @@ function validationReport(
   };
 }
 
+function explorationProtocol(blockedNetworkAttempts: NetworkAttempt[] = []) {
+  return JSON.stringify({
+    blockedNetworkAttempts,
+    consoleErrors: [],
+    pageErrors: [],
+    routes: [
+      {
+        buttonLocatorEvidence: [null],
+        buttons: ["Open Dashboard"],
+        featureIds: ["dashboard"],
+        forms: [],
+        headings: ["Dashboard"],
+        inputs: [],
+        links: [],
+        path: "/",
+        primaryNavigation: [],
+        requestedPath: "/",
+        screenshot: "/workspace/.makeademo/exploration/root.png",
+        snapshot: "/workspace/.makeademo/exploration/root.aria.yml",
+        text: ["Dashboard"],
+        title: "Dashboard",
+      },
+    ],
+  });
+}
+
+function blockedImageExplorationWorkspace(
+  onExploration: () => void,
+): AgentHarnessWorkspace {
+  return {
+    async destroy() {},
+    async execute() {
+      return { exitCode: 0, stderr: "", stdout: "" };
+    },
+    async executeSubmittedCode(command) {
+      if (!command.includes("explore-app.mjs")) {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      }
+      onExploration();
+      return {
+        exitCode: 0,
+        stderr: "",
+        stdout: explorationProtocol([
+          {
+            direction: "outbound",
+            hasCredentials: false,
+            host: "assets.example.com",
+            method: "GET",
+            phase: "browser",
+            resourceType: "image",
+            url: "https://assets.example.com/logo.svg",
+          },
+        ]),
+      };
+    },
+  };
+}
+
 function capturePathScriptCandidate(): ScriptCandidate {
   return {
     assumptions: [],
@@ -2653,14 +2945,10 @@ async function runFlowPlanningScenario(input: {
   return { attempts, commands, models, prompts, result, textFiles };
 }
 
-function secretMountedDaytonaWorkspace(): AgentHarnessWorkspace & {
-  networkAccessRequests: boolean[];
-} {
+function secretMountedDaytonaWorkspace(): AgentHarnessWorkspace {
   const manifest = preparationManifest();
-  const networkAccessRequests: boolean[] = [];
 
   return {
-    networkAccessRequests,
     async destroy() {},
     async uploadFiles() {},
     async execute(command) {
@@ -2686,9 +2974,6 @@ function secretMountedDaytonaWorkspace(): AgentHarnessWorkspace & {
     },
     async executeSubmittedCode() {
       return { exitCode: 0, stderr: "", stdout: "" };
-    },
-    async setOutboundNetworkAccess(enabled) {
-      networkAccessRequests.push(enabled);
     },
     async setSubmittedCodeNetworkAccess() {},
     async syncSubmittedCodeWorkspace() {},
@@ -2771,7 +3056,6 @@ function repairableRepoPreparationWorkspace(): AgentHarnessWorkspace & {
     async executeSubmittedCode() {
       return { exitCode: 0, stderr: "", stdout: "" };
     },
-    async setOutboundNetworkAccess() {},
     async setSubmittedCodeNetworkAccess() {},
     async syncSubmittedCodeWorkspace() {},
   };
@@ -2808,7 +3092,6 @@ function schemaRepairableRepoPreparationWorkspace(): AgentHarnessWorkspace & {
     async executeSubmittedCode() {
       return { exitCode: 0, stderr: "", stdout: "" };
     },
-    async setOutboundNetworkAccess() {},
     async setSubmittedCodeNetworkAccess() {},
     async syncSubmittedCodeWorkspace() {},
   };

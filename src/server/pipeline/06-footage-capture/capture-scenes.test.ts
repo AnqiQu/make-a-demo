@@ -368,7 +368,6 @@ describe("captureScenesFromScript", () => {
         async getPreviewUrl() {
           return "https://preview.example.test/";
         },
-        async setOutboundNetworkAccess() {},
         async uploadFiles() {
           throw new Error(
             "generic artifact upload must not cross trust boundaries",
@@ -403,7 +402,7 @@ describe("captureScenesFromScript", () => {
               url: "https://assets.example.com/logo.svg",
             },
           ],
-          version: "2026-07-14",
+          version: "2026-07-15",
         },
       },
       keepTemp: false,

@@ -1,8 +1,10 @@
 import { createBrowserRuntimeNetworkPolicySource } from "../../shared/external-resources/browser-runtime-network-policy";
-import { isHydratableExternalResource } from "../../shared/external-resources/external-resource-cache";
 import type { ExternalResourceManifest } from "../../shared/external-resources/external-resource-manifest.schema";
 import { executeSubmittedCode } from "../daytona/submitted-code-execution";
-import type { AgentHarnessWorkspace } from "../daytona/workspace.interface";
+import {
+  AgentHarnessCommandTimeoutError,
+  type AgentHarnessWorkspace,
+} from "../daytona/workspace.interface";
 import {
   type ActionCatalog,
   type AppMap,
@@ -104,6 +106,7 @@ type BrowserExplorationProtocol = {
 
 const explorerDirectory = "/workspace/.makeademo/exploration";
 const explorerPath = `${explorerDirectory}/explore-app.mjs`;
+const explorationCommandTimeoutMs = 5 * 60_000;
 
 /**
  * Explores the real prepared app with Playwright inside the secret-free
@@ -114,7 +117,6 @@ export async function exploreSubmittedApp(input: {
   baseUrl: string;
   externalResourceManifest?: ExternalResourceManifest;
   featureInventory?: PreparedDemoFeature[];
-  passthroughUrls?: string[];
   preparationManifestId: string;
   workspace: AgentHarnessWorkspace;
 }): Promise<SubmittedAppExplorationResult> {
@@ -122,17 +124,34 @@ export async function exploreSubmittedApp(input: {
     input.baseUrl,
     input.featureInventory ?? [],
     input.externalResourceManifest,
-    input.passthroughUrls,
   );
   const encodedScript = Buffer.from(script).toString("base64");
-  const result = await executeSubmittedCode(
-    input.workspace,
-    [
-      `mkdir -p ${explorerDirectory}`,
-      `printf %s ${shellQuote(encodedScript)} | base64 -d > ${explorerPath}`,
-      `NODE_PATH="$(npm root -g)" bun ${explorerPath}`,
-    ].join(" && "),
-  );
+  let result: Awaited<ReturnType<typeof executeSubmittedCode>>;
+  try {
+    result = await executeSubmittedCode(
+      input.workspace,
+      [
+        `mkdir -p ${explorerDirectory}`,
+        `printf %s ${shellQuote(encodedScript)} | base64 -d > ${explorerPath}`,
+        `NODE_PATH="$(npm root -g)" bun ${explorerPath}`,
+      ].join(" && "),
+      { timeoutMs: explorationCommandTimeoutMs },
+    );
+  } catch (error) {
+    if (
+      !(error instanceof AgentHarnessCommandTimeoutError) ||
+      input.workspace.readSubmittedCodeAppStatus === undefined
+    ) {
+      throw error;
+    }
+    const appStatus = await input.workspace.readSubmittedCodeAppStatus();
+    if (appStatus.running) throw error;
+    return createExitedAppExplorationFailure({
+      appStatus,
+      baseUrl: input.baseUrl,
+      timeoutError: error,
+    });
+  }
   if (result.exitCode !== 0) {
     throw new Error(
       `Submitted app exploration failed: ${result.stderr || result.stdout}`,
@@ -153,6 +172,47 @@ export async function exploreSubmittedApp(input: {
     observation,
     preparationManifestId: input.preparationManifestId,
   });
+}
+
+function createExitedAppExplorationFailure(input: {
+  appStatus: {
+    exitCode?: number;
+    stderr: string;
+    stdout: string;
+  };
+  baseUrl: string;
+  timeoutError: AgentHarnessCommandTimeoutError;
+}): Extract<SubmittedAppExplorationResult, { kind: "repairable-failure" }> {
+  const output = [input.appStatus.stderr, input.appStatus.stdout]
+    .filter(Boolean)
+    .join("\n");
+  return {
+    kind: "repairable-failure",
+    validationReport: readValidationReport({
+      artifactReferences: [explorerPath],
+      blockedNetworkAttempts: [],
+      browserObservations: [],
+      consoleErrors: [],
+      failureClassification: "start failure",
+      logsSummary: `The prepared app exited${input.appStatus.exitCode === undefined ? "" : ` with code ${input.appStatus.exitCode}`} while App Exploration was running: ${output || input.timeoutError.message}`,
+      networkAttempts: [],
+      pageErrors: [],
+      retryCount: 0,
+      screenshots: [],
+      stage: "app-exploration",
+      status: "failed",
+      stderrExcerpts: input.appStatus.stderr
+        ? [input.appStatus.stderr.slice(-500)]
+        : [],
+      stdoutExcerpts: input.appStatus.stdout
+        ? [input.appStatus.stdout.slice(-500)]
+        : [],
+      suggestedRepairHints: [
+        "Repair the app crash or reduce its runtime resource usage, then rerun browser exploration.",
+      ],
+      urlChecked: input.baseUrl,
+    }),
+  };
 }
 
 function createExplorationArtifacts(input: {
@@ -536,12 +596,8 @@ function createExplorationValidationReport(input: {
 }): ValidationReport {
   const failure = readExplorationFailure(
     input.appMap,
-    input.networkAttempts,
     input.featureInventory,
     input.actionCatalog,
-  );
-  const unresolvedResources = input.networkAttempts.filter(
-    isHydratableExternalResource,
   );
   const actionableConsoleErrors = input.appMap.consoleErrors.filter(
     isActionableBrowserConsoleError,
@@ -577,11 +633,6 @@ function createExplorationValidationReport(input: {
       failure === undefined
         ? []
         : [
-            ...(unresolvedResources.length === 0
-              ? []
-              : [
-                  `Repair unresolved browser resources that could not be cached locally: ${unresolvedResources.map((attempt) => attempt.url ?? attempt.host).join(", ")}`,
-                ]),
             ...(input.appMap.pageErrors.length === 0
               ? []
               : [
@@ -600,30 +651,12 @@ function createExplorationValidationReport(input: {
 
 function readExplorationFailure(
   appMap: AppMap,
-  networkAttempts: NetworkAttempt[],
   featureInventory: PreparedDemoFeature[],
   actionCatalog: ActionCatalog,
 ): { classification: string; message: string } | undefined {
-  const unresolvedResources = networkAttempts.filter(
-    isHydratableExternalResource,
-  );
   const actionableConsoleErrors = appMap.consoleErrors.filter(
     isActionableBrowserConsoleError,
   );
-  if (unresolvedResources.length > 0) {
-    const pageErrorSummary =
-      appMap.pageErrors.length === 0
-        ? ""
-        : ` Browser exploration also observed ${formatCount(appMap.pageErrors.length, "page error")}: ${appMap.pageErrors.slice(0, 3).join(" | ")}.`;
-    const consoleErrorSummary =
-      actionableConsoleErrors.length === 0
-        ? ""
-        : ` Browser exploration also observed ${formatCount(actionableConsoleErrors.length, "console error")}: ${actionableConsoleErrors.slice(0, 3).join(" | ")}.`;
-    return {
-      classification: "external network attempted",
-      message: `Browser exploration could not cache ${formatCount(unresolvedResources.length, "required external browser resource")}: ${unresolvedResources.map((attempt) => attempt.url ?? attempt.host).join(", ")}.${pageErrorSummary}${consoleErrorSummary}`,
-    };
-  }
   if (appMap.pageErrors.length > 0 || actionableConsoleErrors.length > 0) {
     return {
       classification: "browser console/page error",
@@ -809,7 +842,6 @@ function createExplorerScript(
   baseUrl: string,
   featureInventory: PreparedDemoFeature[],
   externalResourceManifest?: ExternalResourceManifest,
-  passthroughUrls?: string[],
 ): string {
   const featureEntryTargets = createFeatureEntryTargets(
     baseUrl,
@@ -817,13 +849,16 @@ function createExplorerScript(
   );
   return `
 import { chromium } from "@playwright/test";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile as makeADemoReadReplayFile, writeFile } from "node:fs/promises";
 
 const baseUrl = ${JSON.stringify(baseUrl)};
 const baseOrigin = new URL(baseUrl).origin;
 const featureEntryTargets = ${JSON.stringify(featureEntryTargets)};
 const outputDirectory = ${JSON.stringify(explorerDirectory)};
 const result = { blockedNetworkAttempts: [], consoleErrors: [], pageErrors: [], routes: [] };
+const isAppUnavailableError = (error) => /(?:ERR_CONNECTION_(?:CLOSED|REFUSED|RESET)|Target page, context or browser has been closed)/i.test(
+  error instanceof Error ? error.message : String(error),
+);
 const browser = await chromium.launch({ headless: true });
 try {
   const context = await browser.newContext({ serviceWorkers: "block", viewport: { width: 1440, height: 900 } });
@@ -832,7 +867,6 @@ try {
       ? {}
       : { manifest: externalResourceManifest }),
     mode: "exploration",
-    ...(passthroughUrls === undefined ? {} : { passthroughUrls }),
   })}
   const page = await context.newPage();
   const readAriaRootName = (snapshot) => {
@@ -841,13 +875,8 @@ try {
     if (!match || !match[1]) return "";
     try { return JSON.parse(match[1]); } catch { return ""; }
   };
-  const createVerifiedRoleLocatorEvidence = async ({ candidateNames, element, role, route, targetHref }) => {
-    const ariaSnapshot = await element.ariaSnapshot();
-    const observedAccessibleName = readAriaRootName(ariaSnapshot);
-    const queries = [
-      ...candidateNames.filter(Boolean).map((name) => ({ exact: false, name })),
-      ...(observedAccessibleName ? [{ exact: true, name: observedAccessibleName }] : []),
-    ];
+  const createVerifiedRoleLocatorEvidence = async ({ candidateNames, role, route, targetHref }) => {
+    const queries = candidateNames.filter(Boolean).map((name) => ({ exact: false, name }));
     const seenQueries = new Set();
     for (const query of queries) {
       const key = JSON.stringify(query);
@@ -856,14 +885,8 @@ try {
       const candidateLocator = page.getByRole(role, query);
       const matchCount = await candidateLocator.count();
       if (matchCount !== 1 || !(await candidateLocator.isVisible())) continue;
-      const elementHandle = await element.elementHandle();
-      if (!elementHandle) continue;
-      const resolvesToObservedElement = await candidateLocator.evaluate(
-        (match, observedElement) => match === observedElement,
-        elementHandle,
-      );
-      await elementHandle.dispose();
-      if (!resolvesToObservedElement) continue;
+      const ariaSnapshot = await candidateLocator.ariaSnapshot();
+      const observedAccessibleName = readAriaRootName(ariaSnapshot);
       return {
         locator: { exact: query.exact, name: query.name, role, strategy: "role" },
         ...(observedAccessibleName ? { observedAccessibleName } : {}),
@@ -877,7 +900,7 @@ try {
     }
     return undefined;
   };
-  const createVerifiedDirectLocatorEvidence = async ({ element, locator, route }) => {
+  const createVerifiedDirectLocatorEvidence = async ({ locator, route }) => {
     const candidateLocator = locator.strategy === "label"
       ? page.getByLabel(locator.value, { exact: locator.exact })
       : locator.strategy === "placeholder"
@@ -889,15 +912,7 @@ try {
             : page.locator(locator.strategy === "xpath" && !locator.value.startsWith("xpath=") ? "xpath=" + locator.value : locator.value);
     const matchCount = await candidateLocator.count();
     if (matchCount !== 1 || !(await candidateLocator.isVisible())) return undefined;
-    const elementHandle = await element.elementHandle();
-    if (!elementHandle) return undefined;
-    const resolvesToObservedElement = await candidateLocator.evaluate(
-      (match, observedElement) => match === observedElement,
-      elementHandle,
-    );
-    await elementHandle.dispose();
-    if (!resolvesToObservedElement) return undefined;
-    const ariaSnapshot = await element.ariaSnapshot();
+    const ariaSnapshot = await candidateLocator.ariaSnapshot();
     const observedAccessibleName = readAriaRootName(ariaSnapshot);
     return {
       locator,
@@ -953,7 +968,7 @@ try {
     { featureIds: [], requestedPath: new URL(baseUrl).pathname, url: new URL(baseUrl).toString() },
   ];
   const seen = new Set();
-  const maxRoutes = Math.min(30, Math.max(10, featureEntryTargets.length + 10));
+  const maxRoutes = Math.min(30, Math.max(6, featureEntryTargets.length + 2));
   await mkdir(outputDirectory, { recursive: true });
   while (queue.length > 0 && seen.size < maxRoutes) {
     const target = queue.shift();
@@ -969,18 +984,19 @@ try {
           const box = element.getBoundingClientRect();
           return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
         };
-        const texts = (selector) => Array.from(document.querySelectorAll(selector)).filter(visible).map((element) => clean(element.textContent)).filter(Boolean);
+        const texts = (selector, limit = 40) => Array.from(document.querySelectorAll(selector)).filter(visible).map((element) => clean(element.textContent || element.getAttribute("aria-label"))).filter(Boolean).slice(0, limit);
         const links = Array.from(document.querySelectorAll("a[href]")).filter(visible).map((element) => {
           const target = new URL(element.href, location.href);
           const explicitName = clean(element.getAttribute("aria-label"));
           const nestedHeading = clean(element.querySelector("h1, h2, h3, [role=heading]")?.textContent);
+          const textName = clean(element.textContent);
           return {
-            candidateNames: [explicitName, nestedHeading].filter(Boolean),
+            candidateNames: [explicitName, nestedHeading, textName].filter(Boolean),
             href: target.href,
-            name: explicitName || nestedHeading || clean(element.textContent),
+            name: explicitName || nestedHeading || textName,
             sameOrigin: target.origin === location.origin,
           };
-        });
+        }).slice(0, 60);
         const inputLocators = Array.from(document.querySelectorAll("input, textarea, select")).filter(visible).flatMap((element) => {
           const tag = element.tagName.toLowerCase();
           const label = clean(element.getAttribute("aria-label") || Array.from(element.labels || [])[0]?.textContent);
@@ -1001,7 +1017,7 @@ try {
           return locator === undefined
             ? []
             : [{ controlKind: tag === "select" ? "select" : "fill", inputType: clean(element.getAttribute("type")).toLowerCase(), locator, name }];
-        });
+        }).slice(0, 12);
         const inputs = inputLocators.map((input) => input.name);
         const scrollTargets = document.documentElement.scrollHeight > window.innerHeight + 40
           ? [{
@@ -1015,8 +1031,8 @@ try {
             }]
           : [];
         return {
-          buttons: texts("button, [role=button]"),
-          forms: Array.from(document.querySelectorAll("form")).filter(visible).map((element) => clean(element.getAttribute("aria-label") || element.getAttribute("name") || element.id || "form")),
+          buttons: texts("button, [role=button]", 16),
+          forms: Array.from(document.querySelectorAll("form")).filter(visible).map((element) => clean(element.getAttribute("aria-label") || element.getAttribute("name") || element.id || "form")).slice(0, 20),
           headings: texts("h1, h2, h3, [role=heading]"),
           inputLocators,
           inputs,
@@ -1029,12 +1045,10 @@ try {
       });
       const current = new URL(page.url());
       const path = current.pathname + current.search + current.hash;
-      const visibleLinks = page.locator("a[href]:visible");
-      observed.links = await Promise.all(observed.links.map(async (link, index) => ({
+      observed.links = await Promise.all(observed.links.map(async (link) => ({
         href: link.href,
         locatorEvidence: (await createVerifiedRoleLocatorEvidence({
           candidateNames: link.candidateNames,
-          element: visibleLinks.nth(index),
           role: "link",
           route: path,
           targetHref: link.href,
@@ -1042,42 +1056,34 @@ try {
         name: link.name,
         sameOrigin: link.sameOrigin,
       })));
-      const visibleHeadings = page.locator("h1, h2, h3, [role=heading]").filter({ visible: true });
-      observed.headingLocatorEvidence = await Promise.all(observed.headings.map((heading, index) =>
+      observed.headingLocatorEvidence = await Promise.all(observed.headings.map((heading) =>
         createVerifiedRoleLocatorEvidence({
           candidateNames: [heading],
-          element: visibleHeadings.nth(index),
           role: "heading",
           route: path,
         }),
       ));
-      const visibleButtons = page.locator("button, [role=button]").filter({ visible: true });
-      observed.buttonLocatorEvidence = await Promise.all(observed.buttons.map((button, index) =>
+      observed.buttonLocatorEvidence = await Promise.all(observed.buttons.map((button) =>
         createVerifiedRoleLocatorEvidence({
           candidateNames: [button],
-          element: visibleButtons.nth(index),
           role: "button",
           route: path,
         }),
       ));
-      const visibleInputs = page.locator("input, textarea, select").filter({ visible: true });
-      observed.inputLocators = await Promise.all(observed.inputLocators.map(async (input, index) => {
+      observed.inputLocators = await Promise.all(observed.inputLocators.map(async (input) => {
         const locator = input.locator.strategy === "label" || input.locator.strategy === "placeholder"
           ? { exact: true, strategy: input.locator.strategy, value: input.locator.value }
           : { strategy: input.locator.strategy, value: input.locator.value };
         return {
           ...input,
           locatorEvidence: (await createVerifiedDirectLocatorEvidence({
-            element: visibleInputs.nth(index),
             locator,
             route: path,
           })) ?? null,
         };
       }));
-      const visibleBodyText = page.locator("main p, main li, article p, [role=main] p").filter({ visible: true });
-      observed.textLocatorEvidence = await Promise.all(observed.text.map((text, index) =>
+      observed.textLocatorEvidence = await Promise.all(observed.text.map((text) =>
         createVerifiedDirectLocatorEvidence({
-          element: visibleBodyText.nth(index),
           locator: { exact: true, strategy: "text", value: text },
           route: path,
         }),
@@ -1085,14 +1091,13 @@ try {
       observed.scrollTargets = await Promise.all(observed.scrollTargets.map(async (target) => ({
         ...target,
         locatorEvidence: (await createVerifiedDirectLocatorEvidence({
-          element: page.locator(target.locator.value),
           locator: { strategy: target.locator.strategy, value: target.locator.value },
           route: path,
         })) ?? null,
       })));
       observed.interactions = [];
       const routeUrl = page.url();
-      for (let index = 0; index < observed.buttons.length; index += 1) {
+      for (let index = 0; index < Math.min(observed.buttons.length, 8); index += 1) {
         const name = observed.buttons[index];
         const locatorEvidence = observed.buttonLocatorEvidence[index];
         if (!name || !locatorEvidence || /\\b(?:buy|checkout|delete|destroy|disconnect|log out|logout|pay|purchase|remove|revoke|sign out)\\b/i.test(name)) continue;
@@ -1113,9 +1118,11 @@ try {
             name,
             outcome,
           });
-        } catch {}
+        } catch (error) {
+          if (isAppUnavailableError(error)) throw error;
+        }
       }
-      for (const input of observed.inputLocators) {
+      for (const input of observed.inputLocators.slice(0, 6)) {
         if (!input.locatorEvidence || ["button", "checkbox", "file", "hidden", "radio", "submit"].includes(input.inputType)) continue;
         try {
           await page.goto(routeUrl, { timeout: 20000, waitUntil: "domcontentloaded" });
@@ -1154,7 +1161,9 @@ try {
             name: input.name,
             outcome,
           });
-        } catch {}
+        } catch (error) {
+          if (isAppUnavailableError(error)) throw error;
+        }
       }
       await page.goto(routeUrl, { timeout: 20000, waitUntil: "domcontentloaded" });
       await page.waitForTimeout(250);
@@ -1184,6 +1193,7 @@ try {
       }
     } catch (error) {
       result.pageErrors.push(target.url + ": " + (error instanceof Error ? error.message : String(error)));
+      if (isAppUnavailableError(error)) break;
     }
   }
 } finally {

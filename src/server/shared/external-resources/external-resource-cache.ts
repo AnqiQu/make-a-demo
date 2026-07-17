@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { request } from "node:https";
-import { isIP } from "node:net";
+import { BlockList, isIP } from "node:net";
 import { join } from "node:path";
 import type { NetworkAttempt } from "../../agent-harness/schemas/artifacts";
 import {
@@ -15,25 +15,30 @@ const eligibleResourceTypes = new Set([
   "font",
   "image",
   "media",
-  "script",
   "stylesheet",
   "xhr",
 ]);
+const credentialQueryParameter =
+  /^(?:access[_-]?token|api[_-]?key|auth(?:orization)?|credential|password|secret|sig(?:nature)?|token|x-amz-(?:credential|security-token|signature)|x-goog-(?:credential|signature))$/i;
 
 export type ExternalResourceFetchResult = {
   body: Uint8Array;
   contentType: string;
+  finalUrl?: string;
   headers: Record<string, string>;
   status: number;
 };
 
 export type ExternalResourceFetcher = (
   url: string,
+  signal: AbortSignal,
 ) => Promise<ExternalResourceFetchResult>;
 
-export type ExternalResourceHostResolver = (
-  hostname: string,
-) => Promise<string[]>;
+export type ExternalResourceFailureReason =
+  | "policy-denied"
+  | "retrieval-failed";
+
+class ExternalResourcePolicyError extends Error {}
 
 const maximumResourceBytes = 128 * 1024 * 1024;
 const maximumCacheBytes = 512 * 1024 * 1024;
@@ -41,88 +46,47 @@ const maximumCacheEntries = 256;
 const maximumRedirects = 5;
 const hydrationConcurrency = 6;
 const externalResourceRequestTimeoutMs = 30_000;
+const nonPublicAddresses = createNonPublicAddressBlockList();
 
-/** Returns whether a blocked browser request is safe to hydrate without credentials. */
-export function isHydratableExternalResource(attempt: NetworkAttempt): boolean {
+/** Returns whether a blocked presentation request can enter controller hydration. */
+export function isHydratableExternalResource(
+  attempt: NetworkAttempt,
+): attempt is NetworkAttempt & {
+  method: "GET";
+  resourceType: string;
+  url: string;
+} {
   return (
     attempt.direction === "outbound" &&
     attempt.phase !== "dependency-install" &&
     attempt.method === "GET" &&
     attempt.hasCredentials !== true &&
-    attempt.url?.startsWith("https://") === true &&
+    attempt.url !== undefined &&
+    isCredentialFreeResourceUrl(attempt.url) &&
     attempt.resourceType !== undefined &&
     eligibleResourceTypes.has(attempt.resourceType)
   );
 }
 
-/**
- * Produces an exact browser pass-through allowlist after resolving every host
- * to public addresses. The browser must still enforce method, credential, and
- * resource-type checks for the live request.
- */
-export async function authorizeExternalResourcePassthrough(input: {
-  attempts: NetworkAttempt[];
-  onFailure?: (input: { error: unknown; url: string }) => Promise<void> | void;
-  resolveHost?: ExternalResourceHostResolver;
-}): Promise<{
-  attempts: NetworkAttempt[];
-  hosts: string[];
-  urls: string[];
-}> {
-  const resolveHost =
-    input.resolveHost ??
-    (async (hostname: string) =>
-      (await lookup(hostname, { all: true, verbatim: true })).map(
-        ({ address }) => address,
-      ));
-  const attemptsByUrl = new Map(
-    input.attempts
-      .filter(isHydratableExternalResource)
-      .map((attempt) => [attempt.url as string, attempt]),
-  );
-  const approvedAttempts: NetworkAttempt[] = [];
-  const approvedHosts = new Set<string>();
-  const addressResolutions = new Map<string, Promise<string[]>>();
-  for (const [url, attempt] of attemptsByUrl) {
-    try {
-      const destination = new URL(url);
-      if (
-        destination.protocol !== "https:" ||
-        destination.username.length > 0 ||
-        destination.password.length > 0
-      ) {
-        throw new Error(
-          `External resource ${url} must be a credential-free HTTPS URL.`,
-        );
-      }
-      const hostname = destination.hostname.toLowerCase();
-      const addressesPromise =
-        addressResolutions.get(hostname) ?? resolveHost(hostname);
-      addressResolutions.set(hostname, addressesPromise);
-      const addresses = await addressesPromise;
-      if (
-        addresses.length === 0 ||
-        addresses.some((address) => !isPublicIp(address))
-      ) {
-        throw new Error(
-          `External resource ${url} did not resolve exclusively to public addresses.`,
-        );
-      }
-      approvedAttempts.push(attempt);
-      approvedHosts.add(hostname);
-    } catch (error) {
-      await input.onFailure?.({ error, url });
-    }
+function isCredentialFreeResourceUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      url.username.length === 0 &&
+      url.password.length === 0 &&
+      isIP(url.hostname.replace(/^\[|\]$/g, "")) === 0 &&
+      [...url.searchParams.keys()].every(
+        (key) => !credentialQueryParameter.test(key),
+      )
+    );
+  } catch {
+    return false;
   }
-  return {
-    attempts: approvedAttempts,
-    hosts: [...approvedHosts].sort(),
-    urls: approvedAttempts.map((attempt) => attempt.url as string).sort(),
-  };
 }
 
 /**
- * Materializes safe browser resources into a content-addressed local cache.
+ * Materializes safe presentation resources into a content-addressed local cache.
  * The fetcher must not forward submitted-code cookies or authorization data.
  */
 export async function hydrateExternalResourceCache(input: {
@@ -132,6 +96,7 @@ export async function hydrateExternalResourceCache(input: {
   fetchResource?: ExternalResourceFetcher;
   onFailure?: (input: {
     error: unknown;
+    reason: ExternalResourceFailureReason;
     url: string;
   }) => Promise<void> | void;
   requestTimeoutMs?: number;
@@ -139,11 +104,16 @@ export async function hydrateExternalResourceCache(input: {
   const resourcesDirectory = join(input.directory, "resources");
   await mkdir(resourcesDirectory, { recursive: true });
   const existingEntries = input.existingManifest?.entries ?? [];
-  const existingUrls = new Set(existingEntries.map((entry) => entry.url));
+  const existingUrls = new Set(
+    existingEntries.flatMap((entry) => [
+      entry.url,
+      ...(entry.responseUrl === undefined ? [] : [entry.responseUrl]),
+    ]),
+  );
   const attemptsByUrl = new Map(
     input.attempts
       .filter(isHydratableExternalResource)
-      .map((attempt) => [attempt.url as string, attempt]),
+      .map((attempt) => [attempt.url, attempt]),
   );
   const discoveredUrls = [
     ...new Set(
@@ -160,6 +130,7 @@ export async function hydrateExternalResourceCache(input: {
       error: new Error(
         `External resource cache exceeded ${maximumCacheEntries} entries.`,
       ),
+      reason: "retrieval-failed",
       url,
     });
   }
@@ -181,7 +152,7 @@ export async function hydrateExternalResourceCache(input: {
       if (url === undefined) return;
       try {
         const response = await withTimeout(
-          fetchResource(url),
+          (signal) => fetchResource(url, signal),
           input.requestTimeoutMs ?? externalResourceRequestTimeoutMs,
           url,
         );
@@ -190,33 +161,53 @@ export async function hydrateExternalResourceCache(input: {
             `External resource ${url} returned HTTP ${response.status}.`,
           );
         }
+        const contentType = normalizeContentType(response.contentType);
+        const responseUrl = response.finalUrl ?? url;
+        if (!isCredentialFreeResourceUrl(responseUrl)) {
+          throw new ExternalResourcePolicyError(
+            `External resource ${url} redirected to an unsafe destination.`,
+          );
+        }
         assertCompatibleContentType(
           attemptsByUrl.get(url)?.resourceType,
-          response.contentType,
+          contentType,
         );
-        totalBytes += response.body.byteLength;
-        if (totalBytes > maximumCacheBytes) {
+        if (response.body.byteLength > maximumResourceBytes) {
+          throw new Error("External resource exceeded the 128 MiB limit.");
+        }
+        if (totalBytes + response.body.byteLength > maximumCacheBytes) {
           throw new Error(
             "External resource cache exceeded the 512 MiB limit.",
           );
         }
+        totalBytes += response.body.byteLength;
         const digest = createHash("sha256").update(response.body).digest("hex");
         const relativePath = `resources/${digest}`;
         await writeFile(join(input.directory, relativePath), response.body);
         hydratedEntries.set(url, {
-          contentType: response.contentType,
+          contentType,
           headers: {
             ...readReplayHeaders(response.headers),
             "access-control-allow-origin": "*",
+            "cross-origin-resource-policy": "cross-origin",
           },
           relativePath,
+          ...(responseUrl === url ? {} : { responseUrl }),
           sha256: `sha256:${digest}` as const,
           sizeBytes: response.body.byteLength,
           status: response.status,
           url,
         });
       } catch (error) {
-        await input.onFailure?.({ error, url });
+        if (error instanceof TypeError) throw error;
+        await input.onFailure?.({
+          error,
+          reason:
+            error instanceof ExternalResourcePolicyError
+              ? "policy-denied"
+              : "retrieval-failed",
+          url,
+        });
       }
     }
   };
@@ -232,28 +223,31 @@ export async function hydrateExternalResourceCache(input: {
       return entry === undefined ? [] : [entry];
     }),
   );
-  return { entries, version: externalResourceManifestVersion };
+  return {
+    entries: entries.sort((left, right) => left.url.localeCompare(right.url)),
+    version: externalResourceManifestVersion,
+  };
 }
 
 async function withTimeout<T>(
-  operation: Promise<T>,
+  operation: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
   url: string,
 ): Promise<T> {
+  const controller = new AbortController();
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      operation,
+      operation(controller.signal),
       new Promise<never>((_resolve, reject) => {
-        timeout = setTimeout(
-          () =>
-            reject(
-              new Error(
-                `External resource ${url} did not respond within ${timeoutMs}ms.`,
-              ),
+        timeout = setTimeout(() => {
+          controller.abort();
+          reject(
+            new Error(
+              `External resource ${url} did not respond within ${timeoutMs}ms.`,
             ),
-          timeoutMs,
-        );
+          );
+        }, timeoutMs);
       }),
     ]);
   } finally {
@@ -266,7 +260,12 @@ export async function verifyExternalResourceCache(input: {
   directory: string;
   manifest: ExternalResourceManifest;
 }) {
-  for (const entry of input.manifest.entries) {
+  const uniqueEntries = [
+    ...new Map(
+      input.manifest.entries.map((entry) => [entry.relativePath, entry]),
+    ).values(),
+  ];
+  for (const entry of uniqueEntries) {
     const body = await readFile(join(input.directory, entry.relativePath));
     const sha256 = `sha256:${createHash("sha256").update(body).digest("hex")}`;
     if (body.byteLength !== entry.sizeBytes || sha256 !== entry.sha256) {
@@ -280,28 +279,28 @@ export async function verifyExternalResourceCache(input: {
 /** Fetches one public HTTPS resource without submitted-code headers or cookies. */
 export async function fetchExternalResource(
   url: string,
+  signal = new AbortController().signal,
 ): Promise<ExternalResourceFetchResult> {
-  return await requestExternalResource(new URL(url), 0);
+  return await requestExternalResource(new URL(url), 0, signal);
 }
 
 async function requestExternalResource(
   url: URL,
   redirects: number,
+  signal: AbortSignal,
 ): Promise<ExternalResourceFetchResult> {
-  if (
-    url.protocol !== "https:" ||
-    url.username.length > 0 ||
-    url.password.length > 0
-  ) {
-    throw new Error("External resources require a public HTTPS destination.");
+  if (signal.aborted) {
+    throw new Error(`External resource ${url.href} was cancelled.`);
+  }
+  if (!isCredentialFreeResourceUrl(url.href)) {
+    throw new ExternalResourcePolicyError(
+      "External resources require a named public HTTPS destination.",
+    );
   }
   const addresses = await lookup(url.hostname, { all: true, verbatim: true });
-  const address = addresses.find((candidate) => isPublicIp(candidate.address));
-  if (
-    address === undefined ||
-    addresses.some((candidate) => !isPublicIp(candidate.address))
-  ) {
-    throw new Error("External resources require a public HTTPS destination.");
+  const address = selectExternalResourceDestinationAddress(addresses);
+  if (signal.aborted) {
+    throw new Error(`External resource ${url.href} was cancelled.`);
   }
 
   return await new Promise<ExternalResourceFetchResult>((resolve, reject) => {
@@ -310,13 +309,19 @@ async function requestExternalResource(
       {
         headers: {
           accept: "*/*",
+          "accept-encoding": "identity",
           "user-agent": "MakeADemo-External-Resource-Hydrator/1",
         },
-        lookup: (_hostname, _options, callback) => {
+        lookup: (_hostname, options, callback) => {
+          if (options.all) {
+            callback(null, [address]);
+            return;
+          }
           callback(null, address.address, address.family);
         },
       },
       (response) => {
+        response.on("error", reject);
         const status = response.statusCode ?? 0;
         const location = response.headers.location;
         if (status >= 300 && status < 400 && location !== undefined) {
@@ -325,9 +330,20 @@ async function requestExternalResource(
             reject(new Error("External resource exceeded the redirect limit."));
             return;
           }
-          requestExternalResource(new URL(location, url), redirects + 1).then(
-            resolve,
-            reject,
+          requestExternalResource(
+            new URL(location, url),
+            redirects + 1,
+            signal,
+          ).then(resolve, reject);
+          return;
+        }
+        const contentLength = Number(response.headers["content-length"]);
+        if (
+          Number.isFinite(contentLength) &&
+          contentLength > maximumResourceBytes
+        ) {
+          response.destroy(
+            new Error("External resource exceeded the 128 MiB limit."),
           );
           return;
         }
@@ -344,6 +360,15 @@ async function requestExternalResource(
           chunks.push(chunk);
         });
         response.on("end", () => {
+          const contentEncoding = response.headers["content-encoding"];
+          if (contentEncoding !== undefined && contentEncoding !== "identity") {
+            reject(
+              new Error(
+                `External resource returned unsupported Content-Encoding ${contentEncoding}.`,
+              ),
+            );
+            return;
+          }
           const contentType = response.headers["content-type"]
             ?.split(";", 1)[0]
             ?.trim()
@@ -357,12 +382,22 @@ async function requestExternalResource(
           resolve({
             body: Buffer.concat(chunks),
             contentType,
+            finalUrl: url.href,
             headers: readReplayHeaders(response.headers),
             status,
           });
         });
       },
     );
+    const abortRequest = () => {
+      outbound.destroy(
+        new Error(`External resource ${url.href} was cancelled.`),
+      );
+    };
+    signal.addEventListener("abort", abortRequest, { once: true });
+    outbound.once("close", () => {
+      signal.removeEventListener("abort", abortRequest);
+    });
     outbound.on("error", reject);
     outbound.setTimeout(externalResourceRequestTimeoutMs, () => {
       outbound.destroy(
@@ -373,6 +408,29 @@ async function requestExternalResource(
     });
     outbound.end();
   });
+}
+
+/**
+ * Selects a preferred DNS answer only when every resolved address is public.
+ * Mixed public/private answers are rejected to keep redirects and rebinding
+ * from crossing the controller's private-network boundary.
+ */
+export function selectExternalResourceDestinationAddress<
+  T extends { address: string; family: number },
+>(addresses: readonly T[]): T {
+  const address =
+    addresses.find(
+      (candidate) => candidate.family === 4 && isPublicIp(candidate.address),
+    ) ?? addresses.find((candidate) => isPublicIp(candidate.address));
+  if (
+    address === undefined ||
+    addresses.some((candidate) => !isPublicIp(candidate.address))
+  ) {
+    throw new ExternalResourcePolicyError(
+      "External resources require a public HTTPS destination.",
+    );
+  }
+  return address;
 }
 
 function readReplayHeaders(
@@ -402,46 +460,72 @@ function assertCompatibleContentType(
             )
           : resourceType === "stylesheet"
             ? value === "text/css"
-            : resourceType === "script"
-              ? /(?:javascript|ecmascript)$/.test(value)
-              : resourceType === "fetch" || resourceType === "xhr"
-                ? /^(?:application\/json|image\/|text\/)/.test(value)
-                : false;
+            : resourceType === "fetch" || resourceType === "xhr"
+              ? /^(?:audio\/|font\/|image\/|video\/|text\/css$|application\/(?:font|vnd\.ms-fontobject))/.test(
+                  value,
+                )
+              : false;
   if (!compatible) {
-    throw new Error(
+    const ErrorType =
+      resourceType === "fetch" || resourceType === "xhr"
+        ? ExternalResourcePolicyError
+        : Error;
+    throw new ErrorType(
       `External ${resourceType ?? "unknown"} resource returned incompatible Content-Type ${contentType}.`,
     );
   }
 }
 
+function normalizeContentType(value: string): string {
+  const contentType = value.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  if (contentType.length === 0) {
+    throw new Error("External resource response omitted Content-Type.");
+  }
+  return contentType;
+}
+
 function isPublicIp(address: string): boolean {
   const family = isIP(address);
-  if (family === 4) {
-    const [a = 0, b = 0] = address.split(".").map(Number);
-    return !(
-      a === 0 ||
-      a === 10 ||
-      a === 127 ||
-      (a === 100 && b >= 64 && b <= 127) ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && [0, 2, 168].includes(b)) ||
-      (a === 198 && [18, 19, 51].includes(b)) ||
-      (a === 203 && b === 0) ||
-      a >= 224
-    );
-  }
-  if (family === 6) {
-    const normalized = address.toLowerCase();
-    if (normalized.startsWith("::ffff:")) {
-      return isPublicIp(normalized.slice("::ffff:".length));
-    }
-    return !(
-      normalized === "::" ||
-      normalized === "::1" ||
-      /^(?:fc|fd|fe[89ab]|ff)/.test(normalized) ||
-      normalized.startsWith("2001:db8:")
-    );
-  }
+  if (family === 4) return !nonPublicAddresses.check(address, "ipv4");
+  if (family === 6) return !nonPublicAddresses.check(address, "ipv6");
   return false;
+}
+
+function createNonPublicAddressBlockList(): BlockList {
+  const blockList = new BlockList();
+  for (const [address, prefix] of [
+    ["0.0.0.0", 8],
+    ["10.0.0.0", 8],
+    ["100.64.0.0", 10],
+    ["127.0.0.0", 8],
+    ["169.254.0.0", 16],
+    ["172.16.0.0", 12],
+    ["192.0.0.0", 24],
+    ["192.0.2.0", 24],
+    ["192.88.99.0", 24],
+    ["192.168.0.0", 16],
+    ["198.18.0.0", 15],
+    ["198.51.100.0", 24],
+    ["203.0.113.0", 24],
+    ["224.0.0.0", 4],
+    ["240.0.0.0", 4],
+  ] as const) {
+    blockList.addSubnet(address, prefix, "ipv4");
+  }
+  for (const [address, prefix] of [
+    ["::", 128],
+    ["::1", 128],
+    ["64:ff9b::", 96],
+    ["64:ff9b:1::", 48],
+    ["100::", 64],
+    ["2001::", 23],
+    ["2002::", 16],
+    ["fc00::", 7],
+    ["fe80::", 10],
+    ["fec0::", 10],
+    ["ff00::", 8],
+  ] as const) {
+    blockList.addSubnet(address, prefix, "ipv6");
+  }
+  return blockList;
 }

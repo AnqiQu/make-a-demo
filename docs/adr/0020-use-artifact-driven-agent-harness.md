@@ -2,11 +2,13 @@
 
 ## Status
 
-Accepted, amended 2026-07-10
+Accepted, amended 2026-07-15
 
-### External resource replay amendment (2026-07-14)
+### External resource replay amendment (2026-07-14, amended 2026-07-15)
 
-Runtime Network Lockdown continues to physically block submitted-app egress. App Exploration and Capture Path Validation may inventory credential-free public HTTPS GET requests and ask a backend-owned hydrator to snapshot eligible browser resources into a content-addressed External Resource Cache. App Exploration, Capture Path Validation, and Footage Capture fulfill exact cached URLs from hash-verified local bytes; they never reopen Sandbox networking for replay.
+Runtime Network Lockdown continues to physically block submitted-app egress. Demo Runtime Preflight, App Exploration, and Capture Path Validation may inventory credential-free public HTTPS GET requests and ask a backend-owned controller hydrator to snapshot eligible presentation resources into a content-addressed External Resource Cache. The controller resolves every destination and redirect exclusively to public addresses, pins the connection to the validated address, and sends no submitted-app headers or credentials. The Sandbox never receives a live-resource network window.
+
+Eligible resources are images, stylesheets, fonts, media, and passive presentation bytes returned to browser or supported server-side fetch clients. Executable scripts, HTML, JSON APIs, credential-bearing or signed URLs, mutations, private destinations, raw-IP URLs, and WebSockets are not hydrated. Controller-observed redirects and media byte ranges replay locally, and repeated offline discovery collects nested stylesheet dependencies. App Exploration, Capture Path Validation, and Footage Capture fulfill cached responses from hash-verified local bytes without reopening Sandbox networking.
 
 Uncached traffic remains blocked and is retained as validation evidence. A suppressed request is not by itself proof that a demo is broken: observable page, feature, action, and resource-hydration failures determine whether repair is required. Authenticated requests, mutations, private destinations, and WebSockets are never hydrated. This preserves original product assets without asking Repo Preparation to remove or substitute presentation code.
 
@@ -85,7 +87,7 @@ Daytona remains the execution substrate. The harness keeps a two-boundary model:
 
 Dependency installation may open network only through a backend-controlled, allowlisted package-manager install window. Runtime Target Resolution keeps the command at the lockfile owner but applies a backend-derived workspace closure when the selected browser app and package manager support deterministic scoped installation. The closure follows declared and source-observed internal dependencies, may expand after preflight proves another known internal workspace is missing, and executes the selected workspace's scripts without assuming root orchestration tools were installed. Unsupported or ambiguous workspace layouts retain full installation. Install repairs may change package metadata, lockfiles, or package-manager configuration, but not executable product source. The dependency network window reseals in `finally`.
 
-Runtime and capture network are blocked by default. When offline exploration observes an eligible credential-free public HTTPS GET, the backend resolves every destination address, opens a temporary Daytona domain allowlist, and gives the generated browser policy only the exact approved URLs. Cookies, authorization, API-key headers, non-GET methods, private destinations, WebSockets, and redirects to unapproved URLs remain blocked. The allowlist closes immediately after the live browser pass. The backend then hydrates a size-bounded, content-type-checked, content-addressed cache and reruns the path offline; final Footage Capture never receives live egress.
+Runtime and capture network are blocked throughout. When an offline pass observes an eligible credential-free public HTTPS GET, the controller downloads it through the backend resource broker, applies DNS, redirect, size, content-type, and cache-budget checks, then uploads and verifies the content-addressed bytes inside the submitted-code Sandbox. Browser requests and supported Node/Bun server-side asset requests replay only exact manifest URLs and recorded response URLs. The app restarts when server-side hydration requires a clean retry, and the browser path reruns offline to discover nested resources. Final Footage Capture receives only the frozen cache and never receives live egress.
 
 Committed private environment files and private-key material are removed from the screened execution archive before either sandbox receives it. Only environment key names survive as preparation hints. Static security rejection stops the pipeline before planning or workspace creation when unsafe content remains.
 

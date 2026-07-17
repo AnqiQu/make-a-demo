@@ -3,7 +3,6 @@ import {
   type AgentHarnessWorkspace,
   isAgentHarnessInfrastructureError,
 } from "../daytona/workspace.interface";
-import type { OpenCodeHarnessRunner } from "../opencode/opencode-harness";
 import {
   classifyRepairRoute,
   readRepairBudgetDecision,
@@ -89,7 +88,6 @@ export type AgentHarnessPipelineDependencies = {
     runPlan: RunPlan;
     workspace: AgentHarnessWorkspace;
   }): Promise<ValidationReport>;
-  openCodeRunner?: OpenCodeHarnessRunner;
   exploreApp(input: {
     actionCatalogPath: string;
     appMapPath: string;
@@ -204,6 +202,8 @@ const artifactPaths = {
   captureRuntimeReset:
     "/workspace/.makeademo/capture-runtime-reset-validation-report.json",
   demoScript: DEMO_SCRIPT_OUTPUT_PATH,
+  externalResourceHydrationReport:
+    "/workspace/.makeademo/external-resource-hydration-report.json",
   externalResourceManifest:
     "/workspace/.makeademo/external-resource-manifest.json",
   flowSpec: "/workspace/.makeademo/flow-spec.json",

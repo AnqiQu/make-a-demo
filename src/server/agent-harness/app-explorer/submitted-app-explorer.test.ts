@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { AgentHarnessCommandTimeoutError } from "../daytona/workspace.interface";
 import type { PreparedDemoFeature } from "../schemas/artifacts";
 import { exploreSubmittedApp } from "./submitted-app-explorer";
 
@@ -94,6 +95,31 @@ describe("exploreSubmittedApp", () => {
         }),
       ]),
     );
+  });
+
+  it("bounds browser work and stops crawling when the prepared app exits", async () => {
+    const { commands } = await exploreObservation({
+      routes: [observedRoute({ headings: ["Dashboard"] })],
+    });
+    const script = readExplorerScript(commands);
+
+    expect(script).toContain("Math.min(observed.buttons.length, 8)");
+    expect(script).toContain("observed.inputLocators.slice(0, 6)");
+    expect(script).toContain("if (isAppUnavailableError(error)) throw error");
+    expect(script).toContain("if (isAppUnavailableError(error)) break");
+  });
+
+  it("verifies unique locators without coupling evidence to DOM indexes", async () => {
+    const { commands } = await exploreObservation({
+      routes: [observedRoute({ headings: ["Dashboard"] })],
+    });
+    const script = readExplorerScript(commands);
+
+    expect(script).toContain(
+      "const ariaSnapshot = await candidateLocator.ariaSnapshot()",
+    );
+    expect(script).not.toContain("visibleButtons.nth(index)");
+    expect(script).not.toContain("visibleInputs.nth(index)");
   });
 
   it("prioritizes prepared feature entry routes and tags their evidence", async () => {
@@ -348,7 +374,7 @@ describe("exploreSubmittedApp", () => {
     );
   });
 
-  it("reports unique attempted external resources with page errors", async () => {
+  it("keeps external attempts as evidence while reporting the browser failure", async () => {
     const { result } = await exploreObservation({
       blockedNetworkAttempts: [
         {
@@ -370,15 +396,12 @@ describe("exploreSubmittedApp", () => {
     const artifacts = requireArtifacts(result);
 
     expect(artifacts.validationReport).toMatchObject({
-      failureClassification: "external network attempted",
+      failureClassification: "browser console/page error",
       blockedNetworkAttempts: [
         expect.objectContaining({ url: "https://api.example.com/v1" }),
       ],
       status: "failed",
     });
-    expect(artifacts.validationReport.logsSummary).toContain(
-      "1 required external browser resource",
-    );
     expect(artifacts.validationReport.logsSummary).toContain("1 page error");
   });
 
@@ -473,6 +496,42 @@ describe("exploreSubmittedApp", () => {
         stage: "app-exploration",
         status: "failed",
         urlChecked: baseUrl,
+      },
+    });
+  });
+
+  it("routes an exploration timeout from an exited app back to preparation repair", async () => {
+    let timeoutMs: number | undefined;
+    const result = await exploreSubmittedApp({
+      baseUrl,
+      preparationManifestId: "prep_001",
+      workspace: {
+        async destroy() {},
+        async execute() {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async executeSubmittedCode(_command, options) {
+          timeoutMs = options?.timeoutMs;
+          throw new AgentHarnessCommandTimeoutError(timeoutMs ?? 0);
+        },
+        async readSubmittedCodeAppStatus() {
+          return {
+            exitCode: 137,
+            running: false,
+            stderr: "JavaScript heap out of memory",
+            stdout: "",
+          };
+        },
+      },
+    });
+
+    expect(timeoutMs).toBe(5 * 60_000);
+    expect(result).toMatchObject({
+      kind: "repairable-failure",
+      validationReport: {
+        failureClassification: "start failure",
+        logsSummary: expect.stringContaining("JavaScript heap out of memory"),
+        status: "failed",
       },
     });
   });

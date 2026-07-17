@@ -284,7 +284,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ]);
   });
 
-  it("executes commands, updates network settings, and deletes the sandbox", async () => {
+  it("executes commands and deletes the sandbox", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
       client: fakeClient(calls),
@@ -292,13 +292,11 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     const handle = await provider.create();
 
     const result = await handle.workspace.execute("opencode run hello");
-    await handle.workspace.setOutboundNetworkAccess?.(false);
     await handle.destroy();
 
     expect(result).toEqual({ exitCode: 0, stderr: "", stdout: "ok" });
     expect(calls.slice(1)).toEqual([
       { executeCommand: "opencode run hello" },
-      { updateNetworkSettings: { networkBlockAll: true } },
       { delete: "sandbox_123" },
     ]);
   });
@@ -908,30 +906,6 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
   });
 
-  it("continues when Daytona org policy rejects sandbox-level network overrides", async () => {
-    const calls: unknown[] = [];
-    const provider = new DaytonaSdkPreparationWorkspaceProvider({
-      client: fakeClient(calls, {
-        networkError: new Error(
-          "Network access is restricted and cannot be overridden at the sandbox level.",
-        ),
-      }),
-    });
-    const handle = await provider.create();
-
-    await expect(
-      handle.workspace.setOutboundNetworkAccess?.(true),
-    ).resolves.toBeUndefined();
-    await expect(
-      handle.workspace.setOutboundNetworkAccess?.(false),
-    ).resolves.toBeUndefined();
-
-    expect(calls.slice(1)).toEqual([
-      { updateNetworkSettings: { networkBlockAll: false } },
-      { updateNetworkSettings: { networkBlockAll: true } },
-    ]);
-  });
-
   it("creates a linked ephemeral submitted-code sandbox when configured", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -964,6 +938,35 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         },
       },
     ]);
+  });
+
+  it("continues when org policy rejects submitted-code network overrides", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls, {
+        networkError: new Error(
+          "Network access is restricted and cannot be overridden at the sandbox level.",
+        ),
+      }),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.setSubmittedCodeNetworkAccess?.(true),
+    ).resolves.toBeUndefined();
+    await expect(
+      handle.workspace.setSubmittedCodeNetworkAccess?.(false),
+    ).resolves.toBeUndefined();
+
+    expect(
+      calls.filter(
+        (call) =>
+          typeof call === "object" &&
+          call !== null &&
+          "updateNetworkSettings" in call,
+      ),
+    ).toHaveLength(2);
   });
 
   it("uploads submitted-code artifacts only to the submitted-code sandbox", async () => {
@@ -1213,44 +1216,6 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         },
       ]),
     );
-  });
-
-  it("limits submitted-code resource passthrough to explicit public domains", async () => {
-    const calls: unknown[] = [];
-    const provider = new DaytonaSdkPreparationWorkspaceProvider({
-      client: fakeLinkedClient(calls),
-      submittedCodeSnapshot: "makeademo-submitted-code-browser",
-    });
-    const handle = await provider.create();
-
-    await handle.workspace.setSubmittedCodeResourceHosts?.([
-      "fonts.example.com",
-      "assets.example.com",
-      "assets.example.com",
-    ]);
-    await handle.workspace.setSubmittedCodeResourceHosts?.([]);
-
-    expect(calls).toEqual(
-      expect.arrayContaining([
-        {
-          updateNetworkSettings: {
-            sandbox: "submitted_sandbox",
-            settings: {
-              domainAllowList: "assets.example.com,fonts.example.com",
-            },
-          },
-        },
-        {
-          updateNetworkSettings: {
-            sandbox: "submitted_sandbox",
-            settings: { networkBlockAll: true },
-          },
-        },
-      ]),
-    );
-    await expect(
-      handle.workspace.setSubmittedCodeResourceHosts?.(["127.0.0.1"]),
-    ).rejects.toThrow("public domain");
   });
 
   it("manages the submitted app through a Daytona process session", async () => {
@@ -1788,6 +1753,7 @@ function fakeLinkedClient(
     failParentArchive?: boolean;
     failSubmittedRestore?: boolean;
     missingSubmittedSandboxOnDelete?: boolean;
+    networkError?: Error;
     remoteCleanupNeverResolves?: boolean;
     submittedDeleteFailuresBeforeSuccess?: number;
     submittedUploadFailuresBeforeSuccess?: number;
@@ -2064,6 +2030,7 @@ function fakeLinkedSandbox(
     executeCommandNeverResolves?: boolean;
     failParentArchive?: boolean;
     failSubmittedRestore?: boolean;
+    networkError?: Error;
     remoteCleanupNeverResolves?: boolean;
     submittedUploadFailuresBeforeSuccess?: number;
   } = {},
@@ -2181,6 +2148,7 @@ function fakeLinkedSandbox(
     },
     async updateNetworkSettings(settings: unknown) {
       calls.push({ updateNetworkSettings: { sandbox: id, settings } });
+      if (options.networkError !== undefined) throw options.networkError;
     },
   };
 }

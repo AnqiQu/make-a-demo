@@ -250,7 +250,7 @@ describe("prepareStylizedPlaywrightScript", () => {
                 url: "https://assets.example.com/product.png",
               },
             ],
-            version: "2026-07-14",
+            version: "2026-07-15",
           },
           externalResourceRoot: resourcesDirectory,
           headed: false,
