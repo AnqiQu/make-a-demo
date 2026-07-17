@@ -28,39 +28,56 @@ export async function uploadSubmittedCodeArchive(input: {
   }
   const localArchivePath = join(input.localDirectory, input.archiveName);
   const remoteArchivePath = `${input.remoteDirectory}/${input.archiveName}`;
-  await createLocalArchive({
-    archivePath: localArchivePath,
-    compression: input.compression ?? "gzip",
-    directory: input.localDirectory,
-    entries: input.entries,
-  });
-  const directoryCreation = await executeSubmittedCode(
-    input.workspace,
-    `mkdir -p ${shellQuote(input.remoteDirectory)}`,
-    { timeoutMs: archiveTransferCommandTimeoutMs },
-  );
-  if (directoryCreation.exitCode !== 0) {
-    throw new Error(
-      `Failed to create submitted-code archive directory ${input.remoteDirectory}.\n${formatCommandOutput(directoryCreation)}`,
+  let remoteArchiveMayExist = false;
+  try {
+    await createLocalArchive({
+      archivePath: localArchivePath,
+      compression: input.compression ?? "gzip",
+      directory: input.localDirectory,
+      entries: input.entries,
+    });
+    const directoryCreation = await executeSubmittedCode(
+      input.workspace,
+      `mkdir -p ${shellQuote(input.remoteDirectory)}`,
+      { timeoutMs: archiveTransferCommandTimeoutMs },
     );
-  }
-  await uploadFiles([
-    { destinationPath: remoteArchivePath, sourcePath: localArchivePath },
-  ]);
-  const extraction = await executeSubmittedCode(
-    input.workspace,
-    [
-      `tar ${input.compression === "none" ? "-xf" : "-xzf"} ${shellQuote(remoteArchivePath)} -C ${shellQuote(input.remoteDirectory)}`,
-      `rm -f ${shellQuote(remoteArchivePath)}`,
-    ].join(" && "),
-    { timeoutMs: archiveTransferCommandTimeoutMs },
-  );
-  if (extraction.exitCode !== 0) {
-    throw new Error(
-      `Failed to extract submitted-code input archive ${remoteArchivePath}.\n${formatCommandOutput(extraction)}`,
+    if (directoryCreation.exitCode !== 0) {
+      throw new Error(
+        `Failed to create submitted-code archive directory ${input.remoteDirectory}.\n${formatCommandOutput(directoryCreation)}`,
+      );
+    }
+    remoteArchiveMayExist = true;
+    await uploadFiles([
+      { destinationPath: remoteArchivePath, sourcePath: localArchivePath },
+    ]);
+    const extraction = await executeSubmittedCode(
+      input.workspace,
+      [
+        `tar ${input.compression === "none" ? "-xf" : "-xzf"} ${shellQuote(remoteArchivePath)} -C ${shellQuote(input.remoteDirectory)}`,
+        `rm -f ${shellQuote(remoteArchivePath)}`,
+      ].join(" && "),
+      { timeoutMs: archiveTransferCommandTimeoutMs },
     );
+    if (extraction.exitCode !== 0) {
+      throw new Error(
+        `Failed to extract submitted-code input archive ${remoteArchivePath}.\n${formatCommandOutput(extraction)}`,
+      );
+    }
+    remoteArchiveMayExist = false;
+  } finally {
+    await Promise.allSettled([
+      rm(localArchivePath, { force: true }),
+      ...(remoteArchiveMayExist
+        ? [
+            executeSubmittedCode(
+              input.workspace,
+              `rm -f ${shellQuote(remoteArchivePath)}`,
+              { timeoutMs: archiveTransferCommandTimeoutMs },
+            ),
+          ]
+        : []),
+    ]);
   }
-  await rm(localArchivePath, { force: true });
 }
 
 /**

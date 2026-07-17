@@ -1806,6 +1806,7 @@ async function validateSubmittedCodeRuntime(input: {
         workspace: input.workspace,
       });
     } catch (error) {
+      if (isAgentHarnessInfrastructureError(error)) throw error;
       return failedPreparationValidation({
         classification: "harness/internal failure",
         logsSummary: `Failed to upload the submitted-code External Resource Cache: ${readErrorMessage(error)}`,

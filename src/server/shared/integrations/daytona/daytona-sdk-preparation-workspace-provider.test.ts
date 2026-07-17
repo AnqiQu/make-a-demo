@@ -1005,6 +1005,43 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ]);
   });
 
+  it("keeps shared artifact transfer logs independent of pipeline stages", async () => {
+    const calls: unknown[] = [];
+    const relayedLogs: string[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls),
+      sandboxLogSinks: [
+        {
+          write(line) {
+            relayedLogs.push(line);
+          },
+        },
+      ],
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.uploadSubmittedCodeFiles?.([
+      {
+        destinationPath: "/workspace/.makeademo/capture/demo-script.ts",
+        sourcePath: "/tmp/demo-script.ts",
+      },
+    ]);
+
+    const transferLogs = relayedLogs
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((log) =>
+        String(log.event).startsWith("artifact.transfer.upload."),
+      );
+    expect(transferLogs.map((log) => log.event)).toEqual([
+      "artifact.transfer.upload.started",
+      "artifact.transfer.upload.succeeded",
+    ]);
+    for (const log of transferLogs) {
+      expect(log).not.toHaveProperty("stage");
+    }
+  });
+
   it("retries a transient submitted-code artifact upload", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({

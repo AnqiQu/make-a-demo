@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AgentHarnessArtifactTransferError,
   AgentHarnessCommandTimeoutError,
   AgentHarnessSandboxUnavailableError,
 } from "../daytona/workspace.interface";
@@ -380,6 +381,15 @@ describe("runAgentHarnessPipeline", () => {
         "sandbox_123",
         new Error("no IP address found"),
       ),
+    ],
+    [
+      "an artifact transfer failure",
+      new AgentHarnessArtifactTransferError({
+        attempts: 3,
+        cause: new Error("upload timed out"),
+        operation: "upload",
+        sandboxId: "sandbox_123",
+      }),
     ],
   ])(
     "does not turn %s into a Preparation Fallback",

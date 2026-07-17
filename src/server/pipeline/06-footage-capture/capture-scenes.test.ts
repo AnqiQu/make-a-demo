@@ -426,8 +426,7 @@ describe("captureScenesFromScript", () => {
     );
     expect(uploadedDestinations).toEqual(
       expect.arrayContaining([
-        "/workspace/.makeademo/external-resources/external-resource-manifest.json",
-        `/workspace/.makeademo/external-resources/resources/${externalResourceDigest}`,
+        "/workspace/.makeademo/external-resources/external-resource-cache.tgz",
         expect.stringMatching(/capture-inputs\.tgz$/),
       ]),
     );

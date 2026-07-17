@@ -42,9 +42,11 @@ export class AgentHarnessSandboxUnavailableError extends Error {
 export function isAgentHarnessInfrastructureError(
   error: unknown,
 ): error is
+  | AgentHarnessArtifactTransferError
   | AgentHarnessCommandTimeoutError
   | AgentHarnessSandboxUnavailableError {
   return (
+    error instanceof AgentHarnessArtifactTransferError ||
     error instanceof AgentHarnessCommandTimeoutError ||
     error instanceof AgentHarnessSandboxUnavailableError
   );

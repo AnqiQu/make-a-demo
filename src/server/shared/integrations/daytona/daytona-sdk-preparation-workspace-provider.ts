@@ -1138,7 +1138,6 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       await this.writeSandboxLog({
         ...input,
         message: `${input.event} for ${input.fileCount} file(s).`,
-        stage: "capture-path-validation",
       });
     } catch {
       // Artifact transfer behavior must not be replaced by observability failures.

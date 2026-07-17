@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createPipelineEventLogger } from "../../shared/logging/pipeline-event-logger";
 import {
+  AgentHarnessArtifactTransferError,
   AgentHarnessCommandTimeoutError,
   AgentHarnessSandboxUnavailableError,
   type AgentHarnessWorkspace,
@@ -1694,14 +1695,78 @@ describe("createDefaultAgentHarnessDependencies", () => {
       expect(syncs).toBe(1);
       expect(uploadedDestinations).toEqual(
         expect.arrayContaining([
-          expect.stringMatching(
-            /^\/workspace\/\.makeademo\/external-resources\/resources\/[a-f0-9]{64}$/,
-          ),
+          "/workspace/.makeademo/external-resources/external-resource-cache.tgz",
         ]),
       );
       expect(
         harness.getExternalResourceCache?.()?.manifest.entries,
       ).toHaveLength(1);
+    } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("propagates External Resource Cache transfer infrastructure failures", async () => {
+    const outputRoot = await mkdtemp(
+      join(tmpdir(), "makeademo-server-resource-transfer-failure-"),
+    );
+    const failure = new AgentHarnessArtifactTransferError({
+      attempts: 3,
+      cause: new Error("upload timed out"),
+      operation: "upload",
+      sandboxId: "sandbox_123",
+    });
+    let starts = 0;
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async readSubmittedCodeAppStatus() {
+        return {
+          running: true,
+          stderr:
+            starts === 1
+              ? '[makeademo:network-blocked] {"direction":"outbound","hasCredentials":false,"host":"assets.example.com","method":"GET","phase":"runtime","resourceType":"fetch","url":"https://assets.example.com/logo.svg"}'
+              : "",
+          stdout: "",
+        };
+      },
+      async setSubmittedCodeNetworkAccess() {},
+      async startSubmittedCodeApp() {
+        starts += 1;
+      },
+      async stopSubmittedCodeApp() {},
+      async syncSubmittedCodeWorkspace() {},
+      async uploadSubmittedCodeFiles() {
+        throw failure;
+      },
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      externalResourceFetcher: async () => ({
+        body: new TextEncoder().encode("original-logo"),
+        contentType: "image/svg+xml",
+        headers: {},
+        status: 200,
+      }),
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot,
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    try {
+      await expect(
+        harness.dependencies.validatePreparation({
+          preparationManifest: preparationManifest(),
+          repoProfile: repoProfile(),
+          runPlan: runPlan(),
+          workspace,
+        }),
+      ).rejects.toBe(failure);
     } finally {
       await rm(outputRoot, { force: true, recursive: true });
     }
@@ -1893,10 +1958,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
       expect(result.validationReport.status).toBe("passed");
       expect(uploadedDestinations).toEqual(
         expect.arrayContaining([
-          "/workspace/.makeademo/external-resources/external-resource-manifest.json",
-          expect.stringMatching(
-            /^\/workspace\/\.makeademo\/external-resources\/resources\/[a-f0-9]{64}$/,
-          ),
+          "/workspace/.makeademo/external-resources/external-resource-cache.tgz",
         ]),
       );
       expect(
@@ -2153,9 +2215,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
       expect(report.status).toBe("passed");
       expect(uploadedDestinations).toEqual(
         expect.arrayContaining([
-          expect.stringMatching(
-            /^\/workspace\/\.makeademo\/external-resources\/resources\/[a-f0-9]{64}$/,
-          ),
+          "/workspace/.makeademo/external-resources/external-resource-cache.tgz",
         ]),
       );
     } finally {

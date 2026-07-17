@@ -1,11 +1,15 @@
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { externalResourceManifestVersion } from "../../shared/external-resources/external-resource-manifest.schema";
 import { uploadSubmittedCodeExternalResourceCache } from "./submitted-code-external-resource-cache";
 import type { AgentHarnessWorkspace } from "./workspace.interface";
+
+const execFileAsync = promisify(execFile);
 
 describe("uploadSubmittedCodeExternalResourceCache", () => {
   it("verifies uploaded replay bytes inside the submitted-code sandbox", async () => {
@@ -48,8 +52,8 @@ describe("uploadSubmittedCodeExternalResourceCache", () => {
         workspace,
       });
 
-      expect(commands).toHaveLength(2);
-      expect(commands[1]).toContain("sha256sum -c");
+      expect(commands).toContainEqual(expect.stringContaining("tar -xzf"));
+      expect(commands.at(-1)).toContain("sha256sum -c");
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
@@ -67,6 +71,7 @@ describe("uploadSubmittedCodeExternalResourceCache", () => {
       writeFile(join(directory, "resources", newDigest), newBody),
     ]);
     const uploadedDestinations: string[] = [];
+    let uploadedArchiveEntries: string[] = [];
     const workspace: AgentHarnessWorkspace = {
       async destroy() {},
       async execute() {
@@ -77,6 +82,14 @@ describe("uploadSubmittedCodeExternalResourceCache", () => {
       },
       async uploadSubmittedCodeFiles(files) {
         uploadedDestinations.push(...files.map((file) => file.destinationPath));
+        const archive = files.length === 1 ? files[0] : undefined;
+        if (archive?.sourcePath.endsWith(".tgz")) {
+          const { stdout } = await execFileAsync("tar", [
+            "-tzf",
+            archive.sourcePath,
+          ]);
+          uploadedArchiveEntries = stdout.trim().split("\n");
+        }
       },
     };
     const oldEntry = {
@@ -119,20 +132,13 @@ describe("uploadSubmittedCodeExternalResourceCache", () => {
         workspace,
       });
 
-      expect(uploadedDestinations).toContain(
-        "/workspace/.makeademo/external-resources/external-resource-manifest.json",
-      );
-      expect(uploadedDestinations).toContain(
-        `/workspace/.makeademo/external-resources/resources/${newDigest}`,
-      );
-      expect(
-        uploadedDestinations.filter((destination) =>
-          destination.endsWith(`/resources/${newDigest}`),
-        ),
-      ).toHaveLength(1);
-      expect(uploadedDestinations).not.toContain(
-        `/workspace/.makeademo/external-resources/resources/${oldDigest}`,
-      );
+      expect(uploadedDestinations).toEqual([
+        "/workspace/.makeademo/external-resources/external-resource-cache.tgz",
+      ]);
+      expect(uploadedArchiveEntries.sort()).toEqual([
+        "external-resource-manifest.json",
+        `resources/${newDigest}`,
+      ]);
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
