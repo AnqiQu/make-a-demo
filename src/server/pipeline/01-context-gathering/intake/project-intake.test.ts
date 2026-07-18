@@ -26,4 +26,19 @@ describe("Context Gathering intake", () => {
       keyProductFeatures: [],
     });
   });
+
+  it("accepts a repo-relative browser application override", () => {
+    expect(
+      readDemoBrief({
+        keyProductFeatures: [],
+        preferredAppDir: "apps/dashboard",
+      }),
+    ).toEqual({
+      keyProductFeatures: [],
+      preferredAppDir: "apps/dashboard",
+    });
+    expect(() =>
+      readDemoBrief({ keyProductFeatures: [], preferredAppDir: "../outside" }),
+    ).toThrow(/preferredAppDir/);
+  });
 });

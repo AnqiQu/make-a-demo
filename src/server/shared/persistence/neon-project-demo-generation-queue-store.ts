@@ -268,14 +268,21 @@ export class NeonProjectDemoGenerationQueueStore
 
 function readDemoBriefFromProjectContext(value: unknown) {
   const context = readRecord(value, "Project context");
-  const structuredContext = readRecord(
-    context.structuredContext,
-    "Project context.structuredContext",
-  );
+  const structuredContext =
+    context.structuredContext === undefined
+      ? context
+      : readRecord(
+          context.structuredContext,
+          "Project context.structuredContext",
+        );
   const targetUsers = readOptionalString(structuredContext, "targetUsers");
   const productSummary = readOptionalString(
     structuredContext,
     "productSummary",
+  );
+  const preferredAppDir = readOptionalString(
+    structuredContext,
+    "preferredAppDir",
   );
   const demoLengthSeconds = readOptionalNumber(
     structuredContext,
@@ -288,6 +295,7 @@ function readDemoBriefFromProjectContext(value: unknown) {
     keyProductFeatures: splitFeatures(
       readOptionalString(structuredContext, "importantFeatures") ?? "",
     ),
+    ...(preferredAppDir ? { preferredAppDir } : {}),
     ...(productSummary ? { productSummary } : {}),
   };
 }

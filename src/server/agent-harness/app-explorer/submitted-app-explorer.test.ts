@@ -240,6 +240,7 @@ describe("exploreSubmittedApp", () => {
     expect(clickActions).toEqual([
       expect.objectContaining({
         evidence: expect.stringContaining("Playwright exercised"),
+        exercised: true,
         expectedResult: "Settings dialog became visible",
         preferredLocator: expect.objectContaining({ name: "Open settings" }),
       }),

@@ -177,6 +177,123 @@ describe("profileRepo", () => {
     ]);
   });
 
+  it("identifies runnable browser workspaces without treating orchestrators or services as apps", () => {
+    const profile = profileRepo({
+      files: [
+        {
+          path: "package.json",
+          text: JSON.stringify({
+            dependencies: { next: "latest", react: "latest" },
+            devDependencies: { turbo: "latest" },
+            scripts: { dev: "turbo dev --parallel" },
+            workspaces: ["apps/*", "packages/*"],
+          }),
+        },
+        {
+          path: "apps/site/package.json",
+          text: JSON.stringify({
+            dependencies: { next: "latest", react: "latest" },
+            name: "@acme/site",
+            scripts: { dev: "next dev -p 3000" },
+          }),
+        },
+        { path: "apps/site/src/app/page.tsx", text: "export default Page" },
+        {
+          path: "apps/operations/package.json",
+          text: JSON.stringify({
+            dependencies: { next: "latest", react: "latest" },
+            name: "@acme/operations",
+            scripts: { dev: "next dev -p 3001" },
+          }),
+        },
+        {
+          path: "apps/operations/src/app/page.tsx",
+          text: "export default Page",
+        },
+        {
+          path: "apps/api/package.json",
+          text: JSON.stringify({
+            name: "@acme/api",
+            scripts: { dev: "bun --hot src/index.ts" },
+          }),
+        },
+        { path: "apps/api/src/index.ts", text: "export const api = true" },
+        {
+          path: "packages/ui/package.json",
+          text: JSON.stringify({
+            dependencies: { react: "latest" },
+            name: "@acme/ui",
+          }),
+        },
+        { path: "bun.lock", text: "" },
+      ],
+      repoUrl: "https://github.com/example/multi-app",
+    });
+
+    expect(profile.browserRuntimeCandidates).toEqual([
+      {
+        dir: "apps/site",
+        evidencePaths: ["apps/site/package.json", "apps/site/src/app/page.tsx"],
+        frameworks: ["next", "react"],
+        installDir: ".",
+        isWorkspace: true,
+        name: "@acme/site",
+        packageManager: "bun",
+        ports: [3000],
+        scripts: { dev: "next dev -p 3000" },
+      },
+      {
+        dir: "apps/operations",
+        evidencePaths: [
+          "apps/operations/package.json",
+          "apps/operations/src/app/page.tsx",
+        ],
+        frameworks: ["next", "react"],
+        installDir: ".",
+        isWorkspace: true,
+        name: "@acme/operations",
+        packageManager: "bun",
+        ports: [3001],
+        scripts: { dev: "next dev -p 3001" },
+      },
+    ]);
+  });
+
+  it("recognizes browser frameworks from package scripts when dependencies are hoisted", () => {
+    const profile = profileRepo({
+      files: [
+        {
+          path: "package.json",
+          text: JSON.stringify({
+            dependencies: { "@angular/core": "latest" },
+            workspaces: ["apps/*"],
+          }),
+        },
+        {
+          path: "apps/portal/package.json",
+          text: JSON.stringify({
+            name: "@acme/portal",
+            scripts: { serve: "ng serve --port 4200" },
+          }),
+        },
+        {
+          path: "apps/portal/src/app/app.component.ts",
+          text: "export class AppComponent {}",
+        },
+        { path: "package-lock.json", text: "{}" },
+      ],
+      repoUrl: "https://github.com/example/angular-monorepo",
+    });
+
+    expect(profile.browserRuntimeCandidates).toEqual([
+      expect.objectContaining({
+        dir: "apps/portal",
+        frameworks: ["angular"],
+        ports: [4200],
+      }),
+    ]);
+  });
+
   it("uses pnpm-workspace membership instead of treating every nested package as a workspace", () => {
     const profile = profileRepo({
       files: [

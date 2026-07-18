@@ -9,6 +9,7 @@ import {
 } from "../repair/repair-router";
 import { validatePreparationFidelity } from "../repo-preparation/preparation-fidelity";
 import type { PreparationWorkspaceDiff } from "../repo-preparation/preparation-workspace-diff";
+import { assertPreparationRuntimeTarget } from "../repo-preparation/prepared-feature-inventory";
 import { profileRepo } from "../repo-profiler/repo-profiler";
 import type { SecretQuarantineManifest } from "../repo-security/secret-quarantine";
 import { screenStaticRepoSecurity } from "../repo-security/static-repo-security";
@@ -47,6 +48,7 @@ export type AgentHarnessPipelineInput = {
   demoBrief: {
     demoLengthSeconds?: number;
     keyProductFeatures?: string[];
+    preferredAppDir?: string;
     productSummary?: string;
     targetUsers?: string;
   };
@@ -76,7 +78,6 @@ export type AgentHarnessPipelineDependencies = {
   }) => Promise<PreparationWorkspaceDiff>;
   createWorkspace(input: {
     repoProfile: RepoProfile;
-    runPlan: RunPlan;
   }): Promise<AgentHarnessWorkspace>;
   /**
    * Recreates a clean, network-locked submitted-code runtime after the
@@ -132,7 +133,12 @@ export type AgentHarnessPipelineDependencies = {
     scriptCandidate: ScriptCandidate;
     workspace: AgentHarnessWorkspace;
   }): Promise<ScriptCandidate>;
-  synthesizeRunPlan(input: { repoProfile: RepoProfile }): Promise<RunPlan>;
+  synthesizeRunPlan(input: {
+    demoBrief: AgentHarnessPipelineInput["demoBrief"];
+    normalizedSupportingDocuments: AgentHarnessPipelineInput["normalizedSupportingDocuments"];
+    repoProfile: RepoProfile;
+    workspace: AgentHarnessWorkspace;
+  }): Promise<RunPlan>;
   validateCapturePath(input: {
     actionCatalog: ActionCatalog;
     appMap: AppMap;
@@ -316,6 +322,7 @@ export async function runAgentHarnessPipeline(
       }),
     );
 
+    workspace = await dependencies.createWorkspace({ repoProfile });
     runPlan = await runAsyncStage(
       "run-plan-synthesis",
       stageStatuses,
@@ -323,12 +330,14 @@ export async function runAgentHarnessPipeline(
       async () =>
         readRunPlan(
           await dependencies.synthesizeRunPlan({
+            demoBrief: input.demoBrief,
+            normalizedSupportingDocuments: input.normalizedSupportingDocuments,
             repoProfile,
+            workspace: requireWorkspace(workspace),
           }),
         ),
     );
     await writeArtifact(dependencies, artifactPaths.runPlan, runPlan);
-    workspace = await dependencies.createWorkspace({ repoProfile, runPlan });
   } catch (error) {
     stageStatuses["agent-harness"] = "failed";
     try {
@@ -344,6 +353,13 @@ export async function runAgentHarnessPipeline(
       });
     } catch (manifestError) {
       attachSecondaryError(error, "failureManifestError", manifestError);
+    }
+    if (options.destroyWorkspaceOnCompletion !== false) {
+      try {
+        await workspace?.destroy();
+      } catch (cleanupError) {
+        attachCleanupError(error, cleanupError);
+      }
     }
     throw error;
   }
@@ -367,10 +383,16 @@ export async function runAgentHarnessPipeline(
     if (preparation.opencodeSessionId !== undefined) {
       opencodeSessionIds.push(preparation.opencodeSessionId);
     }
+    const preparedManifest = readPreparationManifest(preparation.manifest);
+    assertPreparationRuntimeTarget({
+      preparationManifest: preparedManifest,
+      repoProfile,
+      runPlan,
+    });
     let preparationManifest = await writeArtifact(
       dependencies,
       artifactPaths.preparationManifest,
-      readPreparationManifest(preparation.manifest),
+      preparedManifest,
     );
 
     const repoPreparationRepairLimit = options.repoPreparationRepairLimit ?? 3;
@@ -1151,6 +1173,7 @@ async function ensureValidPreparation(input: {
           failureReport: failure,
           preparationManifest,
           repoProfile: input.repoProfile,
+          runPlan: input.runPlan,
         });
       if (
         expandedPreparation !== undefined &&
@@ -1188,10 +1211,16 @@ async function ensureValidPreparation(input: {
         if (repair.opencodeSessionId !== undefined) {
           opencodeSessionIds.push(repair.opencodeSessionId);
         }
+        const repairedManifest = readPreparationManifest(repair.manifest);
+        assertPreparationRuntimeTarget({
+          preparationManifest: repairedManifest,
+          repoProfile: input.repoProfile,
+          runPlan: input.runPlan,
+        });
         preparationManifest = await writeArtifact(
           input.dependencies,
           artifactPaths.preparationManifest,
-          readPreparationManifest(repair.manifest),
+          repairedManifest,
         );
         installRepairBaseline = workspaceDiffBeforeRepair;
       }
@@ -1200,6 +1229,7 @@ async function ensureValidPreparation(input: {
     const resolvedPreparation = resolvePreparationRuntime({
       preparationManifest,
       repoProfile: input.repoProfile,
+      runPlan: input.runPlan,
     }).preparationManifest;
     if (!sameRuntimeConfiguration(preparationManifest, resolvedPreparation)) {
       preparationManifest = await writeArtifact(

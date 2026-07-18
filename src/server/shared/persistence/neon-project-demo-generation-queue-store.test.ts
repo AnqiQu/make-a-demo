@@ -10,6 +10,7 @@ describe("NeonProjectDemoGenerationQueueStore", () => {
         context: {
           structuredContext: {
             importantFeatures: "script generation, video generation",
+            preferredAppDir: "apps/dashboard",
             productSummary: "Creates demo videos.",
             requestedDurationSeconds: 60,
             targetUsers: "Founders",
@@ -66,6 +67,7 @@ describe("NeonProjectDemoGenerationQueueStore", () => {
         audience: "Founders",
         demoLengthSeconds: 60,
         keyProductFeatures: ["script generation", "video generation"],
+        preferredAppDir: "apps/dashboard",
         productSummary: "Creates demo videos.",
       },
       demoRequestId: "demo-request-1",
@@ -96,7 +98,7 @@ describe("NeonProjectDemoGenerationQueueStore", () => {
 
   it("preserves an omitted feature list for automatic codebase-driven selection", async () => {
     const db = queuedProjectDatabase({
-      context: { structuredContext: { importantFeatures: "" } },
+      context: { importantFeatures: "", preferredAppDir: "apps/product" },
       demoRequestId: "demo-request-1",
       projectId: "project-1",
       repoUrl: "https://github.com/example/app",
@@ -113,7 +115,10 @@ describe("NeonProjectDemoGenerationQueueStore", () => {
     );
 
     await expect(store.claimNextQueuedProject()).resolves.toMatchObject({
-      demoBrief: { keyProductFeatures: [] },
+      demoBrief: {
+        keyProductFeatures: [],
+        preferredAppDir: "apps/product",
+      },
       projectId: "project-1",
     });
   });

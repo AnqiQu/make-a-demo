@@ -459,6 +459,7 @@ function createActions(
       actions.push({
         confidence: 0.98,
         evidence: `Playwright exercised ${interaction.name} on ${route.path} and observed: ${interaction.outcome}`,
+        exercised: true,
         expectedResult: interaction.outcome,
         featureIds: matchActionFeatureIds(
           route,

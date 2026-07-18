@@ -4,6 +4,15 @@ import {
 } from "../../pipeline/06-footage-capture/browser-action-plan";
 
 export const DEMO_SCRIPT_OUTPUT_PATH = "/workspace/.makeademo/demo-script.json";
+export const browserRuntimeScriptNames = [
+  "dev",
+  "start",
+  "preview",
+  "serve",
+  "develop",
+] as const;
+export type BrowserRuntimeScriptName =
+  (typeof browserRuntimeScriptNames)[number];
 
 export type PackageManager = "bun" | "npm" | "pnpm" | "unknown" | "yarn";
 type HarnessStageStatus =
@@ -28,6 +37,24 @@ export type RepoWorkspacePackage = {
   workspaceDependencies?: string[];
 };
 
+/** A package proven to expose a runnable browser surface from screened files. */
+export type RepoBrowserRuntimeCandidate = RepoWorkspacePackage & {
+  /** Screened package, configuration, and browser-entry files supporting this candidate. */
+  evidencePaths: string[];
+  /** Browser frameworks declared directly by this package. */
+  frameworks: string[];
+};
+
+/** Durable, source-backed identity of the browser application a run must keep. */
+export type RuntimeTargetSelection = {
+  /** Screened files that support selecting this application. */
+  evidencePaths: string[];
+  reason: string;
+  role: "admin" | "docs" | "marketing" | "product" | "showcase" | "unknown";
+  source: "explicit" | "model" | "single-candidate";
+  targetId: string;
+};
+
 export type NetworkAttempt = {
   direction: "inbound" | "outbound";
   hasCredentials?: boolean;
@@ -50,6 +77,7 @@ export type RepoProfile = {
     packageDirectories: string[];
   };
   workspacePackages?: RepoWorkspacePackage[];
+  browserRuntimeCandidates?: RepoBrowserRuntimeCandidate[];
   detectedFrameworks: string[];
   packageScripts: Record<string, string>;
   candidateAppDirs: string[];
@@ -83,6 +111,7 @@ export type RunPlan = {
   assumptions: string[];
   riskFlags: string[];
   validationExpectations: string[];
+  targetSelection?: RuntimeTargetSelection;
 };
 
 export type PreparedDemoFeature = {
@@ -196,6 +225,8 @@ type LocatorStrategy =
 
 type ActionCatalogAction = {
   id: string;
+  /** True only when browser exploration executed the action and observed its result. */
+  exercised?: true;
   featureIds?: string[];
   route: string;
   kind:
@@ -357,7 +388,38 @@ export function readRepoProfile(value: unknown): RepoProfile {
     securityWarnings: readStringArray(record, "securityWarnings"),
     unsupportedReasons: readStringArray(record, "unsupportedReasons"),
     workspaces: readWorkspaces(record.workspaces),
+    ...readOptionalBrowserRuntimeCandidates(record.browserRuntimeCandidates),
     ...readOptionalWorkspacePackages(record.workspacePackages),
+  };
+}
+
+function readOptionalBrowserRuntimeCandidates(
+  value: unknown,
+): Pick<RepoProfile, "browserRuntimeCandidates"> {
+  if (value === undefined) return {};
+  if (!Array.isArray(value)) {
+    throw new Error("RepoProfile.browserRuntimeCandidates must be an array");
+  }
+  return {
+    browserRuntimeCandidates: value.map((entry, index) => {
+      const record = assertRecord(
+        entry,
+        `RepoProfile.browserRuntimeCandidates[${index}]`,
+      );
+      return {
+        ...readRepoWorkspacePackage(record),
+        evidencePaths: readRepoPathArray(
+          record,
+          "evidencePaths",
+          `RepoProfile.browserRuntimeCandidates[${index}]`,
+        ),
+        frameworks: readStringArray(
+          record,
+          "frameworks",
+          `RepoProfile.browserRuntimeCandidates[${index}]`,
+        ),
+      };
+    }),
   };
 }
 
@@ -376,44 +438,50 @@ function readOptionalWorkspacePackages(
         entry,
         `RepoProfile.workspacePackages[${index}]`,
       );
-      return {
-        dir: readRepoRelativePath(record, "dir"),
-        ...(record.installDir === undefined
-          ? {}
-          : { installDir: readRepoRelativePath(record, "installDir") }),
-        ...(record.isWorkspace === undefined
-          ? {}
-          : { isWorkspace: readBoolean(record, "isWorkspace") }),
-        ...optionalString(record, "name"),
-        ...(record.packageManager === undefined
-          ? {}
-          : {
-              packageManager: readEnum(record, "packageManager", [
-                "bun",
-                "npm",
-                "pnpm",
-                "unknown",
-                "yarn",
-              ]),
-            }),
-        ports: readPortArray(record, "ports"),
-        scripts: readStringRecord(record, "scripts"),
-        ...(record.workspaceDependencies === undefined
-          ? {}
-          : {
-              workspaceDependencies: readStringArray(
-                record,
-                "workspaceDependencies",
-              ),
-            }),
-      };
+      return readRepoWorkspacePackage(record);
     }),
+  };
+}
+
+function readRepoWorkspacePackage(
+  record: Record<string, unknown>,
+): RepoWorkspacePackage {
+  return {
+    dir: readRepoRelativePath(record, "dir"),
+    ...(record.installDir === undefined
+      ? {}
+      : { installDir: readRepoRelativePath(record, "installDir") }),
+    ...(record.isWorkspace === undefined
+      ? {}
+      : { isWorkspace: readBoolean(record, "isWorkspace") }),
+    ...optionalString(record, "name"),
+    ...(record.packageManager === undefined
+      ? {}
+      : {
+          packageManager: readEnum(record, "packageManager", [
+            "bun",
+            "npm",
+            "pnpm",
+            "unknown",
+            "yarn",
+          ]),
+        }),
+    ports: readPortArray(record, "ports"),
+    scripts: readStringRecord(record, "scripts"),
+    ...(record.workspaceDependencies === undefined
+      ? {}
+      : {
+          workspaceDependencies: readStringArray(
+            record,
+            "workspaceDependencies",
+          ),
+        }),
   };
 }
 
 export function readRunPlan(value: unknown): RunPlan {
   const record = assertRecord(value, "RunPlan");
-  return {
+  const runPlan: RunPlan = {
     allowedPorts: readPortArray(record, "allowedPorts"),
     appDir: readRepoRelativePath(record, "appDir"),
     assumptions: readStringArray(record, "assumptions"),
@@ -425,7 +493,45 @@ export function readRunPlan(value: unknown): RunPlan {
     riskFlags: readStringArray(record, "riskFlags"),
     runtime: readEnum(record, "runtime", ["bun", "deno", "node", "unknown"]),
     startCommand: readNonEmptyString(record, "startCommand"),
+    ...readOptionalRuntimeTargetSelection(record.targetSelection),
     validationExpectations: readStringArray(record, "validationExpectations"),
+  };
+  if (
+    runPlan.targetSelection !== undefined &&
+    runPlan.targetSelection.targetId !== runPlan.appDir
+  ) {
+    throw new Error("RunPlan.targetSelection.targetId must match appDir");
+  }
+  return runPlan;
+}
+
+function readOptionalRuntimeTargetSelection(
+  value: unknown,
+): Pick<RunPlan, "targetSelection"> {
+  if (value === undefined) return {};
+  const record = assertRecord(value, "RunPlan.targetSelection");
+  return {
+    targetSelection: {
+      evidencePaths: readRepoPathArray(
+        record,
+        "evidencePaths",
+        "RunPlan.targetSelection",
+      ),
+      reason: readNonEmptyString(record, "reason", "RunPlan.targetSelection"),
+      role: readEnum(
+        record,
+        "role",
+        ["admin", "docs", "marketing", "product", "showcase", "unknown"],
+        "RunPlan.targetSelection",
+      ),
+      source: readEnum(
+        record,
+        "source",
+        ["explicit", "model", "single-candidate"],
+        "RunPlan.targetSelection",
+      ),
+      targetId: readRepoRelativePath(record, "targetId"),
+    },
   };
 }
 
@@ -984,6 +1090,34 @@ function readAction(value: unknown, index: number): ActionCatalogAction {
     record.preferredLocatorCandidateId === undefined
       ? undefined
       : readNonEmptyString(record, "preferredLocatorCandidateId", path);
+  const exercised =
+    record.exercised === undefined
+      ? undefined
+      : readBoolean(record, "exercised", path);
+  if (exercised === false) {
+    throw new Error(`${path}.exercised must be true when provided`);
+  }
+  const kind = readEnum(
+    record,
+    "kind",
+    [
+      "assert",
+      "click",
+      "fill",
+      "navigate",
+      "scroll",
+      "select",
+      "upload",
+      "wait",
+    ],
+    path,
+  );
+  if (
+    exercised === true &&
+    !["click", "fill", "select", "upload"].includes(kind)
+  ) {
+    throw new Error(`${path}.exercised is only valid for feature interactions`);
+  }
   if (
     locatorCandidates !== undefined &&
     preferredLocatorCandidateId === undefined
@@ -1005,6 +1139,7 @@ function readAction(value: unknown, index: number): ActionCatalogAction {
   return {
     confidence: readConfidenceNumber(record, "confidence", path),
     evidence: readNonEmptyString(record, "evidence", path),
+    ...(exercised === undefined ? {} : { exercised: true as const }),
     expectedResult: readNonEmptyString(record, "expectedResult", path),
     ...(record.fallbackLocator === undefined
       ? {}
@@ -1015,21 +1150,7 @@ function readAction(value: unknown, index: number): ActionCatalogAction {
       ? {}
       : { featureIds: readStringArray(record, "featureIds", path) }),
     id: readNonEmptyString(record, "id", path),
-    kind: readEnum(
-      record,
-      "kind",
-      [
-        "assert",
-        "click",
-        "fill",
-        "navigate",
-        "scroll",
-        "select",
-        "upload",
-        "wait",
-      ],
-      path,
-    ),
+    kind,
     ...(locatorCandidates === undefined ? {} : { locatorCandidates }),
     preferredLocator: readPreferredLocator(record.preferredLocator, path),
     ...(preferredLocatorCandidateId === undefined

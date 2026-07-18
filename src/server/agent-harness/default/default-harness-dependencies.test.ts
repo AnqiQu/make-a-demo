@@ -44,6 +44,128 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(models).toEqual(["openai/gpt-5"]);
   });
 
+  it("selects the product application before planning a multi-app monorepo", async () => {
+    const stages: string[] = [];
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async uploadFiles() {},
+      async writeTextFile() {},
+      async execute(command) {
+        if (
+          command ===
+          "cat '/workspace/.makeademo/runtime-target-selection.json'"
+        ) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: JSON.stringify({
+              candidates: [
+                {
+                  evidencePaths: ["apps/website/src/app/page.tsx"],
+                  reason: "Public acquisition and pricing pages.",
+                  role: "marketing",
+                  targetId: "apps/website",
+                },
+                {
+                  evidencePaths: ["apps/dashboard/src/app/page.tsx"],
+                  reason: "The product workflows match the demo brief.",
+                  role: "product",
+                  targetId: "apps/dashboard",
+                },
+              ],
+              reason: "The dashboard is the actual product experience.",
+              selectedTargetId: "apps/dashboard",
+            }),
+          };
+        }
+        if (command.includes("MAKEADEMO_PATCH")) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: "\0MAKEADEMO_PATCH\0",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(input) {
+          stages.push(input.stage);
+          expect(input.prompt).toContain(
+            "classify every runnable browser application",
+          );
+          return { exitCode: 0, stderr: "", stdout: "selected" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+      workspaceProvider: {
+        async create() {
+          return { async destroy() {}, id: "workspace", workspace };
+        },
+      },
+    });
+    const multiAppProfile: RepoProfile = {
+      ...repoProfile(),
+      browserRuntimeCandidates: [
+        {
+          dir: "apps/website",
+          evidencePaths: [
+            "apps/website/package.json",
+            "apps/website/src/app/page.tsx",
+          ],
+          frameworks: ["next", "react"],
+          installDir: ".",
+          isWorkspace: true,
+          ports: [3000],
+          scripts: { dev: "next dev" },
+        },
+        {
+          dir: "apps/dashboard",
+          evidencePaths: [
+            "apps/dashboard/package.json",
+            "apps/dashboard/src/app/page.tsx",
+          ],
+          frameworks: ["next", "react"],
+          installDir: ".",
+          isWorkspace: true,
+          ports: [3001],
+          scripts: { dev: "next dev -p 3001" },
+        },
+      ],
+      candidateAppDirs: ["apps/website", "apps/dashboard"],
+      candidatePorts: [3000, 3001],
+      workspaces: { isMonorepo: true, packageDirectories: ["apps/*"] },
+    };
+    await harness.dependencies.createWorkspace({
+      repoProfile: multiAppProfile,
+    });
+
+    const plan = await harness.dependencies.synthesizeRunPlan({
+      demoBrief: {
+        keyProductFeatures: ["create a report"],
+        productSummary: "Operations dashboard",
+      },
+      normalizedSupportingDocuments: [],
+      repoProfile: multiAppProfile,
+      workspace,
+    });
+
+    expect(stages).toEqual(["runtime-target-selection"]);
+    expect(plan).toMatchObject({
+      allowedPorts: [3001],
+      appDir: "apps/dashboard",
+      expectedLocalUrl: "http://127.0.0.1:3001",
+      targetSelection: {
+        role: "product",
+        source: "model",
+        targetId: "apps/dashboard",
+      },
+    });
+  });
+
   it("captures preparation paths and patch in one bounded command", async () => {
     const commands: Array<{
       command: string;
@@ -209,6 +331,43 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(prompts[1]).toContain(
       "must select both an interaction and visible assertion",
     );
+  });
+
+  it("does not let navigation replace an available browser-exercised feature interaction", async () => {
+    const catalog = actionCatalog();
+    catalog.actions.push({
+      confidence: 0.98,
+      evidence: "Playwright exercised the dashboard filter",
+      exercised: true,
+      expectedResult: "Filtered dashboard results became visible",
+      featureIds: ["dashboard"],
+      id: "filter-dashboard",
+      kind: "click",
+      preferredLocator: {
+        name: "Filter",
+        strategy: "role",
+        value: "button",
+      },
+      risks: [],
+      route: "/",
+    });
+    const navigational = flowSpec();
+    const exercised: FlowSpec = {
+      ...navigational,
+      features: navigational.features.map((feature) => ({
+        ...feature,
+        referencedActionIds: ["filter-dashboard", "dashboard"],
+      })),
+    };
+
+    const { attempts, prompts, result } = await runFlowPlanningScenario({
+      actionCatalog: catalog,
+      candidates: [navigational, exercised],
+    });
+
+    expect(result).toEqual(exercised);
+    expect(attempts).toBe(2);
+    expect(prompts[1]).toContain("browser-exercised interaction");
   });
 
   it("repairs FlowSpecs that change a prepared feature label", async () => {
@@ -379,7 +538,6 @@ describe("createDefaultAgentHarnessDependencies", () => {
     });
     await harness.dependencies.createWorkspace({
       repoProfile: repoProfile(),
-      runPlan: runPlan(),
     });
 
     await expect(
@@ -2200,7 +2358,6 @@ describe("createDefaultAgentHarnessDependencies", () => {
     try {
       await harness.dependencies.createWorkspace({
         repoProfile: repoProfile(),
-        runPlan: runPlan(),
       });
       const report = await harness.dependencies.validateCapturePath({
         actionCatalog: actionCatalog(),
@@ -2852,6 +3009,7 @@ function actionCatalog(): ActionCatalog {
       {
         confidence: 0.9,
         evidence: "Playwright",
+        exercised: true,
         expectedResult: "Reporting visible",
         featureIds: ["reporting"],
         id: "reporting",
@@ -2882,6 +3040,7 @@ function actionCatalog(): ActionCatalog {
       {
         confidence: 0.9,
         evidence: "Playwright",
+        exercised: true,
         expectedResult: "Search results visible",
         featureIds: ["search"],
         id: "search",
@@ -2993,7 +3152,6 @@ async function runFlowPlanningScenario(input: {
   });
   await harness.dependencies.createWorkspace({
     repoProfile: repoProfile(),
-    runPlan: runPlan(),
   });
   const result = await harness.dependencies.planFlow({
     actionCatalog: input.actionCatalog ?? actionCatalog(),

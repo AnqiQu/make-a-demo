@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { PreparationManifest, RepoProfile } from "../schemas/artifacts";
+import type {
+  PreparationManifest,
+  RepoProfile,
+  RunPlan,
+} from "../schemas/artifacts";
 import {
   expandPreparationInstallScopeForMissingWorkspace,
   findRuntimeConfigurationIssue,
@@ -367,6 +371,72 @@ describe("resolveRuntimeTarget", () => {
     expect(resolution.preparationManifest).not.toHaveProperty(
       "buildCommandUsed",
     );
+  });
+
+  it("uses the RunPlan target instead of inferring an easier sibling from feature paths", () => {
+    const repoProfile = profile({
+      browserRuntimeCandidates: [
+        {
+          dir: "apps/website",
+          evidencePaths: ["apps/website/src/app/page.tsx"],
+          frameworks: ["next"],
+          ports: [3000],
+          scripts: { dev: "next dev" },
+        },
+        {
+          dir: "apps/dashboard",
+          evidencePaths: ["apps/dashboard/src/app/page.tsx"],
+          frameworks: ["next"],
+          ports: [3001],
+          scripts: { dev: "next dev -p 3001" },
+        },
+      ],
+      workspacePackages: [
+        {
+          dir: "apps/website",
+          ports: [3000],
+          scripts: { dev: "next dev" },
+        },
+        {
+          dir: "apps/dashboard",
+          ports: [3001],
+          scripts: { dev: "next dev -p 3001" },
+        },
+      ],
+    });
+    const runPlan: RunPlan = {
+      allowedPorts: [3001],
+      appDir: "apps/dashboard",
+      assumptions: [],
+      env: {},
+      expectedLocalUrl: "http://127.0.0.1:3001",
+      installCommand: "bun install --frozen-lockfile",
+      localServices: [],
+      riskFlags: [],
+      runtime: "bun",
+      startCommand: "bun run dev",
+      targetSelection: {
+        evidencePaths: ["apps/dashboard/src/app/page.tsx"],
+        reason: "The dashboard is the product.",
+        role: "product",
+        source: "model",
+        targetId: "apps/dashboard",
+      },
+      validationExpectations: [],
+    };
+
+    const resolution = resolvePreparationRuntime({
+      preparationManifest: manifest("apps/website/src/app/page.tsx"),
+      repoProfile,
+      runPlan,
+    });
+
+    expect(resolution.runtimeTarget?.targetId).toBe("apps/dashboard");
+    expect(resolution.preparationManifest).toMatchObject({
+      appDir: "apps/dashboard",
+      baseUrl: "http://127.0.0.1:3001",
+      startCommandUsed: "bun run dev",
+    });
   });
 
   it("rejects command-level working directories before runtime execution", () => {

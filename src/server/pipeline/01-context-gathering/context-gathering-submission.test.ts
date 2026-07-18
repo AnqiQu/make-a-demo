@@ -27,6 +27,7 @@ describe("submitContextGathering", () => {
         ]);
         expect(input.project.context).toEqual({
           importantFeatures: "repo validation, script generation",
+          preferredAppDir: "apps/dashboard",
           productSummary: "A product that creates demo videos.",
           requestedDurationSeconds: 90,
           targetUsers: "Early founders",
@@ -46,6 +47,7 @@ describe("submitContextGathering", () => {
         repoVisibility: "public",
         structuredContext: {
           importantFeatures: "repo validation, script generation",
+          preferredAppDir: "apps/dashboard",
           productSummary: "A product that creates demo videos.",
           requestedDurationSeconds: 90,
           targetUsers: "Early founders",

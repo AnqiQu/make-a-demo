@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { PreparationManifest } from "../schemas/artifacts";
+import type {
+  PreparationManifest,
+  RepoProfile,
+  RunPlan,
+} from "../schemas/artifacts";
 import { assertPreparedFeatureInventory } from "./prepared-feature-inventory";
 
 describe("assertPreparedFeatureInventory", () => {
@@ -60,7 +64,125 @@ describe("assertPreparedFeatureInventory", () => {
       }),
     ).not.toThrow();
   });
+
+  it("rejects preparation of a sibling application after target selection", () => {
+    const preparationManifest = manifestWithFeatures([
+      {
+        id: "landing-page",
+        label: "Landing page",
+        sourcePaths: ["apps/website/src/app/page.tsx"],
+      },
+    ]);
+    preparationManifest.appDir = "apps/website";
+    preparationManifest.productContext.evidencePaths = [
+      "apps/website/src/app/page.tsx",
+    ];
+
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest,
+        repoProfile: multiAppProfile(),
+        repoSourcePaths: new Set([
+          "apps/dashboard/src/app/page.tsx",
+          "apps/website/src/app/page.tsx",
+        ]),
+        runPlan: dashboardRunPlan(),
+      }),
+    ).toThrow(
+      "PreparationManifest.appDir must remain locked to apps/dashboard",
+    );
+  });
+
+  it("rejects feature evidence owned by a non-selected browser application", () => {
+    const preparationManifest = manifestWithFeatures([
+      {
+        id: "landing-page",
+        label: "Landing page",
+        sourcePaths: ["apps/website/src/app/page.tsx"],
+      },
+    ]);
+    preparationManifest.appDir = "apps/dashboard";
+
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest,
+        repoProfile: multiAppProfile(),
+        repoSourcePaths: new Set([
+          "README.md",
+          "apps/dashboard/src/app/page.tsx",
+          "apps/website/src/app/page.tsx",
+        ]),
+        runPlan: dashboardRunPlan(),
+      }),
+    ).toThrow(/belongs to non-selected browser application apps\/website/);
+  });
 });
+
+function dashboardRunPlan(): RunPlan {
+  return {
+    allowedPorts: [3001],
+    appDir: "apps/dashboard",
+    assumptions: [],
+    env: {},
+    expectedLocalUrl: "http://127.0.0.1:3001",
+    installCommand: "bun install --frozen-lockfile",
+    localServices: [],
+    riskFlags: [],
+    runtime: "bun",
+    startCommand: "bun run dev",
+    targetSelection: {
+      evidencePaths: ["apps/dashboard/src/app/page.tsx"],
+      reason: "The dashboard is the product.",
+      role: "product",
+      source: "model",
+      targetId: "apps/dashboard",
+    },
+    validationExpectations: [],
+  };
+}
+
+function multiAppProfile(): RepoProfile {
+  return {
+    authHints: [],
+    browserRuntimeCandidates: [
+      {
+        dir: "apps/website",
+        evidencePaths: ["apps/website/src/app/page.tsx"],
+        frameworks: ["next"],
+        ports: [3000],
+        scripts: { dev: "next dev" },
+      },
+      {
+        dir: "apps/dashboard",
+        evidencePaths: ["apps/dashboard/src/app/page.tsx"],
+        frameworks: ["next"],
+        ports: [3001],
+        scripts: { dev: "next dev -p 3001" },
+      },
+    ],
+    candidateAppDirs: ["apps/website", "apps/dashboard"],
+    candidateBuildCommands: [],
+    candidateInstallCommands: ["bun install --frozen-lockfile"],
+    candidatePorts: [3000, 3001],
+    candidateStartCommands: ["bun run dev"],
+    confidence: { assumptions: [], overall: 1 },
+    detectedFrameworks: ["next"],
+    dockerHints: [],
+    envExamples: [],
+    externalServiceHints: [],
+    lockfiles: ["bun.lock"],
+    packageManager: "bun",
+    packageScripts: { dev: "turbo dev" },
+    repoUrl: "https://github.com/example/app",
+    requiredEnvHints: [],
+    rootDir: "/workspace",
+    securityWarnings: [],
+    unsupportedReasons: [],
+    workspaces: { isMonorepo: true, packageDirectories: ["apps/*"] },
+  };
+}
 
 function manifestWithFeatures(
   features: Array<{

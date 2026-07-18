@@ -152,8 +152,10 @@ describe("runAgentHarnessPipeline", () => {
           calls.push(`reset:${manifest.id}`);
           return report("capture-runtime-reset", "passed");
         },
-        async synthesizeRunPlan({ repoProfile }) {
-          calls.push(`run-plan:${repoProfile.packageManager}`);
+        async synthesizeRunPlan({ repoProfile, workspace: targetWorkspace }) {
+          calls.push(
+            `run-plan:${repoProfile.packageManager}:${targetWorkspace.agentSandboxId}`,
+          );
           return runPlan();
         },
         async validateCapturePath({ scriptCandidate }) {
@@ -177,8 +179,8 @@ describe("runAgentHarnessPipeline", () => {
 
     expect(result.status).toBe("passed");
     expect(calls).toEqual([
-      "run-plan:bun",
       "workspace",
+      "run-plan:bun:agent_sandbox",
       "prepare:bun:bun install --frozen-lockfile",
       "preparation-diff",
       "preflight:http://127.0.0.1:3001",

@@ -1,9 +1,11 @@
 import { posix } from "node:path";
-import type {
-  PreparationManifest,
-  RepoProfile,
-  RepoWorkspacePackage,
-  ValidationReport,
+import {
+  type PreparationManifest,
+  type RepoProfile,
+  type RepoWorkspacePackage,
+  type RunPlan,
+  type ValidationReport,
+  browserRuntimeScriptNames,
 } from "../schemas/artifacts";
 
 type RuntimeCommand = {
@@ -75,6 +77,7 @@ function readScriptName(command: string): string | undefined {
 export function resolvePreparationRuntime(input: {
   preparationManifest: PreparationManifest;
   repoProfile: RepoProfile;
+  runPlan?: RunPlan;
 }): {
   preparationManifest: PreparationManifest;
   runtimeTarget: ResolvedRuntimeTarget | undefined;
@@ -109,6 +112,7 @@ export function expandPreparationInstallScopeForMissingWorkspace(input: {
   failureReport: ValidationReport;
   preparationManifest: PreparationManifest;
   repoProfile: RepoProfile;
+  runPlan?: RunPlan;
 }): PreparationManifest | undefined {
   if (
     !["build failure", "start failure"].includes(
@@ -155,6 +159,7 @@ export function expandPreparationInstallScopeForMissingWorkspace(input: {
         .join("")}`,
     },
     repoProfile: input.repoProfile,
+    ...(input.runPlan === undefined ? {} : { runPlan: input.runPlan }),
   }).preparationManifest;
 }
 
@@ -162,6 +167,7 @@ export function expandPreparationInstallScopeForMissingWorkspace(input: {
 export function resolveRuntimeTarget(input: {
   preparationManifest: PreparationManifest;
   repoProfile: RepoProfile;
+  runPlan?: RunPlan;
 }): ResolvedRuntimeTarget | undefined {
   const workspacePackage = findPreparedWorkspacePackage(input);
   if (workspacePackage === undefined) {
@@ -204,15 +210,14 @@ export function resolveRuntimeTarget(input: {
     3000;
   return {
     baseUrl: `http://127.0.0.1:${port}`,
-    build:
-      start.scriptName === "dev"
-        ? undefined
-        : findBuildCommand(
-            input.repoProfile,
-            workspacePackage,
-            preferPackageLocalCommands,
-            packageManager,
-          ),
+    build: ["dev", "develop", "serve"].includes(start.scriptName)
+      ? undefined
+      : findBuildCommand(
+          input.repoProfile,
+          workspacePackage,
+          preferPackageLocalCommands,
+          packageManager,
+        ),
     install: {
       command: installCommand,
       cwd:
@@ -323,23 +328,48 @@ function readWorkspaceFilter(
   );
 }
 
-function readFrameworkDefaultPort(command: string): number | undefined {
-  if (/\b(?:vite|svelte-kit)\b/.test(command)) {
+/** Returns the conventional local port implied by a browser framework command. */
+export function readFrameworkDefaultPort(command: string): number | undefined {
+  if (/\b(?:vite|svelte-kit|qwik)\b/.test(command)) {
     return 5173;
   }
   if (/\bastro\b/.test(command)) {
     return 4321;
   }
-  if (/\b(?:next|nuxt|remix)\b/.test(command)) {
+  if (/\b(?:next|nuxt|react-scripts|remix)\b/.test(command)) {
     return 3000;
   }
+  if (/\bng\s+serve\b/.test(command)) return 4200;
+  if (/\bgatsby\b/.test(command)) return 8000;
+  if (/\b(?:vue-cli-service|webpack(?:-dev-server)?)\b/.test(command)) {
+    return 8080;
+  }
+  if (/\bparcel\b/.test(command)) return 1234;
   return undefined;
 }
 
 function findPreparedWorkspacePackage(input: {
   preparationManifest: PreparationManifest;
   repoProfile: RepoProfile;
+  runPlan?: RunPlan;
 }): RepoWorkspacePackage | undefined {
+  const lockedTargetId =
+    input.runPlan?.targetSelection?.targetId ??
+    (input.repoProfile.browserRuntimeCandidates?.some(
+      ({ dir }) => dir === input.runPlan?.appDir,
+    )
+      ? input.runPlan?.appDir
+      : undefined);
+  if (lockedTargetId !== undefined) {
+    return (
+      input.repoProfile.workspacePackages?.find(
+        ({ dir }) => dir === lockedTargetId,
+      ) ??
+      input.repoProfile.browserRuntimeCandidates?.find(
+        ({ dir }) => dir === lockedTargetId,
+      )
+    );
+  }
   const selected = new Set<RepoWorkspacePackage>();
   for (const feature of input.preparationManifest.productContext
     .featureInventory) {
@@ -348,7 +378,7 @@ function findPreparedWorkspacePackage(input: {
         .filter(
           ({ dir, scripts }) =>
             (path === dir || path.startsWith(`${dir}/`)) &&
-            ["dev", "start", "preview"].some(
+            browserRuntimeScriptNames.some(
               (scriptName) => scripts[scriptName] !== undefined,
             ),
         )
@@ -369,7 +399,7 @@ function findStartCommand(
 ):
   | { command: string; cwd: string; port?: number; scriptName: string }
   | undefined {
-  for (const scriptName of ["dev", "start", "preview"]) {
+  for (const scriptName of browserRuntimeScriptNames) {
     if (workspacePackage.scripts[scriptName] === undefined) {
       continue;
     }

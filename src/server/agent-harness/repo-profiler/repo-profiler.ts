@@ -1,5 +1,9 @@
 import { posix } from "node:path";
-import type { PackageManager, RepoProfile } from "../schemas/artifacts";
+import {
+  type PackageManager,
+  type RepoProfile,
+  browserRuntimeScriptNames,
+} from "../schemas/artifacts";
 
 type RepoProfileFile = {
   path: string;
@@ -32,10 +36,17 @@ const lockfileManagers: Array<[string, RepoProfile["packageManager"]]> = [
 ];
 
 const frameworkPackages = [
+  ["@angular/core", "angular"],
+  ["@builder.io/qwik", "qwik"],
   ["@remix-run/react", "remix"],
+  ["@sveltejs/kit", "svelte"],
   ["astro", "astro"],
+  ["gatsby", "gatsby"],
   ["next", "next"],
+  ["nuxt", "nuxt"],
+  ["preact", "preact"],
   ["react", "react"],
+  ["solid-js", "solid"],
   ["svelte", "svelte"],
   ["vite", "vite"],
   ["vue", "vue"],
@@ -84,6 +95,12 @@ export function profileRepo(input: RepoProfileInput): RepoProfile {
     lockfiles,
     workspacePatterns,
   );
+  const browserRuntimeCandidates = readBrowserRuntimeCandidates(
+    files,
+    packages,
+    workspacePackages,
+    packageManager,
+  );
   const candidatePorts = readCandidatePorts(packageScripts);
   const envExamples = files
     .filter((file) => /^\.env(?:\..+)?$/.test(posix.basename(file.path)))
@@ -93,6 +110,7 @@ export function profileRepo(input: RepoProfileInput): RepoProfile {
     authHints: Object.keys(dependencies).filter((name) =>
       authPackagePattern.test(name),
     ),
+    browserRuntimeCandidates,
     candidateAppDirs: readCandidateAppDirs(files),
     candidateBuildCommands: readScriptCommands(packageManager, packageScripts, [
       "build",
@@ -102,9 +120,7 @@ export function profileRepo(input: RepoProfileInput): RepoProfile {
     ),
     candidatePorts,
     candidateStartCommands: readScriptCommands(packageManager, packageScripts, [
-      "dev",
-      "start",
-      "preview",
+      ...browserRuntimeScriptNames,
     ]),
     ...optionalString("commitSha", input.commitSha),
     confidence: {
@@ -160,6 +176,144 @@ export function profileRepo(input: RepoProfileInput): RepoProfile {
   };
 }
 
+function readBrowserRuntimeCandidates(
+  files: RepoProfileFile[],
+  packages: PackageRecord[],
+  workspacePackages: NonNullable<RepoProfile["workspacePackages"]>,
+  rootPackageManager: PackageManager,
+): NonNullable<RepoProfile["browserRuntimeCandidates"]> {
+  const workspacePackagesByDir = new Map(
+    workspacePackages.map((workspacePackage) => [
+      workspacePackage.dir,
+      workspacePackage,
+    ]),
+  );
+  return packages.flatMap((packageRecord) => {
+    if (
+      !browserRuntimeScriptNames.some(
+        (script) => packageRecord.scripts[script] !== undefined,
+      )
+    ) {
+      return [];
+    }
+    const workspacePackage = workspacePackagesByDir.get(packageRecord.dir);
+    const packagePath =
+      packageRecord.dir === "."
+        ? "package.json"
+        : `${packageRecord.dir}/package.json`;
+    const browserEvidencePaths = files
+      .map(({ path }) => path)
+      .filter(
+        (path) =>
+          path !== packagePath &&
+          isOwnedByPackage(path, packageRecord.dir, packages) &&
+          isBrowserRuntimeEvidencePath(path),
+      )
+      .sort();
+    if (browserEvidencePaths.length === 0) return [];
+    const evidencePaths = [packagePath, ...browserEvidencePaths].slice(0, 16);
+    const detectedFrameworks = detectBrowserFrameworks(packageRecord);
+    if (
+      detectedFrameworks.length === 0 &&
+      !browserEvidencePaths.some(isStrongCustomBrowserEvidencePath)
+    ) {
+      return [];
+    }
+    const frameworks =
+      detectedFrameworks.length === 0 ? ["custom-web"] : detectedFrameworks;
+    return [
+      {
+        dir: packageRecord.dir,
+        evidencePaths,
+        frameworks,
+        ...(workspacePackage?.installDir === undefined
+          ? { installDir: packageRecord.dir }
+          : { installDir: workspacePackage.installDir }),
+        isWorkspace: workspacePackage?.isWorkspace ?? false,
+        ...(packageRecord.name === undefined
+          ? {}
+          : { name: packageRecord.name }),
+        packageManager: workspacePackage?.packageManager ?? rootPackageManager,
+        ports: readCandidatePorts(packageRecord.scripts),
+        scripts: Object.fromEntries(
+          Object.entries(packageRecord.scripts).filter(([name]) =>
+            isRuntimePackageScript(name),
+          ),
+        ),
+        ...(workspacePackage?.workspaceDependencies === undefined
+          ? {}
+          : {
+              workspaceDependencies: workspacePackage.workspaceDependencies,
+            }),
+      },
+    ];
+  });
+}
+
+function detectBrowserFrameworks(packageRecord: PackageRecord): string[] {
+  const frameworks = new Set(detectFrameworks(packageRecord.dependencies));
+  const scripts = Object.values(packageRecord.scripts).join("\n");
+  for (const [pattern, framework] of [
+    [/\bng\s+(?:build|serve)\b/, "angular"],
+    [/\bastro\b/, "astro"],
+    [/\bgatsby\b/, "gatsby"],
+    [/\bnext\b/, "next"],
+    [/\bnuxt\b/, "nuxt"],
+    [/\b(?:parcel|webpack(?:-dev-server)?)\b/, "web-bundler"],
+    [/\bqwik\b/, "qwik"],
+    [/\breact-scripts\b/, "react"],
+    [/\bremix\b/, "remix"],
+    [/\bsvelte-kit\b/, "svelte"],
+    [/\bvite\b/, "vite"],
+    [/\bvue-cli-service\b/, "vue"],
+  ] as const) {
+    if (pattern.test(scripts)) frameworks.add(framework);
+  }
+  return [...frameworks];
+}
+
+function isOwnedByPackage(
+  path: string,
+  directory: string,
+  packages: PackageRecord[],
+): boolean {
+  if (
+    directory !== "." &&
+    path !== directory &&
+    !path.startsWith(`${directory}/`)
+  ) {
+    return false;
+  }
+  return !packages.some(
+    ({ dir }) =>
+      dir !== "." &&
+      dir !== directory &&
+      (directory === "." || dir.startsWith(`${directory}/`)) &&
+      (path === dir || path.startsWith(`${dir}/`)),
+  );
+}
+
+function isBrowserRuntimeEvidencePath(path: string): boolean {
+  return (
+    /(?:^|\/)(?:app|pages|routes|screens|src|views)\/.*\.(?:html|js|jsx|mjs|mts|svelte|ts|tsx|vue)$/i.test(
+      path,
+    ) ||
+    /(?:^|\/)(?:index\.html|astro\.config\.[cm]?[jt]s|next\.config\.[cm]?[jt]s|vite\.config\.[cm]?[jt]s|svelte\.config\.[cm]?[jt]s)$/i.test(
+      path,
+    )
+  );
+}
+
+function isStrongCustomBrowserEvidencePath(path: string): boolean {
+  return (
+    /\.(?:html|jsx|tsx|svelte|vue)$/i.test(path) ||
+    /(?:^|\/)(?:app|client|pages|routes|screens|views)\/.*\.[cm]?[jt]s$/i.test(
+      path,
+    ) ||
+    /\.(?:component|page|view)\.[cm]?[jt]s$/i.test(path)
+  );
+}
+
 function readWorkspacePackages(
   files: RepoProfileFile[],
   packages: PackageRecord[],
@@ -170,9 +324,7 @@ function readWorkspacePackages(
     if (packageRecord.dir === ".") return [];
     const scripts = packageRecord.scripts;
     const runtimeScripts = Object.fromEntries(
-      Object.entries(scripts).filter(([name]) =>
-        ["build", "dev", "preview", "start"].includes(name),
-      ),
+      Object.entries(scripts).filter(([name]) => isRuntimePackageScript(name)),
     );
     const isWorkspace = matchesWorkspacePatterns(
       packageRecord.dir,
@@ -227,6 +379,13 @@ function readWorkspacePackages(
       ...(workspaceDependencies.length === 0 ? {} : { workspaceDependencies }),
     };
   });
+}
+
+function isRuntimePackageScript(name: string): boolean {
+  return (
+    name === "build" ||
+    (browserRuntimeScriptNames as readonly string[]).includes(name)
+  );
 }
 
 function isSourceModulePath(path: string): boolean {
@@ -288,7 +447,7 @@ function selectPrimaryPackage(
   packages: PackageRecord[],
 ): PackageRecord | undefined {
   const hasRuntimeScript = ({ scripts }: PackageRecord) =>
-    ["dev", "start", "preview"].some((name) => scripts[name] !== undefined);
+    browserRuntimeScriptNames.some((name) => scripts[name] !== undefined);
   return (
     packages.find((entry) => entry.dir === "." && hasRuntimeScript(entry)) ??
     packages.find(hasRuntimeScript) ??

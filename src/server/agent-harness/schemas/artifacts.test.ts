@@ -112,10 +112,38 @@ describe("agent harness artifact schemas", () => {
     );
   });
 
+  it("does not label navigation as a browser-exercised feature interaction", () => {
+    const catalog = validActionCatalog();
+    expect(() =>
+      readActionCatalog({
+        ...catalog,
+        actions: catalog.actions.map((action) => ({
+          ...action,
+          exercised: true,
+          kind: "navigate",
+        })),
+      }),
+    ).toThrow(/exercised is only valid for feature interactions/);
+  });
+
   it("rejects artifacts that would break downstream validation boundaries", () => {
     expect(() =>
       readRunPlan({ ...validRunPlan(), expectedLocalUrl: "https://app.test" }),
     ).toThrow("expectedLocalUrl must be a local http URL");
+
+    expect(() =>
+      readRunPlan({
+        ...validRunPlan(),
+        appDir: "apps/website",
+        targetSelection: {
+          evidencePaths: ["apps/dashboard/src/app/page.tsx"],
+          reason: "The dashboard is the product.",
+          role: "product",
+          source: "model",
+          targetId: "apps/dashboard",
+        },
+      }),
+    ).toThrow("targetSelection.targetId must match appDir");
 
     expect(() =>
       readPreparationManifest({

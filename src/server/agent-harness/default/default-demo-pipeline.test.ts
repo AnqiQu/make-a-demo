@@ -118,6 +118,7 @@ describe("runDefaultDemoPipeline", () => {
       {
         demoLengthSeconds: 30,
         importantFeatures: ["calendar view"],
+        preferredAppDir: "apps/calendar",
         productSummary: "Scheduling automation",
         repoUrl: "https://github.com/acme/calendar",
         targetUsers: "Operations managers",
@@ -277,6 +278,7 @@ describe("runDefaultDemoPipeline", () => {
             ],
             version: "2026-07-15",
           });
+          expect(input.demoBrief.preferredAppDir).toBe("apps/calendar");
           await dependencies.artifactStore?.writeJson(
             "/workspace/.makeademo/pipeline-run-manifest.json",
             { finalStatus: "passed" },

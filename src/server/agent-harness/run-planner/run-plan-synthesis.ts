@@ -1,29 +1,80 @@
-import type { RepoProfile, RunPlan } from "../schemas/artifacts";
+import {
+  type BrowserRuntimeScriptName,
+  type RepoBrowserRuntimeCandidate,
+  type RepoProfile,
+  type RunPlan,
+  type RuntimeTargetSelection,
+  browserRuntimeScriptNames,
+} from "../schemas/artifacts";
+import { readFrameworkDefaultPort } from "./runtime-target-resolution";
 
-export function synthesizeRunPlan(repoProfile: RepoProfile): RunPlan {
-  const port = repoProfile.candidatePorts[0] ?? 3000;
+export function synthesizeRunPlan(
+  repoProfile: RepoProfile,
+  selectedTarget?: RuntimeTargetSelection,
+): RunPlan {
+  const onlyCandidate =
+    repoProfile.browserRuntimeCandidates?.length === 1
+      ? repoProfile.browserRuntimeCandidates[0]
+      : undefined;
+  const targetSelection =
+    selectedTarget ??
+    (onlyCandidate === undefined
+      ? undefined
+      : {
+          evidencePaths: onlyCandidate.evidencePaths,
+          reason: "The repository contains one runnable browser application.",
+          role: "unknown" as const,
+          source: "single-candidate" as const,
+          targetId: onlyCandidate.dir,
+        });
+  const target = findSelectedTarget(repoProfile, targetSelection);
+  const port =
+    target?.ports[0] ??
+    (target === undefined
+      ? undefined
+      : readFrameworkDefaultPort(Object.values(target.scripts).join("\n"))) ??
+    repoProfile.candidatePorts[0] ??
+    3000;
+  const packageManager = target?.packageManager ?? repoProfile.packageManager;
+  const startScript =
+    target === undefined ? undefined : findStartScript(target);
   const startCommand =
-    repoProfile.candidateStartCommands[0] ??
-    fallbackStartCommand(repoProfile.packageManager, port);
+    (startScript === undefined
+      ? repoProfile.candidateStartCommands[0]
+      : scriptCommand(packageManager, startScript)) ??
+    fallbackStartCommand(packageManager, port);
   return {
     allowedPorts: [port],
-    appDir: repoProfile.candidateAppDirs[0] ?? ".",
-    assumptions: ["selected first profiled app directory"],
+    appDir: target?.dir ?? repoProfile.candidateAppDirs[0] ?? ".",
+    assumptions: [
+      targetSelection?.source === "single-candidate"
+        ? "selected the only runnable browser application"
+        : targetSelection === undefined
+          ? "selected first profiled app directory"
+          : targetSelection.reason,
+    ],
     ...optionalString(
       "buildCommand",
       isDevelopmentCommand(startCommand)
         ? undefined
-        : repoProfile.candidateBuildCommands[0],
+        : target?.scripts.build === undefined
+          ? repoProfile.candidateBuildCommands[0]
+          : scriptCommand(packageManager, "build"),
     ),
     env: { NODE_ENV: "development" },
     expectedLocalUrl: `http://127.0.0.1:${port}`,
     installCommand:
-      repoProfile.candidateInstallCommands[0] ??
-      fallbackInstallCommand(repoProfile.packageManager),
+      target !== undefined &&
+      (target.isWorkspace === false ||
+        packageManager !== repoProfile.packageManager)
+        ? fallbackInstallCommand(packageManager)
+        : (repoProfile.candidateInstallCommands[0] ??
+          fallbackInstallCommand(packageManager)),
     localServices: [],
     riskFlags: readRiskFlags(repoProfile),
-    runtime: readRuntime(repoProfile.packageManager),
+    runtime: readRuntime(packageManager),
     startCommand,
+    ...(targetSelection === undefined ? {} : { targetSelection }),
     validationExpectations: [
       "base URL loads under Runtime Network Lockdown",
       "at least one meaningful visible route is available",
@@ -31,8 +82,39 @@ export function synthesizeRunPlan(repoProfile: RepoProfile): RunPlan {
   };
 }
 
+function findSelectedTarget(
+  repoProfile: RepoProfile,
+  selection: RuntimeTargetSelection | undefined,
+): RepoBrowserRuntimeCandidate | undefined {
+  if (selection === undefined) return undefined;
+  const candidate = repoProfile.browserRuntimeCandidates?.find(
+    ({ dir }) => dir === selection.targetId,
+  );
+  if (candidate === undefined) {
+    throw new Error(
+      `Selected runtime target ${selection.targetId} is not a profiled browser application.`,
+    );
+  }
+  return candidate;
+}
+
+function findStartScript(
+  target: RepoBrowserRuntimeCandidate,
+): BrowserRuntimeScriptName | undefined {
+  return browserRuntimeScriptNames.find(
+    (name) => target.scripts[name] !== undefined,
+  );
+}
+
+function scriptCommand(
+  packageManager: RepoProfile["packageManager"],
+  script: string,
+): string {
+  return `${packageManager === "unknown" ? "npm" : packageManager} run ${script}`;
+}
+
 function isDevelopmentCommand(command: string): boolean {
-  return /(?:^|\s)(?:run\s+)?dev(?:\s|$)/.test(command);
+  return /(?:^|\s)(?:run\s+)?(?:dev|develop|serve)(?:\s|$)/.test(command);
 }
 
 function readRiskFlags(repoProfile: RepoProfile): string[] {

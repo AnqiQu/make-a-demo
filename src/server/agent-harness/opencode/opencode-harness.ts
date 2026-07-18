@@ -8,6 +8,7 @@ export type OpenCodeHarnessStage =
   | "flow-planning"
   | "repo-preparation"
   | "repo-preparation-repair"
+  | "runtime-target-selection"
   | "script-repair"
   | "script-writing";
 

@@ -146,6 +146,8 @@ function readStageArtifactPaths(stage: OpenCodeHarnessRunInput["stage"]) {
       ];
     case "flow-planning":
       return ["/workspace/.makeademo/flow-spec.json"];
+    case "runtime-target-selection":
+      return ["/workspace/.makeademo/runtime-target-selection.json"];
     case "script-repair":
     case "script-writing":
       return ["/workspace/.makeademo/demo-script.json"];

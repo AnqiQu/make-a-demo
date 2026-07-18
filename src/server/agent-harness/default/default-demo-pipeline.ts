@@ -46,6 +46,7 @@ export type DefaultDemoPipelineInput = {
   githubInstallationId?: string;
   importantFeatures: string[];
   normalizedSupportingDocuments?: Array<Record<string, unknown>>;
+  preferredAppDir?: string;
   productSummary?: string;
   repoUrl: string;
   targetUsers?: string;
@@ -180,6 +181,9 @@ export async function runDefaultDemoPipeline(
         demoBrief: {
           demoLengthSeconds: input.demoLengthSeconds,
           keyProductFeatures: input.importantFeatures,
+          ...(input.preferredAppDir === undefined
+            ? {}
+            : { preferredAppDir: input.preferredAppDir }),
           ...(input.productSummary === undefined
             ? {}
             : { productSummary: input.productSummary }),

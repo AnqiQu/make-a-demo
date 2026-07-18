@@ -20,6 +20,7 @@ export type ContextGatheringSubmission = {
   repoVisibility: ProjectRepoVisibility;
   structuredContext: {
     importantFeatures: string;
+    preferredAppDir?: string;
     productSummary: string;
     requestedDurationSeconds: number;
     targetUsers: string;
@@ -29,6 +30,7 @@ export type ContextGatheringSubmission = {
 
 type ContextGatheringProjectContext = {
   importantFeatures: string;
+  preferredAppDir?: string;
   productSummary: string;
   requestedDurationSeconds: number;
   targetUsers: string;
@@ -93,6 +95,9 @@ function createProjectContext(
 ): ContextGatheringProjectContext {
   return {
     importantFeatures: input.importantFeatures,
+    ...(input.preferredAppDir === undefined
+      ? {}
+      : { preferredAppDir: input.preferredAppDir }),
     productSummary: input.productSummary,
     requestedDurationSeconds: input.requestedDurationSeconds,
     targetUsers: input.targetUsers,
@@ -127,6 +132,20 @@ function validateSubmission(input: ContextGatheringSubmission) {
 
   if (!input.contact.email.includes("@")) {
     throw new Error("email must be valid");
+  }
+
+  const preferredAppDir = input.structuredContext.preferredAppDir;
+  if (
+    preferredAppDir !== undefined &&
+    (preferredAppDir.trim().length === 0 ||
+      preferredAppDir !== preferredAppDir.trim() ||
+      preferredAppDir.startsWith("/") ||
+      preferredAppDir.startsWith("\\") ||
+      /^[A-Za-z]:[\\/]/.test(preferredAppDir) ||
+      preferredAppDir.includes("\0") ||
+      preferredAppDir.split(/[\\/]/).includes(".."))
+  ) {
+    throw new Error("preferredAppDir must be a repo-relative path");
   }
 
   if (input.contact.name.trim().length === 0) {

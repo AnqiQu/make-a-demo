@@ -1,4 +1,8 @@
-import type { PreparationManifest } from "../schemas/artifacts";
+import type {
+  PreparationManifest,
+  RepoProfile,
+  RunPlan,
+} from "../schemas/artifacts";
 
 const templateValuePattern = /^replace-with-/i;
 
@@ -9,9 +13,12 @@ const templateValuePattern = /^replace-with-/i;
 export function assertPreparedFeatureInventory(input: {
   demoBrief: { keyProductFeatures?: string[] };
   preparationManifest: PreparationManifest;
+  repoProfile?: RepoProfile;
   repoSourcePaths: ReadonlySet<string>;
+  runPlan?: RunPlan;
 }): void {
   const context = input.preparationManifest.productContext;
+  assertPreparationRuntimeTarget(input);
   if (
     templateValuePattern.test(context.name) ||
     templateValuePattern.test(context.summary)
@@ -79,6 +86,61 @@ export function assertPreparedFeatureInventory(input: {
         ? []
         : [`Unexpected: ${unexpected.join(", ")}.`]),
     ].join(" "),
+  );
+}
+
+/** Rejects preparation output that switches away from a locked browser app. */
+export function assertPreparationRuntimeTarget(input: {
+  preparationManifest: PreparationManifest;
+  repoProfile?: RepoProfile;
+  runPlan?: RunPlan;
+}): void {
+  const targetId = input.runPlan?.targetSelection?.targetId;
+  if (targetId === undefined || input.repoProfile === undefined) return;
+  if (input.preparationManifest.appDir !== targetId) {
+    throw new Error(
+      `PreparationManifest.appDir must remain locked to ${targetId}; received ${input.preparationManifest.appDir}`,
+    );
+  }
+  const siblingTargets = (input.repoProfile.browserRuntimeCandidates ?? [])
+    .map(({ dir }) => dir)
+    .filter((dir) => dir !== targetId);
+  for (const [field, paths] of [
+    [
+      "productContext.evidencePaths",
+      input.preparationManifest.productContext.evidencePaths,
+    ],
+    ...input.preparationManifest.productContext.featureInventory.map(
+      (feature, index) => [
+        `productContext.featureInventory[${index}].sourcePaths`,
+        feature.sourcePaths,
+      ],
+    ),
+  ] as Array<[string, string[]]>) {
+    for (const path of paths) {
+      const sibling = siblingTargets.find((dir) => isWithin(path, dir));
+      if (sibling !== undefined) {
+        throw new Error(
+          `${field} path ${path} belongs to non-selected browser application ${sibling}`,
+        );
+      }
+    }
+  }
+  for (const [
+    index,
+    feature,
+  ] of input.preparationManifest.productContext.featureInventory.entries()) {
+    if (!feature.sourcePaths.some((path) => isWithin(path, targetId))) {
+      throw new Error(
+        `productContext.featureInventory[${index}].sourcePaths must cite the selected browser application ${targetId}`,
+      );
+    }
+  }
+}
+
+function isWithin(path: string, directory: string): boolean {
+  return (
+    directory === "." || path === directory || path.startsWith(`${directory}/`)
   );
 }
 

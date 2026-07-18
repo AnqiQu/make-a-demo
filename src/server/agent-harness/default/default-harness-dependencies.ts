@@ -59,6 +59,11 @@ import {
   resolvePreparationRuntime,
 } from "../run-planner/runtime-target-resolution";
 import {
+  RuntimeTargetSelectionRequiredError,
+  createExplicitRuntimeTargetSelection,
+  readModelRuntimeTargetSelection,
+} from "../run-planner/runtime-target-selection";
+import {
   type ActionCatalog,
   type AppMap,
   DEMO_SCRIPT_OUTPUT_PATH,
@@ -170,6 +175,9 @@ const artifactPaths = {
     "/workspace/.makeademo/preparation-preflight-validation-report.json",
   repoProfile: "/workspace/.makeademo/repo-profile.json",
   runPlan: "/workspace/.makeademo/run-plan.json",
+  runtimeTargetSelection: "/workspace/.makeademo/runtime-target-selection.json",
+  runtimeTargetSelectionContract:
+    "/workspace/.makeademo/runtime-target-selection-contract.json",
   supportingDocuments: "/workspace/.makeademo/supporting-documents.json",
 };
 
@@ -188,6 +196,7 @@ export async function createDefaultAgentHarnessDependencies(
     | AgentHarnessSubmittedCodeAppStartInput
     | undefined;
   let opencodeSessionId: string | undefined;
+  let repoMaterialized = false;
   let runtimeRepairArtifactAttempt = 0;
   let scriptWritingBaseline: ScriptWritingContentSnapshot = {};
   const externalResourceDirectory = join(
@@ -222,6 +231,18 @@ export async function createDefaultAgentHarnessDependencies(
       logger: options.logger,
       openCodeRunner,
     });
+  const ensureRepoMaterialized = async (
+    repoProfile: RepoProfile,
+    workspace: AgentHarnessWorkspace,
+  ) => {
+    if (repoMaterialized) return;
+    await materializeScreenedRepo({
+      repoProfile,
+      sourceArchive: options.repoSourceArchive,
+      workspace,
+    });
+    repoMaterialized = true;
+  };
   const hydrateExternalResources = async (
     attempts: NetworkAttempt[],
     pass: number,
@@ -669,11 +690,7 @@ export async function createDefaultAgentHarnessDependencies(
       runPlan,
       workspace,
     }) {
-      await materializeScreenedRepo({
-        repoProfile,
-        sourceArchive: options.repoSourceArchive,
-        workspace,
-      });
+      await ensureRepoMaterialized(repoProfile, workspace);
       await writeWorkspaceJson(workspace, artifactPaths.demoBrief, demoBrief);
       await writeWorkspaceJson(
         workspace,
@@ -759,7 +776,7 @@ export async function createDefaultAgentHarnessDependencies(
         const candidateManifest = await tryReadPreparationManifest(
           workspace,
           artifactPaths.preparationManifest,
-          { demoBrief, repoSourcePaths },
+          { demoBrief, repoProfile, repoSourcePaths, runPlan },
         );
         let manifestResult: PreparationManifestReadResult =
           candidateManifest.ok || result.exitCode === 0
@@ -926,7 +943,7 @@ export async function createDefaultAgentHarnessDependencies(
             ? await tryReadPreparationManifest(
                 workspace,
                 artifactPaths.preparationManifest,
-                { demoBrief, repoSourcePaths },
+                { demoBrief, repoProfile, repoSourcePaths, runPlan },
               )
             : {
                 error: `OpenCode exited with code ${result.exitCode}: ${result.stderr || result.stdout}`,
@@ -1097,8 +1114,114 @@ export async function createDefaultAgentHarnessDependencies(
         workspace,
       });
     },
-    async synthesizeRunPlan({ repoProfile }) {
-      return synthesizeRunPlan(repoProfile);
+    async synthesizeRunPlan({
+      demoBrief,
+      normalizedSupportingDocuments,
+      repoProfile,
+      workspace,
+    }) {
+      const candidates = repoProfile.browserRuntimeCandidates ?? [];
+      if (demoBrief.preferredAppDir !== undefined) {
+        return synthesizeRunPlan(
+          repoProfile,
+          createExplicitRuntimeTargetSelection(
+            repoProfile,
+            demoBrief.preferredAppDir,
+          ),
+        );
+      }
+      if (candidates.length <= 1) {
+        return synthesizeRunPlan(repoProfile);
+      }
+
+      await ensureRepoMaterialized(repoProfile, workspace);
+      await writeWorkspaceJson(workspace, artifactPaths.demoBrief, demoBrief);
+      await writeWorkspaceJson(
+        workspace,
+        artifactPaths.repoProfile,
+        repoProfile,
+      );
+      await writeWorkspaceJson(
+        workspace,
+        artifactPaths.runtimeTargetSelectionContract,
+        createRuntimeTargetSelectionContract(repoProfile),
+      );
+      await writeWorkspaceJson(
+        workspace,
+        artifactPaths.supportingDocuments,
+        normalizedSupportingDocuments ?? [],
+      );
+      let artifactError = "Runtime target selection was not produced.";
+      for (
+        let attempt = 1;
+        attempt <= retryPolicy.agentArtifactAttempts;
+        attempt += 1
+      ) {
+        const result = await runOpenCode({
+          availableTools: ["read", "write"],
+          configDir: openCodeConfigDirectory,
+          model: `${providerID}/${modelID}`,
+          prompt: createRuntimeTargetSelectionPrompt(
+            attempt === 1 ? undefined : artifactError,
+          ),
+          ...optionalSessionId(opencodeSessionId),
+          stage: "runtime-target-selection",
+          timeoutMs: 5 * 60_000,
+          workingDirectory: workspaceRepoDirectory,
+          workspace,
+        });
+        opencodeSessionId = result.sessionId ?? opencodeSessionId;
+        const diff = await readPreparationWorkspaceDiff(workspace);
+        if (diff.changedPaths.length > 0) {
+          throw new Error(
+            `Runtime Target Selection must be read-only; changed: ${diff.changedPaths.join(", ")}.`,
+          );
+        }
+        const selectionResult =
+          result.exitCode === 0
+            ? await tryReadWorkspaceJson(
+                workspace,
+                artifactPaths.runtimeTargetSelection,
+              )
+            : {
+                error: `OpenCode exited with code ${result.exitCode}: ${result.stderr || result.stdout}`,
+                ok: false as const,
+              };
+        if (selectionResult.ok) {
+          try {
+            return synthesizeRunPlan(
+              repoProfile,
+              readModelRuntimeTargetSelection(
+                selectionResult.value,
+                repoProfile,
+              ),
+            );
+          } catch (error) {
+            if (error instanceof RuntimeTargetSelectionRequiredError) {
+              throw error;
+            }
+            artifactError = `Invalid runtime target selection: ${readErrorMessage(error)}`;
+          }
+        } else {
+          artifactError = selectionResult.error;
+        }
+        throwIfRequiredArtifactWriteWasDenied({
+          path: artifactPaths.runtimeTargetSelection,
+          result,
+          stage: "Runtime Target Selection",
+        });
+        if (attempt === retryPolicy.agentArtifactAttempts) {
+          throw new Error(
+            formatOpenCodeArtifactContractError({
+              path: artifactPaths.runtimeTargetSelection,
+              readError: artifactError,
+              result,
+              stage: "Runtime Target Selection",
+            }),
+          );
+        }
+      }
+      throw new Error("Runtime Target Selection retry loop exited early.");
     },
     async validateCapturePath({ preparationManifest, scriptCandidate }) {
       const handle = requireWorkspaceHandle(workspaceHandle);
@@ -1634,6 +1757,7 @@ async function validateSubmittedCodeRuntime(input: {
   const resolution = resolvePreparationRuntime({
     preparationManifest: input.preparationManifest,
     repoProfile: input.repoProfile,
+    runPlan: input.runPlan,
   });
   const manifest = resolution.preparationManifest;
   const runtimeTarget = resolution.runtimeTarget;
@@ -2123,6 +2247,7 @@ function assertFlowSpecGrounded(input: {
     ]),
   );
   for (const feature of input.flowSpec.features) {
+    const selectedActions: ActionCatalog["actions"] = [];
     const selectedActionKinds = new Set<
       ActionCatalog["actions"][number]["kind"]
     >();
@@ -2171,12 +2296,26 @@ function assertFlowSpecGrounded(input: {
           `FlowSpec action ${actionId} is not grounded for feature ${feature.featureId}`,
         );
       }
+      selectedActions.push(action);
       selectedActionKinds.add(action.kind);
     }
-    if (
-      !selectedActionKinds.has("assert") ||
-      ![...selectedActionKinds].some((kind) => kind !== "assert")
-    ) {
+    const exercisedActions = input.actionCatalog.actions.filter(
+      (action) =>
+        action.exercised === true &&
+        action.featureIds?.includes(feature.featureId),
+    );
+    if (!selectedActionKinds.has("assert")) {
+      throw new Error(
+        `FlowSpec feature ${feature.featureId} must select both an interaction and visible assertion from ActionCatalog`,
+      );
+    }
+    if (exercisedActions.length > 0) {
+      if (!selectedActions.some(({ exercised }) => exercised === true)) {
+        throw new Error(
+          `FlowSpec feature ${feature.featureId} must select a browser-exercised interaction when one is available`,
+        );
+      }
+    } else if (!selectedActionKinds.has("navigate")) {
       throw new Error(
         `FlowSpec feature ${feature.featureId} must select both an interaction and visible assertion from ActionCatalog`,
       );
@@ -2540,7 +2679,9 @@ async function tryReadPreparationManifest(
   path: string,
   featureValidation?: {
     demoBrief: AgentHarnessPipelineInput["demoBrief"];
+    repoProfile: RepoProfile;
     repoSourcePaths: string[];
+    runPlan: RunPlan;
   },
 ): Promise<PreparationManifestReadResult> {
   let json = await tryReadWorkspaceJson(workspace, path);
@@ -2567,7 +2708,9 @@ async function tryReadPreparationManifest(
       assertPreparedFeatureInventory({
         demoBrief: featureValidation.demoBrief,
         preparationManifest: manifest,
+        repoProfile: featureValidation.repoProfile,
         repoSourcePaths: new Set(featureValidation.repoSourcePaths),
+        runPlan: featureValidation.runPlan,
       });
     }
     return {
@@ -2904,6 +3047,51 @@ function requireWorkspaceHandle(
   return handle;
 }
 
+function createRuntimeTargetSelectionContract(repoProfile: RepoProfile) {
+  return {
+    candidates: (repoProfile.browserRuntimeCandidates ?? []).map(
+      ({ dir, evidencePaths }) => ({ evidencePaths, targetId: dir }),
+    ),
+    output: {
+      candidates: [
+        {
+          evidencePaths: ["screened evidence path from the candidate"],
+          reason: "source-backed classification reason",
+          role: "admin | docs | marketing | product | showcase | unknown",
+          targetId: "candidate targetId",
+        },
+      ],
+      reason: "selection or ambiguity reason",
+      selectedTargetId: "candidate targetId, or null when ambiguous",
+    },
+  };
+}
+
+function createRuntimeTargetSelectionPrompt(previousError?: string): string {
+  return createStagePrompt({
+    artifactPaths: [
+      artifactPaths.repoProfile,
+      artifactPaths.demoBrief,
+      artifactPaths.supportingDocuments,
+      artifactPaths.runtimeTargetSelectionContract,
+      artifactPaths.runtimeTargetSelection,
+    ],
+    instructions: [
+      "Inspect /workspace/repo and classify every runnable browser application listed in the contract.",
+      "Select the application that contains the actual user-facing product and best covers the demo brief. Marketing, documentation, component-showcase, and product applications are distinct roles; a difficult authentication or data dependency is not evidence that a marketing sibling is the product.",
+      "Use maker-provided supporting documents when present to disambiguate the intended product or feature set.",
+      "Assess every candidate exactly once and cite only evidencePaths allowed for that candidate by the contract.",
+      "If the source evidence and demo brief do not distinguish one intended application, set selectedTargetId to null and explain the ambiguity. Never choose by candidate order.",
+      "This stage is read-only. Do not modify anything under /workspace/repo.",
+      "Write only the completed JSON decision to /workspace/.makeademo/runtime-target-selection.json. After writing it, do not call another tool.",
+      ...(previousError === undefined
+        ? []
+        : [`Repair this previous artifact error: ${previousError}`]),
+    ].join("\n"),
+    stage: "runtime-target-selection",
+  });
+}
+
 function createRepoPreparationPrompt(input: {
   demoBrief: AgentHarnessPipelineInput["demoBrief"];
   repoProfile: RepoProfile;
@@ -2922,6 +3110,7 @@ function createRepoPreparationPrompt(input: {
     instructions: [
       "Prepare the cloned app in /workspace/repo for a local MakeADemo run.",
       "Before editing, inspect the README and package metadata, then use route definitions to follow only the page components, state/API layers, authentication guards, and fixtures needed for browser-demonstrable flows.",
+      `The RunPlan has locked the demo to ${input.runPlan.appDir}. Prepare only that browser application and its internal dependencies; never substitute a marketing, docs, showcase, or other runnable sibling. appDir must remain ${input.runPlan.appDir}.`,
       "You may modify app files in /workspace/repo only when needed to make a deterministic local demo mode.",
       "Preserve the original product: captured routes must continue to use its existing route tree, UI components, design system, styles, brand assets, and interaction logic. Do not create an alternate frontend, standalone demo server, replacement page, or copied approximation of the product.",
       "Make demo changes at integration seams only: authentication/session providers, API or data adapters, external-service clients, fixtures, seed state, environment/configuration, and locally vendored copies of existing remote assets. Mock the data behind the original screen, never the screen itself.",
@@ -2974,6 +3163,7 @@ function createRepoPreparationRepairPrompt(input: {
     instructions: [
       "Repo Preparation completed without producing the required artifact /workspace/.makeademo/preparation-manifest.json.",
       "The artifact may be missing, unreadable, invalid JSON, or schema-invalid.",
+      `The RunPlan target is immutable: prepare only ${input.runPlan.appDir}, keep appDir equal to ${input.runPlan.appDir}, and do not use evidence from a runnable sibling application.`,
       `Backend artifact validation failed with: ${input.readError}`,
       "Repair only the Repo Preparation output contract. Inspect /workspace/repo and the durable artifacts, then write a valid PreparationManifest JSON object to /workspace/.makeademo/preparation-manifest.json.",
       "Read /workspace/.makeademo/preparation-manifest-contract.json and use /workspace/.makeademo/preparation-manifest-template.json as the canonical shape.",
@@ -3038,6 +3228,7 @@ function createRuntimePreparationRepairPrompt(input: {
       "Do not run the app, install dependencies, or use the network. The backend will rerun install, build, start, and browser validation in the isolated submitted-code sandbox.",
       "Omit buildCommandUsed for development-server starts. If validation reports that a root aggregate build is too broad, use the exact app-scoped command from the failure summary.",
       "Preserve backend-resolved appDir, install, build, start, port, and base URL fields unless the failure summary explicitly reports a runtime-configuration error.",
+      `The selected browser application remains ${input.runPlan.appDir}; validation difficulty never authorizes switching to a runnable sibling.`,
       "For dependency-source failures, change only package metadata, lockfiles, or package-manager configuration. Do not edit executable source files or replace a library API to make installation pass; the backend performs controlled lockfile reconciliation and reruns the frozen install.",
       "For browser network failures, repair only unresolved URLs in the failure report. The backend already replays safe public GET resources, so preserve original product images, media, fonts, styles, and scripts. Adapt authenticated or stateful APIs at their service/data seams and never substitute visible assets.",
       "You may edit /workspace/repo and must rewrite /workspace/.makeademo/preparation-manifest.json to match the actual repaired state.",
@@ -3086,7 +3277,7 @@ function createFlowPlanningPrompt(artifactError?: string): string {
       "When the maker supplied no features, select exactly min(3, productContext.featureInventory.length) source-backed features with the strongest browser evidence.",
       "Each feature must use its prepared featureId and only ActionCatalog actions tagged with that featureId.",
       "Preserve each selected feature's prepared display label so backend-owned feature introduction cards remain source-grounded.",
-      "Each feature must select both a non-assert interaction and a visible assertion from ActionCatalog, with at least one selected action not reused by another feature.",
+      "For each feature, select a browser-exercised ActionCatalog interaction (exercised=true) and a visible assertion. Navigation does not replace an available exercised interaction. Only when no exercised action exists for a genuinely read-only feature may you use navigation plus a unique visible assertion. At least one selected action must not be reused by another feature.",
       "Read /workspace/.makeademo/flow-spec-contract.json and satisfy every required field, property type, and invariant it defines.",
       "Write a valid FlowSpec JSON object to /workspace/.makeademo/flow-spec.json.",
       "Do not invent alternate field names or object-shaped steps. Every steps entry and every repairConstraints entry must be a string.",
