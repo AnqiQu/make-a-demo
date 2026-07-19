@@ -43,7 +43,9 @@ describe("Browser Action Plan", () => {
     expect(script).toContain(
       "import { setup, scene, step } from './makeademo-capture-sdk';",
     );
-    expect(script).toContain("await page.goto(baseUrl);");
+    expect(script).toContain(
+      'await page.goto(baseUrl, { waitUntil: "domcontentloaded" });',
+    );
     expect(script).toContain('await scene("dashboard"');
     expect(script).toContain('await step("open-dashboard"');
     expect(script).toContain(
@@ -52,6 +54,31 @@ describe("Browser Action Plan", () => {
     expect(script).toContain(".click();");
     expect(script).toContain('await step("dashboard-visible"');
     expect(script).toContain(".toBeVisible();");
+  });
+
+  it("treats DOM readiness as navigation completion", () => {
+    const script = compileBrowserActionPlan({
+      scenes: [
+        {
+          actions: readBrowserActions([
+            { id: "open-dashboard", path: "/dashboard", type: "goto" },
+            {
+              id: "dashboard-visible",
+              locator: { strategy: "text", value: "Dashboard" },
+              type: "assert-visible",
+            },
+          ]),
+          id: "dashboard",
+        },
+      ],
+    });
+
+    expect(script).toContain(
+      'await page.goto(baseUrl, { waitUntil: "domcontentloaded" });',
+    );
+    expect(script).toContain(
+      'await page.goto(new URL("/dashboard", baseUrl).toString(), { waitUntil: "domcontentloaded" });',
+    );
   });
 
   it("rejects unsafe navigation and unknown action properties", () => {

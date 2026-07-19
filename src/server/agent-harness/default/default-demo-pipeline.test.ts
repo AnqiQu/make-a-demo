@@ -323,9 +323,9 @@ describe("runDefaultDemoPipeline", () => {
             },
             scriptCandidate: {
               assumptions: [],
-              browserActionCompilerVersion: "2026-07-12.1",
+              browserActionCompilerVersion: "2026-07-18.1",
               bunRuntimeVersion: "1.3.14",
-              captureSdkVersion: "2026-07-10.1",
+              captureSdkVersion: "2026-07-18.1",
               conformanceResult: {
                 artifactReferences: [],
                 blockedNetworkAttempts: [],
@@ -555,9 +555,9 @@ describe("runDefaultDemoPipeline", () => {
             },
             scriptCandidate: {
               assumptions: [],
-              browserActionCompilerVersion: "2026-07-12.1",
+              browserActionCompilerVersion: "2026-07-18.1",
               bunRuntimeVersion: "1.3.14",
-              captureSdkVersion: "2026-07-10.1",
+              captureSdkVersion: "2026-07-18.1",
               conformanceResult: {
                 artifactReferences: [],
                 blockedNetworkAttempts: [],

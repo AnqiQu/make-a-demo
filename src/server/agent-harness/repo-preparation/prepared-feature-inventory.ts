@@ -61,6 +61,16 @@ export function assertPreparedFeatureInventory(input: {
       throw new Error(`${path}.entryPaths must contain a local app path`);
     }
   }
+  if (
+    context.featureInventory.some(
+      ({ authStrategy }) => authStrategy !== "none",
+    ) &&
+    input.preparationManifest.authBypassOrDemoIdentity === undefined
+  ) {
+    throw new Error(
+      "PreparationManifest.authBypassOrDemoIdentity must describe the active off-camera authentication bootstrap",
+    );
+  }
 
   const requestedFeatures = input.demoBrief.keyProductFeatures ?? [];
   if (requestedFeatures.length === 0) {

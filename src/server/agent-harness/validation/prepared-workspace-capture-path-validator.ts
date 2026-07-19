@@ -40,6 +40,7 @@ export type PreparedWorkspaceCapturePathResult = {
     | "harness/internal failure"
     | "locator failure"
     | "timing/state failure"
+    | "start failure"
     | "script contract failure";
   failureReason?: string;
   logs: string[];
@@ -267,13 +268,17 @@ function classifyCaptureFailure(
 ): NonNullable<PreparedWorkspaceCapturePathResult["failureClassification"]> {
   if (error instanceof CaptureBrowserActionFailureError) {
     const evidence = `${error.label ?? ""} ${error.message}`;
-    if (
-      /locator|getBy|waiting for|strict mode|timed out|timeout/i.test(evidence)
-    ) {
-      return "locator failure";
-    }
     if (/expect|assert/i.test(evidence)) {
       return "assertion failure";
+    }
+    if (/page\.goto|\bgoto\b|navigat/i.test(evidence)) {
+      if (error.sceneId === "setup" && error.actionId === undefined) {
+        return "start failure";
+      }
+      return "timing/state failure";
+    }
+    if (/locator|getBy|strict mode/i.test(evidence)) {
+      return "locator failure";
     }
     return "timing/state failure";
   }

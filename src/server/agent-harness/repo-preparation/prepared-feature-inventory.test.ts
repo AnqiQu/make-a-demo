@@ -65,6 +65,26 @@ describe("assertPreparedFeatureInventory", () => {
     ).not.toThrow();
   });
 
+  it("requires preparation to record the off-camera authentication bootstrap", () => {
+    const preparationManifest = manifestWithFeatures([
+      {
+        authStrategy: "bypass",
+        id: "dashboard",
+        label: "Dashboard",
+      },
+    ]);
+
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest,
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).toThrow(
+      "PreparationManifest.authBypassOrDemoIdentity must describe the active off-camera authentication bootstrap",
+    );
+  });
+
   it("rejects preparation of a sibling application after target selection", () => {
     const preparationManifest = manifestWithFeatures([
       {
@@ -186,6 +206,7 @@ function multiAppProfile(): RepoProfile {
 
 function manifestWithFeatures(
   features: Array<{
+    authStrategy?: "bypass" | "demo-identity" | "none";
     id: string;
     label: string;
     requestedFeature?: string;

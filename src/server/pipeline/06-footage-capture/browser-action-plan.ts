@@ -284,7 +284,7 @@ export function compileBrowserActionPlan(input: {
     "import { setup, scene, step } from './makeademo-capture-sdk';",
     "",
     "await setup(async ({ page, baseUrl, expect }) => {",
-    "  await page.goto(baseUrl);",
+    '  await page.goto(baseUrl, { waitUntil: "domcontentloaded" });',
     ...compileActions(input.setupActions ?? [], "  "),
     "  void expect;",
     "});",
@@ -444,7 +444,7 @@ function compileActions(actions: BrowserAction[], indent: string): string[] {
 function compileAction(action: BrowserAction): string[] {
   if (action.type === "goto") {
     return [
-      `await page.goto(new URL(${JSON.stringify(action.path)}, baseUrl).toString());`,
+      `await page.goto(new URL(${JSON.stringify(action.path)}, baseUrl).toString(), { waitUntil: "domcontentloaded" });`,
     ];
   }
   if (action.type === "assert-url") {

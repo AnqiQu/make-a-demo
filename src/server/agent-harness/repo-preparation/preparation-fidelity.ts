@@ -32,6 +32,9 @@ export function validatePreparationFidelity(input: {
   for (const path of modifiedOriginalPaths) {
     if (installRepairSourcePaths.has(path)) continue;
     const patch = readFilePatch(input.workspaceDiff.patch, path);
+    if (isDemoSeamPath(path) && !addsProductPresentation(patch)) {
+      continue;
+    }
     if (isProductPresentationPath(path)) {
       if (!onlyLocalizesExternalAssets(patch)) {
         violations.push(
@@ -48,7 +51,11 @@ export function validatePreparationFidelity(input: {
   for (const path of createdPaths) {
     if (installRepairSourcePaths.has(path)) continue;
     const patch = readFilePatch(input.workspaceDiff.patch, path);
-    if (isProductPresentationPath(path) && !isVendoredAssetPath(path)) {
+    if (
+      isProductPresentationPath(path) &&
+      !isVendoredAssetPath(path) &&
+      (!isDemoSeamPath(path) || addsProductPresentation(patch))
+    ) {
       violations.push(
         `${path} creates replacement product UI instead of adapting the original application.`,
       );
@@ -144,6 +151,18 @@ function isStandaloneReplacementRuntime(patch: string) {
   );
 }
 
+function addsProductPresentation(patch: string) {
+  const additions = changedPatchLines(patch, "+").join("\n");
+  return (
+    /<!doctype\s+html|<(?:a|article|aside|body|button|canvas|dialog|div|footer|form|h[1-6]|header|html|img|input|label|li|main|nav|ol|p|section|select|span|style|svg|table|textarea|ul|video)\b/i.test(
+      additions,
+    ) ||
+    /(?:return\s*\(?|=>\s*\(?)\s*<\/?[A-Z]/.test(additions) ||
+    /^\s*<\/?[A-Z][A-Za-z0-9.]*\b[^>]*>/m.test(additions) ||
+    /\b(?:className|dangerouslySetInnerHTML|style)\s*=/.test(additions)
+  );
+}
+
 function onlyLocalizesExternalAssets(patch: string) {
   const removed = changedPatchLines(patch, "-");
   const added = changedPatchLines(patch, "+");
@@ -185,7 +204,7 @@ function isProductPresentationPath(path: string) {
 }
 
 function isDemoSeamPath(path: string) {
-  return /(?:^|[./_-])(?:adapter|api|auth|config|data|env|fixture|middleware|mock|provider|repository|seed|service|session|store)(?:[./_-]|$)/i.test(
+  return /(?:^|[./_-])(?:adapter|api|auth|config|data|env|fixture|graphql|middleware|mock|provider|proxy|repository|rpc|seed|service|session|store|trpc)(?:[./_-]|$)/i.test(
     path,
   );
 }

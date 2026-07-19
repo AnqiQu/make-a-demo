@@ -370,6 +370,37 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(prompts[1]).toContain("browser-exercised interaction");
   });
 
+  it("never accepts an auth wall as a navigation-only product feature", async () => {
+    const authMap = appMap();
+    authMap.discoveredRoutes = authMap.discoveredRoutes.map((route) => ({
+      ...route,
+      path: "/login",
+      requestedPath: "/dashboard",
+      title: "Sign in",
+    }));
+    authMap.loginOrAuthWalls = ["/login"];
+    authMap.routeTitles = { "/login": "Sign in" };
+    const catalog = actionCatalog();
+    catalog.actions = catalog.actions.map((action) =>
+      action.featureIds?.includes("dashboard")
+        ? { ...action, route: "/login" }
+        : action,
+    );
+    const invalid = flowSpec();
+    invalid.features = invalid.features.map((feature) => ({
+      ...feature,
+      referencedAppMapRoutePaths: ["/login"],
+    }));
+
+    await expect(
+      runFlowPlanningScenario({
+        actionCatalog: catalog,
+        appMap: authMap,
+        candidates: [invalid],
+      }),
+    ).rejects.toThrow(/auth wall/i);
+  });
+
   it("repairs FlowSpecs that change a prepared feature label", async () => {
     const completeFlowSpec = flowSpec();
     const changedLabel = {
@@ -2635,7 +2666,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
     });
 
     expect(candidate).toMatchObject({
-      captureSdkVersion: "2026-07-10.1",
+      captureSdkVersion: "2026-07-18.1",
       contractVersion: "2026-07-12.1",
     });
 

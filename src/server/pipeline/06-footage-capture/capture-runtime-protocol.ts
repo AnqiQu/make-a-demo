@@ -283,10 +283,14 @@ export function readSuccessfulCaptureProtocol(input: {
     }
 
     if (marker.kind === "action") {
-      if (!declaredSceneIds.has(marker.sceneId)) {
+      const isSetupAction = marker.sceneId === "setup";
+      if (!isSetupAction && !declaredSceneIds.has(marker.sceneId)) {
         continue;
       }
-      if (activeScene?.sceneId !== marker.sceneId) {
+      if (
+        (isSetupAction && activeScene !== undefined) ||
+        (!isSetupAction && activeScene?.sceneId !== marker.sceneId)
+      ) {
         throw violation(
           `Browser Action marker for Scene ${marker.sceneId} was emitted outside its Scene boundaries.`,
         );

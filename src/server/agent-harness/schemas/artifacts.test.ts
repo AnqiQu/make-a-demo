@@ -44,7 +44,7 @@ describe("agent harness artifact schemas", () => {
     ]);
     expect(contract.outputPath).toBe(DEMO_SCRIPT_OUTPUT_PATH);
     expect(scriptCandidate.sourceFlowSpecId).toBe("flow_001");
-    expect(scriptCandidate.browserActionCompilerVersion).toBe("2026-07-12.1");
+    expect(scriptCandidate.browserActionCompilerVersion).toBe("2026-07-18.1");
     expect(scriptCandidate.bunRuntimeVersion).toBe("1.3.14");
     expect(scriptCandidate.playwrightRuntimeVersion).toBe("1.60.0");
     expect(pipelineRunManifest.stageStatuses["script-writing"]).toBe("passed");
@@ -428,7 +428,7 @@ function validDemoScriptContract() {
     allowedCaptureSdkActions: ["setup", "scene", "page.goto", "locator.click"],
     baseUrlBinding: "Capture SDK context baseUrl",
     browserContextOwnership: "MakeADemo owns browser and context",
-    captureSdkVersion: "2026-07-10.1",
+    captureSdkVersion: "2026-07-18.1",
     contractVersion: "2026-07-08",
     examples: [{ scriptId: "script_001" }],
     forbiddenApis: ["fetch", "XMLHttpRequest", "WebSocket"],
@@ -448,7 +448,7 @@ function validScriptCandidate() {
   return {
     assumptions: ["dashboard available"],
     captureSdkVersion: "generated",
-    browserActionCompilerVersion: "2026-07-12.1",
+    browserActionCompilerVersion: "2026-07-18.1",
     bunRuntimeVersion: "1.3.14",
     conformanceResult: validValidationReport(),
     contractVersion: "2026-07-08",

@@ -118,6 +118,7 @@ export async function exploreSubmittedApp(input: {
   externalResourceManifest?: ExternalResourceManifest;
   featureInventory?: PreparedDemoFeature[];
   preparationManifestId: string;
+  requestedFeatures?: string[];
   workspace: AgentHarnessWorkspace;
 }): Promise<SubmittedAppExplorationResult> {
   const script = createExplorerScript(
@@ -171,6 +172,7 @@ export async function exploreSubmittedApp(input: {
     featureInventory: input.featureInventory ?? [],
     observation,
     preparationManifestId: input.preparationManifestId,
+    requestedFeatures: input.requestedFeatures ?? [],
   });
 }
 
@@ -220,10 +222,18 @@ function createExplorationArtifacts(input: {
   featureInventory: PreparedDemoFeature[];
   observation: BrowserExplorationProtocol;
   preparationManifestId: string;
+  requestedFeatures: string[];
 }): SubmittedAppExplorationResult {
   const appMapId = `${input.preparationManifestId}_app_map`;
   const actionCatalogId = `${input.preparationManifestId}_actions`;
   const networkAttempts = readObservedNetworkAttempts(input.observation);
+  const explicitAuthenticationFeatureIds = new Set(
+    input.featureInventory
+      .filter((feature) =>
+        isExplicitAuthenticationFeature(feature, input.requestedFeatures),
+      )
+      .map(({ id }) => id),
+  );
   const routes = input.observation.routes.map((route) => ({
     buttons: route.buttons,
     ...(route.featureIds === undefined ? {} : { featureIds: route.featureIds }),
@@ -289,13 +299,18 @@ function createExplorationArtifacts(input: {
     ),
   });
   const actionCatalog = readActionCatalog({
-    actions: createActions(input.observation.routes, input.featureInventory),
+    actions: createActions(
+      input.observation.routes,
+      input.featureInventory,
+      explicitAuthenticationFeatureIds,
+    ),
     appMapId,
     id: actionCatalogId,
   });
   const validationReport = createExplorationValidationReport({
     actionCatalog,
     appMap,
+    explicitAuthenticationFeatureIds,
     featureInventory: input.featureInventory,
     networkAttempts,
   });
@@ -337,14 +352,22 @@ function createRepairableExplorationFailure(input: {
 function createActions(
   routes: ObservedRoute[],
   featureInventory: PreparedDemoFeature[],
+  explicitAuthenticationFeatureIds: ReadonlySet<string>,
 ) {
   const actions: Array<Record<string, unknown>> = [];
   routes.forEach((route, routeIndex) => {
+    const matchFeatureIds = (evidence: string) =>
+      matchActionFeatureIds(
+        route,
+        evidence,
+        featureInventory,
+        explicitAuthenticationFeatureIds,
+      );
     actions.push({
       confidence: 1,
       evidence: `Playwright loaded ${route.path}`,
       expectedResult: `${route.title || route.path} becomes visible`,
-      featureIds: route.featureIds ?? [],
+      featureIds: matchFeatureIds(""),
       id: `navigate-route-${routeIndex + 1}`,
       kind: "navigate",
       preferredLocator: {
@@ -365,7 +388,7 @@ function createActions(
         confidence: 0.95,
         evidence: `Playwright observed heading on ${route.path}`,
         expectedResult: `${heading} remains visible`,
-        featureIds: matchActionFeatureIds(route, heading, featureInventory),
+        featureIds: matchFeatureIds(heading),
         id,
         kind: "assert",
         ...createLocatorCandidateFields(id, locatorEvidence),
@@ -392,11 +415,7 @@ function createActions(
           confidence: 0.85,
           evidence: `Playwright observed visible text on ${route.path}`,
           expectedResult: `${visibleText} remains visible`,
-          featureIds: matchActionFeatureIds(
-            route,
-            visibleText,
-            featureInventory,
-          ),
+          featureIds: matchFeatureIds(visibleText),
           id,
           kind: "assert",
           ...createLocatorCandidateFields(
@@ -421,11 +440,7 @@ function createActions(
             confidence: 0.85,
             evidence: `Playwright observed a visible control on ${route.path}`,
             expectedResult: `${visibleButton} remains visible`,
-            featureIds: matchActionFeatureIds(
-              route,
-              visibleButton,
-              featureInventory,
-            ),
+            featureIds: matchFeatureIds(visibleButton),
             id,
             kind: "assert",
             ...createLocatorCandidateFields(
@@ -461,10 +476,8 @@ function createActions(
         evidence: `Playwright exercised ${interaction.name} on ${route.path} and observed: ${interaction.outcome}`,
         exercised: true,
         expectedResult: interaction.outcome,
-        featureIds: matchActionFeatureIds(
-          route,
+        featureIds: matchFeatureIds(
           `${interaction.name} ${interaction.outcome}`,
-          featureInventory,
         ),
         id,
         kind: interaction.kind,
@@ -487,11 +500,7 @@ function createActions(
         confidence: 0.9,
         evidence: `Playwright observed link to ${link.href}`,
         expectedResult: `${link.href} becomes visible`,
-        featureIds: matchActionFeatureIds(
-          route,
-          `${link.name} ${link.href}`,
-          featureInventory,
-        ),
+        featureIds: matchFeatureIds(`${link.name} ${link.href}`),
         id,
         kind: "click",
         ...createLocatorCandidateFields(id, link.locatorEvidence),
@@ -513,7 +522,7 @@ function createActions(
         confidence: 0.95,
         evidence: `Playwright observed scrollable content on ${route.path}`,
         expectedResult: `Scrolling ${target.name} reveals more visible content`,
-        featureIds: matchActionFeatureIds(route, target.name, featureInventory),
+        featureIds: matchFeatureIds(target.name),
         id,
         kind: "scroll",
         ...createLocatorCandidateFields(id, target.locatorEvidence),
@@ -532,9 +541,21 @@ function matchActionFeatureIds(
   route: ObservedRoute,
   actionEvidence: string,
   featureInventory: PreparedDemoFeature[],
+  explicitAuthenticationFeatureIds: ReadonlySet<string>,
 ): string[] {
   const routeFeatureIds = route.featureIds ?? [];
-  if (routeFeatureIds.length <= 1) return routeFeatureIds;
+  if (isAuthWall(route)) {
+    return featureInventory
+      .filter(
+        (feature) =>
+          routeFeatureIds.includes(feature.id) &&
+          explicitAuthenticationFeatureIds.has(feature.id),
+      )
+      .map(({ id }) => id);
+  }
+  if (actionEvidence.length === 0 || routeFeatureIds.length <= 1) {
+    return routeFeatureIds;
+  }
   const actionTokens = semanticTokens(actionEvidence);
   const matches = featureInventory
     .filter((feature) => routeFeatureIds.includes(feature.id))
@@ -592,6 +613,7 @@ function createLocatorCandidateFields(
 function createExplorationValidationReport(input: {
   actionCatalog: ActionCatalog;
   appMap: AppMap;
+  explicitAuthenticationFeatureIds: ReadonlySet<string>;
   featureInventory: PreparedDemoFeature[];
   networkAttempts: NetworkAttempt[];
 }): ValidationReport {
@@ -599,6 +621,7 @@ function createExplorationValidationReport(input: {
     input.appMap,
     input.featureInventory,
     input.actionCatalog,
+    input.explicitAuthenticationFeatureIds,
   );
   const actionableConsoleErrors = input.appMap.consoleErrors.filter(
     isActionableBrowserConsoleError,
@@ -654,6 +677,7 @@ function readExplorationFailure(
   appMap: AppMap,
   featureInventory: PreparedDemoFeature[],
   actionCatalog: ActionCatalog,
+  explicitAuthenticationFeatureIds: ReadonlySet<string>,
 ): { classification: string; message: string } | undefined {
   const actionableConsoleErrors = appMap.consoleErrors.filter(
     isActionableBrowserConsoleError,
@@ -667,13 +691,19 @@ function readExplorationFailure(
   const featuresById = new Map(
     featureInventory.map((feature) => [feature.id, feature]),
   );
+  const authWallRoutes = new Set(appMap.loginOrAuthWalls);
   const authBarrierFeatureIds = new Set(
-    appMap.discoveredRoutes.filter(isAuthWall).flatMap((route) =>
-      (route.featureIds ?? []).filter((featureId) => {
-        const feature = featuresById.get(featureId);
-        return feature !== undefined && !isAuthenticationFeature(feature);
-      }),
-    ),
+    appMap.discoveredRoutes
+      .filter((route) => authWallRoutes.has(route.path))
+      .flatMap((route) =>
+        (route.featureIds ?? []).filter((featureId) => {
+          const feature = featuresById.get(featureId);
+          return (
+            feature !== undefined &&
+            !explicitAuthenticationFeatureIds.has(feature.id)
+          );
+        }),
+      ),
   );
   if (authBarrierFeatureIds.size > 0) {
     const blockedFeatures = featureInventory
@@ -799,23 +829,70 @@ function createRouteLocatorCandidates(route: ObservedRoute): string[] {
 
 function isAuthWall(route: {
   buttons: string[];
+  forms?: string[];
   headings: string[];
   inputs: string[];
+  links?: Array<{ name: string }>;
+  path?: string;
+  requestedPath?: string;
+  title?: string;
 }): boolean {
+  const actionLabels = [
+    ...route.buttons,
+    ...(route.links ?? []).map(({ name }) => name),
+  ];
   const hasPassword = route.inputs.some((input) => /password/i.test(input));
   const hasIdentity = route.inputs.some((input) =>
     /email|username|user name/i.test(input),
   );
-  const hasAuthCallToAction = /\b(?:log in|login|sign in|authenticate)\b/i.test(
-    [...route.headings, ...route.buttons].join(" "),
+  const visibleCopy = [
+    route.title ?? "",
+    ...route.headings,
+    ...actionLabels,
+    ...(route.forms ?? []),
+  ].join(" ");
+  const hasAuthCallToAction =
+    /\b(?:authenticate|log in|login|magic link|one[- ]time (?:code|password)|passkey|sign in|sign up|sso)\b/i.test(
+      visibleCopy,
+    );
+  const hasIdentityProviderAction = actionLabels.some((button) =>
+    /\b(?:continue|log in|sign in)\s+(?:with\s+)?(?:apple|facebook|github|google|linkedin|microsoft|sso)\b/i.test(
+      button,
+    ),
   );
-  return hasPassword && hasIdentity && hasAuthCallToAction;
+  const hasAuthPath =
+    /(?:^|[/#?_-])(?:auth|log-?in|oauth|sign-?in|sign-?up|sso)(?:[/#?&=_-]|$)/i.test(
+      route.path ?? "",
+    );
+  const redirected =
+    route.requestedPath !== undefined && route.requestedPath !== route.path;
+  return (
+    (hasPassword && hasIdentity && hasAuthCallToAction) ||
+    (hasAuthPath &&
+      (hasAuthCallToAction || hasIdentity || hasIdentityProviderAction)) ||
+    (redirected && hasIdentityProviderAction)
+  );
 }
 
-function isAuthenticationFeature(feature: PreparedDemoFeature): boolean {
-  return /\b(?:log(?:ging)?\s*in|login|sign(?:ing)?\s*in|authentication|authenticate)\b/i.test(
-    `${feature.requestedFeature ?? ""} ${feature.label}`,
+/** Returns true only when the maker explicitly requested authentication footage. */
+export function isExplicitAuthenticationFeature(
+  feature: PreparedDemoFeature,
+  requestedFeatures: readonly string[],
+): boolean {
+  if (feature.requestedFeature === undefined) return false;
+  const requestedFeature = normalizeRequestedFeature(feature.requestedFeature);
+  return (
+    requestedFeatures.some(
+      (candidate) => normalizeRequestedFeature(candidate) === requestedFeature,
+    ) &&
+    /\b(?:account (?:creation|registration)|authenticate|authentication|creat(?:e|ing) an? account|log(?:ging)?\s*in|login|magic link|oauth|passkey|sign(?:ing)?\s*(?:in|up)|single sign-on|sso)\b/i.test(
+      feature.requestedFeature,
+    )
   );
+}
+
+function normalizeRequestedFeature(value: string): string {
+  return value.trim().replaceAll(/\s+/g, " ").toLowerCase();
 }
 
 function readExplorationProtocol(stdout: string): BrowserExplorationProtocol {

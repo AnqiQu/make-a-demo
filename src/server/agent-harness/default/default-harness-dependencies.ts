@@ -30,6 +30,7 @@ import type { PipelineEventLogger } from "../../shared/logging/pipeline-event-lo
 import {
   type SubmittedAppExplorationResult,
   exploreSubmittedApp,
+  isExplicitAuthenticationFeature,
 } from "../app-explorer/submitted-app-explorer";
 import { uploadSubmittedCodeExternalResourceCache } from "../daytona/submitted-code-external-resource-cache";
 import {
@@ -563,7 +564,7 @@ export async function createDefaultAgentHarnessDependencies(
       workspaceHandle = await provider.create();
       return workspaceHandle.workspace;
     },
-    async exploreApp({ preparationManifest, workspace }) {
+    async exploreApp({ demoBrief, preparationManifest, workspace }) {
       return await runWithExternalResourceBroker({
         markUnresolved: (result, attempts) => ({
           ...result,
@@ -584,6 +585,7 @@ export async function createDefaultAgentHarnessDependencies(
             featureInventory:
               preparationManifest.productContext.featureInventory,
             preparationManifestId: preparationManifest.id,
+            requestedFeatures: demoBrief.keyProductFeatures ?? [],
             workspace,
           }),
         stage: "app-exploration",
@@ -2237,6 +2239,7 @@ function assertFlowSpecGrounded(input: {
   const observedRoutes = new Set(
     input.appMap.discoveredRoutes.map((route) => route.path),
   );
+  const authWallRoutes = new Set(input.appMap.loginOrAuthWalls);
   const actionsById = new Map(
     input.actionCatalog.actions.map((action) => [action.id, action]),
   );
@@ -2277,6 +2280,17 @@ function assertFlowSpecGrounded(input: {
     for (const route of feature.referencedAppMapRoutePaths) {
       if (!observedRoutes.has(route)) {
         throw new Error(`FlowSpec references unknown AppMap route ${route}`);
+      }
+      if (
+        authWallRoutes.has(route) &&
+        !isExplicitAuthenticationFeature(
+          preparedFeature,
+          input.demoBrief.keyProductFeatures ?? [],
+        )
+      ) {
+        throw new Error(
+          `FlowSpec feature ${feature.featureId} cannot use auth wall route ${route}; authentication must be completed off camera`,
+        );
       }
     }
     for (const actionId of feature.referencedActionIds) {
@@ -3124,7 +3138,7 @@ function createRepoPreparationPrompt(input: {
       "Replace every placeholder in productContext. productContext.name and summary must describe the actual product; evidencePaths and every feature sourcePaths entry must reference original screened repository files that support the claim.",
       "When keyProductFeatures is non-empty, prepare every requested feature exactly once and preserve its exact text in requestedFeature. Make every entryPaths route browser-reachable under local demo mode.",
       "When keyProductFeatures is empty, select and fully prepare up to three strong source-backed browser features. Each selected feature must be reachable with deterministic local authentication and data fixtures where needed; candidate identification alone is not sufficient.",
-      "For a feature blocked by authentication, use an ephemeral demo-only bypass or deterministic local identity and record authStrategy. Keep registration or login visible when authentication itself is a requested feature.",
+      "For a feature blocked by authentication, make a secret-free demo-only bypass or deterministic local identity active before App Exploration opens its entryPaths. Record authStrategy and describe the active bootstrap in authBypassOrDemoIdentity. Do not depend on real credentials or OAuth. Keep authentication UI visible only when the maker's exact keyProductFeatures explicitly requests authentication.",
       "Do not invent core product behavior that is absent from the source. If a requested capability is truly absent, leave concrete evidence in knownLimitations rather than fabricating it.",
       "Every feature sourcePaths list must cite at least one original browser route, page, component, or UI module used by the prepared route. If the original app cannot be prepared through the allowed seams, do not synthesize a substitute product.",
       `Use this local runtime URL in the manifest: ${input.runPlan.expectedLocalUrl}`,
@@ -3169,7 +3183,7 @@ function createRepoPreparationRepairPrompt(input: {
       "Read /workspace/.makeademo/preparation-manifest-contract.json and use /workspace/.makeademo/preparation-manifest-template.json as the canonical shape.",
       "Do not patch only the named field. Rebuild and validate every productContext.featureInventory entry against the complete contract before finishing.",
       "Inspect the source paths needed to replace productContext placeholders. Every requested feature must have one source-backed inventory entry and at least one browser entry path; do not solve validation by deleting a requested feature.",
-      "Use a demo-only auth bypass or deterministic local identity when a requested feature is protected, while keeping authentication UI visible if authentication itself is requested.",
+      "When a feature is protected, make a secret-free demo-only bypass or deterministic local identity active before App Exploration opens its entryPaths. Record it in authStrategy and authBypassOrDemoIdentity; do not depend on real credentials or OAuth. Keep authentication UI visible only when the maker's exact keyProductFeatures explicitly requests authentication.",
       "Preserve original routes, UI components, styles, brand assets, and interaction logic. Repair only authentication, data, external-service, fixture, seed, asset-vendoring, environment, or configuration seams; never create a replacement app or standalone demo server.",
       "Do not finish until the manifest exists at that exact path.",
       "Do not write secrets into files. Replace external services with local fixtures or mocks.",
@@ -3234,7 +3248,7 @@ function createRuntimePreparationRepairPrompt(input: {
       "You may edit /workspace/repo and must rewrite /workspace/.makeademo/preparation-manifest.json to match the actual repaired state.",
       "The repaired runtime must still be the original product. Preserve its route tree, UI components, design system, styles, brand assets, and interaction logic; remove alternate demo servers, replacement pages, and commands that bypass the original app.",
       "Repair only authentication/session, data/API, external-service, fixture/seed, local asset, environment, or configuration seams. Do not remove workspace configuration or replace the package graph or lockfile with a smaller demo project.",
-      "Preserve every selected productContext feature, including every requested feature. If browser evidence shows an auth barrier or missing entry route, modify only the ephemeral demo runtime to make that feature reachable, update its authStrategy and entryPaths, and retain source evidence.",
+      "Preserve every selected productContext feature, including every requested feature. If browser evidence shows an auth barrier or missing entry route, modify only the ephemeral demo runtime so its secret-free auth state is active before App Exploration opens the feature route. Update authStrategy, authBypassOrDemoIdentity, and entryPaths, retain source evidence, and never depend on real credentials or OAuth.",
       "Read /workspace/.makeademo/preparation-manifest-contract.json and use /workspace/.makeademo/preparation-manifest-template.json as the canonical shape.",
       "Do not patch only the reported failure. Revalidate the complete manifest and every productContext.featureInventory entry before finishing.",
       'appDir must remain relative to /workspace/repo: use "." for the repo root or a path such as "frontend"; never use an absolute path.',
@@ -3313,7 +3327,7 @@ function createScriptWritingPrompt(input: {
       "Write only playwright-recording feature demonstration Scenes. The backend deterministically adds the product intro, one brief feature intro before each feature, and the product outro.",
       "Every browser Scene must include featureId matching exactly one FlowSpec feature. Include at least one browser Scene for every FlowSpec feature and no Scene for an unselected feature.",
       "Every playwright-recording Scene requires typed actions and expectedVisibleOutcome. Each locator action must copy one browser-verified ActionCatalog locator exactly and include its locatorCandidateId; sourceActionId must reference ActionCatalog evidence selected by FlowSpec.",
-      "Use setupActions only for off-camera browser setup such as navigation or login. Every setup action must also include a sourceActionId grounded in ActionCatalog. Keep the product demonstration inside Scene actions.",
+      "The prepared runtime already owns authentication prerequisites. Use setupActions only for grounded off-camera browser state such as navigation or seeded UI setup. Every setup action must include a sourceActionId grounded in ActionCatalog. Put authentication in a Scene only when FlowSpec explicitly selected it as a maker-requested feature; keep all other product demonstration inside Scene actions.",
       "Do not author full-screen-text or static-image narrative cards; they are backend-owned.",
       "Scene description is optional human-readable metadata.",
       "presentation.music, presentation.textOverlays, and presentation.transitions are optional. When omitted they default to disabled music, no overlays, and direct back-to-back Scene playback.",

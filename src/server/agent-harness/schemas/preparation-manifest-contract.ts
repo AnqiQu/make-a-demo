@@ -33,7 +33,7 @@ export function createPreparationManifestContract() {
   return {
     $schema: "https://json-schema.org/draft/2020-12/schema",
     additionalProperties: false,
-    contractVersion: "2026-07-15",
+    contractVersion: "2026-07-18",
     invariants: [
       "all paths must reference the screened repository and must not be absolute",
       "every maker-requested feature must appear exactly once and preserve its exact text in requestedFeature",
@@ -41,13 +41,14 @@ export function createPreparationManifestContract() {
       "every feature entry must include every required field, including empty array fields",
       "every feature sourcePaths list must cite an original browser route, page, component, or UI module used by the prepared route",
       "authStrategy must be exactly bypass, demo-identity, or none",
+      "when any feature uses bypass or demo-identity, authBypassOrDemoIdentity must describe the active secret-free authentication bootstrap",
       "feature ids must be stable safe identifiers and unique within featureInventory",
     ],
     outputPath: "/workspace/.makeademo/preparation-manifest.json",
     properties: {
       appDir: { minLength: 1, type: "string" },
       appExplorationHints: stringArray,
-      authBypassOrDemoIdentity: { type: "string" },
+      authBypassOrDemoIdentity: { minLength: 1, type: "string" },
       baseUrl: { minLength: 1, type: "string" },
       blockedExternalServicesReplaced: stringArray,
       buildCommandUsed: { type: "string" },

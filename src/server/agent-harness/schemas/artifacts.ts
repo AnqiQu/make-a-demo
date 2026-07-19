@@ -143,6 +143,7 @@ export type PreparationManifest = {
   envUsed: Record<string, string>;
   localDemoModeChanges: string[];
   mocksAndFixturesAdded: string[];
+  /** Describes secret-free authentication state active before browser exploration. */
   authBypassOrDemoIdentity?: string;
   blockedExternalServicesReplaced: string[];
   requiredLocalOnlyAssumptions: string[];

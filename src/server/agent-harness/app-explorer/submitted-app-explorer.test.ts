@@ -202,6 +202,9 @@ describe("exploreSubmittedApp", () => {
     const actions = requireArtifacts(result).actionCatalog.actions;
 
     expect(
+      actions.find((action) => action.kind === "navigate")?.featureIds,
+    ).toEqual([invoice.id, teammate.id]);
+    expect(
       actions.find(
         (action) =>
           action.kind === "click" &&
@@ -270,29 +273,71 @@ describe("exploreSubmittedApp", () => {
     });
   });
 
-  it("keeps a login form observable when signing in is requested", async () => {
+  it("recognizes an OAuth-only redirect as a protected feature auth wall", async () => {
+    const invoice = preparedFeature({
+      authStrategy: "bypass",
+      entryPaths: ["/invoices"],
+      id: "invoices",
+      label: "Invoice management",
+      requestedFeature: "invoice management",
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [invoice],
+      routes: [
+        observedRoute({
+          buttons: [],
+          featureIds: [invoice.id],
+          headings: ["Welcome to Product"],
+          links: [
+            {
+              href: "https://accounts.google.com/o/oauth2/auth",
+              name: "Continue with Google",
+              sameOrigin: false,
+            },
+          ],
+          path: "/login?return_to=invoices",
+          requestedPath: "/invoices",
+          title: "Welcome | Product",
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "feature auth barrier",
+      logsSummary: expect.stringContaining("invoice management"),
+      status: "failed",
+    });
+    expect(
+      requireArtifacts(result).actionCatalog.actions.some((action) =>
+        action.featureIds?.includes(invoice.id),
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps registration observable when account creation is requested", async () => {
     const { result } = await exploreObservation({
       featureInventory: [
         preparedFeature({
           authStrategy: "demo-identity",
-          description: "Sign in with the deterministic demo identity.",
-          entryPaths: ["/#/login"],
+          description: "Create the deterministic demo identity.",
+          entryPaths: ["/#/signup"],
           fixtureNotes: ["Use demo@example.com"],
-          id: "sign-in",
-          label: "Signing in",
-          requestedFeature: "signing in",
+          id: "create-account",
+          label: "Creating an account",
+          requestedFeature: "creating an account",
           sourcePaths: ["src/login.tsx"],
         }),
       ],
+      requestedFeatures: ["creating an account"],
       routes: [
         observedRoute({
-          buttons: ["Sign in"],
-          featureIds: ["sign-in"],
-          forms: ["login"],
-          headings: ["Sign in"],
+          buttons: ["Create account"],
+          featureIds: ["create-account"],
+          forms: ["registration"],
+          headings: ["Create account"],
           inputs: ["Email", "Password"],
-          path: "/#/login",
-          requestedPath: "/#/login",
+          path: "/#/signup",
+          requestedPath: "/#/signup",
         }),
       ],
     });
@@ -300,6 +345,36 @@ describe("exploreSubmittedApp", () => {
     expect(result.validationReport).toMatchObject({
       failureClassification: "none",
       status: "passed",
+    });
+  });
+
+  it("does not promote authentication into a default demo feature", async () => {
+    const signIn = preparedFeature({
+      authStrategy: "demo-identity",
+      description: "Sign in to the product.",
+      entryPaths: ["/login"],
+      id: "sign-in",
+      label: "Signing in",
+      requestedFeature: "signing in",
+      sourcePaths: ["src/login.tsx"],
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [signIn],
+      routes: [
+        observedRoute({
+          buttons: ["Continue"],
+          featureIds: [signIn.id],
+          headings: ["Welcome back"],
+          inputs: ["Work email"],
+          path: "/auth",
+          requestedPath: "/auth",
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "feature auth barrier",
+      status: "failed",
     });
   });
 
@@ -550,6 +625,7 @@ async function exploreObservation(input: {
   consoleErrors?: string[];
   featureInventory?: PreparedDemoFeature[];
   pageErrors?: string[];
+  requestedFeatures?: string[];
   routes: Array<Record<string, unknown>>;
 }) {
   const commands: string[] = [];
@@ -559,6 +635,9 @@ async function exploreObservation(input: {
       ? {}
       : { featureInventory: input.featureInventory }),
     preparationManifestId: "prep_001",
+    ...(input.requestedFeatures === undefined
+      ? {}
+      : { requestedFeatures: input.requestedFeatures }),
     workspace: {
       async destroy() {},
       async execute() {

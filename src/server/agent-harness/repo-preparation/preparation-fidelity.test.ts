@@ -95,6 +95,17 @@ describe("validatePreparationFidelity", () => {
     expect(report.logsSummary).toContain("src/components/data-grid.tsx");
   });
 
+  it("rejects a replacement component hidden behind an API-like filename", () => {
+    const replacementPath = "src/api-dashboard.tsx";
+    const report = validateDiff({
+      createdFiles: [replacementPath],
+      patch: `diff --git a/${replacementPath} b/${replacementPath}\n+export const ApiDashboard = () => (<ReplacementDashboard />);`,
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(replacementPath);
+  });
+
   it("allows deterministic auth, data, and vendored-asset adaptations", () => {
     const report = validateDiff({
       createdFiles: [
@@ -109,6 +120,27 @@ describe("validatePreparationFidelity", () => {
         "+export const projects = [];",
         "diff --git a/public/fonts/product.woff2 b/public/fonts/product.woff2",
         "new file mode 100644",
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("allows authentication and data adapters inside framework route trees", () => {
+    const report = validateDiff({
+      createdFiles: ["apps/dashboard/src/app/api/demo-session/route.ts"],
+      modifiedFiles: [
+        "apps/dashboard/src/proxy.ts",
+        "apps/dashboard/src/trpc/client.tsx",
+      ],
+      patch: [
+        "diff --git a/apps/dashboard/src/proxy.ts b/apps/dashboard/src/proxy.ts",
+        "+if (process.env.MAKEADEMO_LOCAL_AUTH === '1') return demoSession(request);",
+        "diff --git a/apps/dashboard/src/trpc/client.tsx b/apps/dashboard/src/trpc/client.tsx",
+        "-const endpoint = getApiUrl();",
+        "+const endpoint = process.env.MAKEADEMO_LOCAL_AUTH === '1' ? '/api/demo-session' : getApiUrl();",
+        "diff --git a/apps/dashboard/src/app/api/demo-session/route.ts b/apps/dashboard/src/app/api/demo-session/route.ts",
+        "+export const GET = () => Response.json({ user: { id: 'demo-user' } });",
       ].join("\n"),
     });
 

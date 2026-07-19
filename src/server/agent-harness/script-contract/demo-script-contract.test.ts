@@ -283,7 +283,7 @@ describe("DemoScriptContract", () => {
     };
     const candidate = {
       ...scriptCandidate(typedScript),
-      captureSdkVersion: "2026-07-10.1",
+      captureSdkVersion: "2026-07-18.1",
       contractVersion: "2026-07-12.1",
     };
 
@@ -569,7 +569,7 @@ describe("DemoScriptContract", () => {
           ...scriptCandidate(validDemoScript()),
           browserActionCompilerVersion: "stale",
         },
-        "browserActionCompilerVersion must be 2026-07-12.1",
+        "browserActionCompilerVersion must be 2026-07-18.1",
       ],
       [
         "agent-authored Playwright source",
@@ -685,9 +685,9 @@ function scriptCandidate(scriptJsonContent: unknown) {
       stdoutExcerpts: [],
       suggestedRepairHints: [],
     },
-    browserActionCompilerVersion: "2026-07-12.1",
+    browserActionCompilerVersion: "2026-07-18.1",
     bunRuntimeVersion: "1.3.14",
-    captureSdkVersion: "2026-07-10.1",
+    captureSdkVersion: "2026-07-18.1",
     contractVersion: "2026-07-12.1",
     outputPath: DEMO_SCRIPT_OUTPUT_PATH,
     playwrightRuntimeVersion: "1.60.0",

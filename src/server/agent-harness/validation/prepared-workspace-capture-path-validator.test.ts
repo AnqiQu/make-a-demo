@@ -245,6 +245,59 @@ describe("validatePreparedWorkspaceCapturePath", () => {
     ).resolves.toBe("png");
   });
 
+  it("reports an off-camera setup navigation timeout instead of a protocol failure", async () => {
+    const localRunDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-capture-validation-test-"),
+    );
+    const workspace: AgentHarnessWorkspaceHandle = {
+      async destroy() {},
+      id: "agent_sandbox",
+      workspace: {
+        async destroy() {},
+        async execute() {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async executeSubmittedCode(command) {
+          if (command.includes("bun ")) {
+            return {
+              exitCode: 1,
+              stderr: "",
+              stdout: [
+                '[makeademo:validation] script started {"baseUrl":"http://127.0.0.1:3000"}',
+                '[makeademo:action] {"elapsedMs":1,"event":"started","label":"page.goto(http://127.0.0.1:3000)","sceneId":"setup","timeoutMs":10000}',
+                '[makeademo:action] {"elapsedMs":10001,"event":"failed","label":"page.goto(http://127.0.0.1:3000)","message":"goto: Timeout 10000ms exceeded","sceneId":"setup","timeoutMs":10000}',
+                '[makeademo:validation] script failed {"message":"goto: Timeout 10000ms exceeded","url":"http://127.0.0.1:3000/login"}',
+              ].join("\n"),
+            };
+          }
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async uploadSubmittedCodeFiles() {},
+      },
+    };
+
+    const result = await validatePreparedWorkspaceCapturePath({
+      baseUrl: "http://127.0.0.1:3000",
+      demoPlaywrightScript: [
+        "import { setup, scene } from './makeademo-capture-sdk';",
+        "await setup(async ({ page, baseUrl }) => { await page.goto(baseUrl); });",
+        "await scene('scene-main', async ({ page, expect }) => { await expect(page.locator('main')).toBeVisible(); });",
+      ].join("\n"),
+      localRunDirectory,
+      sceneIds: ["scene-main"],
+      workspace,
+    });
+
+    expect(result).toMatchObject({
+      failureClassification: "start failure",
+      failureReason: expect.stringContaining("page.goto"),
+      status: "failed",
+    });
+    expect(result.failureReason).not.toContain(
+      "successful capture run must emit",
+    );
+  });
+
   it("includes raw process diagnostics when execution fails before protocol markers", async () => {
     const localRunDirectory = await mkdtemp(
       join(tmpdir(), "makeademo-capture-validation-test-"),

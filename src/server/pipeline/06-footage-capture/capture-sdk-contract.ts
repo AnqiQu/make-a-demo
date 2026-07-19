@@ -78,7 +78,7 @@ export function createCaptureSdkAgentContract() {
       "import { setup, scene, step } from './makeademo-capture-sdk';",
       "",
       "await setup(async ({ page, baseUrl, expect }) => {",
-      "  await page.goto(baseUrl);",
+      '  await page.goto(baseUrl, { waitUntil: "domcontentloaded" });',
       "  await expect(page.locator('body')).toBeVisible();",
       "});",
       "",
@@ -826,7 +826,7 @@ export declare function step<Result>(
 function instructionsSource() {
   return `# MakeADemo Capture SDK Contract
 
-Import setup, scene, and step from './makeademo-capture-sdk'. Put off-camera login, seeding, and navigation in setup. Put each on-camera product moment in scene(id, async ({ page, baseUrl, expect }) => { ... }). Wrap every compiler-identified Browser Action in step(actionId, async () => { ... }) so failures retain their durable Action ID. Each scene must prove a visible outcome with Playwright toBeVisible or toBeInViewport before it ends; text, URL, title, and count assertions may supplement but cannot replace that visibility proof.
+Import setup, scene, and step from './makeademo-capture-sdk'. Authentication prerequisites are owned by the prepared runtime. Put grounded off-camera navigation and seeded UI setup in setup. Put each on-camera product moment in scene(id, async ({ page, baseUrl, expect }) => { ... }). Wrap every compiler-identified Browser Action in step(actionId, async () => { ... }) so failures retain their durable Action ID. Each scene must prove a visible outcome with Playwright toBeVisible or toBeInViewport before it ends; text, URL, title, and count assertions may supplement but cannot replace that visibility proof.
 
 Do not launch browsers, create contexts, configure recordVideo, write marker logs, print [makeademo:scene] lines, or provide timestamps/durations.
 

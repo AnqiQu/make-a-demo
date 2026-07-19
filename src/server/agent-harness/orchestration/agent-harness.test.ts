@@ -1682,9 +1682,9 @@ function flowSpec() {
 function scriptCandidate() {
   return {
     assumptions: [],
-    browserActionCompilerVersion: "2026-07-12.1",
+    browserActionCompilerVersion: "2026-07-18.1",
     bunRuntimeVersion: "1.3.14",
-    captureSdkVersion: "2026-07-10.1",
+    captureSdkVersion: "2026-07-18.1",
     conformanceResult: report("static-script-contract-validation", "passed"),
     contractVersion: "2026-07-08",
     outputPath: DEMO_SCRIPT_OUTPUT_PATH as typeof DEMO_SCRIPT_OUTPUT_PATH,
