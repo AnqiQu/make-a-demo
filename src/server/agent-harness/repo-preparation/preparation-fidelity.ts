@@ -32,18 +32,30 @@ export function validatePreparationFidelity(input: {
   for (const path of modifiedOriginalPaths) {
     if (installRepairSourcePaths.has(path)) continue;
     const patch = readFilePatch(input.workspaceDiff.patch, path);
-    if (isDemoSeamPath(path) && !addsProductPresentation(patch)) {
+    const addsPresentation = addsProductPresentation(patch);
+    const demoSeam = isDemoSeamPath(path);
+    if (
+      (demoSeam ||
+        isActiveDemoAuthAdaptation(input.preparationManifest, path, patch)) &&
+      !addsPresentation
+    ) {
       continue;
     }
     if (isProductPresentationPath(path)) {
       if (!onlyLocalizesExternalAssets(patch)) {
         violations.push(
-          `${path} modifies original product UI, styling, or brand assets instead of preserving them.`,
+          !addsPresentation &&
+            isExecutableSourcePath(path) &&
+            containsAuthenticationTerms(patch)
+            ? authenticationGateViolation(path)
+            : `${path} modifies original product UI, styling, or brand assets instead of preserving them.`,
         );
       }
-    } else if (isExecutableSourcePath(path) && !isDemoSeamPath(path)) {
+    } else if (isExecutableSourcePath(path) && !demoSeam) {
       violations.push(
-        `${path} modifies original feature logic outside an authentication, data, service, or configuration seam.`,
+        containsAuthenticationTerms(patch)
+          ? authenticationGateViolation(path)
+          : `${path} modifies original feature logic outside an authentication, data, service, or configuration seam.`,
       );
     }
   }
@@ -137,8 +149,8 @@ function createFidelityReport(violations: string[]): ValidationReport {
       ? []
       : [
           "Run the original application and preserve its routes, components, styles, assets, and interaction logic.",
-          "Replace only authentication, data, and external-service seams with deterministic local adapters or fixtures.",
-          "Remove alternate demo servers, replacement pages, and commands that bypass the original application.",
+          "For off-camera authentication, wrap the existing behavior with an active MAKEADEMO_DEMO flag from envUsed, preserve the non-demo path, and supply a complete deterministic identity.",
+          "Adapt required data and external services behind existing seams with local fixtures; remove alternate servers, replacement pages, and commands that bypass the original application.",
         ],
   };
 }
@@ -207,6 +219,76 @@ function isDemoSeamPath(path: string) {
   return /(?:^|[./_-])(?:adapter|api|auth|config|data|env|fixture|graphql|middleware|mock|provider|proxy|repository|rpc|seed|service|session|store|trpc)(?:[./_-]|$)/i.test(
     path,
   );
+}
+
+function isActiveDemoAuthAdaptation(
+  preparationManifest: PreparationManifest,
+  path: string,
+  patch: string,
+) {
+  const activeDemoFlags = Object.entries(preparationManifest.envUsed)
+    .filter(
+      ([key, value]) =>
+        /(?:^|_)MAKEADEMO_DEMO$/i.test(key) && /^(?:1|true)$/i.test(value),
+    )
+    .map(([key]) => key);
+  const additions = addedPatchText(patch);
+  return (
+    isExecutableSourcePath(path) &&
+    activeDemoFlags.some((flag) => additions.includes(flag)) &&
+    containsAuthenticationTerms(additions) &&
+    preservesNonDemoBehavior(patch, activeDemoFlags)
+  );
+}
+
+function containsAuthenticationTerms(source: string) {
+  const words = source
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_$-]+/g, " ");
+  return /\b(?:auth(?:entication|orization)?|claims?|credentials?|identity|login|logout|oauth|principal|redirect|sessions?|sign\s+(?:in|out))\b/i.test(
+    words,
+  );
+}
+
+function authenticationGateViolation(path: string) {
+  return `${path} changes authentication without an active, non-destructive MakeADemo demo gate.`;
+}
+
+function preservesNonDemoBehavior(patch: string, activeDemoFlags: string[]) {
+  const removed = changedPatchLines(patch, "-").filter((line) => line.trim());
+  if (removed.length === 0) return true;
+
+  const added = changedPatchLines(patch, "+");
+  const demoVariables = added
+    .filter((line) => activeDemoFlags.some((flag) => line.includes(flag)))
+    .flatMap((line) =>
+      [...line.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/g)].map(
+        (match) => match[1] as string,
+      ),
+    );
+  const guards = [
+    ...demoVariables.map((variable) => `!${escapeRegExp(variable)}&&`),
+    ...activeDemoFlags.map(
+      (flag) =>
+        `(?:process\\.env\\.|import\\.meta\\.env\\.)${escapeRegExp(flag)}!={1,2}["'](?:true|1)["']&&`,
+    ),
+  ];
+  const demoGuard = new RegExp(`(?:${guards.join("|")})`);
+  return removed.every((original) =>
+    added.some(
+      (candidate) =>
+        normalizeCode(candidate).replace(demoGuard, "") ===
+        normalizeCode(original),
+    ),
+  );
+}
+
+function normalizeCode(source: string) {
+  return source.replace(/\s+/g, "");
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function isExecutableSourcePath(path: string) {

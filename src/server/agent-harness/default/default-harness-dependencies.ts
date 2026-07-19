@@ -3106,6 +3106,12 @@ function createRuntimeTargetSelectionPrompt(previousError?: string): string {
   });
 }
 
+const offCameraAuthenticationInstruction =
+  "For a feature blocked by authentication, preserve the normal authentication path when demo mode is off and gate the narrowest existing provider, session, middleware, or route guard with MAKEADEMO_DEMO=true (or only the framework-required public prefix) recorded in envUsed. The active demo path must supply the complete non-null user, session, claims, and organization/team/tenant context consumed downstream; returning null from user or session lookups is not a bypass. Record the active secret-free strategy in authStrategy and authBypassOrDemoIdentity; never depend on credentials or OAuth. A guard-only edit may touch a router or layout, but must not change rendered markup or styling. Keep authentication UI visible only when the maker's exact keyProductFeatures explicitly requests authentication.";
+
+const offlineFeatureStateInstruction =
+  "Follow every selected feature beyond authentication through its API, tRPC, GraphQL, repository, database, and service calls. Replace authenticated or stateful runtime dependencies at existing seams with deterministic local fixtures; a feature that still requires an external API or database is not prepared under Runtime Network Lockdown.";
+
 function createRepoPreparationPrompt(input: {
   demoBrief: AgentHarnessPipelineInput["demoBrief"];
   repoProfile: RepoProfile;
@@ -3138,7 +3144,8 @@ function createRepoPreparationPrompt(input: {
       "Replace every placeholder in productContext. productContext.name and summary must describe the actual product; evidencePaths and every feature sourcePaths entry must reference original screened repository files that support the claim.",
       "When keyProductFeatures is non-empty, prepare every requested feature exactly once and preserve its exact text in requestedFeature. Make every entryPaths route browser-reachable under local demo mode.",
       "When keyProductFeatures is empty, select and fully prepare up to three strong source-backed browser features. Each selected feature must be reachable with deterministic local authentication and data fixtures where needed; candidate identification alone is not sufficient.",
-      "For a feature blocked by authentication, make a secret-free demo-only bypass or deterministic local identity active before App Exploration opens its entryPaths. Record authStrategy and describe the active bootstrap in authBypassOrDemoIdentity. Do not depend on real credentials or OAuth. Keep authentication UI visible only when the maker's exact keyProductFeatures explicitly requests authentication.",
+      offCameraAuthenticationInstruction,
+      offlineFeatureStateInstruction,
       "Do not invent core product behavior that is absent from the source. If a requested capability is truly absent, leave concrete evidence in knownLimitations rather than fabricating it.",
       "Every feature sourcePaths list must cite at least one original browser route, page, component, or UI module used by the prepared route. If the original app cannot be prepared through the allowed seams, do not synthesize a substitute product.",
       `Use this local runtime URL in the manifest: ${input.runPlan.expectedLocalUrl}`,
@@ -3183,7 +3190,8 @@ function createRepoPreparationRepairPrompt(input: {
       "Read /workspace/.makeademo/preparation-manifest-contract.json and use /workspace/.makeademo/preparation-manifest-template.json as the canonical shape.",
       "Do not patch only the named field. Rebuild and validate every productContext.featureInventory entry against the complete contract before finishing.",
       "Inspect the source paths needed to replace productContext placeholders. Every requested feature must have one source-backed inventory entry and at least one browser entry path; do not solve validation by deleting a requested feature.",
-      "When a feature is protected, make a secret-free demo-only bypass or deterministic local identity active before App Exploration opens its entryPaths. Record it in authStrategy and authBypassOrDemoIdentity; do not depend on real credentials or OAuth. Keep authentication UI visible only when the maker's exact keyProductFeatures explicitly requests authentication.",
+      offCameraAuthenticationInstruction,
+      offlineFeatureStateInstruction,
       "Preserve original routes, UI components, styles, brand assets, and interaction logic. Repair only authentication, data, external-service, fixture, seed, asset-vendoring, environment, or configuration seams; never create a replacement app or standalone demo server.",
       "Do not finish until the manifest exists at that exact path.",
       "Do not write secrets into files. Replace external services with local fixtures or mocks.",
@@ -3248,7 +3256,9 @@ function createRuntimePreparationRepairPrompt(input: {
       "You may edit /workspace/repo and must rewrite /workspace/.makeademo/preparation-manifest.json to match the actual repaired state.",
       "The repaired runtime must still be the original product. Preserve its route tree, UI components, design system, styles, brand assets, and interaction logic; remove alternate demo servers, replacement pages, and commands that bypass the original app.",
       "Repair only authentication/session, data/API, external-service, fixture/seed, local asset, environment, or configuration seams. Do not remove workspace configuration or replace the package graph or lockfile with a smaller demo project.",
-      "Preserve every selected productContext feature, including every requested feature. If browser evidence shows an auth barrier or missing entry route, modify only the ephemeral demo runtime so its secret-free auth state is active before App Exploration opens the feature route. Update authStrategy, authBypassOrDemoIdentity, and entryPaths, retain source evidence, and never depend on real credentials or OAuth.",
+      "Preserve every selected productContext feature, including every requested feature, and retain its source evidence and entryPaths.",
+      offCameraAuthenticationInstruction,
+      offlineFeatureStateInstruction,
       "Read /workspace/.makeademo/preparation-manifest-contract.json and use /workspace/.makeademo/preparation-manifest-template.json as the canonical shape.",
       "Do not patch only the reported failure. Revalidate the complete manifest and every productContext.featureInventory entry before finishing.",
       'appDir must remain relative to /workspace/repo: use "." for the repo root or a path such as "frontend"; never use an absolute path.',

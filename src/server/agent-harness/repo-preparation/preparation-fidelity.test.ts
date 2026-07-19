@@ -147,6 +147,105 @@ describe("validatePreparationFidelity", () => {
     expect(report.status).toBe("passed");
   });
 
+  it("allows an active demo-gated identity adapter without a seam-like filename", () => {
+    const providerPath = "packages/supabase/src/client/server.ts";
+    const report = validateDemoDiff(providerPath, [
+      "+if (process.env.MAKEADEMO_DEMO === 'true') {",
+      "+  return { auth: {",
+      "+    getUser: async () => ({ data: { user: { id: 'demo-user' } }, error: null }),",
+      "+    getSession: async () => ({ data: { session: { user: { id: 'demo-user' } } }, error: null }),",
+      "+  } };",
+      "+}",
+    ]);
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("allows a demo-gated authentication guard without changing layout presentation", () => {
+    const layoutPath = "apps/dashboard/src/app/(app)/layout.tsx";
+    const report = validateDemoDiff(layoutPath, [
+      "+const demoMode = process.env.MAKEADEMO_DEMO === 'true';",
+      "-if (!user) redirect('/login');",
+      "+if (!demoMode && !user) redirect('/login');",
+    ]);
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("allows a framework-prefixed demo flag directly in an authentication guard", () => {
+    const routerPath = "src/router.ts";
+    const report = validateDemoDiff(
+      routerPath,
+      [
+        "-if (!session) redirect('/login');",
+        "+if (import.meta.env.VITE_MAKEADEMO_DEMO !== 'true' && !session) redirect('/login');",
+      ],
+      "VITE_MAKEADEMO_DEMO",
+    );
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("rejects an authentication replacement that is not demo-gated", () => {
+    const providerPath = "packages/identity/src/client/server.ts";
+    const report = validateDemoDiff(providerPath, [
+      "-return createIdentityClient(request);",
+      "+return { auth: { getUser: async () => null } };",
+    ]);
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(
+      `${providerPath} changes authentication without an active, non-destructive MakeADemo demo gate.`,
+    );
+    expect(report.suggestedRepairHints).toContainEqual(
+      expect.stringContaining("MAKEADEMO_DEMO"),
+    );
+  });
+
+  it("rejects a demo flag declared beside a destructive authentication guard change", () => {
+    const layoutPath = "apps/dashboard/src/app/(app)/layout.tsx";
+    const report = validateDemoDiff(layoutPath, [
+      "+const demoMode = process.env.MAKEADEMO_DEMO === 'true';",
+      "-if (!user) redirect('/login');",
+      "+if (user) redirect('/login');",
+    ]);
+
+    expect(report.status).toBe("failed");
+  });
+
+  it("rejects demo-gated authentication changes that replace visible UI", () => {
+    const layoutPath = "apps/dashboard/src/app/(app)/layout.tsx";
+    const report = validateDemoDiff(layoutPath, [
+      "+const demoMode = process.env.MAKEADEMO_DEMO === 'true';",
+      "-return <ProductLayout>{children}</ProductLayout>;",
+      "+return demoMode ? <main>Demo dashboard</main> : <ProductLayout>{children}</ProductLayout>;",
+    ]);
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(layoutPath);
+  });
+
+  it("does not treat demo-gated styling as an authentication seam", () => {
+    const stylePath = "apps/dashboard/src/app/globals.css";
+    const report = validateDemoDiff(stylePath, [
+      "+/* MAKEADEMO_DEMO auth bypass */",
+      "+.authentication-screen { display: none; }",
+    ]);
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(stylePath);
+  });
+
+  it("does not mistake ordinary author data for authentication behavior", () => {
+    const featurePath = "src/article.ts";
+    const report = validateDemoDiff(featurePath, [
+      "+if (process.env.MAKEADEMO_DEMO === 'true') return demoAuthor;",
+    ]);
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(featurePath);
+  });
+
   it("rejects executable source introduced by an install repair without blaming prior demo adaptations", () => {
     const authPath = "src/auth/session-provider.ts";
     const exportPath = "src/service/export.ts";
@@ -208,15 +307,28 @@ describe("validatePreparationFidelity", () => {
   });
 });
 
+function validateDemoDiff(
+  path: string,
+  changes: string[],
+  flag = "MAKEADEMO_DEMO",
+) {
+  return validateDiff({
+    manifestOverrides: { envUsed: { [flag]: "true" } },
+    modifiedFiles: [path],
+    patch: [`diff --git a/${path} b/${path}`, ...changes].join("\n"),
+  });
+}
+
 function validateDiff(input: {
   createdFiles?: string[];
+  manifestOverrides?: Partial<PreparationManifest>;
   modifiedFiles?: string[];
   patch: string;
 }) {
   const createdFiles = input.createdFiles ?? [];
   const modifiedFiles = input.modifiedFiles ?? [];
   return validatePreparationFidelity({
-    preparationManifest: manifest(),
+    preparationManifest: manifest(input.manifestOverrides),
     repoSourcePaths: new Set(["package.json", routePath, ...modifiedFiles]),
     workspaceDiff: workspaceDiff(
       [...createdFiles, ...modifiedFiles],

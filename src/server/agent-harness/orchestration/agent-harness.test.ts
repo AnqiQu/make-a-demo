@@ -1082,7 +1082,7 @@ describe("runAgentHarnessPipeline", () => {
     ).rejects.toThrow("Script Writing modified disallowed workspace paths");
   });
 
-  it("repairs preparation and re-explores when no grounded browser route is discovered", async () => {
+  it("repairs preparation when a claimed auth bypass still reaches login", async () => {
     let explorationAttempts = 0;
     const calls: string[] = [];
 
@@ -1109,8 +1109,9 @@ describe("runAgentHarnessPipeline", () => {
                 kind: "repairable-failure" as const,
                 validationReport: {
                   ...report("app-exploration", "failed"),
-                  failureClassification: "app route not discoverable",
-                  logsSummary: "No browser routes were discovered",
+                  failureClassification: "feature auth barrier",
+                  logsSummary:
+                    "Prepared dashboard route redirected to authentication",
                 },
               }
             : {
@@ -1124,12 +1125,15 @@ describe("runAgentHarnessPipeline", () => {
           return flowSpec();
         },
         async prepareRepo() {
-          return { manifest: preparationManifest() };
+          return { manifest: claimedAuthBypassManifest() };
         },
         async repairPreparation({ failureReport }) {
           calls.push(`repair:${failureReport.stage}`);
           return {
-            manifest: { ...preparationManifest(), id: "prep_network_fixed" },
+            manifest: {
+              ...claimedAuthBypassManifest(),
+              id: "prep_network_fixed",
+            },
           };
         },
         async resetCaptureRuntime() {
@@ -1598,6 +1602,21 @@ function preparationManifest() {
     requiredLocalOnlyAssumptions: [],
     scriptGenerationContext: [],
     startCommandUsed: "bun run dev --host 127.0.0.1 --port 3000",
+  };
+}
+
+function claimedAuthBypassManifest() {
+  const manifest = preparationManifest();
+  return {
+    ...manifest,
+    authBypassOrDemoIdentity: "MAKEADEMO_DEMO supplies a local identity.",
+    envUsed: { MAKEADEMO_DEMO: "true" },
+    productContext: {
+      ...manifest.productContext,
+      featureInventory: manifest.productContext.featureInventory.map(
+        (feature) => ({ ...feature, authStrategy: "bypass" as const }),
+      ),
+    },
   };
 }
 
