@@ -116,10 +116,14 @@ export type AgentHarnessSubmittedCodeAppStartInput = {
  * exit code means the managed command is still running.
  */
 export type AgentHarnessSubmittedCodeAppStatus = {
+  endedAt?: string;
   exitCode?: number;
   running: boolean;
+  signal?: string;
+  startedAt?: string;
   stderr: string;
   stdout: string;
+  terminationReason?: "controlled-stop" | "exited" | "signaled" | "unknown";
 };
 
 export type AgentHarnessNetworkStateTransition = {

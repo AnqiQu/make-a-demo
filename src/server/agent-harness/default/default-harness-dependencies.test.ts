@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createPipelineEventLogger } from "../../shared/logging/pipeline-event-logger";
 import {
   AgentHarnessArtifactTransferError,
@@ -82,7 +82,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
           return {
             exitCode: 0,
             stderr: "",
-            stdout: "\0MAKEADEMO_PATCH\0",
+            stdout: "\0MAKEADEMO_HASHES\0\0MAKEADEMO_PATCH\0",
           };
         }
         return { exitCode: 0, stderr: "", stdout: "" };
@@ -189,7 +189,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         return {
           exitCode: 0,
           stderr: "",
-          stdout: "src/App.tsx\0\0MAKEADEMO_PATCH\0diff contents",
+          stdout: `src/App.tsx\0__proto__\0\0MAKEADEMO_HASHES\0src/App.tsx\0sha256:${"f".repeat(64)}\0__proto__\0sha256:${"e".repeat(64)}\0\0MAKEADEMO_PATCH\0diff contents`,
         };
       },
     };
@@ -203,7 +203,14 @@ describe("createDefaultAgentHarnessDependencies", () => {
     await expect(
       harness.dependencies.capturePreparationWorkspaceDiff?.({ workspace }),
     ).resolves.toMatchObject({
-      changedPaths: ["/workspace/repo/src/App.tsx"],
+      changedFileSha256: Object.fromEntries([
+        ["src/App.tsx", `sha256:${"f".repeat(64)}`],
+        ["__proto__", `sha256:${"e".repeat(64)}`],
+      ]),
+      changedPaths: [
+        "/workspace/repo/src/App.tsx",
+        "/workspace/repo/__proto__",
+      ],
       patch: "diff contents",
     });
     await logger.flush();
@@ -997,6 +1004,223 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(sessionIds).toEqual([undefined, "stalled_session", undefined]);
   });
 
+  it("rebuilds a fidelity repair from screened source without stale manifest or session state", async () => {
+    let manifestPresent = false;
+    let manifestPresentAtRepairStart: boolean | undefined;
+    let screenedRepoMaterializations = 0;
+    const sessionIds: Array<string | undefined> = [];
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async uploadFiles(files) {
+        if (
+          files.some(
+            ({ destinationPath }) =>
+              destinationPath === "/workspace/.makeademo/screened-repo.tar",
+          )
+        ) {
+          screenedRepoMaterializations += 1;
+        }
+      },
+      async execute(command) {
+        if (
+          command.includes(
+            "rm -f '/workspace/.makeademo/preparation-manifest.json'",
+          )
+        ) {
+          manifestPresent = false;
+        }
+        if (
+          command === "cat '/workspace/.makeademo/preparation-manifest.json'"
+        ) {
+          return manifestPresent
+            ? {
+                exitCode: 0,
+                stderr: "",
+                stdout: JSON.stringify(preparationManifest()),
+              }
+            : { exitCode: 1, stderr: "missing", stdout: "" };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async writeTextFile(path) {
+        if (path === "/workspace/.makeademo/preparation-manifest.json") {
+          manifestPresent = true;
+        }
+      },
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(input) {
+          sessionIds.push(input.sessionId);
+          if (input.stage === "repo-preparation-repair") {
+            manifestPresentAtRepairStart = manifestPresent;
+          }
+          manifestPresent = true;
+          return {
+            exitCode: 0,
+            sessionId:
+              input.stage === "repo-preparation"
+                ? "prepared_session"
+                : "rebuilt_session",
+            stderr: "",
+            stdout: "prepared",
+          };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await harness.dependencies.prepareRepo({
+      demoBrief: { keyProductFeatures: ["dashboard"] },
+      normalizedSupportingDocuments: undefined,
+      repoProfile: repoProfile(),
+      repoSourcePaths: ["package.json", "src/App.tsx"],
+      runPlan: runPlan(),
+      workspace,
+    });
+    await harness.dependencies.repairPreparation?.({
+      demoBrief: { keyProductFeatures: ["dashboard"] },
+      failureReport: {
+        ...validationReport("preparation-fidelity", "failed"),
+        failureClassification: "product fidelity violation",
+      },
+      normalizedSupportingDocuments: undefined,
+      preparationManifest: preparationManifest(),
+      repoProfile: repoProfile(),
+      repoSourcePaths: ["package.json", "src/App.tsx"],
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(screenedRepoMaterializations).toBe(2);
+    expect(manifestPresentAtRepairStart).toBe(false);
+    expect(sessionIds).toEqual([undefined, undefined]);
+  });
+
+  it("restores a fidelity-approved preparation patch and manifest", async () => {
+    const commands: string[] = [];
+    const written = new Map<string, string>();
+    const patch = [
+      "diff --git a/src/demo.ts b/src/demo.ts",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/src/demo.ts",
+      "@@ -0,0 +1 @@",
+      "+export const demo = true;",
+    ].join("\n");
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute(command) {
+        commands.push(command);
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async uploadFiles() {},
+      async writeTextFile(path, contents) {
+        written.set(path, contents);
+      },
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await harness.dependencies.restorePreparationCandidate?.({
+      preparationManifest: preparationManifest(),
+      repoProfile: repoProfile(),
+      workspace,
+      workspaceDiff: {
+        changedFileSha256: {
+          "src/demo.ts": `sha256:${"a".repeat(64)}`,
+        },
+        changedPaths: ["/workspace/repo/src/demo.ts"],
+        patch,
+        patchSha256: `sha256:${createHash("sha256").update(patch).digest("hex")}`,
+        sourceCommitSha: "abc123def456",
+      },
+    });
+
+    expect(
+      written.get("/workspace/.makeademo/accepted-preparation.patch"),
+    ).toBe(`${patch}\n`);
+    expect(
+      JSON.parse(
+        written.get("/workspace/.makeademo/preparation-manifest.json") ?? "",
+      ),
+    ).toEqual(preparationManifest());
+    expect(commands).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          "git -C '/workspace/repo' apply --binary '/workspace/.makeademo/accepted-preparation.patch'",
+        ),
+      ]),
+    );
+  });
+
+  it("keeps install repairs scoped to dependency files and preserves the approved manifest", async () => {
+    const approvedManifest = preparationManifest();
+    const driftedManifest = { ...approvedManifest, id: "prep_drifted" };
+    let manifest = approvedManifest;
+    let repairPrompt = "";
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute(command) {
+        if (
+          command === "cat '/workspace/.makeademo/preparation-manifest.json'"
+        ) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: JSON.stringify(manifest),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async uploadFiles() {},
+      async writeTextFile(path, contents) {
+        if (path === "/workspace/.makeademo/preparation-manifest.json") {
+          manifest = JSON.parse(contents) as PreparationManifest;
+        }
+      },
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(input) {
+          if (input.stage === "repo-preparation-repair") {
+            repairPrompt = input.prompt;
+            manifest = driftedManifest;
+          }
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const repaired = await harness.dependencies.repairPreparation?.({
+      demoBrief: { keyProductFeatures: ["dashboard"] },
+      failureReport: {
+        ...validationReport("preparation-preflight", "failed"),
+        failureClassification: "install failure",
+      },
+      normalizedSupportingDocuments: undefined,
+      preparationManifest: approvedManifest,
+      repoProfile: repoProfile(),
+      repoSourcePaths: ["package.json", "src/App.tsx"],
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(repaired?.manifest).toEqual(approvedManifest);
+    expect(manifest).toEqual(approvedManifest);
+    expect(repairPrompt).toContain("Do not edit lockfiles");
+    expect(repairPrompt).toContain("Do not rewrite the PreparationManifest");
+  });
+
   it("preserves a runtime repair timeout when artifact retries are disabled", async () => {
     const workspace = repairableRepoPreparationWorkspace();
     const timeout = new AgentHarnessCommandTimeoutError(300_000, "inactivity");
@@ -1624,6 +1848,50 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
   });
 
+  it("reconciles a repaired dependency graph before the next frozen install", async () => {
+    const commands: string[] = [];
+    const promotedFiles: string[][] = [];
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async promoteSubmittedCodeFiles(paths) {
+        promotedFiles.push(paths);
+      },
+      async setSubmittedCodeNetworkAccess() {},
+      async startSubmittedCodeApp() {},
+      async stopSubmittedCodeApp() {},
+      async syncSubmittedCodeWorkspace() {},
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.validatePreparation({
+        preparationManifest: preparationManifest(),
+        reconcileLockfile: true,
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).resolves.toMatchObject({ status: "passed" });
+
+    expect(commands[0]).toContain(
+      "bun install --lockfile-only --ignore-scripts",
+    );
+    expect(commands[1]).toContain("bun install --frozen-lockfile");
+    expect(promotedFiles).toEqual([["bun.lock"]]);
+  });
+
   it("rejects a root aggregate build when the prepared feature has a scoped monorepo build", async () => {
     const calls: string[] = [];
     const workspace: AgentHarnessWorkspace = {
@@ -1701,6 +1969,104 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(calls).toEqual([]);
   });
 
+  it("hydrates public resources requested during a guarded build and rebuilds offline", async () => {
+    const outputRoot = await mkdtemp(
+      join(tmpdir(), "makeademo-build-resource-hydration-"),
+    );
+    const assetUrl = "https://fonts.example.com/product.woff2";
+    const commands: string[] = [];
+    const buildEnvironments: Array<Record<string, string> | undefined> = [];
+    let buildRuns = 0;
+    let starts = 0;
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode(command, options) {
+        commands.push(command);
+        if (command.includes("bun run build:app")) {
+          buildRuns += 1;
+          buildEnvironments.push(options?.env);
+          return buildRuns === 1
+            ? {
+                exitCode: 1,
+                stderr: `[makeademo:network-blocked] {"direction":"outbound","hasCredentials":false,"host":"fonts.example.com","method":"GET","phase":"runtime","resourceType":"font","url":"${assetUrl}"}`,
+                stdout: "",
+              }
+            : { exitCode: 0, stderr: "", stdout: "built" };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async readSubmittedCodeAppStatus() {
+        return { running: true, stderr: "", stdout: "ready" };
+      },
+      async setSubmittedCodeNetworkAccess() {},
+      async startSubmittedCodeApp() {
+        starts += 1;
+      },
+      async stopSubmittedCodeApp() {},
+      async syncSubmittedCodeWorkspace() {},
+      async uploadSubmittedCodeFiles() {},
+    };
+    const requestedUrls: string[] = [];
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      externalResourceFetcher: async (url) => {
+        requestedUrls.push(url);
+        return {
+          body: new TextEncoder().encode("font"),
+          contentType: "font/woff2",
+          headers: {},
+          status: 200,
+        };
+      },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot,
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    try {
+      const report = await harness.dependencies.validatePreparation({
+        preparationManifest: {
+          ...preparationManifest(),
+          buildCommandUsed: "bun run build:app",
+        },
+        repoProfile: {
+          ...repoProfile(),
+          packageScripts: {
+            ...repoProfile().packageScripts,
+            "build:app": "next build",
+          },
+        },
+        runPlan: runPlan(),
+        workspace,
+      });
+
+      expect(report).toMatchObject({ status: "passed" });
+      expect(requestedUrls).toEqual([assetUrl]);
+      expect(buildRuns).toBe(2);
+      expect(starts).toBe(1);
+      expect(buildEnvironments).toEqual([
+        expect.objectContaining({
+          NODE_OPTIONS: expect.stringContaining("runtime-network-guard.cjs"),
+        }),
+        expect.objectContaining({
+          NODE_OPTIONS: expect.stringContaining("runtime-network-guard.cjs"),
+        }),
+      ]);
+      expect(
+        commands.findIndex((command) =>
+          command.includes("runtime-network-guard.cjs"),
+        ),
+      ).toBeLessThan(
+        commands.findIndex((command) => command.includes("bun run build:app")),
+      );
+    } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
   it("starts and stops the submitted app through the workspace managed-process seam", async () => {
     const shellCommands: string[] = [];
     const lifecycleCalls: unknown[] = [];
@@ -1761,6 +2127,520 @@ describe("createDefaultAgentHarnessDependencies", () => {
       },
     ]);
     expect(shellCommands.join("\n")).not.toMatch(/nohup|app\.pid/);
+  });
+
+  it("probes a prepared feature route instead of accepting the server root", async () => {
+    const submittedCommands: string[] = [];
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode(command) {
+        submittedCommands.push(command);
+        return { exitCode: 0, stderr: "", stdout: "ok" };
+      },
+      async setSubmittedCodeNetworkAccess() {},
+      async startSubmittedCodeApp() {},
+      async stopSubmittedCodeApp() {},
+      async syncSubmittedCodeWorkspace() {},
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+    const [feature] = preparationManifest().productContext.featureInventory;
+    if (feature === undefined) throw new Error("Expected a prepared feature.");
+    const manifest: PreparationManifest = {
+      ...preparationManifest(),
+      productContext: {
+        ...preparationManifest().productContext,
+        featureInventory: [
+          {
+            ...feature,
+            entryPaths: ["/dashboard"],
+          },
+        ],
+      },
+    };
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: manifest,
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      status: "passed",
+      urlChecked: "http://127.0.0.1:3000/dashboard",
+    });
+    expect(submittedCommands.at(-1)).toContain(
+      "http://127.0.0.1:3000/dashboard",
+    );
+  });
+
+  it("gives one connected feature request the full cold-render deadline", async () => {
+    const submittedCommands: string[] = [];
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode(command) {
+        submittedCommands.push(command);
+        return { exitCode: 0, stderr: "", stdout: "ok" };
+      },
+      async setSubmittedCodeNetworkAccess() {},
+      async startSubmittedCodeApp() {},
+      async stopSubmittedCodeApp() {},
+      async syncSubmittedCodeWorkspace() {},
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.validatePreparation({
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).resolves.toMatchObject({ status: "passed" });
+
+    const probeCommands = submittedCommands.filter((command) =>
+      command.includes("curl -"),
+    );
+    expect(probeCommands).toHaveLength(1);
+    expect(probeCommands[0]).toMatch(/--connect-timeout 2\b/);
+    expect(probeCommands[0]).toMatch(/--max-time 90\b/);
+    expect(probeCommands[0]).toContain("--location");
+  });
+
+  it("preserves connection failures that precede a successful cold render", async () => {
+    vi.useFakeTimers();
+    let probeAttempt = 0;
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode(command) {
+        if (!command.includes("curl -")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        probeAttempt += 1;
+        return probeAttempt === 1
+          ? {
+              exitCode: 7,
+              stderr: "curl: (7) Failed to connect to 127.0.0.1",
+              stdout: "",
+            }
+          : { exitCode: 0, stderr: "", stdout: "ready" };
+      },
+      async readSubmittedCodeAppStatus() {
+        return { running: true, stderr: "", stdout: "" };
+      },
+      async setSubmittedCodeNetworkAccess() {},
+      async startSubmittedCodeApp() {},
+      async stopSubmittedCodeApp() {},
+      async syncSubmittedCodeWorkspace() {},
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    try {
+      const validation = harness.dependencies.validatePreparation({
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      });
+      await vi.advanceTimersByTimeAsync(2_000);
+      const report = await validation;
+
+      expect(report.runtimeProbe).toMatchObject({
+        attempts: [
+          { attempt: 1, outcome: "connection-refused" },
+          {
+            attempt: 2,
+            outcome: "responded",
+            process: { running: true },
+          },
+        ],
+        targetUrl: "http://127.0.0.1:3000/",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("records the final local URL and HTTP status after redirects", async () => {
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode(command) {
+        return command.includes("curl -")
+          ? {
+              exitCode: 0,
+              stderr: "",
+              stdout:
+                '[makeademo:probe] {"httpStatus":200,"url":"http://127.0.0.1:3000/login"}',
+            }
+          : { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async setSubmittedCodeNetworkAccess() {},
+      async startSubmittedCodeApp() {},
+      async stopSubmittedCodeApp() {},
+      async syncSubmittedCodeWorkspace() {},
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: preparationManifest(),
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report.runtimeProbe).toMatchObject({
+      finalUrl: "http://127.0.0.1:3000/login",
+      httpStatus: 200,
+      targetUrl: "http://127.0.0.1:3000/",
+    });
+  });
+
+  it("fails a response when the managed runtime exited during the probe", async () => {
+    let statusReads = 0;
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode(command) {
+        return command.includes("curl -")
+          ? {
+              exitCode: 0,
+              stderr: "",
+              stdout:
+                '[makeademo:probe] {"httpStatus":200,"url":"http://127.0.0.1:3000/"}',
+            }
+          : { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async readSubmittedCodeAppStatus() {
+        statusReads += 1;
+        return statusReads === 1
+          ? { running: true, stderr: "", stdout: "ready" }
+          : { exitCode: 1, running: false, stderr: "crashed", stdout: "" };
+      },
+      async setSubmittedCodeNetworkAccess() {},
+      async startSubmittedCodeApp() {},
+      async stopSubmittedCodeApp() {},
+      async syncSubmittedCodeWorkspace() {},
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: preparationManifest(),
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "runtime crash",
+      runtimeProbe: {
+        attempts: [{ outcome: "responded" }],
+        httpStatus: 200,
+      },
+      status: "failed",
+    });
+  });
+
+  it("preserves HTTP error metadata and classifies a crashing route as a build failure", async () => {
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode(command) {
+        return command.includes("curl -")
+          ? {
+              exitCode: 22,
+              stderr: "curl: (22) The requested URL returned error: 500",
+              stdout:
+                '[makeademo:probe] {"httpStatus":500,"url":"http://127.0.0.1:3000/dashboard"}',
+            }
+          : { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async readSubmittedCodeAppStatus() {
+        return {
+          running: true,
+          stderr: "",
+          stdout: "route compilation failed",
+        };
+      },
+      async setSubmittedCodeNetworkAccess() {},
+      async startSubmittedCodeApp() {},
+      async stopSubmittedCodeApp() {},
+      async syncSubmittedCodeWorkspace() {},
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: preparationManifest(),
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "build failure",
+      runtimeProbe: {
+        finalUrl: "http://127.0.0.1:3000/dashboard",
+        httpStatus: 500,
+      },
+      status: "failed",
+    });
+  });
+
+  it("classifies a running process that never listens as a listen failure", async () => {
+    vi.useFakeTimers();
+    let probes = 0;
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode(command) {
+        if (!command.includes("curl -")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        probes += 1;
+        return {
+          exitCode: 7,
+          stderr: "curl: (7) Failed to connect: Connection refused",
+          stdout: "",
+        };
+      },
+      async readSubmittedCodeAppStatus() {
+        return { running: true, stderr: "", stdout: "starting" };
+      },
+      async setSubmittedCodeNetworkAccess() {},
+      async startSubmittedCodeApp() {},
+      async stopSubmittedCodeApp() {},
+      async syncSubmittedCodeWorkspace() {},
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    try {
+      const validation = harness.dependencies.validatePreparation({
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      });
+      await vi.advanceTimersByTimeAsync(18_000);
+      const report = await validation;
+
+      expect(report).toMatchObject({
+        failureClassification: "listen failure",
+        status: "failed",
+      });
+      expect(probes).toBe(10);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("classifies a connected cold-render timeout without retrying the route", async () => {
+    let probeAttempts = 0;
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode(command) {
+        if (!command.includes("curl -")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        probeAttempts += 1;
+        return {
+          exitCode: 28,
+          stderr: "curl: (28) Operation timed out after 90000 milliseconds",
+          stdout: "",
+        };
+      },
+      async readSubmittedCodeAppStatus() {
+        return { running: true, stderr: "", stdout: "compiling route" };
+      },
+      async setSubmittedCodeNetworkAccess() {},
+      async startSubmittedCodeApp() {},
+      async stopSubmittedCodeApp() {},
+      async syncSubmittedCodeWorkspace() {},
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: preparationManifest(),
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "render timeout",
+      runtimeProbe: {
+        attempts: [{ attempt: 1, outcome: "render-timeout" }],
+      },
+      status: "failed",
+    });
+    expect(probeAttempts).toBe(1);
+  });
+
+  it("reports a managed process exit instead of the final connection error", async () => {
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode(command) {
+        return command.includes("curl -")
+          ? {
+              exitCode: 7,
+              stderr: "curl: (7) Failed to connect to 127.0.0.1",
+              stdout: "",
+            }
+          : { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async readSubmittedCodeAppStatus() {
+        return {
+          exitCode: 0,
+          running: false,
+          stderr: "",
+          stdout: "server stopped after compiling /dashboard",
+        };
+      },
+      async setSubmittedCodeNetworkAccess() {},
+      async startSubmittedCodeApp() {},
+      async stopSubmittedCodeApp() {},
+      async syncSubmittedCodeWorkspace() {},
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: preparationManifest(),
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "runtime crash",
+      logsSummary: expect.stringContaining(
+        "server stopped after compiling /dashboard",
+      ),
+      runtimeProbe: {
+        attempts: [
+          {
+            attempt: 1,
+            outcome: "runtime-exited",
+            process: { exitCode: 0, running: false },
+          },
+        ],
+      },
+      status: "failed",
+    });
+  });
+
+  it("classifies an unresolved bare import as a missing dependency", async () => {
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode(command) {
+        return command.includes("curl -")
+          ? {
+              exitCode: 22,
+              stderr: "curl: (22) The requested URL returned error: 500",
+              stdout: "",
+            }
+          : { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async readSubmittedCodeAppStatus() {
+        return {
+          running: true,
+          stderr: "",
+          stdout:
+            "Module not found: Can't resolve 'use-stick-to-bottom' in '/workspace/repo/apps/dashboard'",
+        };
+      },
+      async setSubmittedCodeNetworkAccess() {},
+      async startSubmittedCodeApp() {},
+      async stopSubmittedCodeApp() {},
+      async syncSubmittedCodeWorkspace() {},
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.validatePreparation({
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).resolves.toMatchObject({
+      failureClassification: "missing dependency",
+      status: "failed",
+    });
   });
 
   it("reports suppressed server egress without failing a responsive runtime", async () => {

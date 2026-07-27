@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { AgentHarnessCommandTimeoutError } from "../daytona/workspace.interface";
+import {
+  AgentHarnessCommandTimeoutError,
+  type AgentHarnessWorkspace,
+} from "../daytona/workspace.interface";
 import type { PreparedDemoFeature } from "../schemas/artifacts";
 import { exploreSubmittedApp } from "./submitted-app-explorer";
 
@@ -576,6 +579,86 @@ describe("exploreSubmittedApp", () => {
     });
   });
 
+  it("reports managed app crash evidence when exploration discovers no routes", async () => {
+    const pageError = `${baseUrl}/account/date-and-locale: goto: net::ERR_CONNECTION_RESET`;
+    const { result } = await exploreObservation({
+      blockedNetworkAttempts: [
+        {
+          host: "assets.example.com",
+          method: "GET",
+          resourceType: "image",
+          url: "https://assets.example.com/logo.svg",
+        },
+      ],
+      consoleErrors: ["Chunk compilation failed"],
+      pageErrors: [pageError],
+      readSubmittedCodeAppStatus: async () => ({
+        exitCode: 137,
+        running: false,
+        stderr: "JavaScript heap out of memory",
+        stdout: "Compiling /account/date-and-locale",
+      }),
+      routes: [],
+    });
+
+    expect(result).toMatchObject({
+      kind: "repairable-failure",
+      validationReport: {
+        blockedNetworkAttempts: [
+          expect.objectContaining({
+            url: "https://assets.example.com/logo.svg",
+          }),
+        ],
+        consoleErrors: ["Chunk compilation failed"],
+        failureClassification: "app route crashes",
+        logsSummary: expect.stringContaining("exited with code 137"),
+        pageErrors: [pageError],
+        status: "failed",
+        stderrExcerpts: ["JavaScript heap out of memory"],
+        stdoutExcerpts: ["Compiling /account/date-and-locale"],
+      },
+    });
+  });
+
+  it("keeps route discovery classification while exposing a running app's output", async () => {
+    const { result } = await exploreObservation({
+      readSubmittedCodeAppStatus: async () => ({
+        running: true,
+        stderr: "Route compilation failed",
+        stdout: "Compiling /dashboard",
+      }),
+      routes: [],
+    });
+
+    expect(result).toMatchObject({
+      kind: "repairable-failure",
+      validationReport: {
+        failureClassification: "app route not discoverable",
+        stderrExcerpts: ["Route compilation failed"],
+        stdoutExcerpts: ["Compiling /dashboard"],
+      },
+    });
+  });
+
+  it("preserves the browser failure when managed app status is unavailable", async () => {
+    const { result } = await exploreObservation({
+      readSubmittedCodeAppStatus: async () => {
+        throw new Error("Daytona status unavailable");
+      },
+      routes: [],
+    });
+
+    expect(result).toMatchObject({
+      kind: "repairable-failure",
+      validationReport: {
+        failureClassification: "app route not discoverable",
+        status: "failed",
+        stderrExcerpts: [],
+        stdoutExcerpts: [],
+      },
+    });
+  });
+
   it("routes an exploration timeout from an exited app back to preparation repair", async () => {
     let timeoutMs: number | undefined;
     const result = await exploreSubmittedApp({
@@ -611,6 +694,29 @@ describe("exploreSubmittedApp", () => {
       },
     });
   });
+
+  it("preserves an exploration timeout when managed app status is unavailable", async () => {
+    const exploration = exploreSubmittedApp({
+      baseUrl,
+      preparationManifestId: "prep_001",
+      workspace: {
+        async destroy() {},
+        async execute() {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async executeSubmittedCode() {
+          throw new AgentHarnessCommandTimeoutError(5 * 60_000);
+        },
+        async readSubmittedCodeAppStatus() {
+          throw new Error("Daytona status unavailable");
+        },
+      },
+    });
+
+    await expect(exploration).rejects.toBeInstanceOf(
+      AgentHarnessCommandTimeoutError,
+    );
+  });
 });
 
 type ExplorationResult = Awaited<ReturnType<typeof exploreSubmittedApp>>;
@@ -625,6 +731,9 @@ async function exploreObservation(input: {
   consoleErrors?: string[];
   featureInventory?: PreparedDemoFeature[];
   pageErrors?: string[];
+  readSubmittedCodeAppStatus?: NonNullable<
+    AgentHarnessWorkspace["readSubmittedCodeAppStatus"]
+  >;
   requestedFeatures?: string[];
   routes: Array<Record<string, unknown>>;
 }) {
@@ -656,6 +765,11 @@ async function exploreObservation(input: {
           }),
         };
       },
+      ...(input.readSubmittedCodeAppStatus === undefined
+        ? {}
+        : {
+            readSubmittedCodeAppStatus: input.readSubmittedCodeAppStatus,
+          }),
     },
   });
   return { commands, result };

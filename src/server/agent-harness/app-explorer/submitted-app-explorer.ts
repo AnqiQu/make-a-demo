@@ -3,6 +3,7 @@ import type { ExternalResourceManifest } from "../../shared/external-resources/e
 import { executeSubmittedCode } from "../daytona/submitted-code-execution";
 import {
   AgentHarnessCommandTimeoutError,
+  type AgentHarnessSubmittedCodeAppStatus,
   type AgentHarnessWorkspace,
 } from "../daytona/workspace.interface";
 import {
@@ -139,14 +140,11 @@ export async function exploreSubmittedApp(input: {
       { timeoutMs: explorationCommandTimeoutMs },
     );
   } catch (error) {
-    if (
-      !(error instanceof AgentHarnessCommandTimeoutError) ||
-      input.workspace.readSubmittedCodeAppStatus === undefined
-    ) {
+    if (!(error instanceof AgentHarnessCommandTimeoutError)) {
       throw error;
     }
-    const appStatus = await input.workspace.readSubmittedCodeAppStatus();
-    if (appStatus.running) throw error;
+    const appStatus = await readAppStatus(input.workspace);
+    if (appStatus?.running !== false) throw error;
     return createExitedAppExplorationFailure({
       appStatus,
       baseUrl: input.baseUrl,
@@ -161,7 +159,9 @@ export async function exploreSubmittedApp(input: {
 
   const observation = readExplorationProtocol(result.stdout);
   if (observation.routes.length === 0) {
+    const appStatus = await readAppStatus(input.workspace);
     return createRepairableExplorationFailure({
+      appStatus,
       baseUrl: input.baseUrl,
       observation,
     });
@@ -177,17 +177,11 @@ export async function exploreSubmittedApp(input: {
 }
 
 function createExitedAppExplorationFailure(input: {
-  appStatus: {
-    exitCode?: number;
-    stderr: string;
-    stdout: string;
-  };
+  appStatus: AgentHarnessSubmittedCodeAppStatus;
   baseUrl: string;
   timeoutError: AgentHarnessCommandTimeoutError;
 }): Extract<SubmittedAppExplorationResult, { kind: "repairable-failure" }> {
-  const output = [input.appStatus.stderr, input.appStatus.stdout]
-    .filter(Boolean)
-    .join("\n");
+  const diagnostics = createAppStatusDiagnostics(input.appStatus);
   return {
     kind: "repairable-failure",
     validationReport: readValidationReport({
@@ -196,19 +190,15 @@ function createExitedAppExplorationFailure(input: {
       browserObservations: [],
       consoleErrors: [],
       failureClassification: "start failure",
-      logsSummary: `The prepared app exited${input.appStatus.exitCode === undefined ? "" : ` with code ${input.appStatus.exitCode}`} while App Exploration was running: ${output || input.timeoutError.message}`,
+      logsSummary: `The prepared app exited${input.appStatus.exitCode === undefined ? "" : ` with code ${input.appStatus.exitCode}`} while App Exploration was running: ${diagnostics.output || input.timeoutError.message}`,
       networkAttempts: [],
       pageErrors: [],
       retryCount: 0,
       screenshots: [],
       stage: "app-exploration",
       status: "failed",
-      stderrExcerpts: input.appStatus.stderr
-        ? [input.appStatus.stderr.slice(-500)]
-        : [],
-      stdoutExcerpts: input.appStatus.stdout
-        ? [input.appStatus.stdout.slice(-500)]
-        : [],
+      stderrExcerpts: diagnostics.stderrExcerpts,
+      stdoutExcerpts: diagnostics.stdoutExcerpts,
       suggestedRepairHints: [
         "Repair the app crash or reduce its runtime resource usage, then rerun browser exploration.",
       ],
@@ -319,10 +309,13 @@ function createExplorationArtifacts(input: {
 }
 
 function createRepairableExplorationFailure(input: {
+  appStatus: AgentHarnessSubmittedCodeAppStatus | undefined;
   baseUrl: string;
   observation: BrowserExplorationProtocol;
 }): Extract<SubmittedAppExplorationResult, { kind: "repairable-failure" }> {
   const networkAttempts = readObservedNetworkAttempts(input.observation);
+  const appExited = input.appStatus?.running === false;
+  const diagnostics = createAppStatusDiagnostics(input.appStatus);
   return {
     kind: "repairable-failure",
     validationReport: readValidationReport({
@@ -330,23 +323,56 @@ function createRepairableExplorationFailure(input: {
       blockedNetworkAttempts: networkAttempts,
       browserObservations: [],
       consoleErrors: unique(input.observation.consoleErrors),
-      failureClassification: "app route not discoverable",
-      logsSummary:
-        "Playwright completed exploration but did not discover a browser route to ground Flow Planning.",
+      failureClassification: appExited
+        ? "app route crashes"
+        : "app route not discoverable",
+      logsSummary: appExited
+        ? `The prepared app exited${input.appStatus?.exitCode === undefined ? "" : ` with code ${input.appStatus.exitCode}`} while Playwright was exploring it${diagnostics.output ? `: ${diagnostics.output}` : "."}`
+        : "Playwright completed exploration but did not discover a browser route to ground Flow Planning.",
       networkAttempts,
       pageErrors: unique(input.observation.pageErrors),
       retryCount: 0,
       screenshots: [],
       stage: "app-exploration",
       status: "failed",
-      stderrExcerpts: [],
-      stdoutExcerpts: [],
-      suggestedRepairHints: [
-        "Repair the prepared app start command, base URL, route crash, or initial app state, then rerun browser exploration.",
-      ],
+      stderrExcerpts: diagnostics.stderrExcerpts,
+      stdoutExcerpts: diagnostics.stdoutExcerpts,
+      suggestedRepairHints: appExited
+        ? [
+            "Repair the app crash or reduce its runtime resource usage, then rerun browser exploration.",
+          ]
+        : [
+            "Repair the prepared app start command, base URL, route crash, or initial app state, then rerun browser exploration.",
+          ],
       urlChecked: input.baseUrl,
     }),
   };
+}
+
+function createAppStatusDiagnostics(
+  appStatus?: AgentHarnessSubmittedCodeAppStatus,
+): {
+  output: string;
+  stderrExcerpts: string[];
+  stdoutExcerpts: string[];
+} {
+  const stderrExcerpt = appStatus?.stderr.slice(-500) ?? "";
+  const stdoutExcerpt = appStatus?.stdout.slice(-500) ?? "";
+  return {
+    output: [stderrExcerpt, stdoutExcerpt].filter(Boolean).join("\n"),
+    stderrExcerpts: stderrExcerpt ? [stderrExcerpt] : [],
+    stdoutExcerpts: stdoutExcerpt ? [stdoutExcerpt] : [],
+  };
+}
+
+async function readAppStatus(
+  workspace: AgentHarnessWorkspace,
+): Promise<AgentHarnessSubmittedCodeAppStatus | undefined> {
+  try {
+    return await workspace.readSubmittedCodeAppStatus?.();
+  } catch {
+    return undefined;
+  }
 }
 
 function createActions(

@@ -72,6 +72,7 @@ strict digraph "dependency-cruiser output"{
     "src/server/agent-harness/default/default-harness-dependencies.ts" -> "src/server/agent-harness/daytona/workspace.interface.ts"
     "src/server/agent-harness/default/default-harness-dependencies.ts" -> "src/server/agent-harness/opencode/default-opencode-harness-runner.ts"
     "src/server/agent-harness/default/default-harness-dependencies.ts" -> "src/server/agent-harness/opencode/opencode-harness.ts"
+    "src/server/agent-harness/default/default-harness-dependencies.ts" -> "src/server/agent-harness/repair/repair-router.ts"
     "src/server/agent-harness/default/default-harness-dependencies.ts" -> "src/server/agent-harness/repo-preparation/prepared-feature-inventory.ts"
     "src/server/agent-harness/default/default-harness-dependencies.ts" -> "src/server/agent-harness/run-planner/run-plan-synthesis.ts"
     "src/server/agent-harness/default/default-harness-dependencies.ts" -> "src/server/agent-harness/run-planner/runtime-target-resolution.ts"

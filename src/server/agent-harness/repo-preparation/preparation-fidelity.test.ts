@@ -112,10 +112,13 @@ describe("validatePreparationFidelity", () => {
         "src/demo/fixtures/tracker-data.ts",
         "public/fonts/product.woff2",
       ],
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
       modifiedFiles: ["src/auth/session-provider.ts"],
       patch: [
         "diff --git a/src/auth/session-provider.ts b/src/auth/session-provider.ts",
-        "+export const demoIdentity = localIdentity;",
+        "+if (process.env.MAKEADEMO_DEMO === 'true') {",
+        "+  return localIdentity;",
+        "+}",
         "diff --git a/src/demo/fixtures/tracker-data.ts b/src/demo/fixtures/tracker-data.ts",
         "+export const projects = [];",
         "diff --git a/public/fonts/product.woff2 b/public/fonts/product.woff2",
@@ -133,16 +136,93 @@ describe("validatePreparationFidelity", () => {
         "apps/dashboard/src/proxy.ts",
         "apps/dashboard/src/trpc/client.tsx",
       ],
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
       patch: [
         "diff --git a/apps/dashboard/src/proxy.ts b/apps/dashboard/src/proxy.ts",
-        "+if (process.env.MAKEADEMO_LOCAL_AUTH === '1') return demoSession(request);",
+        "+if (process.env.MAKEADEMO_DEMO === 'true') return demoSession(request);",
         "diff --git a/apps/dashboard/src/trpc/client.tsx b/apps/dashboard/src/trpc/client.tsx",
         "-const endpoint = getApiUrl();",
-        "+const endpoint = process.env.MAKEADEMO_LOCAL_AUTH === '1' ? '/api/demo-session' : getApiUrl();",
+        "+const endpoint = process.env.MAKEADEMO_DEMO === 'true' ? '/api/demo-session' : getApiUrl();",
         "diff --git a/apps/dashboard/src/app/api/demo-session/route.ts b/apps/dashboard/src/app/api/demo-session/route.ts",
         "+export const GET = () => Response.json({ user: { id: 'demo-user' } });",
       ].join("\n"),
     });
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("rejects server adapters that call back through the prepared app listener", () => {
+    const serverPath = "apps/dashboard/src/server/trpc/context.ts";
+    const report = validateDiff({
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [serverPath],
+      patch: [
+        `diff --git a/${serverPath} b/${serverPath}`,
+        "+if (process.env.MAKEADEMO_DEMO === 'true') {",
+        "+  return fetch('http://localhost:3000/api/demo-session');",
+        "+}",
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain("calls back through its own listener");
+  });
+
+  it("allows one shared demo gate to guard multiline auth and integration adaptations", () => {
+    const gatePath = "apps/dashboard/src/demo.ts";
+    const layoutPath = "apps/dashboard/src/app/(app)/layout.tsx";
+    const clientPath = "apps/dashboard/src/trpc/client.tsx";
+    const report = validateDiff({
+      createdFiles: [gatePath],
+      manifestOverrides: { envUsed: { NEXT_PUBLIC_MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [layoutPath, clientPath],
+      patch: [
+        `diff --git a/${gatePath} b/${gatePath}`,
+        "+export const isDemoMode = process.env.NEXT_PUBLIC_MAKEADEMO_DEMO === 'true';",
+        `diff --git a/${layoutPath} b/${layoutPath}`,
+        "+import { isDemoMode } from '../../demo';",
+        "-if (!user) redirect('/login');",
+        "+if (!isDemoMode && !user) redirect('/login');",
+        `diff --git a/${clientPath} b/${clientPath}`,
+        "+import { isDemoMode } from '../demo';",
+        "-const client = createRemoteClient();",
+        "+const client =",
+        "+  isDemoMode",
+        "+    ? createFixtureClient()",
+        "+    : createRemoteClient();",
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("allows a modified seam to use a demo gate from screened source", () => {
+    const gatePath = "src/config/demo-mode.ts";
+    const sessionPath = "src/auth/session.ts";
+    const report = validateDiff({
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [sessionPath],
+      patch: [
+        `diff --git a/${sessionPath} b/${sessionPath}`,
+        "+import { isDemoMode } from '../config/demo-mode';",
+        "-if (!session) redirect('/login');",
+        "+if (!isDemoMode && !session) redirect('/login');",
+      ].join("\n"),
+      sourceFiles: {
+        [gatePath]:
+          "export const isDemoMode = process.env.MAKEADEMO_DEMO === 'true';",
+      },
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("allows a guarded adapter selection in a generic composition root", () => {
+    const bootstrapPath = "src/bootstrap.ts";
+    const report = validateDemoDiff(bootstrapPath, [
+      "-const projectsClient = createRemoteClient();",
+      "+const projectsClient = runtimeConfig.MAKEADEMO_DEMO === 'true' ? createFixtureClient() : createRemoteClient();",
+    ]);
 
     expect(report.status).toBe("passed");
   });
@@ -172,6 +252,17 @@ describe("validatePreparationFidelity", () => {
     expect(report.status).toBe("passed");
   });
 
+  it("allows an additive demo branch before an unchanged authentication guard", () => {
+    const routePath = "src/routes/dashboard.ts";
+    const report = validateDemoDiff(routePath, [
+      "+if (process.env.MAKEADEMO_DEMO === 'true') return renderDashboard();",
+      " const session = await currentSession();",
+      " if (!session) redirect('/login');",
+    ]);
+
+    expect(report.status).toBe("passed");
+  });
+
   it("allows a framework-prefixed demo flag directly in an authentication guard", () => {
     const routerPath = "src/router.ts";
     const report = validateDemoDiff(
@@ -186,6 +277,67 @@ describe("validatePreparationFidelity", () => {
     expect(report.status).toBe("passed");
   });
 
+  it.each([
+    {
+      changes: [
+        "+if os.getenv('MAKEADEMO_DEMO') == 'true':",
+        "+    return demo_projects",
+        " return load_projects(database)",
+      ],
+      path: "backend/repositories/projects.py",
+    },
+    {
+      changes: [
+        '+if os.Getenv("MAKEADEMO_DEMO") == "true" {',
+        "+  return demoProjects()",
+        "+}",
+        " return loadProjects(client)",
+      ],
+      path: "internal/clients/projects.go",
+    },
+    {
+      changes: [
+        "+if ENV['MAKEADEMO_DEMO'] == 'true'",
+        "+  return demo_user",
+        "+end",
+        " return current_user",
+      ],
+      path: "app/providers/current_user.rb",
+    },
+    {
+      changes: [
+        '+if [ "${MAKEADEMO_DEMO}" = "true" ]; then',
+        "+  export API_URL=http://127.0.0.1:3000/api/fixtures",
+        "+fi",
+      ],
+      path: "scripts/configure-service.sh",
+    },
+  ])("allows an additive guarded adapter in $path", ({ changes, path }) => {
+    expect(validateDemoDiff(path, changes).status).toBe("passed");
+  });
+
+  it("recognizes a guarded current-user branch in a route as authentication", () => {
+    const routePath = "app/routes/account.py";
+    const report = validateDemoDiff(routePath, [
+      "+if os.getenv('MAKEADEMO_DEMO') == 'true':",
+      "+    return account_view()",
+      " if current_user is None: abort(401)",
+    ]);
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("allows a Python authentication guard extension that preserves its off path", () => {
+    const routePath = "app/routes/account.py";
+    const report = validateDemoDiff(routePath, [
+      "+demo_mode = os.getenv('MAKEADEMO_DEMO') == 'true'",
+      "-if current_user is None: abort(401)",
+      "+if not demo_mode and current_user is None: abort(401)",
+    ]);
+
+    expect(report.status).toBe("passed");
+  });
+
   it("rejects an authentication replacement that is not demo-gated", () => {
     const providerPath = "packages/identity/src/client/server.ts";
     const report = validateDemoDiff(providerPath, [
@@ -195,10 +347,70 @@ describe("validatePreparationFidelity", () => {
 
     expect(report.status).toBe("failed");
     expect(report.logsSummary).toContain(
-      `${providerPath} changes authentication without an active, non-destructive MakeADemo demo gate.`,
+      `${providerPath} changes authentication behavior without an active MakeADemo demo flag recorded in envUsed.`,
     );
     expect(report.suggestedRepairHints).toContainEqual(
       expect.stringContaining("MAKEADEMO_DEMO"),
+    );
+  });
+
+  it("rejects an ungated authentication replacement inside an integration seam", () => {
+    const sessionPath = "src/auth/session-provider.ts";
+    const report = validateDiff({
+      modifiedFiles: [sessionPath],
+      patch: [
+        `diff --git a/${sessionPath} b/${sessionPath}`,
+        "-return loadSession(request);",
+        "+return createDemoSession();",
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(
+      `${sessionPath} changes authentication behavior without an active MakeADemo demo flag recorded in envUsed.`,
+    );
+  });
+
+  it("rejects an active demo flag that does not guard the authentication adaptation", () => {
+    const sessionPath = "src/auth/session.ts";
+    const report = validateDemoDiff(sessionPath, [
+      "+const configuredFlag = process.env.MAKEADEMO_DEMO;",
+      "+return createDemoSession();",
+    ]);
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(
+      `${sessionPath} does not conditionally use the repository's active MakeADemo demo gate for the authentication adaptation.`,
+    );
+  });
+
+  it("does not treat a demo-flag string literal as an active guard", () => {
+    const clientPath = "src/clients/projects.ts";
+    const report = validateDemoDiff(clientPath, [
+      "-const client = createRemoteClient();",
+      "+const client = 'MAKEADEMO_DEMO' ? createFixtureClient() : createRemoteClient();",
+    ]);
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(
+      `${clientPath} changes integration behavior without an active MakeADemo demo flag recorded in envUsed.`,
+    );
+  });
+
+  it("rejects an ungated data replacement inside an integration seam", () => {
+    const repositoryPath = "backend/repositories/projects.py";
+    const report = validateDiff({
+      modifiedFiles: [repositoryPath],
+      patch: [
+        `diff --git a/${repositoryPath} b/${repositoryPath}`,
+        "-return load_projects(database)",
+        "+return demo_projects",
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(
+      `${repositoryPath} changes integration behavior without an active MakeADemo demo flag recorded in envUsed.`,
     );
   });
 
@@ -249,11 +461,21 @@ describe("validatePreparationFidelity", () => {
   it("rejects executable source introduced by an install repair without blaming prior demo adaptations", () => {
     const authPath = "src/auth/session-provider.ts";
     const exportPath = "src/service/export.ts";
-    const baselinePatch = `diff --git a/${authPath} b/${authPath}\n+export const demoIdentity = localIdentity;`;
+    const baselinePatch = [
+      `diff --git a/${authPath} b/${authPath}`,
+      "+if (process.env.MAKEADEMO_DEMO === 'true') return localIdentity;",
+    ].join("\n");
     const report = validatePreparationFidelity({
-      installRepairBaseline: workspaceDiff([authPath], baselinePatch),
-      preparationManifest: manifest(),
-      repoSourcePaths: new Set([authPath, exportPath, "package.json"]),
+      dependencyRepair: true,
+      repairBaseline: workspaceDiff([authPath], baselinePatch),
+      preparationManifest: manifest({
+        envUsed: { MAKEADEMO_DEMO: "true" },
+      }),
+      repoSourceFiles: new Map<string, string>(
+        [authPath, exportPath, "package.json"].map(
+          (path) => [path, ""] as const,
+        ),
+      ),
       workspaceDiff: workspaceDiff(
         [authPath, exportPath, "package.json"],
         [
@@ -268,8 +490,85 @@ describe("validatePreparationFidelity", () => {
 
     expect(report.status).toBe("failed");
     expect(report.logsSummary).toContain(exportPath);
-    expect(report.logsSummary).not.toContain(
-      `${authPath} was modified by dependency installation repair`,
+    expect(report.logsSummary).not.toContain(authPath);
+  });
+
+  it("compares install-repair source by content instead of patch formatting", () => {
+    const fixturePath = "src/auth/session.ts";
+    const digest = `sha256:${"d".repeat(64)}` as const;
+    const addition =
+      "+if (process.env.MAKEADEMO_DEMO === 'true') return demoIdentity;";
+    const baseline = workspaceDiff(
+      [fixturePath],
+      `diff --git a/${fixturePath} b/${fixturePath}\n${addition}`,
+      { [fixturePath]: digest },
+    );
+    const reformatted = workspaceDiff(
+      [fixturePath],
+      `diff --git a/${fixturePath} b/${fixturePath}\n@@ -1 +1 @@\n${addition}`,
+      { [fixturePath]: digest },
+    );
+    const changed = workspaceDiff([fixturePath], reformatted.patch, {
+      [fixturePath]: `sha256:${"e".repeat(64)}`,
+    });
+    const input = {
+      dependencyRepair: true,
+      repairBaseline: baseline,
+      preparationManifest: manifest({
+        envUsed: { MAKEADEMO_DEMO: "true" },
+      }),
+      repoSourceFiles: new Map([[fixturePath, ""]]),
+    };
+
+    expect(
+      validatePreparationFidelity({ ...input, workspaceDiff: reformatted })
+        .status,
+    ).toBe("passed");
+    expect(
+      validatePreparationFidelity({ ...input, workspaceDiff: changed }).status,
+    ).toBe("failed");
+  });
+
+  it("rejects lockfiles edited by a dependency repair agent", () => {
+    const lockfile = "bun.lock";
+    const report = validatePreparationFidelity({
+      dependencyRepair: true,
+      repairBaseline: workspaceDiff([], ""),
+      preparationManifest: manifest(),
+      repoSourceFiles: new Map([
+        ["package.json", "{}"],
+        [lockfile, "lockfileVersion = 1"],
+      ]),
+      workspaceDiff: workspaceDiff(
+        [lockfile],
+        `diff --git a/${lockfile} b/${lockfile}\n+invalid manual entry`,
+      ),
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(
+      "lockfiles must be generated by the backend package manager",
+    );
+  });
+
+  it("rejects lockfiles edited by any repair agent", () => {
+    const lockfile = "pnpm-lock.yaml";
+    const report = validatePreparationFidelity({
+      repairBaseline: workspaceDiff([], ""),
+      preparationManifest: manifest(),
+      repoSourceFiles: new Map([
+        ["package.json", "{}"],
+        [lockfile, "lockfileVersion: 9"],
+      ]),
+      workspaceDiff: workspaceDiff(
+        [lockfile],
+        `diff --git a/${lockfile} b/${lockfile}\n+packages: {}`,
+      ),
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(
+      "lockfiles must be generated by the backend package manager",
     );
   });
 
@@ -324,12 +623,21 @@ function validateDiff(input: {
   manifestOverrides?: Partial<PreparationManifest>;
   modifiedFiles?: string[];
   patch: string;
+  sourceFiles?: Record<string, string>;
 }) {
   const createdFiles = input.createdFiles ?? [];
   const modifiedFiles = input.modifiedFiles ?? [];
+  const repoSourceFiles = new Map<string, string>(
+    ["package.json", routePath, ...modifiedFiles].map(
+      (path) => [path, input.sourceFiles?.[path] ?? ""] as const,
+    ),
+  );
+  for (const [path, source] of Object.entries(input.sourceFiles ?? {})) {
+    repoSourceFiles.set(path, source);
+  }
   return validatePreparationFidelity({
     preparationManifest: manifest(input.manifestOverrides),
-    repoSourcePaths: new Set(["package.json", routePath, ...modifiedFiles]),
+    repoSourceFiles,
     workspaceDiff: workspaceDiff(
       [...createdFiles, ...modifiedFiles],
       input.patch,
@@ -337,8 +645,18 @@ function validateDiff(input: {
   });
 }
 
-function workspaceDiff(changedPaths: string[], patch: string) {
+function workspaceDiff(
+  changedPaths: string[],
+  patch: string,
+  changedFileSha256: Record<
+    string,
+    `sha256:${string}` | null
+  > = Object.fromEntries(
+    changedPaths.map((path) => [path, `sha256:${"a".repeat(64)}` as const]),
+  ),
+) {
   return {
+    changedFileSha256,
     changedPaths: changedPaths.map((path) => `/workspace/repo/${path}`),
     patch,
     patchSha256: `sha256:${"a".repeat(64)}` as const,

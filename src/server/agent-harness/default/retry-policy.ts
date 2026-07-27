@@ -8,7 +8,7 @@ export type AgentHarnessRetryPolicy = {
 const defaultRetryPolicy: AgentHarnessRetryPolicy = {
   agentArtifactAttempts: 3,
   externalResourceBrokerPasses: 6,
-  repoPreparationRepairs: 3,
+  repoPreparationRepairs: 5,
   scriptRepairs: 3,
 };
 

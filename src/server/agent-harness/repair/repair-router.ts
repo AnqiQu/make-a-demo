@@ -1,5 +1,11 @@
 export type RepairRoute = "fail" | "repo-preparation-repair" | "script-repair";
 
+const dependencyFailureClassifications = new Set([
+  "install failure",
+  "listen failure",
+  "missing dependency",
+]);
+
 const scriptFailureClassifications = new Set([
   "assertion failure",
   "Capture SDK violation",
@@ -20,10 +26,13 @@ const preparationFailureClassifications = new Set([
   "external network required",
   "feature auth barrier",
   "install failure",
+  "missing dependency",
   "missing env",
   "prepared feature not observable",
   "product fidelity violation",
   "requested feature not observable",
+  "render timeout",
+  "runtime crash",
   "start failure",
 ]);
 
@@ -60,6 +69,15 @@ export function classifyRepairRoute(input: {
   }
 
   return "fail";
+}
+
+/** Returns whether a preparation failure should permit dependency metadata edits only. */
+export function isDependencyRepairFailure(
+  failureClassification: string | undefined,
+): boolean {
+  return dependencyFailureClassifications.has(
+    failureClassification?.trim() ?? "",
+  );
 }
 
 export function readRepairBudgetDecision(input: {

@@ -122,7 +122,9 @@ type DaytonaSdkPtyOptions = Parameters<
 
 type ManagedSubmittedCodeApp = {
   commandId: string;
+  endedAt?: string;
   sessionId: string;
+  startedAt: string;
 };
 
 export type DaytonaSdkPreparationWorkspaceProviderOptions = {
@@ -667,7 +669,11 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
           "Daytona did not return a command id for the submitted-code app.",
         );
       }
-      this.activeSubmittedCodeApp = { commandId, sessionId };
+      this.activeSubmittedCodeApp = {
+        commandId,
+        sessionId,
+        startedAt: new Date().toISOString(),
+      };
     } catch (error) {
       await Promise.allSettled([
         withTimeout(
@@ -700,12 +706,18 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       ),
     ]);
     const exitCode = command.exitCode;
+    if (exitCode !== undefined && app.endedAt === undefined) {
+      app.endedAt = new Date().toISOString();
+    }
 
     return {
+      ...(app.endedAt === undefined ? {} : { endedAt: app.endedAt }),
       ...(exitCode === undefined ? {} : { exitCode }),
       running: exitCode === undefined,
+      startedAt: app.startedAt,
       stderr: logs?.stderr ?? "",
       stdout: logs?.stdout ?? "",
+      ...(exitCode === undefined ? {} : { terminationReason: "exited" }),
     };
   }
 

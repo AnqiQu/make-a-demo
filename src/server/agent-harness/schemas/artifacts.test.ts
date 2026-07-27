@@ -37,6 +37,11 @@ describe("agent harness artifact schemas", () => {
     expect(validationReport.blockedNetworkAttempts[0]?.route).toBe(
       "http://127.0.0.1:3000/dashboard",
     );
+    expect(validationReport.runtimeProbe?.attempts[0]).toMatchObject({
+      attempt: 1,
+      outcome: "responded",
+      process: { running: true },
+    });
     expect(appMap.discoveredRoutes[0]?.path).toBe("/");
     expect(actionCatalog.actions[0]?.kind).toBe("click");
     expect(flowSpec.features[0]?.referencedActionIds).toEqual([
@@ -331,6 +336,21 @@ function validValidationReport() {
     networkAttempts: [],
     pageErrors: [],
     retryCount: 0,
+    runtimeProbe: {
+      attempts: [
+        {
+          attempt: 1,
+          durationMs: 125,
+          exitCode: 0,
+          outcome: "responded",
+          process: { running: true },
+          startedAt: "2026-07-25T00:00:00.000Z",
+        },
+      ],
+      finalUrl: "http://127.0.0.1:3000/dashboard",
+      httpStatus: 200,
+      targetUrl: "http://127.0.0.1:3000/dashboard",
+    },
     screenshots: ["screenshots/base.png"],
     stage: "preparation-preflight",
     status: "passed",

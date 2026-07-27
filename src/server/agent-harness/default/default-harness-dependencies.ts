@@ -36,6 +36,7 @@ import { uploadSubmittedCodeExternalResourceCache } from "../daytona/submitted-c
 import {
   AgentHarnessCommandTimeoutError,
   type AgentHarnessSubmittedCodeAppStartInput,
+  type AgentHarnessSubmittedCodeAppStatus,
   type AgentHarnessWorkspace,
   type AgentHarnessWorkspaceCommandResult,
   type AgentHarnessWorkspaceHandle,
@@ -53,6 +54,7 @@ import type {
   AgentHarnessPipelineDependencies,
   AgentHarnessPipelineInput,
 } from "../orchestration/agent-harness";
+import { isDependencyRepairFailure } from "../repair/repair-router";
 import { assertPreparedFeatureInventory } from "../repo-preparation/prepared-feature-inventory";
 import { synthesizeRunPlan } from "../run-planner/run-plan-synthesis";
 import {
@@ -73,6 +75,8 @@ import {
   type PreparationManifest,
   type RepoProfile,
   type RunPlan,
+  type RuntimeProbeAttempt,
+  type RuntimeProbeDiagnostics,
   type ScriptCandidate,
   type ValidationReport,
   readFlowSpec,
@@ -91,7 +95,10 @@ import {
   findScriptWritingContentChanges,
 } from "../script-generation/read-only-boundary";
 import { runDependencyInstallThroughGate } from "../tools/dependency-install-gate";
-import { planLockfileReconciliation } from "../tools/lockfile-reconciliation";
+import {
+  createLockfileReconciliationCommand,
+  planLockfileReconciliation,
+} from "../tools/lockfile-reconciliation";
 import { validateDynamicCapturePath } from "../validation/dynamic-capture-path-validation";
 import { validatePreparedWorkspaceCapturePath } from "../validation/prepared-workspace-capture-path-validator";
 import {
@@ -145,6 +152,7 @@ const openCodeConfigDirectory = "/tmp/makeademo/opencode";
 const maxShellArtifactWriteBytes = 120 * 1024;
 const openCodeInactivityTimeoutMs = 5 * 60_000;
 const preparationDiffCommandTimeoutMs = 60_000;
+const preparationHashMarker = "\0MAKEADEMO_HASHES\0";
 const preparationPatchMarker = "\0MAKEADEMO_PATCH\0";
 
 const artifactPaths = {
@@ -365,10 +373,13 @@ export async function createDefaultAgentHarnessDependencies(
       "buildApp" | "externalResourceCache" | "onAppStart" | "resetWorkspace"
     >,
   ): Promise<ValidationReport> => {
-    const runValidation = async (initialRun: boolean) =>
+    const runValidation = async (inputRun: {
+      buildApp: boolean;
+      initialRun: boolean;
+    }) =>
       await validateSubmittedCodeRuntime({
         ...input,
-        buildApp: initialRun,
+        buildApp: inputRun.buildApp,
         ...(externalResourceManifest === undefined
           ? {}
           : {
@@ -377,23 +388,26 @@ export async function createDefaultAgentHarnessDependencies(
                 manifest: externalResourceManifest,
               },
             }),
-        ...(!initialRun || input.installDependencies === false
+        ...(!inputRun.initialRun || input.installDependencies === false
           ? { installDependencies: false }
           : {}),
         onAppStart: (appStartInput) => {
           submittedCodeAppStartInput = appStartInput;
         },
-        resetWorkspace: initialRun,
+        resetWorkspace: inputRun.initialRun,
       });
     const readUncachedAttempts = (report: ValidationReport) =>
       readUncachedExternalResourceAttempts(report.blockedNetworkAttempts);
 
+    let buildApp = true;
+    let initialRun = true;
     for (
       let pass = 1;
       pass <= retryPolicy.externalResourceBrokerPasses;
       pass += 1
     ) {
-      const report = await runValidation(pass === 1);
+      const report = await runValidation({ buildApp, initialRun });
+      initialRun = false;
       const uncached = readUncachedAttempts(report);
       if (uncached.length === 0) return report;
       const hydration = await hydrateExternalResources(
@@ -401,6 +415,9 @@ export async function createDefaultAgentHarnessDependencies(
         pass,
         input.stage ?? "preparation-preflight",
       );
+      buildApp =
+        report.attemptedCommand !== undefined &&
+        report.attemptedCommand === input.preparationManifest.buildCommandUsed;
       if (hydration.addedResources > 0) continue;
       const remainingAttempts = readUncachedAttempts(report);
       return remainingAttempts.length === 0
@@ -412,7 +429,7 @@ export async function createDefaultAgentHarnessDependencies(
           );
     }
 
-    const finalReport = await runValidation(false);
+    const finalReport = await runValidation({ buildApp, initialRun: false });
     const uncached = readUncachedAttempts(finalReport);
     return uncached.length === 0
       ? finalReport
@@ -520,7 +537,7 @@ export async function createDefaultAgentHarnessDependencies(
         event: "preparation.diff.patch.started",
         timeoutMs: preparationDiffCommandTimeoutMs,
       });
-      let diff: { changedPaths: string[]; patch: string };
+      let diff: Awaited<ReturnType<typeof readPreparationWorkspaceDiff>>;
       try {
         diff = await readPreparationWorkspaceDiff(workspace);
         await options.logger?.info({
@@ -552,6 +569,57 @@ export async function createDefaultAgentHarnessDependencies(
         }),
         before: scriptWritingBaseline,
       });
+    },
+    async restorePreparationCandidate({
+      preparationManifest,
+      repoProfile,
+      workspace,
+      workspaceDiff,
+    }) {
+      const expectedPatchSha256 = `sha256:${createHash("sha256")
+        .update(workspaceDiff.patch)
+        .digest("hex")}`;
+      if (workspaceDiff.patchSha256 !== expectedPatchSha256) {
+        throw new Error(
+          "Fidelity-approved preparation patch failed SHA-256 verification.",
+        );
+      }
+      const screenedCommitSha = options.repoSourceArchive?.commitSha;
+      if (
+        screenedCommitSha === undefined ||
+        workspaceDiff.sourceCommitSha !== screenedCommitSha
+      ) {
+        throw new Error(
+          "Fidelity-approved preparation patch does not match the screened repository revision.",
+        );
+      }
+      await materializeScreenedRepo({
+        repoProfile,
+        sourceArchive: options.repoSourceArchive,
+        workspace,
+      });
+      if (workspaceDiff.patch.length > 0) {
+        const patchPath = `${makeADemoDirectory}/accepted-preparation.patch`;
+        await writeWorkspaceText(workspace, patchPath, workspaceDiff.patch);
+        try {
+          const result = await workspace.execute(
+            `git -C ${shellQuote(workspaceRepoDirectory)} apply --binary ${shellQuote(patchPath)}`,
+          );
+          if (result.exitCode !== 0) {
+            throw new Error(
+              `Failed to restore fidelity-approved preparation patch: ${result.stderr || result.stdout}`,
+            );
+          }
+        } finally {
+          await removeWorkspaceFile(workspace, patchPath);
+        }
+      }
+      await writeWorkspaceJson(
+        workspace,
+        artifactPaths.preparationManifest,
+        preparationManifest,
+      );
+      opencodeSessionId = undefined;
     },
     async createWorkspace() {
       const provider =
@@ -887,12 +955,28 @@ export async function createDefaultAgentHarnessDependencies(
       runPlan,
       workspace,
     }) {
-      await writeWorkspaceJson(workspace, artifactPaths.demoBrief, demoBrief);
-      await writeWorkspaceJson(
-        workspace,
-        artifactPaths.preparationManifest,
-        preparationManifest,
+      const dependencyRepair = isDependencyRepairFailure(
+        failureReport.failureClassification,
       );
+      const rebuildFromScreenedSource =
+        failureReport.stage === "preparation-fidelity";
+      if (rebuildFromScreenedSource) {
+        await materializeScreenedRepo({
+          repoProfile,
+          sourceArchive: options.repoSourceArchive,
+          workspace,
+        });
+        await removeWorkspaceFile(workspace, artifactPaths.preparationManifest);
+        opencodeSessionId = undefined;
+      }
+      await writeWorkspaceJson(workspace, artifactPaths.demoBrief, demoBrief);
+      if (!rebuildFromScreenedSource) {
+        await writeWorkspaceJson(
+          workspace,
+          artifactPaths.preparationManifest,
+          preparationManifest,
+        );
+      }
       await writeWorkspaceJson(
         workspace,
         validationArtifactPath(failureReport.stage),
@@ -940,18 +1024,36 @@ export async function createDefaultAgentHarnessDependencies(
           workspace,
         });
         opencodeSessionId = result.sessionId ?? opencodeSessionId;
-        const manifestResult =
-          result.exitCode === 0
-            ? await tryReadPreparationManifest(
-                workspace,
-                artifactPaths.preparationManifest,
-                { demoBrief, repoProfile, repoSourcePaths, runPlan },
-              )
-            : {
-                error: `OpenCode exited with code ${result.exitCode}: ${result.stderr || result.stdout}`,
-                failureClassification: "agent-command" as const,
-                ok: false as const,
-              };
+        if (dependencyRepair) {
+          await writeWorkspaceJson(
+            workspace,
+            artifactPaths.preparationManifest,
+            preparationManifest,
+          );
+        }
+        let manifestResult: PreparationManifestReadResult;
+        if (result.exitCode !== 0) {
+          manifestResult = {
+            error: `OpenCode exited with code ${result.exitCode}: ${result.stderr || result.stdout}`,
+            failureClassification: "agent-command",
+            ok: false,
+          };
+        } else if (dependencyRepair) {
+          manifestResult = {
+            candidate: preparationManifest,
+            candidateFingerprint: fingerprintArtifactText(
+              JSON.stringify(preparationManifest),
+            ),
+            manifest: preparationManifest,
+            ok: true,
+          };
+        } else {
+          manifestResult = await tryReadPreparationManifest(
+            workspace,
+            artifactPaths.preparationManifest,
+            { demoBrief, repoProfile, repoSourcePaths, runPlan },
+          );
+        }
         runtimeRepairArtifactAttempt += 1;
         await persistAgentArtifactAttempt({
           artifactStore: options.artifactStore,
@@ -1326,12 +1428,14 @@ export async function createDefaultAgentHarnessDependencies(
     },
     async validatePreparation({
       preparationManifest,
+      reconcileLockfile,
       repoProfile,
       runPlan,
       workspace,
     }) {
       return await validateRuntimeWithExternalResources({
         preparationManifest,
+        ...(reconcileLockfile === undefined ? {} : { reconcileLockfile }),
         repoProfile,
         runPlan,
         workspace,
@@ -1750,6 +1854,7 @@ async function validateSubmittedCodeRuntime(input: {
   installDependencies?: boolean;
   onAppStart?: (input: AgentHarnessSubmittedCodeAppStartInput) => void;
   preparationManifest: PreparationManifest;
+  reconcileLockfile?: boolean;
   repoProfile: RepoProfile;
   resetWorkspace?: boolean;
   runPlan: RunPlan;
@@ -1822,16 +1927,10 @@ async function validateSubmittedCodeRuntime(input: {
             ),
           ),
       });
-    let result = await runInstall(installCommand);
-    const reconciliationCommand =
-      result.status === "failed"
-        ? planLockfileReconciliation({
-            installCommand,
-            stderr: result.stderr,
-            stdout: result.stdout,
-          })
-        : undefined;
-    if (reconciliationCommand !== undefined) {
+    type InstallResult = Awaited<ReturnType<typeof runInstall>>;
+    const reconcileLockfile = async (
+      reconciliationCommand: string,
+    ): Promise<InstallResult | undefined> => {
       const reconciliation = await runInstall(reconciliationCommand);
       if (reconciliation.status === "succeeded") {
         try {
@@ -1847,17 +1946,18 @@ async function validateSubmittedCodeRuntime(input: {
               lockfiles: input.repoProfile.lockfiles,
             }),
           );
-          result = await runInstall(installCommand);
+          return undefined;
         } catch (error) {
-          result = {
+          return {
             exitCode: 1,
             status: "failed",
             stderr: `Automatic lockfile reconciliation could not be persisted: ${readErrorMessage(error)}`,
             stdout: "",
           };
         }
-      } else if (reconciliation.status === "failed") {
-        result = {
+      }
+      if (reconciliation.status === "failed") {
+        return {
           ...reconciliation,
           stderr: [
             "Automatic lockfile reconciliation failed.",
@@ -1866,6 +1966,39 @@ async function validateSubmittedCodeRuntime(input: {
             .filter((value) => value.length > 0)
             .join("\n"),
         };
+      }
+      return reconciliation;
+    };
+
+    let result: InstallResult;
+    if (input.reconcileLockfile === true) {
+      const reconciliationCommand =
+        createLockfileReconciliationCommand(installCommand);
+      result =
+        reconciliationCommand === undefined
+          ? {
+              exitCode: 1,
+              status: "failed",
+              stderr:
+                "Automatic lockfile reconciliation could not determine the package manager.",
+              stdout: "",
+            }
+          : ((await reconcileLockfile(reconciliationCommand)) ??
+            (await runInstall(installCommand)));
+    } else {
+      result = await runInstall(installCommand);
+      const reconciliationCommand =
+        result.status === "failed"
+          ? planLockfileReconciliation({
+              installCommand,
+              stderr: result.stderr,
+              stdout: result.stdout,
+            })
+          : undefined;
+      if (reconciliationCommand !== undefined) {
+        result =
+          (await reconcileLockfile(reconciliationCommand)) ??
+          (await runInstall(installCommand));
       }
     }
     if (result.status === "denied") {
@@ -1887,29 +2020,6 @@ async function validateSubmittedCodeRuntime(input: {
         stage,
         stderr: result.stderr,
         stdout: result.stdout,
-      });
-    }
-  }
-
-  if (input.buildApp !== false && manifest.buildCommandUsed !== undefined) {
-    const buildResult = await executeSubmitted(
-      input.workspace,
-      commandInAppDirectory(
-        runtimeTarget?.build?.cwd ?? manifest.appDir,
-        manifest.buildCommandUsed,
-      ),
-      { env: manifest.envUsed },
-    );
-    if (buildResult.exitCode !== 0) {
-      return failedPreparationValidation({
-        attemptedCommand: manifest.buildCommandUsed,
-        classification: "build failure",
-        exitCode: buildResult.exitCode,
-        logsSummary: `Submitted-code build failed: ${buildResult.stderr || buildResult.stdout}`,
-        manifest,
-        stage,
-        stderr: buildResult.stderr,
-        stdout: buildResult.stdout,
       });
     }
   }
@@ -1961,6 +2071,39 @@ async function validateSubmittedCodeRuntime(input: {
       )
       .join(" "),
   };
+
+  if (input.buildApp !== false && manifest.buildCommandUsed !== undefined) {
+    const buildResult = await executeSubmitted(
+      input.workspace,
+      commandInAppDirectory(
+        runtimeTarget?.build?.cwd ?? manifest.appDir,
+        manifest.buildCommandUsed,
+      ),
+      { env: guardedRuntimeEnv },
+    );
+    const blockedBuildAttempts = readRuntimeNetworkAttempts(
+      [buildResult.stderr, buildResult.stdout].filter(Boolean).join("\n"),
+    );
+    if (buildResult.exitCode !== 0 || blockedBuildAttempts.length > 0) {
+      return failedPreparationValidation({
+        attemptedCommand: manifest.buildCommandUsed,
+        blockedNetworkAttempts: blockedBuildAttempts,
+        classification:
+          blockedBuildAttempts.length > 0
+            ? "external network attempted"
+            : "build failure",
+        exitCode: buildResult.exitCode,
+        logsSummary:
+          blockedBuildAttempts.length > 0
+            ? `Submitted-code build requested ${blockedBuildAttempts.length} uncached external resource(s): ${buildResult.stderr || buildResult.stdout}`
+            : `Submitted-code build failed: ${buildResult.stderr || buildResult.stdout}`,
+        manifest,
+        stage,
+        stderr: buildResult.stderr,
+        stdout: buildResult.stdout,
+      });
+    }
+  }
   const appStartInput = {
     command: manifest.startCommandUsed,
     cwd: absoluteAppDirectory(runtimeTarget?.start.cwd ?? manifest.appDir),
@@ -1979,12 +2122,16 @@ async function validateSubmittedCodeRuntime(input: {
     });
   }
 
+  const preflightUrl = preparationProbeUrl(manifest);
   const preflightResult = await probeSubmittedCodeRuntime(
     input.workspace,
-    manifest.baseUrl,
+    preflightUrl,
   );
   const probeExecutionFailed =
     isReadinessProbeExecutionFailure(preflightResult);
+  const probeResponded =
+    preflightResult.exitCode === 0 &&
+    preflightResult.runtimeProbe.attempts.at(-1)?.outcome === "responded";
   let appStatus:
     | Awaited<
         ReturnType<
@@ -2003,9 +2150,10 @@ async function validateSubmittedCodeRuntime(input: {
   const appOutput = [appStatus?.stderr, appStatus?.stdout]
     .filter((value): value is string => value !== undefined && value.length > 0)
     .join("\n");
+  const probeSucceeded = probeResponded && appStatus?.running !== false;
   const blockedRuntimeNetworkAttempts = readRuntimeNetworkAttempts(appOutput);
   const failedLogs = [
-    `Prepared submitted-code runtime did not respond: ${preflightResult.stderr || preflightResult.stdout}`,
+    `Prepared submitted-code runtime readiness failed: ${preflightResult.stderr || preflightResult.stdout}`,
     appStatus === undefined
       ? undefined
       : appStatus.running
@@ -2020,32 +2168,87 @@ async function validateSubmittedCodeRuntime(input: {
     .join("\n");
 
   return validationReport({
-    attemptedCommand: `curl ${manifest.baseUrl}`,
+    attemptedCommand: `curl ${preflightUrl}`,
     exitCode: preflightResult.exitCode,
     blockedNetworkAttempts: blockedRuntimeNetworkAttempts,
-    failureClassification:
-      preflightResult.exitCode === 0
-        ? "none"
-        : probeExecutionFailed
-          ? "harness/internal failure"
-          : "start failure",
-    logsSummary:
-      preflightResult.exitCode === 0
-        ? blockedRuntimeNetworkAttempts.length === 0
-          ? "Prepared submitted-code runtime responded successfully."
-          : `Prepared submitted-code runtime responded successfully; Runtime Network Lockdown suppressed ${blockedRuntimeNetworkAttempts.length} external request(s).`
-        : failedLogs,
+    failureClassification: probeSucceeded
+      ? "none"
+      : probeExecutionFailed
+        ? "harness/internal failure"
+        : classifyPreparationRuntimeFailure(
+            preflightResult.runtimeProbe,
+            appOutput,
+            appStatus?.running === false,
+          ),
+    logsSummary: probeSucceeded
+      ? blockedRuntimeNetworkAttempts.length === 0
+        ? "Prepared submitted-code runtime responded successfully."
+        : `Prepared submitted-code runtime responded successfully; Runtime Network Lockdown suppressed ${blockedRuntimeNetworkAttempts.length} external request(s).`
+      : failedLogs,
     stage,
     networkAttempts: blockedRuntimeNetworkAttempts,
-    status: preflightResult.exitCode === 0 ? "passed" : "failed",
+    runtimeProbe: preflightResult.runtimeProbe,
+    status: probeSucceeded ? "passed" : "failed",
     stderrExcerpts: preflightResult.stderr
       ? [preflightResult.stderr.slice(-500)]
       : [],
     stdoutExcerpts: preflightResult.stdout
       ? [preflightResult.stdout.slice(-500)]
       : [],
-    urlChecked: manifest.baseUrl,
+    urlChecked: preflightUrl,
   });
+}
+
+function classifyPreparationRuntimeFailure(
+  probe: RuntimeProbeDiagnostics,
+  appOutput: string,
+  processExited = false,
+): string {
+  const missingSpecifiers = [
+    ...appOutput.matchAll(
+      /(?:can'?t resolve|cannot find module|could not resolve)\s+["']([^"']+)["']/gi,
+    ),
+  ].map((match) => match[1] ?? "");
+  if (missingSpecifiers.some(isBarePackageSpecifier)) {
+    return "missing dependency";
+  }
+  if (missingSpecifiers.length > 0) return "build failure";
+  if (processExited) return "runtime crash";
+  const outcome = probe.attempts.at(-1)?.outcome;
+  if (outcome === "render-timeout") return "render timeout";
+  if (outcome === "runtime-exited") return "runtime crash";
+  if (outcome === "connection-refused") return "listen failure";
+  if (outcome === "http-error") {
+    if (probe.httpStatus === 401 || probe.httpStatus === 403)
+      return "auth wall";
+    if (probe.httpStatus === 404) return "app route not discoverable";
+    if ((probe.httpStatus ?? 0) >= 500) return "build failure";
+  }
+  return "start failure";
+}
+
+function isBarePackageSpecifier(specifier: string): boolean {
+  if (
+    specifier.startsWith(".") ||
+    specifier.startsWith("/") ||
+    specifier.startsWith("#") ||
+    specifier.startsWith("@/") ||
+    specifier.startsWith("~/")
+  ) {
+    return false;
+  }
+  return /^(?:@[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+|[A-Za-z0-9][A-Za-z0-9_.-]*)(?:\/.*)?$/.test(
+    specifier,
+  );
+}
+
+function preparationProbeUrl(manifest: PreparationManifest): string {
+  const entryPath = manifest.productContext.featureInventory
+    .flatMap(({ entryPaths }) => entryPaths)
+    .find((path) => path.length > 0);
+  return entryPath === undefined
+    ? manifest.baseUrl
+    : new URL(entryPath, manifest.baseUrl).toString();
 }
 
 function unresolvedExternalResourceValidation(
@@ -2196,25 +2399,139 @@ function absoluteAppDirectory(appDir: string): string {
 async function probeSubmittedCodeRuntime(
   workspace: AgentHarnessWorkspace,
   url: string,
-): Promise<AgentHarnessWorkspaceCommandResult> {
+): Promise<
+  AgentHarnessWorkspaceCommandResult & {
+    runtimeProbe: RuntimeProbeDiagnostics;
+  }
+> {
   let result: AgentHarnessWorkspaceCommandResult = {
     exitCode: 1,
     stderr: "Readiness probe did not run.",
     stdout: "",
   };
+  const attempts: RuntimeProbeAttempt[] = [];
+  let responseMetadata: { httpStatus: number; url: string } | undefined;
   for (let attempt = 1; attempt <= 10; attempt += 1) {
+    const startedAt = new Date().toISOString();
+    const startedAtMs = Date.now();
     result = await executeSubmitted(
       workspace,
-      `curl -fsS --max-time 10 ${shellQuote(url)} -o /tmp/makeademo/preflight.html`,
+      `curl -fsS --location --max-redirs 5 --connect-timeout 2 --max-time 90 --write-out ${shellQuote(`\n[makeademo:probe] {"httpStatus":%{http_code},"url":"%{url_effective}"}\n`)} ${shellQuote(url)} -o /tmp/makeademo/preflight.html`,
     );
-    if (result.exitCode === 0 || isReadinessProbeExecutionFailure(result)) {
-      return result;
+    responseMetadata = readRuntimeProbeResponseMetadata(result.stdout);
+    const process = await readRuntimeProcessObservation(workspace);
+    attempts.push({
+      attempt,
+      ...(result.stderr || result.stdout
+        ? { detail: (result.stderr || result.stdout).slice(-500) }
+        : {}),
+      durationMs: Date.now() - startedAtMs,
+      exitCode: result.exitCode,
+      outcome: readRuntimeProbeOutcome(result, process),
+      startedAt,
+      ...(process === undefined ? {} : { process }),
+    });
+    if (
+      result.exitCode === 0 ||
+      isReadinessProbeExecutionFailure(result) ||
+      !isConnectionRefused(result) ||
+      process?.running === false
+    ) {
+      break;
     }
     if (attempt < 10) {
       await wait(2_000);
     }
   }
-  return result;
+  return {
+    ...result,
+    runtimeProbe: {
+      attempts,
+      ...(responseMetadata !== undefined
+        ? {
+            finalUrl: responseMetadata.url,
+            httpStatus: responseMetadata.httpStatus,
+          }
+        : result.exitCode === 0
+          ? { finalUrl: url, httpStatus: 200 }
+          : {}),
+      targetUrl: url,
+    },
+  };
+}
+
+function readRuntimeProbeResponseMetadata(
+  stdout: string,
+): { httpStatus: number; url: string } | undefined {
+  const line = stdout
+    .split("\n")
+    .find((candidate) => candidate.startsWith("[makeademo:probe] "));
+  if (line === undefined) return undefined;
+  try {
+    const value = JSON.parse(line.slice("[makeademo:probe] ".length)) as Record<
+      string,
+      unknown
+    >;
+    return typeof value.httpStatus === "number" && typeof value.url === "string"
+      ? { httpStatus: value.httpStatus, url: value.url }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function readRuntimeProcessObservation(
+  workspace: AgentHarnessWorkspace,
+): Promise<RuntimeProbeAttempt["process"] | undefined> {
+  if (workspace.readSubmittedCodeAppStatus === undefined) return undefined;
+  try {
+    const status = await workspace.readSubmittedCodeAppStatus();
+    return runtimeProcessObservation(status);
+  } catch {
+    return undefined;
+  }
+}
+
+function runtimeProcessObservation(
+  status: AgentHarnessSubmittedCodeAppStatus,
+): NonNullable<RuntimeProbeAttempt["process"]> {
+  return {
+    running: status.running,
+    ...(status.endedAt === undefined ? {} : { endedAt: status.endedAt }),
+    ...(status.exitCode === undefined ? {} : { exitCode: status.exitCode }),
+    ...(status.signal === undefined ? {} : { signal: status.signal }),
+    ...(status.startedAt === undefined ? {} : { startedAt: status.startedAt }),
+    ...(status.terminationReason === undefined
+      ? {}
+      : { terminationReason: status.terminationReason }),
+  };
+}
+
+function readRuntimeProbeOutcome(
+  result: AgentHarnessWorkspaceCommandResult,
+  process: RuntimeProbeAttempt["process"] | undefined,
+): RuntimeProbeAttempt["outcome"] {
+  if (process?.running === false) return "runtime-exited";
+  if (result.exitCode === 0) return "responded";
+  if (isConnectionRefused(result)) return "connection-refused";
+  if (result.exitCode === 28 || /timed? out|timeout/i.test(result.stderr)) {
+    return "render-timeout";
+  }
+  if (result.exitCode === 22 || /\b(?:4|5)\d\d\b/.test(result.stderr)) {
+    return "http-error";
+  }
+  return "probe-error";
+}
+
+function isConnectionRefused(
+  result: AgentHarnessWorkspaceCommandResult,
+): boolean {
+  return (
+    result.exitCode === 7 ||
+    /(?:couldn'?t connect|failed to connect|connection refused)/i.test(
+      `${result.stderr}\n${result.stdout}`,
+    )
+  );
 }
 
 function isReadinessProbeExecutionFailure(
@@ -2501,18 +2818,26 @@ async function readWorkspaceContentSnapshot(
 
 async function readPreparationWorkspaceDiff(
   workspace: AgentHarnessWorkspace,
-): Promise<{ changedPaths: string[]; patch: string }> {
+): Promise<{
+  changedFileSha256: Record<string, `sha256:${string}` | null>;
+  changedPaths: string[];
+  patch: string;
+}> {
   const result = await workspace.execute(
-    `sh -lc ${shellQuote(
+    `bash -lc ${shellQuote(
       [
         `cd ${shellQuote(workspaceRepoDirectory)}`,
         "temporary_index=$(mktemp)",
+        "changed_paths=$(mktemp)",
         'rm -f "$temporary_index"',
-        'cleanup_index() { rm -f "$temporary_index"; }',
+        'cleanup_index() { rm -f "$temporary_index" "$changed_paths"; }',
         "trap cleanup_index EXIT",
         'GIT_INDEX_FILE="$temporary_index" git read-tree HEAD',
         'GIT_INDEX_FILE="$temporary_index" git add -A',
-        'GIT_INDEX_FILE="$temporary_index" git diff --cached --name-only -z HEAD',
+        'GIT_INDEX_FILE="$temporary_index" git diff --cached --name-only -z HEAD > "$changed_paths"',
+        'cat "$changed_paths"',
+        "printf '\\0MAKEADEMO_HASHES\\0'",
+        'while IFS= read -r -d "" path; do printf "%s\\0" "$path"; if [ -L "$path" ]; then digest="sha256:$(readlink -z -- "$path" | sha256sum | cut -d " " -f 1)"; elif [ -f "$path" ]; then digest="sha256:$(sha256sum -- "$path" | cut -d " " -f 1)"; else digest=deleted; fi; printf "%s\\0" "$digest"; done < "$changed_paths"',
         "printf '\\0MAKEADEMO_PATCH\\0'",
         'GIT_INDEX_FILE="$temporary_index" git diff --cached --binary --full-index HEAD',
       ].join(" && "),
@@ -2524,12 +2849,17 @@ async function readPreparationWorkspaceDiff(
       `Failed to capture prepared workspace diff: ${result.stderr || result.stdout}`,
     );
   }
+  const hashMarkerIndex = result.stdout.indexOf(preparationHashMarker);
   const markerIndex = result.stdout.indexOf(preparationPatchMarker);
-  if (markerIndex === -1) {
+  if (
+    hashMarkerIndex === -1 ||
+    markerIndex === -1 ||
+    hashMarkerIndex > markerIndex
+  ) {
     throw new Error("Prepared workspace diff output was malformed.");
   }
   const relativePaths = result.stdout
-    .slice(0, markerIndex)
+    .slice(0, hashMarkerIndex)
     .split("\0")
     .filter((path) => path.length > 0);
   if (
@@ -2539,7 +2869,33 @@ async function readPreparationWorkspaceDiff(
   ) {
     throw new Error("Prepared workspace diff contained an unsafe path.");
   }
+  const hashFields = result.stdout
+    .slice(hashMarkerIndex + preparationHashMarker.length, markerIndex)
+    .split("\0")
+    .filter((field) => field.length > 0);
+  if (hashFields.length !== relativePaths.length * 2) {
+    throw new Error("Prepared workspace file digest output was malformed.");
+  }
+  const changedFileSha256: Array<readonly [string, `sha256:${string}` | null]> =
+    [];
+  for (let index = 0; index < hashFields.length; index += 2) {
+    const path = hashFields[index];
+    const digest = hashFields[index + 1];
+    if (
+      path === undefined ||
+      digest === undefined ||
+      !relativePaths.includes(path) ||
+      (digest !== "deleted" && !/^sha256:[0-9a-f]{64}$/.test(digest))
+    ) {
+      throw new Error("Prepared workspace file digest output was malformed.");
+    }
+    changedFileSha256.push([
+      path,
+      digest === "deleted" ? null : (digest as `sha256:${string}`),
+    ]);
+  }
   return {
+    changedFileSha256: Object.fromEntries(changedFileSha256),
     changedPaths: relativePaths.map(
       (path) => `${workspaceRepoDirectory}/${path}`,
     ),
@@ -2564,6 +2920,18 @@ async function writeWorkspaceJson(
   value: unknown,
 ): Promise<void> {
   await writeWorkspaceText(workspace, path, JSON.stringify(value, null, 2));
+}
+
+async function removeWorkspaceFile(
+  workspace: AgentHarnessWorkspace,
+  path: string,
+): Promise<void> {
+  const result = await workspace.execute(`rm -f ${shellQuote(path)}`);
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `Failed to remove stale workspace artifact ${path}: ${result.stderr || result.stdout}`,
+    );
+  }
 }
 
 async function writeWorkspaceText(
@@ -2852,6 +3220,7 @@ function validationReport(input: {
   failureClassification?: string;
   logsSummary: string;
   networkAttempts?: ValidationReport["networkAttempts"];
+  runtimeProbe?: RuntimeProbeDiagnostics;
   stage: string;
   status?: "failed" | "passed";
   stderrExcerpts?: string[];
@@ -2870,6 +3239,9 @@ function validationReport(input: {
     networkAttempts: input.networkAttempts ?? [],
     pageErrors: [],
     retryCount: 0,
+    ...(input.runtimeProbe === undefined
+      ? {}
+      : { runtimeProbe: input.runtimeProbe }),
     screenshots: [],
     stage: input.stage,
     status: input.status ?? "passed",
@@ -2938,6 +3310,7 @@ function createScriptCandidate(input: {
 
 function failedPreparationValidation(input: {
   attemptedCommand?: string;
+  blockedNetworkAttempts?: NetworkAttempt[];
   classification: string;
   exitCode?: number;
   logsSummary: string;
@@ -2951,10 +3324,12 @@ function failedPreparationValidation(input: {
       ? {}
       : { attemptedCommand: input.attemptedCommand }),
     ...(input.exitCode === undefined ? {} : { exitCode: input.exitCode }),
+    blockedNetworkAttempts: input.blockedNetworkAttempts ?? [],
     failureClassification: input.classification,
     logsSummary: input.logsSummary,
     stage: input.stage,
     status: "failed",
+    networkAttempts: input.blockedNetworkAttempts ?? [],
     stderrExcerpts: input.stderr ? [input.stderr.slice(-500)] : [],
     stdoutExcerpts: input.stdout ? [input.stdout.slice(-500)] : [],
     urlChecked: input.manifest.baseUrl,
@@ -3107,10 +3482,10 @@ function createRuntimeTargetSelectionPrompt(previousError?: string): string {
 }
 
 const offCameraAuthenticationInstruction =
-  "For a feature blocked by authentication, preserve the normal authentication path when demo mode is off and gate the narrowest existing provider, session, middleware, or route guard with MAKEADEMO_DEMO=true (or only the framework-required public prefix) recorded in envUsed. The active demo path must supply the complete non-null user, session, claims, and organization/team/tenant context consumed downstream; returning null from user or session lookups is not a bypass. Record the active secret-free strategy in authStrategy and authBypassOrDemoIdentity; never depend on credentials or OAuth. A guard-only edit may touch a router or layout, but must not change rendered markup or styling. Keep authentication UI visible only when the maker's exact keyProductFeatures explicitly requests authentication.";
+  "For a feature blocked by authentication, keep the normal path unchanged when demo mode is off and conditionally select the narrowest existing identity, session, middleware, or route seam with MAKEADEMO_DEMO=true (or only a framework-required public prefix) recorded in envUsed. Read the flag directly or once through a small shared helper, and use that source-backed gate in every modified auth or integration file. The demo path must supply the complete non-null user, session, claims, and organization/team/tenant context consumed downstream; returning null is not a bypass. Record the secret-free strategy in authStrategy and authBypassOrDemoIdentity; never depend on credentials or OAuth, change rendered markup or styling, or show authentication unless an exact keyProductFeature requests it.";
 
 const offlineFeatureStateInstruction =
-  "Follow every selected feature beyond authentication through its API, tRPC, GraphQL, repository, database, and service calls. Replace authenticated or stateful runtime dependencies at existing seams with deterministic local fixtures; a feature that still requires an external API or database is not prepared under Runtime Network Lockdown.";
+  "Follow every selected feature beyond authentication through its API, RPC, GraphQL, client, repository, database, and service calls. Add deterministic local adapters or fixtures at existing seams, conditionally select them with the same source-backed demo gate, and retain the normal adapter when it is off; a feature that still requires an external API or database is not prepared under Runtime Network Lockdown. Server-side demo adapters must invoke fixtures or local service code directly, never send HTTP back through the prepared app's own baseUrl or listening port; browser clients may use relative same-origin routes, and a truly separate local service must use its own declared port.";
 
 function createRepoPreparationPrompt(input: {
   demoBrief: AgentHarnessPipelineInput["demoBrief"];
@@ -3221,6 +3596,11 @@ function createRuntimePreparationRepairPrompt(input: {
   repoProfile: RepoProfile;
   runPlan: RunPlan;
 }): string {
+  const dependencyRepair = isDependencyRepairFailure(
+    input.failureReport.failureClassification,
+  );
+  const rebuildFromScreenedSource =
+    input.failureReport.stage === "preparation-fidelity";
   return createStagePrompt({
     artifactPaths: [
       artifactPaths.repoProfile,
@@ -3247,13 +3627,28 @@ function createRuntimePreparationRepairPrompt(input: {
         : [
             `The previous repaired manifest was rejected: ${input.artifactError}`,
           ]),
+      ...(rebuildFromScreenedSource
+        ? [
+            "The repository was restored from the immutable screened source and the failed manifest was removed. Rebuild the complete preparation candidate and manifest from this clean baseline; no prior workspace edit remains.",
+          ]
+        : []),
       "Do not run the app, install dependencies, or use the network. The backend will rerun install, build, start, and browser validation in the isolated submitted-code sandbox.",
       "Omit buildCommandUsed for development-server starts. If validation reports that a root aggregate build is too broad, use the exact app-scoped command from the failure summary.",
       "Preserve backend-resolved appDir, install, build, start, port, and base URL fields unless the failure summary explicitly reports a runtime-configuration error.",
       `The selected browser application remains ${input.runPlan.appDir}; validation difficulty never authorizes switching to a runnable sibling.`,
-      "For dependency-source failures, change only package metadata, lockfiles, or package-manager configuration. Do not edit executable source files or replace a library API to make installation pass; the backend performs controlled lockfile reconciliation and reruns the frozen install.",
+      ...(dependencyRepair
+        ? [
+            "Change only package manifests or recognized package-manager configuration required to resolve the reported dependency failure. Do not edit executable source, application scripts, workspace topology, or presentation files.",
+            "Do not edit lockfiles; the backend regenerates and verifies them with the detected package manager.",
+            "Do not rewrite the PreparationManifest; the accepted runtime, authentication, fixtures, and Product Context remain authoritative for an install repair.",
+          ]
+        : []),
       "For browser network failures, repair only unresolved URLs in the failure report. The backend already replays safe public GET resources, so preserve original product images, media, fonts, styles, and scripts. Adapt authenticated or stateful APIs at their service/data seams and never substitute visible assets.",
-      "You may edit /workspace/repo and must rewrite /workspace/.makeademo/preparation-manifest.json to match the actual repaired state.",
+      ...(dependencyRepair
+        ? ["Edit only the dependency files under /workspace/repo."]
+        : [
+            "You may edit /workspace/repo and must rewrite /workspace/.makeademo/preparation-manifest.json to match the actual repaired state.",
+          ]),
       "The repaired runtime must still be the original product. Preserve its route tree, UI components, design system, styles, brand assets, and interaction logic; remove alternate demo servers, replacement pages, and commands that bypass the original app.",
       "Repair only authentication/session, data/API, external-service, fixture/seed, local asset, environment, or configuration seams. Do not remove workspace configuration or replace the package graph or lockfile with a smaller demo project.",
       "Preserve every selected productContext feature, including every requested feature, and retain its source evidence and entryPaths.",
@@ -3262,8 +3657,10 @@ function createRuntimePreparationRepairPrompt(input: {
       "Read /workspace/.makeademo/preparation-manifest-contract.json and use /workspace/.makeademo/preparation-manifest-template.json as the canonical shape.",
       "Do not patch only the reported failure. Revalidate the complete manifest and every productContext.featureInventory entry before finishing.",
       'appDir must remain relative to /workspace/repo: use "." for the repo root or a path such as "frontend"; never use an absolute path.',
-      'envUsed must remain a flat string-to-string object such as {"NODE_ENV":"development","DEMO_MODE":"true"}; nested values, arrays, and descriptive objects are invalid.',
-      `Current manifest: ${JSON.stringify(input.preparationManifest)}`,
+      'envUsed must remain a flat string-to-string object such as {"NODE_ENV":"development","MAKEADEMO_DEMO":"true"}; nested values, arrays, and descriptive objects are invalid.',
+      ...(rebuildFromScreenedSource
+        ? []
+        : [`Current manifest: ${JSON.stringify(input.preparationManifest)}`]),
       `Run plan: ${JSON.stringify(input.runPlan)}`,
       `Demo brief: ${JSON.stringify(input.demoBrief)}`,
       `Repo profile: ${JSON.stringify(input.repoProfile)}`,

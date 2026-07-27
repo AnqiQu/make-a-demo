@@ -5,9 +5,13 @@ import {
 } from "../daytona/workspace.interface";
 import {
   classifyRepairRoute,
+  isDependencyRepairFailure,
   readRepairBudgetDecision,
 } from "../repair/repair-router";
-import { validatePreparationFidelity } from "../repo-preparation/preparation-fidelity";
+import {
+  readDependencyRepairDelta,
+  validatePreparationFidelity,
+} from "../repo-preparation/preparation-fidelity";
 import type { PreparationWorkspaceDiff } from "../repo-preparation/preparation-workspace-diff";
 import { assertPreparationRuntimeTarget } from "../repo-preparation/prepared-feature-inventory";
 import { profileRepo } from "../repo-profiler/repo-profiler";
@@ -123,6 +127,17 @@ export type AgentHarnessPipelineDependencies = {
     runPlan: RunPlan;
     workspace: AgentHarnessWorkspace;
   }): Promise<{ manifest: PreparationManifest; opencodeSessionId?: string }>;
+  /**
+   * Restores the last Preparation candidate accepted by backend fidelity
+   * validation. Implementations must verify the screened-source revision and
+   * patch digest before replacing the mutable workspace and manifest.
+   */
+  restorePreparationCandidate?(input: {
+    preparationManifest: PreparationManifest;
+    repoProfile: RepoProfile;
+    workspace: AgentHarnessWorkspace;
+    workspaceDiff: PreparationWorkspaceDiff;
+  }): Promise<void>;
   repairScript?(input: {
     actionCatalog: ActionCatalog;
     appMap: AppMap;
@@ -148,6 +163,8 @@ export type AgentHarnessPipelineDependencies = {
     workspace: AgentHarnessWorkspace;
   }): Promise<ValidationReport>;
   validatePreparation(input: {
+    /** Regenerate the package-manager lockfile before frozen installation. */
+    reconcileLockfile?: boolean;
     preparationManifest: PreparationManifest;
     repoProfile: RepoProfile;
     runPlan: RunPlan;
@@ -189,7 +206,7 @@ export type AgentHarnessPipelineResult = {
 
 export type AgentHarnessPipelineOptions = {
   destroyWorkspaceOnCompletion?: boolean;
-  /** Maximum Repo Preparation repairs allowed independently per failing validation stage. */
+  /** Maximum Repo Preparation repairs allowed across the complete pipeline. */
   repoPreparationRepairLimit?: number;
   /** Maximum Script repairs allowed independently per failing validation stage. */
   scriptRepairLimit?: number;
@@ -246,6 +263,11 @@ export async function runAgentHarnessPipeline(
   const stageTimings: PipelineRunManifest["stageTimings"] = [];
   const validationReports: ValidationReport[] = [];
   const opencodeSessionIds: string[] = [];
+  const recordOpenCodeSessionId = (sessionId?: string) => {
+    if (sessionId !== undefined && !opencodeSessionIds.includes(sessionId)) {
+      opencodeSessionIds.push(sessionId);
+    }
+  };
   let cleanupFailure: unknown;
   let primaryError: unknown;
   let preparationWorkspaceDiff: PreparationWorkspaceDiff | undefined;
@@ -380,9 +402,7 @@ export async function runAgentHarnessPipeline(
           workspace: requireWorkspace(workspace),
         }),
     );
-    if (preparation.opencodeSessionId !== undefined) {
-      opencodeSessionIds.push(preparation.opencodeSessionId);
-    }
+    recordOpenCodeSessionId(preparation.opencodeSessionId);
     const preparedManifest = readPreparationManifest(preparation.manifest);
     assertPreparationRuntimeTarget({
       preparationManifest: preparedManifest,
@@ -395,7 +415,11 @@ export async function runAgentHarnessPipeline(
       preparedManifest,
     );
 
-    const repoPreparationRepairLimit = options.repoPreparationRepairLimit ?? 3;
+    const repoPreparationRepairLimit = options.repoPreparationRepairLimit ?? 5;
+    const preparationRepairBudget: PreparationRepairBudget = {
+      attemptsByFingerprint: {},
+      totalAttempts: 0,
+    };
     const preparationRepairAttemptsByPhase: Record<string, number> = {};
     const scriptRepairAttemptsByPhase: Record<string, number> = {};
     const scriptRepairLimit = options.scriptRepairLimit ?? 3;
@@ -405,7 +429,9 @@ export async function runAgentHarnessPipeline(
       dependencies,
       input,
       preparationManifest,
+      preparationRepairBudget,
       preparationRepairAttemptsByPhase,
+      recordOpenCodeSessionId,
       repoPreparationRepairLimit,
       repoProfile,
       runPlan,
@@ -416,8 +442,8 @@ export async function runAgentHarnessPipeline(
       workspace: requireWorkspace(workspace),
     });
     preparationManifest = preparationState.preparationManifest;
+    let acceptedPreparation = preparationState.acceptedPreparation;
     let preparationValidation = preparationState.preparationValidation;
-    opencodeSessionIds.push(...preparationState.opencodeSessionIds);
 
     let appMap: AppMap;
     let actionCatalog: ActionCatalog;
@@ -482,12 +508,15 @@ export async function runAgentHarnessPipeline(
         }
 
         preparationState = await ensureValidPreparation({
+          ...(acceptedPreparation === undefined ? {} : { acceptedPreparation }),
           capturePreparationWorkspaceDiff,
           dependencies,
           initialFailure: explorationValidation,
           input,
           preparationManifest,
+          preparationRepairBudget,
           preparationRepairAttemptsByPhase,
+          recordOpenCodeSessionId,
           repoPreparationRepairLimit,
           repoProfile,
           runPlan,
@@ -498,8 +527,8 @@ export async function runAgentHarnessPipeline(
           workspace: requireWorkspace(workspace),
         });
         preparationManifest = preparationState.preparationManifest;
+        acceptedPreparation = preparationState.acceptedPreparation;
         preparationValidation = preparationState.preparationValidation;
-        opencodeSessionIds.push(...preparationState.opencodeSessionIds);
       }
 
       flowSpec = await runAsyncStage(
@@ -622,12 +651,17 @@ export async function runAgentHarnessPipeline(
         );
         if (capturePathPreflight.status === "failed") {
           preparationState = await ensureValidPreparation({
+            ...(acceptedPreparation === undefined
+              ? {}
+              : { acceptedPreparation }),
             capturePreparationWorkspaceDiff,
             dependencies,
             initialFailure: capturePathPreflight,
             input,
             preparationManifest,
+            preparationRepairBudget,
             preparationRepairAttemptsByPhase,
+            recordOpenCodeSessionId,
             repoPreparationRepairLimit,
             repoProfile,
             runPlan,
@@ -638,8 +672,8 @@ export async function runAgentHarnessPipeline(
             workspace: requireWorkspace(workspace),
           });
           preparationManifest = preparationState.preparationManifest;
+          acceptedPreparation = preparationState.acceptedPreparation;
           preparationValidation = preparationState.preparationValidation;
-          opencodeSessionIds.push(...preparationState.opencodeSessionIds);
           continue pipelineAttempt;
         }
         const capturePathValidation = await runValidationStage(
@@ -670,12 +704,17 @@ export async function runAgentHarnessPipeline(
           "repo-preparation-repair"
         ) {
           preparationState = await ensureValidPreparation({
+            ...(acceptedPreparation === undefined
+              ? {}
+              : { acceptedPreparation }),
             capturePreparationWorkspaceDiff,
             dependencies,
             initialFailure: capturePathValidation,
             input,
             preparationManifest,
+            preparationRepairBudget,
             preparationRepairAttemptsByPhase,
+            recordOpenCodeSessionId,
             repoPreparationRepairLimit,
             repoProfile,
             runPlan,
@@ -686,8 +725,8 @@ export async function runAgentHarnessPipeline(
             workspace: requireWorkspace(workspace),
           });
           preparationManifest = preparationState.preparationManifest;
+          acceptedPreparation = preparationState.acceptedPreparation;
           preparationValidation = preparationState.preparationValidation;
-          opencodeSessionIds.push(...preparationState.opencodeSessionIds);
           continue pipelineAttempt;
         }
 
@@ -841,9 +880,7 @@ export async function runAgentHarnessPipeline(
     };
   } catch (error) {
     const failedSessionId = readFailedOpenCodeSessionId(error);
-    if (failedSessionId !== undefined) {
-      opencodeSessionIds.push(failedSessionId);
-    }
+    recordOpenCodeSessionId(failedSessionId);
     let preparationWorkspaceDiffError: unknown;
     if (
       preparationWorkspaceMutated &&
@@ -1056,11 +1093,19 @@ async function runValidationStage(
     writeArtifact(dependencies, path, report),
     writeArtifact(
       dependencies,
-      `${artifactPaths.validationAttempts}/${stage.replaceAll(/[^A-Za-z0-9_-]/g, "-")}/attempt-${attempt}.json`,
+      validationAttemptArtifactPath(stage, attempt),
       report,
     ),
   ]);
   return report;
+}
+
+function validationAttemptArtifactPath(
+  stage: string,
+  attempt: number,
+  suffix = "",
+): string {
+  return `${artifactPaths.validationAttempts}/${stage.replaceAll(/[^A-Za-z0-9_-]/g, "-")}/attempt-${attempt}${suffix}.json`;
 }
 
 function nextValidationAttempt(
@@ -1135,7 +1180,18 @@ async function repairScriptCandidate(input: {
   return repairedCandidate;
 }
 
+type AcceptedPreparationCandidate = {
+  manifest: PreparationManifest;
+  workspaceDiff: PreparationWorkspaceDiff;
+};
+
+type PreparationRepairBudget = {
+  attemptsByFingerprint: Record<string, number>;
+  totalAttempts: number;
+};
+
 async function ensureValidPreparation(input: {
+  acceptedPreparation?: AcceptedPreparationCandidate;
   capturePreparationWorkspaceDiff: () => Promise<
     PreparationWorkspaceDiff | undefined
   >;
@@ -1143,7 +1199,9 @@ async function ensureValidPreparation(input: {
   initialFailure?: ValidationReport;
   input: AgentHarnessPipelineInput;
   preparationManifest: PreparationManifest;
+  preparationRepairBudget: PreparationRepairBudget;
   preparationRepairAttemptsByPhase: Record<string, number>;
+  recordOpenCodeSessionId: (sessionId?: string) => void;
   repoPreparationRepairLimit: number;
   repoProfile: RepoProfile;
   runPlan: RunPlan;
@@ -1153,18 +1211,21 @@ async function ensureValidPreparation(input: {
   validationAttemptCounts: Record<string, number>;
   workspace: AgentHarnessWorkspace;
 }): Promise<{
-  opencodeSessionIds: string[];
+  acceptedPreparation: AcceptedPreparationCandidate | undefined;
   preparationManifest: PreparationManifest;
   preparationValidation: ValidationReport;
 }> {
   let preparationManifest = input.preparationManifest;
   let failure = input.initialFailure;
-  let installRepairBaseline: PreparationWorkspaceDiff | undefined;
-  let lastWorkspaceDiff: PreparationWorkspaceDiff | undefined;
+  let acceptedPreparation = input.acceptedPreparation;
+  let activeRepairFailure: ValidationReport | undefined;
+  let dependencyRepair = false;
+  let reconcileLockfile = false;
+  let repairBaseline: PreparationWorkspaceDiff | undefined;
+  let lastWorkspaceDiff = acceptedPreparation?.workspaceDiff;
   const attemptedInstallScopes = new Set([
     input.preparationManifest.installCommandUsed,
   ]);
-  const opencodeSessionIds: string[] = [];
 
   for (;;) {
     if (failure !== undefined) {
@@ -1187,11 +1248,15 @@ async function ensureValidPreparation(input: {
         );
         failure = undefined;
       } else {
-        const workspaceDiffBeforeRepair =
-          failure.failureClassification === "install failure"
-            ? lastWorkspaceDiff
-            : undefined;
+        const manifestBeforeRepair = preparationManifest;
+        const workspaceDiffBeforeRepair = lastWorkspaceDiff;
+        const repairingDependencies = isDependencyRepairFailure(
+          failure.failureClassification,
+        );
         const phase = failure.stage;
+        const fingerprint = preparationFailureFingerprint(failure);
+        const fingerprintRepairAttempts =
+          input.preparationRepairBudget.attemptsByFingerprint[fingerprint] ?? 0;
         const phaseRepairAttempts =
           input.preparationRepairAttemptsByPhase[phase] ?? 0;
         const repair = await repairPreparationManifest({
@@ -1200,17 +1265,20 @@ async function ensureValidPreparation(input: {
           input: input.input,
           preparationManifest,
           phaseRepairAttempts,
+          fingerprintRepairAttempts,
           repoPreparationRepairLimit: input.repoPreparationRepairLimit,
           repoProfile: input.repoProfile,
           runPlan: input.runPlan,
           stageStatuses: input.stageStatuses,
           stageTimings: input.stageTimings,
+          totalRepairAttempts: input.preparationRepairBudget.totalAttempts,
           workspace: input.workspace,
         });
+        input.preparationRepairBudget.attemptsByFingerprint[fingerprint] =
+          fingerprintRepairAttempts + 1;
+        input.preparationRepairBudget.totalAttempts += 1;
         input.preparationRepairAttemptsByPhase[phase] = phaseRepairAttempts + 1;
-        if (repair.opencodeSessionId !== undefined) {
-          opencodeSessionIds.push(repair.opencodeSessionId);
-        }
+        input.recordOpenCodeSessionId(repair.opencodeSessionId);
         const repairedManifest = readPreparationManifest(repair.manifest);
         assertPreparationRuntimeTarget({
           preparationManifest: repairedManifest,
@@ -1220,9 +1288,11 @@ async function ensureValidPreparation(input: {
         preparationManifest = await writeArtifact(
           input.dependencies,
           artifactPaths.preparationManifest,
-          repairedManifest,
+          repairingDependencies ? manifestBeforeRepair : repairedManifest,
         );
-        installRepairBaseline = workspaceDiffBeforeRepair;
+        activeRepairFailure = failure;
+        dependencyRepair = repairingDependencies;
+        repairBaseline = workspaceDiffBeforeRepair;
       }
     }
 
@@ -1239,9 +1309,38 @@ async function ensureValidPreparation(input: {
       );
     }
 
+    reconcileLockfile = false;
     const workspaceDiff = await input.capturePreparationWorkspaceDiff();
     lastWorkspaceDiff = workspaceDiff;
     if (workspaceDiff !== undefined) {
+      const fidelityAttempt =
+        (input.validationAttemptCounts["preparation-fidelity"] ?? 0) + 1;
+      await writeArtifact(
+        input.dependencies,
+        validationAttemptArtifactPath(
+          "preparation-fidelity",
+          fidelityAttempt,
+          "-workspace-diff",
+        ),
+        {
+          ...workspaceDiff,
+          ...(acceptedPreparation === undefined
+            ? {}
+            : {
+                acceptedBaselinePatchSha256:
+                  acceptedPreparation.workspaceDiff.patchSha256,
+              }),
+          dependencyRepair,
+          repair: repairBaseline !== undefined,
+        },
+      );
+      const repairDelta =
+        repairBaseline === undefined
+          ? undefined
+          : readDependencyRepairDelta(repairBaseline, workspaceDiff);
+      const unchangedDependencyRepair =
+        dependencyRepair && repairDelta?.changedPaths.length === 0;
+      reconcileLockfile = repairDelta?.dependencyInputsChanged ?? false;
       const fidelityValidation = await runValidationStage(
         "preparation-fidelity",
         input.dependencies,
@@ -1251,23 +1350,59 @@ async function ensureValidPreparation(input: {
         input.stageTimings,
         async () =>
           validatePreparationFidelity({
-            ...(installRepairBaseline === undefined
+            ...(repairBaseline === undefined
               ? {}
-              : { installRepairBaseline }),
+              : { dependencyRepair, repairBaseline }),
             preparationManifest,
-            repoSourcePaths: new Set(
-              input.input.files.map((file) => file.path),
+            repoSourceFiles: new Map(
+              input.input.files.map((file) => [file.path, file.text] as const),
             ),
             workspaceDiff,
           }),
         input.validationAttemptCounts,
         input.preparationRepairAttemptsByPhase["preparation-fidelity"] ?? 0,
       );
-      installRepairBaseline = undefined;
+      dependencyRepair = false;
+      repairBaseline = undefined;
       if (fidelityValidation.status === "failed") {
-        failure = fidelityValidation;
+        reconcileLockfile = false;
+        if (
+          acceptedPreparation !== undefined &&
+          activeRepairFailure !== undefined &&
+          input.dependencies.restorePreparationCandidate !== undefined
+        ) {
+          await input.dependencies.restorePreparationCandidate({
+            preparationManifest: acceptedPreparation.manifest,
+            repoProfile: input.repoProfile,
+            workspace: input.workspace,
+            workspaceDiff: acceptedPreparation.workspaceDiff,
+          });
+          preparationManifest = acceptedPreparation.manifest;
+          lastWorkspaceDiff = acceptedPreparation.workspaceDiff;
+          failure = appendRepairRejection(
+            activeRepairFailure,
+            fidelityValidation,
+          );
+          activeRepairFailure = undefined;
+        } else {
+          failure = fidelityValidation;
+        }
         continue;
       }
+      if (unchangedDependencyRepair && activeRepairFailure !== undefined) {
+        failure = {
+          ...activeRepairFailure,
+          logsSummary: `${activeRepairFailure.logsSummary} Rejected repair: no package manifest or recognized package-manager configuration changed.`,
+          suggestedRepairHints: [
+            ...activeRepairFailure.suggestedRepairHints,
+            "Change the dependency metadata responsible for the reported install failure; do not rewrite the manifest or executable source.",
+          ],
+        };
+        activeRepairFailure = undefined;
+        continue;
+      }
+      acceptedPreparation = { manifest: preparationManifest, workspaceDiff };
+      activeRepairFailure = undefined;
     }
 
     const preparationValidation = await runValidationStage(
@@ -1280,6 +1415,7 @@ async function ensureValidPreparation(input: {
       () =>
         input.dependencies.validatePreparation({
           preparationManifest,
+          ...(reconcileLockfile ? { reconcileLockfile: true } : {}),
           repoProfile: input.repoProfile,
           runPlan: input.runPlan,
           workspace: input.workspace,
@@ -1287,15 +1423,56 @@ async function ensureValidPreparation(input: {
       input.validationAttemptCounts,
       input.preparationRepairAttemptsByPhase["preparation-preflight"] ?? 0,
     );
+    if (
+      preparationValidation.status === "failed" &&
+      preparationValidation.failureClassification === "install failure"
+    ) {
+      const postValidationDiff = await input.capturePreparationWorkspaceDiff();
+      if (postValidationDiff !== undefined) {
+        lastWorkspaceDiff = postValidationDiff;
+        if (
+          acceptedPreparation !== undefined &&
+          readDependencyRepairDelta(
+            acceptedPreparation.workspaceDiff,
+            postValidationDiff,
+          ).onlyLockfiles
+        ) {
+          acceptedPreparation = {
+            manifest: preparationManifest,
+            workspaceDiff: postValidationDiff,
+          };
+        }
+      }
+    }
     if (preparationValidation.status === "passed") {
       return {
-        opencodeSessionIds,
+        acceptedPreparation,
         preparationManifest,
         preparationValidation,
       };
     }
     failure = preparationValidation;
   }
+}
+
+function appendRepairRejection(
+  originalFailure: ValidationReport,
+  fidelityFailure: ValidationReport,
+): ValidationReport {
+  return {
+    ...originalFailure,
+    artifactReferences: [
+      ...new Set([
+        ...originalFailure.artifactReferences,
+        ...fidelityFailure.artifactReferences,
+      ]),
+    ],
+    logsSummary: `${originalFailure.logsSummary} Rejected repair: ${fidelityFailure.logsSummary}`,
+    suggestedRepairHints: [
+      ...originalFailure.suggestedRepairHints,
+      ...fidelityFailure.suggestedRepairHints,
+    ],
+  };
 }
 
 function sameRuntimeConfiguration(
@@ -1316,6 +1493,7 @@ function sameRuntimeConfiguration(
 async function repairPreparationManifest(input: {
   dependencies: AgentHarnessPipelineDependencies;
   failureReport: ValidationReport;
+  fingerprintRepairAttempts: number;
   input: AgentHarnessPipelineInput;
   preparationManifest: PreparationManifest;
   phaseRepairAttempts: number;
@@ -1324,6 +1502,7 @@ async function repairPreparationManifest(input: {
   runPlan: RunPlan;
   stageStatuses: Record<string, string>;
   stageTimings: PipelineRunManifest["stageTimings"];
+  totalRepairAttempts: number;
   workspace: AgentHarnessWorkspace;
 }): Promise<{ manifest: PreparationManifest; opencodeSessionId?: string }> {
   const route = classifyRepairRoute(input.failureReport);
@@ -1335,22 +1514,24 @@ async function repairPreparationManifest(input: {
     throw new Error("Unreachable validation state.");
   }
 
-  const budget = readRepairBudgetDecision({
-    attempted: input.phaseRepairAttempts,
-    limit:
-      input.failureReport.stage === "preparation-fidelity"
-        ? Math.min(1, input.repoPreparationRepairLimit)
-        : input.repoPreparationRepairLimit,
-    route,
-  });
-  if (budget.status === "exhausted") {
+  if (input.totalRepairAttempts >= input.repoPreparationRepairLimit) {
     throw new Error(
-      `${input.failureReport.stage} failed: ${input.failureReport.logsSummary}. ${budget.reason}`,
+      `${input.failureReport.stage} failed: ${input.failureReport.logsSummary}. ${route} global retry budget exhausted after ${input.repoPreparationRepairLimit} attempts`,
     );
   }
+  const repeatedFailureLimit = Math.min(
+    input.failureReport.stage === "preparation-fidelity" ? 1 : 2,
+    input.repoPreparationRepairLimit,
+  );
+  if (input.fingerprintRepairAttempts >= repeatedFailureLimit) {
+    throw new Error(
+      `${input.failureReport.stage} failed: ${input.failureReport.logsSummary}. ${route} repeated failure retry budget exhausted after ${repeatedFailureLimit} attempts`,
+    );
+  }
+  const nextAttempt = input.phaseRepairAttempts + 1;
 
   return await runAsyncStage(
-    `${input.failureReport.stage}-repo-preparation-repair-${budget.nextAttempt}`,
+    `${input.failureReport.stage}-repo-preparation-repair-${nextAttempt}`,
     input.stageStatuses,
     input.stageTimings,
     () =>
@@ -1369,6 +1550,30 @@ async function repairPreparationManifest(input: {
         opencodeSessionId?: string;
       }>,
   );
+}
+
+function preparationFailureFingerprint(report: ValidationReport): string {
+  const rejectionParts = report.logsSummary.split(" Rejected repair:");
+  const latestSummary =
+    rejectionParts.length === 1
+      ? report.logsSummary
+      : `${rejectionParts[0]} Rejected repair:${rejectionParts.at(-1)}`;
+  const summary = latestSummary
+    .trim()
+    .toLowerCase()
+    .replace(/\b\d{4}-\d{2}-\d{2}t\d{2}:\d{2}:\d{2}(?:\.\d+)?z\b/g, "<time>")
+    .replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/g, "<id>")
+    .replace(
+      /\b\d+(?:\.\d+)?\s*(?:ms|milliseconds?|s|seconds?|minutes?)\b/g,
+      "<duration>",
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+  return [
+    report.stage,
+    report.failureClassification ?? "unknown",
+    summary,
+  ].join("\u0000");
 }
 
 function assertValidationPassed(report: ValidationReport): void {

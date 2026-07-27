@@ -173,6 +173,39 @@ export type ValidationReport = {
   suggestedRepairHints: string[];
   retryCount: number;
   artifactReferences: string[];
+  runtimeProbe?: RuntimeProbeDiagnostics;
+};
+
+export type RuntimeProbeDiagnostics = {
+  attempts: RuntimeProbeAttempt[];
+  targetUrl: string;
+  finalUrl?: string;
+  httpStatus?: number;
+};
+
+export type RuntimeProbeAttempt = {
+  attempt: number;
+  detail?: string;
+  durationMs: number;
+  exitCode: number;
+  outcome:
+    | "connection-refused"
+    | "http-error"
+    | "probe-error"
+    | "render-timeout"
+    | "responded"
+    | "runtime-exited";
+  startedAt: string;
+  process?: RuntimeProcessObservation;
+};
+
+type RuntimeProcessObservation = {
+  running: boolean;
+  endedAt?: string;
+  exitCode?: number;
+  signal?: string;
+  startedAt?: string;
+  terminationReason?: "controlled-stop" | "exited" | "signaled" | "unknown";
 };
 
 type AppMapRoute = {
@@ -809,6 +842,9 @@ export function readValidationReport(value: unknown): ValidationReport {
     networkAttempts: readNetworkAttempts(record, "networkAttempts"),
     pageErrors: readStringArray(record, "pageErrors"),
     retryCount: readNonNegativeInteger(record, "retryCount"),
+    ...(record.runtimeProbe === undefined
+      ? {}
+      : { runtimeProbe: readRuntimeProbe(record.runtimeProbe) }),
     screenshots: readStringArray(record, "screenshots"),
     stage: readNonEmptyString(record, "stage"),
     status: readEnum(record, "status", ["failed", "passed"]),
@@ -816,6 +852,88 @@ export function readValidationReport(value: unknown): ValidationReport {
     stdoutExcerpts: readStringArray(record, "stdoutExcerpts"),
     suggestedRepairHints: readStringArray(record, "suggestedRepairHints"),
     ...optionalLocalUrlKey(record, "urlChecked"),
+  };
+}
+
+function readRuntimeProbe(value: unknown): RuntimeProbeDiagnostics {
+  const path = "runtimeProbe";
+  const record = assertRecord(value, path);
+  return {
+    attempts: readArray(record.attempts, `${path}.attempts`, (entry, index) => {
+      const attemptPath = `${path}.attempts[${index}]`;
+      const attempt = assertRecord(entry, attemptPath);
+      return {
+        attempt: readNonNegativeInteger(attempt, "attempt", attemptPath),
+        ...(attempt.detail === undefined
+          ? {}
+          : { detail: readNonEmptyString(attempt, "detail", attemptPath) }),
+        durationMs: readNonNegativeNumber(attempt, "durationMs", attemptPath),
+        exitCode: readNonNegativeInteger(attempt, "exitCode", attemptPath),
+        outcome: readEnum(
+          attempt,
+          "outcome",
+          [
+            "connection-refused",
+            "http-error",
+            "probe-error",
+            "render-timeout",
+            "responded",
+            "runtime-exited",
+          ],
+          attemptPath,
+        ),
+        startedAt: readIsoDateString(attempt, "startedAt", attemptPath),
+        ...(attempt.process === undefined
+          ? {}
+          : {
+              process: readRuntimeProcessObservation(
+                attempt.process,
+                `${attemptPath}.process`,
+              ),
+            }),
+      };
+    }),
+    ...(record.finalUrl === undefined
+      ? {}
+      : { finalUrl: readLocalHttpUrl(record, "finalUrl", path) }),
+    ...(record.httpStatus === undefined
+      ? {}
+      : {
+          httpStatus: readNonNegativeInteger(record, "httpStatus", path),
+        }),
+    targetUrl: readLocalHttpUrl(record, "targetUrl", path),
+  };
+}
+
+function readRuntimeProcessObservation(
+  value: unknown,
+  path: string,
+): RuntimeProcessObservation {
+  const record = assertRecord(value, path);
+  return {
+    running: readBoolean(record, "running", path),
+    ...(record.endedAt === undefined
+      ? {}
+      : { endedAt: readIsoDateString(record, "endedAt", path) }),
+    ...(record.exitCode === undefined
+      ? {}
+      : { exitCode: readNonNegativeInteger(record, "exitCode", path) }),
+    ...(record.signal === undefined
+      ? {}
+      : { signal: readNonEmptyString(record, "signal", path) }),
+    ...(record.startedAt === undefined
+      ? {}
+      : { startedAt: readIsoDateString(record, "startedAt", path) }),
+    ...(record.terminationReason === undefined
+      ? {}
+      : {
+          terminationReason: readEnum(
+            record,
+            "terminationReason",
+            ["controlled-stop", "exited", "signaled", "unknown"],
+            path,
+          ),
+        }),
   };
 }
 
@@ -1550,10 +1668,12 @@ function readNonNegativeNumber(
 function readNonNegativeInteger(
   record: Record<string, unknown>,
   key: string,
+  parentPath?: string,
 ): number {
-  const value = readNonNegativeNumber(record, key);
+  const value = readNonNegativeNumber(record, key, parentPath);
   if (!Number.isInteger(value)) {
-    throw new Error(`${key} must be an integer`);
+    const path = parentPath ? `${parentPath}.${key}` : key;
+    throw new Error(`${path} must be an integer`);
   }
   return value;
 }

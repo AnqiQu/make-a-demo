@@ -1316,11 +1316,14 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         },
       ]),
     );
-    expect(status).toEqual({
+    expect(status).toMatchObject({
+      endedAt: expect.any(String),
       exitCode: 0,
       running: false,
+      startedAt: expect.any(String),
       stderr: "",
       stdout: "",
+      terminationReason: "exited",
     });
   });
 
