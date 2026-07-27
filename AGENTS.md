@@ -41,7 +41,7 @@ The codebase should remain minimal and adaptable while preserving clean seams be
 
 ## Development Practice
 
-For runtime-code changes, always use the `tdd` skill if you have to it. If you don't, you must read and follow `docs/agents/tdd.md` before editing runtime code. Follow TDD best practices:
+For runtime-code changes, always use the `tdd` skill if you have access to it. If you don't, you must read and follow `docs/agents/tdd.md` before editing runtime code. Follow TDD best practices:
 
 - Write one failing behavior test first.
 - Implement the smallest change that makes that test pass.
@@ -49,7 +49,8 @@ For runtime-code changes, always use the `tdd` skill if you have to it. If you d
 - Prefer tests through public interfaces and real seams rather than implementation details.
 - Add regression tests for bugs before fixing them when a correct seam exists.
 - When exporting a new interface, add a docstring that explains what implementations should do and the invariants they must uphold.
-- Run `bun run lint`, `bun run typecheck`, `bun run test`, `bun run knip`, and `bun run graph:deps` before considering code changes complete.
+- Run `bun run lint`, `bun run typecheck`, `bun run test`, and `bun run knip` before considering code changes complete.
+- Regenerate dependency graphs with `bun run graph:deps` only when module structure changes (new files, moved files, or changed imports), and commit the regenerated graphs separately with the `generated:` prefix so they do not bloat feature diffs.
 
 ### Commit
 
@@ -64,10 +65,10 @@ For runtime-code changes, always use the `tdd` skill if you have to it. If you d
 - Use `infra:` for deployment, CI, environment, sandbox, cloud, or operational tooling changes.
 - Use `generated:` for regenerated artifacts such as dependency graphs, schemas, lockfiles, or other machine-generated outputs when committed separately.
 - Prefer a specific subject that explains the exact change, such as `bugfix: preserve Daytona preview paths` rather than `bugfix: fix pipeline`.
-- Before committing, ask the user whether the work completes or relates to any Linear issues. If it does, include the relevant issue key in the commit subject. Issue text is optional; when it is not supplied, describe the changes directly in the commit message.
-- When a commit or PR is about a Linear issue, include the relevant Linear issue key in the commit subject or PR title, for example `feature(OWL-22): add draft composite review`.
-- When a commit or PR should close a Linear issue, include a Linear closing magic word and issue key in the title/subject, not only in the body. Use a closing form such as `Closes OWL-22: add draft composite review` in the PR title, or `feature: closes OWL-22 add draft composite review` in a commit subject when committing directly to the default branch.
-- Use non-closing Linear words such as `Refs OWL-22` only when the work is related but should not move the issue to Done after merge.
+- Issues live in GitHub Issues (see `docs/agents/issue-tracker.md`). When the related issue is apparent from the branch, conversation, or staged work, reference it without asking; ask the user only when the relationship is genuinely unclear.
+- When a commit or PR is about a GitHub issue, include the issue reference in the commit subject or PR title, for example `feature(#22): add draft composite review`.
+- When a commit or PR should close a GitHub issue, use a GitHub closing keyword with the issue number in the PR title or commit subject, not only in the body, for example `Closes #22: add draft composite review` or `feature: closes #22 add draft composite review`.
+- Use non-closing references such as `Refs #22` when the work is related but should not close the issue on merge.
 - N.B. When asked to commit, split staged work into multiple small commits. N.B.: Commits should be atomic: each commit should be fully described by its short subject and should not be able to be split apart anymore without losing important context.
 
 ### Testing
@@ -81,4 +82,5 @@ For runtime-code changes, always use the `tdd` skill if you have to it. If you d
 - Do not unit test prompt text or prompt wording in code. Prompts do not need direct unit tests; test the observable behavior or contract that the prompt-powered seam must satisfy instead.
 - Add regression tests before fixing bugs, and keep them focused on the bug's externally visible behavior.
 - Avoid over-mocking. Use small fakes at external seams when real adapters would make the test slow, flaky, or dependent on network/auth state.
+- Every seam must be exercised by at least one test that runs the real implementation, not a stub — especially security-critical seams such as archive screening, sandbox permissions, and network policy. Fakes everywhere means the seam itself is untested.
 - Refactor tests after they pass: remove duplicated setup, split broad tests, and keep assertions specific enough to catch real regressions.
