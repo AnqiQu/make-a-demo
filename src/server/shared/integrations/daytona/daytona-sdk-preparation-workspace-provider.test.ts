@@ -538,74 +538,30 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ]);
   });
 
-  it("does not resolve sandbox logging until the workspace-visible mirror is durable", async () => {
+  it("appends each sandbox log line with one command instead of re-copying the log", async () => {
     const calls: unknown[] = [];
-    const workspaceMirrorStarted = deferred<void>();
-    const workspaceMirror = deferred<void>();
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
-      client: fakeClient(calls, {
-        awaitWorkspaceLogMirror: workspaceMirror.promise,
-        onWorkspaceLogMirrorStarted: workspaceMirrorStarted.resolve,
-      }),
+      client: fakeClient(calls),
     });
     const handle = await provider.create();
 
-    let resolved = false;
-    const write = handle.workspace
-      .writeSandboxLog?.({
-        event: "repo-preparation.started",
-        stage: "repo-preparation",
-      })
-      .then(() => {
-        resolved = true;
-      });
-
-    await workspaceMirrorStarted.promise;
-
-    expect(calls).toEqual(
-      expect.arrayContaining([
-        {
-          executeCommand: expect.stringContaining(
-            "cp '/tmp/makeademo/sandbox-log.jsonl' '/workspace/.makeademo/sandbox-log.jsonl'",
-          ),
-        },
-      ]),
-    );
-    expect(resolved).toBe(false);
-
-    workspaceMirror.resolve();
-    await expect(write).resolves.toBeUndefined();
-    expect(resolved).toBe(true);
-  });
-
-  it("surfaces sandbox logging failures when the workspace mirror path is unavailable", async () => {
-    const calls: unknown[] = [];
-    const provider = new DaytonaSdkPreparationWorkspaceProvider({
-      client: fakeClient(calls, { failWorkspaceLogMirror: true }),
+    await handle.workspace.writeSandboxLog?.({
+      event: "repo-preparation.started",
+      stage: "repo-preparation",
     });
-    const handle = await provider.create();
 
-    await expect(
-      handle.workspace.writeSandboxLog?.({
-        event: "repo-preparation.started",
-        stage: "repo-preparation",
-      }),
-    ).rejects.toThrow("Failed to mirror Daytona sandbox audit log.");
-
-    expect(calls).toEqual(
-      expect.arrayContaining([
-        {
-          executeCommand: expect.stringContaining(
-            ">> '/tmp/makeademo/sandbox-log.jsonl'",
-          ),
-        },
-        {
-          executeCommand: expect.stringContaining(
-            "cp '/tmp/makeademo/sandbox-log.jsonl' '/workspace/.makeademo/sandbox-log.jsonl'",
-          ),
-        },
-      ]),
-    );
+    const logCommands = calls
+      .filter(
+        (call): call is { executeCommand: string } =>
+          typeof call === "object" &&
+          call !== null &&
+          "executeCommand" in call &&
+          typeof call.executeCommand === "string" &&
+          call.executeCommand.includes("sandbox-log.jsonl"),
+      )
+      .map((call) => call.executeCommand);
+    expect(logCommands).toHaveLength(1);
+    expect(logCommands[0]).toContain(">> '/tmp/makeademo/sandbox-log.jsonl'");
   });
 
   it("fails fast when a durable sandbox log write does not finish", async () => {
@@ -2196,17 +2152,14 @@ function fakeLinkedSandbox(
 function fakeClient(
   calls: unknown[],
   options: {
-    awaitWorkspaceLogMirror?: Promise<void>;
     commandsRequireSandboxRestart?: boolean;
     downloadError?: string;
     executeCommandFails?: boolean;
     executeCommandNeverResolves?: boolean;
     failFirstSubmittedCodeInitialization?: boolean;
-    failWorkspaceLogMirror?: boolean;
     failSubmittedCodeNetworkDisable?: boolean;
     missingSubmittedCodeImage?: boolean;
     networkError?: Error;
-    onWorkspaceLogMirrorStarted?: () => void;
     previewNeverResolves?: boolean;
     ptyConnectionFailuresBeforeSuccess?: number;
     ptyDisconnectNeverResolves?: boolean;
@@ -2353,7 +2306,10 @@ function fakeClient(
             "bad request: failed to resolve container IP after 3 attempts: no IP address found. Is the Sandbox started?",
           );
         }
-        if (command.includes("cat /workspace/.makeademo/sandbox-log.jsonl")) {
+        if (
+          command.includes("tail -c") &&
+          command.includes("/tmp/makeademo/sandbox-log.jsonl")
+        ) {
           return {
             exitCode: 0,
             result: options.sandboxLogContents ?? "",
@@ -2373,24 +2329,6 @@ function fakeClient(
             exitCode: 1,
             result: "",
             stderr: "failed to disable submitted-code network",
-          };
-        }
-        if (
-          options.awaitWorkspaceLogMirror !== undefined &&
-          command.includes("/workspace/.makeademo/sandbox-log.jsonl")
-        ) {
-          options.onWorkspaceLogMirrorStarted?.();
-          await options.awaitWorkspaceLogMirror;
-        }
-        if (
-          options.failWorkspaceLogMirror === true &&
-          command.includes("/workspace/.makeademo/sandbox-log.jsonl")
-        ) {
-          return {
-            exitCode: 1,
-            result: "",
-            stderr:
-              "mkdir: cannot create directory '/workspace': Permission denied",
           };
         }
         if (
@@ -2475,17 +2413,6 @@ function fakeClient(
       return sandbox;
     },
   };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((promiseResolve, promiseReject) => {
-    resolve = promiseResolve;
-    reject = promiseReject;
-  });
-
-  return { promise, reject, resolve };
 }
 
 function countOccurrences(text: string, needle: string): number {

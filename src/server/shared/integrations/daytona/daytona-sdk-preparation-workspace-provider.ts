@@ -157,7 +157,13 @@ const artifactTransferRetryLimit = 2;
 const makeADemoArtifactDirectory = "/tmp/makeademo";
 const workspaceMakeADemoDirectory = "/workspace/.makeademo";
 const sandboxAuditLogPath = `${makeADemoArtifactDirectory}/sandbox-log.jsonl`;
-const workspaceSandboxAuditLogPath = `${workspaceMakeADemoDirectory}/sandbox-log.jsonl`;
+/**
+ * Log collection runs during teardown, exactly when a failing run most needs
+ * its evidence: it gets a generous budget independent of the per-line write
+ * timeout, and a byte cap so a runaway log cannot stall teardown.
+ */
+const sandboxLogCollectionTimeoutMs = 60_000;
+const sandboxLogCollectionByteCap = 5 * 1024 * 1024;
 const submittedCodeRuntimeTempDirectory = `${workspaceMakeADemoDirectory}/runtime-tmp`;
 
 export async function createDaytonaSdkPreparationWorkspaceHandle(input: {
@@ -528,13 +534,13 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     const collect = () =>
       withTimeout(
         this.sandbox.process.executeCommand(
-          `sh -lc ${shellQuote(`test ! -f ${workspaceSandboxAuditLogPath} || cat ${workspaceSandboxAuditLogPath}`)}`,
+          `sh -lc ${shellQuote(`test ! -f ${sandboxAuditLogPath} || tail -c ${sandboxLogCollectionByteCap} ${sandboxAuditLogPath}`)}`,
           undefined,
           undefined,
-          toSdkTimeoutSeconds(this.logWriteTimeoutMs),
+          toSdkTimeoutSeconds(sandboxLogCollectionTimeoutMs),
         ),
-        this.logWriteTimeoutMs,
-        `Daytona sandbox log collection did not finish within ${this.logWriteTimeoutMs}ms.`,
+        sandboxLogCollectionTimeoutMs,
+        `Daytona sandbox log collection did not finish within ${sandboxLogCollectionTimeoutMs}ms.`,
       );
     let response: Awaited<ReturnType<typeof collect>>;
     try {
@@ -591,18 +597,6 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
 
     if ((response.exitCode ?? 0) !== 0) {
       throw new Error("Failed to write Daytona sandbox audit log.");
-    }
-
-    const mirrorResponse = await withTimeout(
-      this.sandbox.process.executeCommand(
-        `mkdir -p ${shellQuote(workspaceMakeADemoDirectory)} && cp ${shellQuote(sandboxAuditLogPath)} ${shellQuote(workspaceSandboxAuditLogPath)}`,
-      ),
-      this.logWriteTimeoutMs,
-      `Daytona sandbox log mirror did not finish within ${this.logWriteTimeoutMs}ms.`,
-    );
-
-    if ((mirrorResponse.exitCode ?? 0) !== 0) {
-      throw new Error("Failed to mirror Daytona sandbox audit log.");
     }
   }
 
