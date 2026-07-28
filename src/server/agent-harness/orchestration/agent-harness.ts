@@ -268,7 +268,6 @@ export async function runAgentHarnessPipeline(
       opencodeSessionIds.push(sessionId);
     }
   };
-  let cleanupFailure: unknown;
   let primaryError: unknown;
   let preparationWorkspaceDiff: PreparationWorkspaceDiff | undefined;
   let preparationWorkspaceDiffCaptureAttempted = false;
@@ -963,9 +962,9 @@ export async function runAgentHarnessPipeline(
       try {
         await workspace?.destroy();
       } catch (cleanupError) {
-        if (primaryError === undefined) {
-          cleanupFailure = cleanupError;
-        } else {
+        // On the success path the result has already been returned and the run
+        // manifest persisted; a late destroy failure must not undo either.
+        if (primaryError !== undefined) {
           stageStatuses["workspace-cleanup"] = "failed";
           attachCleanupError(primaryError, cleanupError);
           const primaryMessage = readErrorMessage(primaryError);
@@ -995,9 +994,6 @@ export async function runAgentHarnessPipeline(
 
   if (primaryError !== undefined) {
     throw primaryError;
-  }
-  if (cleanupFailure !== undefined) {
-    throw cleanupFailure;
   }
   throw new Error("Agent harness finished without a result.");
 }

@@ -295,9 +295,6 @@ export async function runDefaultDemoPipeline(
   if (primaryFailure !== undefined) {
     throw primaryFailure;
   }
-  if (cleanupFailure !== undefined) {
-    throw cleanupFailure;
-  }
   if (completedResult === undefined) {
     throw new Error("Default demo pipeline finished without a result.");
   }
