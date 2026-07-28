@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { classifyRepairRoute, readRepairBudgetDecision } from "./repair-router";
+import {
+  classifyRepairRoute,
+  isDependencyRepairFailure,
+  readRepairBudgetDecision,
+} from "./repair-router";
 
 describe("RepairRouter", () => {
   it("routes script-only failures to ScriptRepair", () => {
@@ -20,6 +24,7 @@ describe("RepairRouter", () => {
   it("routes preparation failures to RepoPreparationRepair", () => {
     for (const classification of [
       "install failure",
+      "listen failure",
       "build failure",
       "start failure",
       "missing env",
@@ -35,6 +40,35 @@ describe("RepairRouter", () => {
         classifyRepairRoute({ failureClassification: classification }),
       ).toBe("repo-preparation-repair");
     }
+  });
+
+  it("does not restrict a listen failure to dependency-metadata repairs", () => {
+    expect(isDependencyRepairFailure("listen failure")).toBe(false);
+    expect(isDependencyRepairFailure("install failure")).toBe(true);
+    expect(isDependencyRepairFailure("missing dependency")).toBe(true);
+  });
+
+  it("fails an unrecognized classification instead of keyword-routing its logs", () => {
+    expect(
+      classifyRepairRoute({
+        failureClassification: "flow lock",
+        logsSummary: "assertion failed while locating the dashboard",
+      }),
+    ).toBe("fail");
+    expect(
+      classifyRepairRoute({
+        failureClassification: "transient infrastructure failure",
+      }),
+    ).toBe("fail");
+  });
+
+  it("keyword-routes only the first summary line when no classification exists", () => {
+    expect(
+      classifyRepairRoute({
+        logsSummary:
+          "Start command exited with code 1\nAssertionError: expected the server to respond",
+      }),
+    ).toBe("repo-preparation-repair");
   });
 
   it("stops repair attempts when a typed budget is exhausted", () => {

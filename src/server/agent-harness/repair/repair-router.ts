@@ -2,7 +2,6 @@ export type RepairRoute = "fail" | "repo-preparation-repair" | "script-repair";
 
 const dependencyFailureClassifications = new Set([
   "install failure",
-  "listen failure",
   "missing dependency",
 ]);
 
@@ -26,6 +25,7 @@ const preparationFailureClassifications = new Set([
   "external network required",
   "feature auth barrier",
   "install failure",
+  "listen failure",
   "missing dependency",
   "missing env",
   "prepared feature not observable",
@@ -41,24 +41,19 @@ export function classifyRepairRoute(input: {
   logsSummary?: string;
 }): RepairRoute {
   const classification = input.failureClassification?.trim();
-  if (classification !== undefined) {
+  if (classification !== undefined && classification.length > 0) {
     if (scriptFailureClassifications.has(classification)) {
       return "script-repair";
     }
     if (preparationFailureClassifications.has(classification)) {
       return "repo-preparation-repair";
     }
-    if (
-      classification === "unsafe repo" ||
-      classification === "unsupported repo" ||
-      classification === "harness/internal failure" ||
-      classification === "transient infrastructure failure"
-    ) {
-      return "fail";
-    }
+    // Unrecognized classifications fail with their own reason; keyword
+    // matching against arbitrary logs must never override a classifier.
+    return "fail";
   }
 
-  const summary = input.logsSummary ?? "";
+  const summary = input.logsSummary?.split("\n", 1)[0] ?? "";
   if (/locator|assertion|contract|capture sdk/i.test(summary)) {
     return "script-repair";
   }
