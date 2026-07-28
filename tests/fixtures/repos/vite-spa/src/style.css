@@ -1,0 +1,86 @@
+:root {
+  color-scheme: light;
+  font-family: system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  background: #f4f1ea;
+  color: #24301f;
+}
+
+.app {
+  max-width: 34rem;
+  margin: 0 auto;
+  padding: 2rem 1rem 4rem;
+  display: grid;
+  gap: 1.5rem;
+}
+
+h1 {
+  margin: 0;
+  font-size: 2rem;
+}
+
+.tagline {
+  margin: 0.25rem 0 0;
+  color: #5c6b52;
+}
+
+form,
+section {
+  display: grid;
+  gap: 0.5rem;
+}
+
+label {
+  font-weight: 600;
+}
+
+input {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #a9b39d;
+  border-radius: 6px;
+  font-size: 1rem;
+}
+
+button {
+  justify-self: start;
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 6px;
+  background: #3a5a2a;
+  color: #fff;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+#note-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.note {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem;
+  background: #fff;
+  border: 1px solid #d8dcd0;
+  border-radius: 8px;
+}
+
+.note.pinned {
+  border-color: #3a5a2a;
+  background: #eef3e8;
+}
+
+.note button {
+  background: #eef3e8;
+  color: #24301f;
+  border: 1px solid #a9b39d;
+}

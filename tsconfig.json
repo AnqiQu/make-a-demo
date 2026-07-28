@@ -27,5 +27,6 @@
     "scripts/**/*.mts",
     "vitest.config.ts",
     "vite.config.ts"
-  ]
+  ],
+  "exclude": ["tests/fixtures/repos"]
 }

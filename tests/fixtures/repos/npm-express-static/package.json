@@ -1,0 +1,16 @@
+{
+  "name": "trailhead",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "npm@11.13.0",
+  "scripts": {
+    "build": "node build.mjs",
+    "start": "serve -s dist -l 4500",
+    "api": "node server.mjs"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "serve": "^14.2.4"
+  }
+}

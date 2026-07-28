@@ -1,0 +1,11 @@
+{
+  "name": "crewboard-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.15.9",
+  "scripts": {
+    "prepare": "node scripts/write-prepare-marker.mjs",
+    "dev": "pnpm --filter @crewboard/web dev",
+    "build": "pnpm --filter @crewboard/web build"
+  }
+}

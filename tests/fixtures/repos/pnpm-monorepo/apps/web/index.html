@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Crewboard</title>
+  </head>
+  <body>
+    <main class="app">
+      <header>
+        <h1>Crewboard</h1>
+        <p class="tagline">A task board for small crews.</p>
+      </header>
+
+      <form id="new-task-form" aria-label="Add a task">
+        <div class="field">
+          <label for="task-name">Task</label>
+          <input id="task-name" name="task-name" type="text" placeholder="e.g. Patch the roof" required />
+        </div>
+        <div class="field">
+          <label for="task-assignee">Assignee</label>
+          <select id="task-assignee" name="task-assignee">
+            <option value="">Unassigned</option>
+            <option value="Sam">Sam</option>
+            <option value="Rio">Rio</option>
+            <option value="Alex">Alex</option>
+          </select>
+        </div>
+        <button type="submit">Add task</button>
+      </form>
+
+      <section id="board" class="board" aria-label="Task board"></section>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

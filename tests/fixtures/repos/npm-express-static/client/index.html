@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Trailhead</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header>
+        <h1>Trailhead</h1>
+        <p class="tagline">Plan a day hike in two minutes.</p>
+      </header>
+
+      <section aria-label="Distance converter">
+        <h2>Distance converter</h2>
+        <label for="distance-value">Distance</label>
+        <input id="distance-value" name="distance-value" type="number" min="0" step="0.1" value="5" />
+        <label for="distance-unit">Unit</label>
+        <select id="distance-unit" name="distance-unit">
+          <option value="miles">Miles</option>
+          <option value="kilometers">Kilometers</option>
+        </select>
+        <p id="distance-result" role="status">5 miles is 8.05 kilometers</p>
+      </section>
+
+      <section aria-label="Packing checklist">
+        <h2>Packing checklist</h2>
+        <form id="packing-form">
+          <label for="packing-item">Add an item</label>
+          <input id="packing-item" name="packing-item" type="text" placeholder="e.g. Water filter" required />
+          <button type="submit">Add to list</button>
+        </form>
+        <ul id="packing-list"></ul>
+        <p id="packing-progress" role="status">0 of 3 packed</p>
+      </section>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

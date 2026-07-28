@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Fieldnote</title>
+  </head>
+  <body>
+    <main class="app">
+      <header>
+        <h1>Fieldnote</h1>
+        <p class="tagline">Quick notes for people who work outside.</p>
+      </header>
+
+      <form id="new-note-form" aria-label="Create a note">
+        <label for="note-text">New note</label>
+        <input id="note-text" name="note-text" type="text" placeholder="e.g. North fence post is leaning" required />
+        <button type="submit">Add note</button>
+      </form>
+
+      <section aria-label="Find notes">
+        <label for="note-search">Search notes</label>
+        <input id="note-search" name="note-search" type="search" placeholder="Filter by keyword" />
+      </section>
+
+      <section aria-label="Your notes">
+        <p id="note-stats" role="status">3 notes, 1 pinned</p>
+        <ul id="note-list"></ul>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

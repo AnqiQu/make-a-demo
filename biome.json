@@ -9,7 +9,8 @@
       ".makeademo-terminal-runs",
       "artifacts",
       "demo/artifacts",
-      "dist"
+      "dist",
+      "tests/fixtures/repos"
     ]
   },
   "formatter": {

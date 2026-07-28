@@ -2,6 +2,7 @@
   "entry": ["demo/app/main.tsx"],
   "ignoreDependencies": ["@railway/cli"],
   "ignore": [
+    "tests/fixtures/repos/**",
     ".dependency-cruiser.graph.cjs",
     "scripts/filter-type-only-dot.mts",
     "src/server/shared/integrations/remotion/makeademo-video.tsx",
