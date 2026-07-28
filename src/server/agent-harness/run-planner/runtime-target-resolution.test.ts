@@ -291,6 +291,37 @@ describe("resolveRuntimeTarget", () => {
     );
   });
 
+  it("expands scoped installation when the failure is classified as a missing dependency", () => {
+    const expanded = expandPreparationInstallScopeForMissingWorkspace({
+      failureReport: {
+        ...validationReport(),
+        failureClassification: "missing dependency",
+        logsSummary: "Cannot find module '@acme/design-system'",
+      },
+      preparationManifest: manifest("apps/web/src/page.tsx"),
+      repoProfile: profile({
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "@acme/web",
+            ports: [],
+            scripts: { start: "next start" },
+          },
+          {
+            dir: "packages/design-system",
+            name: "@acme/design-system",
+            ports: [],
+            scripts: {},
+          },
+        ],
+      }),
+    });
+
+    expect(expanded?.installCommandUsed).toContain(
+      "--filter=@acme/design-system",
+    );
+  });
+
   it("uses a nested project lockfile without workspace filtering", () => {
     const target = resolveRuntimeTarget({
       preparationManifest: manifest("apps/web/src/page.tsx"),

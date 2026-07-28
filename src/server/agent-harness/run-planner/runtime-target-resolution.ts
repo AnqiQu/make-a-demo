@@ -115,7 +115,7 @@ export function expandPreparationInstallScopeForMissingWorkspace(input: {
   runPlan?: RunPlan;
 }): PreparationManifest | undefined {
   if (
-    !["build failure", "start failure"].includes(
+    !["build failure", "missing dependency", "start failure"].includes(
       input.failureReport.failureClassification ?? "",
     ) ||
     !input.repoProfile.workspaces.isMonorepo ||
