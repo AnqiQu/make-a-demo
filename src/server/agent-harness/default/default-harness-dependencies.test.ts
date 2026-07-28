@@ -2359,6 +2359,108 @@ describe("createDefaultAgentHarnessDependencies", () => {
     }
   });
 
+  it("keeps probing a dev server that binds only after a long cold start", async () => {
+    vi.useFakeTimers();
+    try {
+      const startMs = Date.now();
+      const workspace: AgentHarnessWorkspace = {
+        async destroy() {},
+        async execute() {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async executeSubmittedCode(command) {
+          if (!command.includes("curl -")) {
+            return { exitCode: 0, stderr: "", stdout: "" };
+          }
+          return Date.now() - startMs < 90_000
+            ? {
+                exitCode: 7,
+                stderr: "curl: (7) Failed to connect to 127.0.0.1",
+                stdout: "",
+              }
+            : { exitCode: 0, stderr: "", stdout: "ready" };
+        },
+        async readSubmittedCodeAppStatus() {
+          return { running: true, stderr: "", stdout: "" };
+        },
+        async setSubmittedCodeNetworkAccess() {},
+        async startSubmittedCodeApp() {},
+        async stopSubmittedCodeApp() {},
+        async syncSubmittedCodeWorkspace() {},
+      };
+      const harness = await createDefaultAgentHarnessDependencies({
+        artifactStore: { async writeJson() {} },
+        openCodeRunner: repoPreparationRunner(),
+        outputRoot: "/tmp/makeademo-test",
+        repoSourceArchive: await repoSourceArchive(),
+      });
+
+      const validation = harness.dependencies.validatePreparation({
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      });
+      await vi.advanceTimersByTimeAsync(200_000);
+      const report = await validation;
+
+      expect(report.status).toBe("passed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds install and build commands with explicit timeouts", async () => {
+    const timeouts: Array<{ command: string; timeoutMs: number | undefined }> =
+      [];
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode(command, options) {
+        if (command.includes("install") || command.includes("run build")) {
+          timeouts.push({ command, timeoutMs: options?.timeoutMs });
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async readSubmittedCodeAppStatus() {
+        return { running: true, stderr: "", stdout: "" };
+      },
+      async setSubmittedCodeNetworkAccess() {},
+      async startSubmittedCodeApp() {},
+      async stopSubmittedCodeApp() {},
+      async syncSubmittedCodeWorkspace() {},
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        buildCommandUsed: "bun run build",
+      },
+      repoProfile: {
+        ...repoProfile(),
+        packageScripts: { build: "vite build", dev: "bun run dev" },
+      },
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(timeouts).toEqual([
+      expect.objectContaining({ timeoutMs: 20 * 60_000 }),
+      expect.objectContaining({
+        command: expect.stringContaining("run build"),
+        timeoutMs: 15 * 60_000,
+      }),
+    ]);
+  });
+
   it("records the final local URL and HTTP status after redirects", async () => {
     const workspace: AgentHarnessWorkspace = {
       async destroy() {},
@@ -2546,14 +2648,14 @@ describe("createDefaultAgentHarnessDependencies", () => {
         runPlan: runPlan(),
         workspace,
       });
-      await vi.advanceTimersByTimeAsync(18_000);
+      await vi.advanceTimersByTimeAsync(200_000);
       const report = await validation;
 
       expect(report).toMatchObject({
         failureClassification: "listen failure",
         status: "failed",
       });
-      expect(probes).toBe(10);
+      expect(probes).toBe(16);
     } finally {
       vi.useRealTimers();
     }

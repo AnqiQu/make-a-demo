@@ -39,6 +39,7 @@ import {
   type AgentHarnessSubmittedCodeAppStatus,
   type AgentHarnessWorkspace,
   type AgentHarnessWorkspaceCommandResult,
+  type AgentHarnessWorkspaceExecuteOptions,
   type AgentHarnessWorkspaceHandle,
   type AgentHarnessWorkspaceProvider,
   isAgentHarnessInfrastructureError,
@@ -1926,6 +1927,7 @@ async function validateSubmittedCodeRuntime(input: {
               runtimeTarget?.install.cwd ?? manifest.appDir,
               command,
             ),
+            { timeoutMs: dependencyInstallTimeoutMs },
           ),
       });
     type InstallResult = Awaited<ReturnType<typeof runInstall>>;
@@ -2080,7 +2082,7 @@ async function validateSubmittedCodeRuntime(input: {
         runtimeTarget?.build?.cwd ?? manifest.appDir,
         manifest.buildCommandUsed,
       ),
-      { env: guardedRuntimeEnv },
+      { env: guardedRuntimeEnv, timeoutMs: submittedCodeBuildTimeoutMs },
     );
     const blockedBuildAttempts = readRuntimeNetworkAttempts(
       [buildResult.stderr, buildResult.stdout].filter(Boolean).join("\n"),
@@ -2378,7 +2380,7 @@ async function setSubmittedCodeNetwork(
 async function executeSubmitted(
   workspace: AgentHarnessWorkspace,
   command: string,
-  options: { env?: Record<string, string> } = {},
+  options: AgentHarnessWorkspaceExecuteOptions = {},
 ) {
   if (workspace.executeSubmittedCode === undefined) {
     throw new Error("Submitted-code execution is not configured.");
@@ -2398,6 +2400,24 @@ function absoluteAppDirectory(appDir: string): string {
     : `${workspaceRepoDirectory}/${relativeAppDirectory}`;
 }
 
+/**
+ * Cold monorepo dev servers routinely compile for 60–120s before binding, so
+ * connection-refused probes back off exponentially until this budget elapses.
+ * Every other failure mode (HTTP error, crashed process, probe execution
+ * failure) still terminates the probe immediately.
+ */
+const runtimeReadinessBudgetMs = 180_000;
+const runtimeReadinessInitialDelayMs = 2_000;
+const runtimeReadinessMaxDelayMs = 15_000;
+
+/**
+ * Explicit ceilings for the two heaviest submitted-code commands, replacing
+ * the implicit provider default so a hung install or build fails as a
+ * classified timeout instead of an opaque provider error.
+ */
+const dependencyInstallTimeoutMs = 20 * 60_000;
+const submittedCodeBuildTimeoutMs = 15 * 60_000;
+
 async function probeSubmittedCodeRuntime(
   workspace: AgentHarnessWorkspace,
   url: string,
@@ -2413,7 +2433,9 @@ async function probeSubmittedCodeRuntime(
   };
   const attempts: RuntimeProbeAttempt[] = [];
   let responseMetadata: { httpStatus: number; url: string } | undefined;
-  for (let attempt = 1; attempt <= 10; attempt += 1) {
+  let waitedMs = 0;
+  let delayMs = runtimeReadinessInitialDelayMs;
+  for (let attempt = 1; ; attempt += 1) {
     const startedAt = new Date().toISOString();
     const startedAtMs = Date.now();
     result = await executeSubmitted(
@@ -2437,13 +2459,14 @@ async function probeSubmittedCodeRuntime(
       result.exitCode === 0 ||
       isReadinessProbeExecutionFailure(result) ||
       !isConnectionRefused(result) ||
-      process?.running === false
+      process?.running === false ||
+      waitedMs >= runtimeReadinessBudgetMs
     ) {
       break;
     }
-    if (attempt < 10) {
-      await wait(2_000);
-    }
+    await wait(delayMs);
+    waitedMs += delayMs;
+    delayMs = Math.min(delayMs * 2, runtimeReadinessMaxDelayMs);
   }
   return {
     ...result,
