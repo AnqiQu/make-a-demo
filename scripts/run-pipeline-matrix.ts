@@ -1,0 +1,192 @@
+// Opt-in acceptance gate for the remediation plan (docs/audits/2026-07-27-remediation-plan.md,
+// Phase 0.3): runs the full demo pipeline against the configured repo matrix and writes a
+// pass/fail report. Each entry costs real Daytona/agent money — run deliberately.
+//
+//   bun run pipeline:matrix                 # all configured entries
+//   bun run pipeline:matrix -- --only vite-spa,midday
+//
+// Fixture entries need a GitHub mirror before they can run (the pipeline only accepts
+// https://github.com/owner/repo URLs); see tests/fixtures/repos/README.md.
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import {
+  type DefaultDemoPipelineInput,
+  type DefaultDemoPipelineResult,
+  runDefaultDemoPipeline,
+} from "../src/server/agent-harness/default/default-demo-pipeline";
+
+export type MatrixEntryConfig = {
+  demoLengthSeconds?: number;
+  fixtureDir?: string;
+  importantFeatures?: string[];
+  name: string;
+  preferredAppDir?: string;
+  productSummary?: string;
+  repoUrl?: string;
+  targetUsers?: string;
+};
+
+export type ResolvedMatrixEntry =
+  | { input: DefaultDemoPipelineInput; name: string; status: "runnable" }
+  | { name: string; reason: string; status: "skipped" };
+
+export type MatrixEntryResult = {
+  detail: string;
+  durationMs?: number;
+  name: string;
+  runDirectory?: string;
+  status: "passed" | "failed" | "skipped";
+};
+
+export function matrixRepoEnvVar(entryName: string): string {
+  return `MAKEADEMO_MATRIX_REPO_${entryName.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`;
+}
+
+export function resolveMatrixEntries(
+  entries: MatrixEntryConfig[],
+  env: Record<string, string | undefined>,
+): ResolvedMatrixEntry[] {
+  return entries.map((entry) => {
+    const repoUrl = env[matrixRepoEnvVar(entry.name)]?.trim() || entry.repoUrl;
+    if (repoUrl === undefined || repoUrl.length === 0) {
+      const source =
+        entry.fixtureDir === undefined
+          ? "the repo"
+          : `${entry.fixtureDir} to a GitHub repo you own`;
+      return {
+        name: entry.name,
+        reason:
+          `no repo URL configured — push ${source} and set ` +
+          `${matrixRepoEnvVar(entry.name)} or the repoUrl field in the matrix config`,
+        status: "skipped",
+      };
+    }
+    return {
+      input: {
+        demoLengthSeconds: entry.demoLengthSeconds ?? 30,
+        importantFeatures: entry.importantFeatures ?? [],
+        ...(entry.preferredAppDir === undefined
+          ? {}
+          : { preferredAppDir: entry.preferredAppDir }),
+        ...(entry.productSummary === undefined
+          ? {}
+          : { productSummary: entry.productSummary }),
+        repoUrl,
+        ...(entry.targetUsers === undefined
+          ? {}
+          : { targetUsers: entry.targetUsers }),
+      },
+      name: entry.name,
+      status: "runnable",
+    };
+  });
+}
+
+export async function runPipelineMatrix(
+  entries: ResolvedMatrixEntry[],
+  options: {
+    log: (message: string) => void;
+    runPipeline?: (
+      input: DefaultDemoPipelineInput,
+    ) => Promise<DefaultDemoPipelineResult>;
+  },
+): Promise<MatrixEntryResult[]> {
+  const runPipeline = options.runPipeline ?? runDefaultDemoPipeline;
+  const results: MatrixEntryResult[] = [];
+  for (const entry of entries) {
+    if (entry.status === "skipped") {
+      options.log(`skipping ${entry.name}: ${entry.reason}`);
+      results.push({
+        detail: entry.reason,
+        name: entry.name,
+        status: "skipped",
+      });
+      continue;
+    }
+    options.log(`running ${entry.name} (${entry.input.repoUrl})`);
+    const startedAt = Date.now();
+    try {
+      const result = await runPipeline(entry.input);
+      results.push({
+        detail: result.finalVideoPath,
+        durationMs: Date.now() - startedAt,
+        name: entry.name,
+        runDirectory: result.runDirectory,
+        status: "passed",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      results.push({
+        detail: message.split("\n", 1)[0] ?? message,
+        durationMs: Date.now() - startedAt,
+        name: entry.name,
+        status: "failed",
+      });
+    }
+  }
+  return results;
+}
+
+export function renderMatrixReport(results: MatrixEntryResult[]): string {
+  const lines = [
+    "| Entry | Status | Duration | Detail |",
+    "|---|---|---|---|",
+    ...results.map((result) => {
+      const duration =
+        result.durationMs === undefined
+          ? "—"
+          : `${Math.round(result.durationMs / 1000)}s`;
+      return `| ${result.name} | ${result.status} | ${duration} | ${result.detail} |`;
+    }),
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
+const matrixConfigPath = "tests/fixtures/pipeline-matrix.json";
+
+async function main(): Promise<void> {
+  const config = JSON.parse(await readFile(matrixConfigPath, "utf8")) as {
+    entries: MatrixEntryConfig[];
+  };
+  const onlyArgument = process.argv.indexOf("--only");
+  const only =
+    onlyArgument === -1
+      ? undefined
+      : new Set(
+          (process.argv[onlyArgument + 1] ?? "")
+            .split(",")
+            .map((name) => name.trim())
+            .filter((name) => name.length > 0),
+        );
+  const configured =
+    only === undefined
+      ? config.entries
+      : config.entries.filter((entry) => only.has(entry.name));
+  if (configured.length === 0) {
+    throw new Error(
+      `No matrix entries selected from ${matrixConfigPath}${
+        only === undefined ? "" : ` matching --only ${[...only].join(",")}`
+      }.`,
+    );
+  }
+
+  const entries = resolveMatrixEntries(configured, process.env);
+  const results = await runPipelineMatrix(entries, {
+    log: (message) => process.stdout.write(`[matrix] ${message}\n`),
+  });
+
+  const report = renderMatrixReport(results);
+  const reportPath = join(
+    ".makeademo-terminal-runs",
+    `matrix-report-${new Date().toISOString().replace(/[:.]/g, "-")}.json`,
+  );
+  await writeFile(reportPath, `${JSON.stringify(results, null, 2)}\n`);
+  process.stdout.write(`\n${report}\nReport written to ${reportPath}\n`);
+  if (results.some((result) => result.status === "failed")) {
+    process.exitCode = 1;
+  }
+}
+
+if (import.meta.main) {
+  await main();
+}

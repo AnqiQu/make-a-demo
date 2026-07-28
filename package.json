@@ -18,6 +18,7 @@
     "knip": "knip",
     "lint": "biome check .",
     "lsp:typescript": "typescript-language-server --stdio",
+    "pipeline:matrix": "bun scripts/run-pipeline-matrix.ts",
     "pipeline:run": "bun scripts/run-demo-pipeline.mts",
     "preview": "vite preview",
     "start": "bun src/server/api/server.mts",

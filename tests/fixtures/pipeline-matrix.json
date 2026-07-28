@@ -1,0 +1,23 @@
+{
+  "entries": [
+    {
+      "name": "midday",
+      "repoUrl": "https://github.com/midday-ai/midday"
+    },
+    {
+      "name": "vite-spa",
+      "fixtureDir": "tests/fixtures/repos/vite-spa",
+      "productSummary": "Fieldnote is a quick notes app for people who work outside: add notes, search them, and pin the important ones."
+    },
+    {
+      "name": "pnpm-monorepo",
+      "fixtureDir": "tests/fixtures/repos/pnpm-monorepo",
+      "productSummary": "Crewboard is a task board for small crews: add tasks with optional assignees and move them from To do through Done."
+    },
+    {
+      "name": "npm-express-static",
+      "fixtureDir": "tests/fixtures/repos/npm-express-static",
+      "productSummary": "Trailhead helps plan a day hike: convert distances between miles and kilometers and keep a packing checklist."
+    }
+  ]
+}
