@@ -212,6 +212,13 @@ export type AgentHarnessPipelineOptions = {
   scriptRepairLimit?: number;
 };
 
+/**
+ * Bounded re-runs of Dynamic Capture Path Validation when the failure is a
+ * classified transient infrastructure error rather than a script or repo
+ * defect; repairs must never be spent on infrastructure flakes.
+ */
+const transientCaptureRetryLimit = 2;
+
 const artifactPaths = {
   actionCatalog: "/workspace/.makeademo/action-catalog.json",
   agentArtifactAttempts: "/workspace/.makeademo/agent-artifact-attempts",
@@ -580,6 +587,7 @@ export async function runAgentHarnessPipeline(
         scriptCandidate,
       );
 
+      let transientCaptureRetries = 0;
       for (;;) {
         const staticRepairAttempts =
           scriptRepairAttemptsByPhase["static-script-contract-validation"] ?? 0;
@@ -696,6 +704,15 @@ export async function runAgentHarnessPipeline(
         );
         if (capturePathValidation.status === "passed") {
           break;
+        }
+
+        if (
+          capturePathValidation.failureClassification ===
+            "transient infrastructure failure" &&
+          transientCaptureRetries < transientCaptureRetryLimit
+        ) {
+          transientCaptureRetries += 1;
+          continue;
         }
 
         if (

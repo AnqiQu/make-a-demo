@@ -638,6 +638,144 @@ describe("runAgentHarnessPipeline", () => {
     );
   });
 
+  it("retries capture validation after a transient infrastructure failure without spending script repair", async () => {
+    const calls: string[] = [];
+    let captureAttempts = 0;
+
+    const result = await runAgentHarnessPipeline(
+      {
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        files: [
+          { path: "package.json", text: "{}" },
+          { path: "bun.lock", text: "" },
+        ],
+        repoStats: { fileCount: 2, sizeBytes: 200 },
+        repoUrl: "https://github.com/example/app",
+        runId: "run_transient",
+      },
+      {
+        async createWorkspace() {
+          return workspace();
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairScript({ failureReport }) {
+          calls.push(`repair:${failureReport.logsSummary}`);
+          return scriptCandidate();
+        },
+        async resetCaptureRuntime() {
+          return report("capture-runtime-reset", "passed");
+        },
+        async synthesizeRunPlan() {
+          return runPlan();
+        },
+        async validateCapturePath() {
+          captureAttempts += 1;
+          calls.push(`dynamic:${captureAttempts}`);
+          return captureAttempts === 1
+            ? {
+                ...report("capture-path-validation", "failed"),
+                failureClassification: "transient infrastructure failure",
+                logsSummary:
+                  "Submitted-code artifact download failed after 3 attempt(s)",
+              }
+            : report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(calls).toEqual(["dynamic:1", "dynamic:2"]);
+  });
+
+  it("fails with the transient infrastructure cause once its retry budget is spent", async () => {
+    const calls: string[] = [];
+
+    await expect(
+      runAgentHarnessPipeline(
+        {
+          demoBrief: { keyProductFeatures: ["dashboard"] },
+          files: [
+            { path: "package.json", text: "{}" },
+            { path: "bun.lock", text: "" },
+          ],
+          repoStats: { fileCount: 2, sizeBytes: 200 },
+          repoUrl: "https://github.com/example/app",
+          runId: "run_transient_exhausted",
+        },
+        {
+          async createWorkspace() {
+            return workspace();
+          },
+          async exploreApp() {
+            return {
+              kind: "artifacts" as const,
+              actionCatalog: actionCatalog(),
+              appMap: appMap(),
+              validationReport: report("app-exploration", "passed"),
+            };
+          },
+          async planFlow() {
+            return flowSpec();
+          },
+          async prepareRepo() {
+            return { manifest: preparationManifest() };
+          },
+          async repairScript({ failureReport }) {
+            calls.push(`repair:${failureReport.logsSummary}`);
+            return scriptCandidate();
+          },
+          async resetCaptureRuntime() {
+            return report("capture-runtime-reset", "passed");
+          },
+          async synthesizeRunPlan() {
+            return runPlan();
+          },
+          async validateCapturePath() {
+            calls.push("dynamic");
+            return {
+              ...report("capture-path-validation", "failed"),
+              failureClassification: "transient infrastructure failure",
+              logsSummary:
+                "Submitted-code artifact download failed after 3 attempt(s)",
+            };
+          },
+          async validatePreparation() {
+            return report("preparation-preflight", "passed");
+          },
+          async validateScriptContract() {
+            return report("static-script-contract-validation", "passed");
+          },
+          async writeScript() {
+            return scriptCandidate();
+          },
+        },
+      ),
+    ).rejects.toThrow(/Submitted-code artifact download failed/);
+    expect(calls).toEqual(["dynamic", "dynamic", "dynamic"]);
+  });
+
   it("feeds failed runtime preflight back through Repo Preparation Repair", async () => {
     const calls: string[] = [];
     const artifactWrites: string[] = [];
