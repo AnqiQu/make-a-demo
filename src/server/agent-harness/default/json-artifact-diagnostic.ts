@@ -39,7 +39,7 @@ export function diagnoseJsonSyntax(
   return {
     byteLength: Buffer.byteLength(value),
     column,
-    excerpt: redactDiagnosticExcerpt(
+    excerpt: redactSecretText(
       value.slice(
         Math.max(0, offset - 180),
         Math.min(value.length, offset + 180),
@@ -51,7 +51,12 @@ export function diagnoseJsonSyntax(
   };
 }
 
-function redactDiagnosticExcerpt(value: string): string {
+/**
+ * Redacts bearer tokens and truncates at the first secret-named JSON field so
+ * excerpts of agent or app output can be safely fed back into prompts and
+ * durable logs. Redaction must run on every excerpt that leaves this process.
+ */
+export function redactSecretText(value: string): string {
   const bearerRedacted = value.replace(
     /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi,
     "Bearer [Redacted]",

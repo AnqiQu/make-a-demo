@@ -111,6 +111,7 @@ import {
   type JsonSyntaxDiagnostic,
   diagnoseJsonSyntax,
   fingerprintArtifactText,
+  redactSecretText,
 } from "./json-artifact-diagnostic";
 import {
   type RepoSourceArchive,
@@ -715,7 +716,7 @@ export async function createDefaultAgentHarnessDependencies(
           result.exitCode === 0
             ? await tryReadWorkspaceJson(workspace, artifactPaths.flowSpec)
             : {
-                error: `OpenCode exited with code ${result.exitCode}: ${result.stderr || result.stdout}`,
+                error: formatAgentCommandFailure(result),
                 ok: false as const,
               };
         if (flowSpecResult.ok) {
@@ -853,7 +854,7 @@ export async function createDefaultAgentHarnessDependencies(
           candidateManifest.ok || result.exitCode === 0
             ? candidateManifest
             : {
-                error: `OpenCode exited with code ${result.exitCode}: ${result.stderr || result.stdout}`,
+                error: formatAgentCommandFailure(result),
                 failureClassification: "agent-command",
                 ok: false as const,
               };
@@ -1035,7 +1036,7 @@ export async function createDefaultAgentHarnessDependencies(
         let manifestResult: PreparationManifestReadResult;
         if (result.exitCode !== 0) {
           manifestResult = {
-            error: `OpenCode exited with code ${result.exitCode}: ${result.stderr || result.stdout}`,
+            error: formatAgentCommandFailure(result),
             failureClassification: "agent-command",
             ok: false,
           };
@@ -1172,7 +1173,7 @@ export async function createDefaultAgentHarnessDependencies(
           result.exitCode === 0
             ? await tryReadWorkspaceJson(workspace, DEMO_SCRIPT_OUTPUT_PATH)
             : {
-                error: `OpenCode exited with code ${result.exitCode}: ${result.stderr || result.stdout}`,
+                error: formatAgentCommandFailure(result),
                 ok: false as const,
               };
         if (demoScriptResult.ok) {
@@ -1289,7 +1290,7 @@ export async function createDefaultAgentHarnessDependencies(
                 artifactPaths.runtimeTargetSelection,
               )
             : {
-                error: `OpenCode exited with code ${result.exitCode}: ${result.stderr || result.stdout}`,
+                error: formatAgentCommandFailure(result),
                 ok: false as const,
               };
         if (selectionResult.ok) {
@@ -1519,7 +1520,7 @@ export async function createDefaultAgentHarnessDependencies(
           result.exitCode === 0
             ? await tryReadWorkspaceJson(workspace, DEMO_SCRIPT_OUTPUT_PATH)
             : {
-                error: `OpenCode exited with code ${result.exitCode}: ${result.stderr || result.stdout}`,
+                error: formatAgentCommandFailure(result),
                 ok: false as const,
               };
         if (demoScriptResult.ok) {
@@ -1620,8 +1621,8 @@ async function runLoggedOpenCode(input: {
           ? {}
           : { opencodeSessionId: result.sessionId }),
         stage: input.input.stage,
-        stderrExcerpt: tail(result.stderr, 4_000),
-        stdoutExcerpt: tail(result.stdout, 4_000),
+        stderrExcerpt: redactSecretText(tail(result.stderr, 4_000)),
+        stdoutExcerpt: redactSecretText(tail(result.stdout, 4_000)),
       },
       level,
     );
@@ -1640,10 +1641,10 @@ async function runLoggedOpenCode(input: {
         message: `${input.input.stage} agent command failed before completion.`,
         ...(partialStderr.length === 0
           ? {}
-          : { partialStderrExcerpt: partialStderr }),
+          : { partialStderrExcerpt: redactSecretText(partialStderr) }),
         ...(partialStdout.length === 0
           ? {}
-          : { partialStdoutExcerpt: partialStdout }),
+          : { partialStdoutExcerpt: redactSecretText(partialStdout) }),
         stage: input.input.stage,
         ...(timeoutError === undefined
           ? {}
@@ -3426,6 +3427,17 @@ function throwIfRequiredArtifactWriteWasDenied(input: {
   }
 }
 
+/** Bounded, redacted agent-facing summary of a failed OpenCode command. */
+function formatAgentCommandFailure(result: {
+  exitCode: number;
+  stderr: string;
+  stdout: string;
+}): string {
+  return `OpenCode exited with code ${result.exitCode}: ${redactSecretText(
+    tail(result.stderr || result.stdout, 2000),
+  )}`;
+}
+
 function formatOpenCodeOutputExcerpt(result: {
   stderr: string;
   stdout: string;
@@ -3433,10 +3445,10 @@ function formatOpenCodeOutputExcerpt(result: {
   const parts = [
     result.stderr.trim().length === 0
       ? ""
-      : `stderr:\n${tail(result.stderr, 2000)}`,
+      : `stderr:\n${redactSecretText(tail(result.stderr, 2000))}`,
     result.stdout.trim().length === 0
       ? ""
-      : `stdout:\n${tail(result.stdout, 2000)}`,
+      : `stdout:\n${redactSecretText(tail(result.stdout, 2000))}`,
   ].filter(Boolean);
   return parts.length === 0 ? "(no OpenCode output)" : parts.join("\n");
 }

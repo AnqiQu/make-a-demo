@@ -44,6 +44,65 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(models).toEqual(["openai/gpt-5"]);
   });
 
+  it("feeds agents a bounded, redacted excerpt of a failed command's output", async () => {
+    const prompts: string[] = [];
+    let attempts = 0;
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async uploadFiles() {},
+      async writeTextFile() {},
+      async execute(command) {
+        if (command === "cat '/workspace/.makeademo/flow-spec.json'") {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: JSON.stringify(flowSpec()),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(runInput) {
+          attempts += 1;
+          prompts.push(runInput.prompt);
+          return attempts === 1
+            ? {
+                exitCode: 1,
+                stderr: `${"x".repeat(3_000_000)}\ncurl -H 'Authorization: Bearer sk-secret-12345'`,
+                stdout: "",
+              }
+            : { exitCode: 0, stderr: "", stdout: "planned" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+      workspaceProvider: {
+        async create() {
+          return { async destroy() {}, id: "workspace", workspace };
+        },
+      },
+    });
+
+    await harness.dependencies.createWorkspace({
+      repoProfile: repoProfile(),
+    });
+    await harness.dependencies.planFlow({
+      actionCatalog: actionCatalog(),
+      appMap: appMap(),
+      demoBrief: { keyProductFeatures: ["dashboard"] },
+      preparationManifest: preparationManifest(),
+      repoProfile: repoProfile(),
+    });
+
+    const retryPrompt = prompts[1] ?? "";
+    expect(retryPrompt.length).toBeLessThan(20_000);
+    expect(retryPrompt).not.toContain("sk-secret-12345");
+    expect(retryPrompt).toContain("Bearer [Redacted]");
+  });
+
   it("selects the product application before planning a multi-app monorepo", async () => {
     const stages: string[] = [];
     const workspace: AgentHarnessWorkspace = {
