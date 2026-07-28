@@ -1902,6 +1902,7 @@ async function validateSubmittedCodeRuntime(input: {
       await input.workspace.syncSubmittedCodeWorkspace?.();
     }
   } catch (error) {
+    if (isAgentHarnessInfrastructureError(error)) throw error;
     return failedPreparationValidation({
       classification: "harness/internal failure",
       logsSummary: `Failed to reset submitted-code workspace: ${readErrorMessage(error)}`,
@@ -2113,6 +2114,7 @@ async function validateSubmittedCodeRuntime(input: {
   try {
     await input.workspace.startSubmittedCodeApp(appStartInput);
   } catch (error) {
+    if (isAgentHarnessInfrastructureError(error)) throw error;
     return failedPreparationValidation({
       attemptedCommand: manifest.startCommandUsed,
       classification: "harness/internal failure",

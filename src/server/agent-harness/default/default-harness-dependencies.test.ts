@@ -1969,6 +1969,80 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(calls).toEqual([]);
   });
 
+  it("rethrows a sandbox outage during workspace reset instead of reporting a failed validation", async () => {
+    const outage = new AgentHarnessSandboxUnavailableError(
+      "sandbox_123",
+      new Error("502 Bad Gateway"),
+    );
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async setSubmittedCodeNetworkAccess() {},
+      async startSubmittedCodeApp() {},
+      async stopSubmittedCodeApp() {},
+      async syncSubmittedCodeWorkspace() {
+        throw outage;
+      },
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.validatePreparation({
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).rejects.toBe(outage);
+  });
+
+  it("rethrows a sandbox outage during managed app start instead of reporting a failed validation", async () => {
+    const outage = new AgentHarnessSandboxUnavailableError(
+      "sandbox_123",
+      new Error("502 Bad Gateway"),
+    );
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async setSubmittedCodeNetworkAccess() {},
+      async startSubmittedCodeApp() {
+        throw outage;
+      },
+      async stopSubmittedCodeApp() {},
+      async syncSubmittedCodeWorkspace() {},
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.validatePreparation({
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).rejects.toBe(outage);
+  });
+
   it("hydrates public resources requested during a guarded build and rebuilds offline", async () => {
     const outputRoot = await mkdtemp(
       join(tmpdir(), "makeademo-build-resource-hydration-"),
