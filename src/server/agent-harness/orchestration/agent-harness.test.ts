@@ -988,6 +988,100 @@ describe("runAgentHarnessPipeline", () => {
     ]);
   });
 
+  it("counts a deterministic install-scope expansion against the global repair budget", async () => {
+    let preflightAttempts = 0;
+    let repairAttempts = 0;
+
+    await expect(
+      runAgentHarnessPipeline(
+        {
+          demoBrief: { keyProductFeatures: ["dashboard"] },
+          files: [
+            {
+              path: "package.json",
+              text: JSON.stringify({ workspaces: ["apps/*", "packages/*"] }),
+            },
+            {
+              path: "apps/web/package.json",
+              text: JSON.stringify({
+                name: "@acme/web",
+                scripts: { dev: "vite" },
+              }),
+            },
+            { path: "apps/web/src/page.tsx", text: "export default 1" },
+            {
+              path: "packages/events/package.json",
+              text: JSON.stringify({ name: "@acme/events" }),
+            },
+            { path: "bun.lock", text: "" },
+          ],
+          repoStats: { fileCount: 5, sizeBytes: 500 },
+          repoUrl: "https://github.com/example/app",
+          runId: "run_expansion_budget",
+        },
+        {
+          async capturePreparationWorkspaceDiff() {
+            return unchangedWorkspaceDiff();
+          },
+          async createWorkspace() {
+            return workspace();
+          },
+          async exploreApp() {
+            throw new Error("App Exploration must not run.");
+          },
+          async planFlow() {
+            throw new Error("Flow Planning must not run.");
+          },
+          async prepareRepo() {
+            const manifest = preparationManifest();
+            const feature = manifest.productContext.featureInventory[0];
+            if (feature !== undefined) {
+              feature.sourcePaths = ["apps/web/src/page.tsx"];
+            }
+            return { manifest };
+          },
+          async repairPreparation() {
+            repairAttempts += 1;
+            return { manifest: preparationManifest() };
+          },
+          async resetCaptureRuntime() {
+            throw new Error("Capture reset must not run.");
+          },
+          async synthesizeRunPlan() {
+            return runPlan();
+          },
+          async validateCapturePath() {
+            throw new Error("Capture validation must not run.");
+          },
+          async validatePreparation() {
+            preflightAttempts += 1;
+            return preflightAttempts === 1
+              ? {
+                  ...report("preparation-preflight", "failed"),
+                  failureClassification: "start failure",
+                  logsSummary:
+                    "Module not found: Can't resolve '@acme/events/client'",
+                }
+              : {
+                  ...report("preparation-preflight", "failed"),
+                  failureClassification: "start failure",
+                  logsSummary: "App exited before it became ready",
+                };
+          },
+          async validateScriptContract() {
+            throw new Error("Script validation must not run.");
+          },
+          async writeScript() {
+            throw new Error("Script writing must not run.");
+          },
+        },
+        { repoPreparationRepairLimit: 1 },
+      ),
+    ).rejects.toThrow("global retry budget exhausted");
+
+    expect(repairAttempts).toBe(0);
+  });
+
   it("repairs a product fidelity violation before runtime preflight", async () => {
     const calls: string[] = [];
     let diffAttempts = 0;
@@ -1573,6 +1667,71 @@ describe("runAgentHarnessPipeline", () => {
 
     expect(result.status).toBe("passed");
     expect(reconcileRequests).toEqual([undefined, true]);
+  });
+
+  it("recognizes a repeated failure whose logs differ only by port and temp path", async () => {
+    let preflightAttempts = 0;
+    let repairAttempts = 0;
+
+    await expect(
+      runAgentHarnessPipeline(
+        {
+          demoBrief: { keyProductFeatures: ["dashboard"] },
+          files: [{ path: "package.json", text: "{}" }],
+          repoStats: { fileCount: 1, sizeBytes: 100 },
+          repoUrl: "https://github.com/example/app",
+          runId: "run_noisy_repeated_failure",
+        },
+        {
+          async capturePreparationWorkspaceDiff() {
+            return unchangedWorkspaceDiff();
+          },
+          async createWorkspace() {
+            return workspace();
+          },
+          async exploreApp() {
+            throw new Error("App Exploration must not run.");
+          },
+          async planFlow() {
+            throw new Error("Flow Planning must not run.");
+          },
+          async prepareRepo() {
+            return { manifest: preparationManifest() };
+          },
+          async repairPreparation() {
+            repairAttempts += 1;
+            return { manifest: preparationManifest() };
+          },
+          async resetCaptureRuntime() {
+            throw new Error("Capture reset must not run.");
+          },
+          async synthesizeRunPlan() {
+            return runPlan();
+          },
+          async validatePreparation() {
+            preflightAttempts += 1;
+            return {
+              ...report("preparation-preflight", "failed"),
+              attemptedCommand: "bun run dev",
+              failureClassification: "start failure",
+              logsSummary: `Start command could not listen on 127.0.0.1:${3000 + preflightAttempts}\nfull log: /tmp/makeademo-run-${preflightAttempts}/app.log`,
+            };
+          },
+          async validateCapturePath() {
+            throw new Error("Capture validation must not run.");
+          },
+          async validateScriptContract() {
+            throw new Error("Script validation must not run.");
+          },
+          async writeScript() {
+            throw new Error("Script writing must not run.");
+          },
+        },
+        { repoPreparationRepairLimit: 5 },
+      ),
+    ).rejects.toThrow("repeated failure");
+
+    expect(repairAttempts).toBe(2);
   });
 
   it("stops repeating the same preparation failure after two repairs", async () => {

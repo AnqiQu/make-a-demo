@@ -423,6 +423,7 @@ export async function runAgentHarnessPipeline(
 
     const repoPreparationRepairLimit = options.repoPreparationRepairLimit ?? 5;
     const preparationRepairBudget: PreparationRepairBudget = {
+      attemptedInstallScopes: new Set(),
       attemptsByFingerprint: {},
       totalAttempts: 0,
     };
@@ -1199,6 +1200,7 @@ type AcceptedPreparationCandidate = {
 };
 
 type PreparationRepairBudget = {
+  attemptedInstallScopes: Set<string>;
   attemptsByFingerprint: Record<string, number>;
   totalAttempts: number;
 };
@@ -1236,9 +1238,9 @@ async function ensureValidPreparation(input: {
   let reconcileLockfile = false;
   let repairBaseline: PreparationWorkspaceDiff | undefined;
   let lastWorkspaceDiff = acceptedPreparation?.workspaceDiff;
-  const attemptedInstallScopes = new Set([
-    input.preparationManifest.installCommandUsed,
-  ]);
+  const attemptedInstallScopes =
+    input.preparationRepairBudget.attemptedInstallScopes;
+  attemptedInstallScopes.add(input.preparationManifest.installCommandUsed);
 
   for (;;) {
     if (failure !== undefined) {
@@ -1254,6 +1256,7 @@ async function ensureValidPreparation(input: {
         !attemptedInstallScopes.has(expandedPreparation.installCommandUsed)
       ) {
         attemptedInstallScopes.add(expandedPreparation.installCommandUsed);
+        input.preparationRepairBudget.totalAttempts += 1;
         preparationManifest = await writeArtifact(
           input.dependencies,
           artifactPaths.preparationManifest,
@@ -1567,11 +1570,24 @@ async function repairPreparationManifest(input: {
 
 function preparationFailureFingerprint(report: ValidationReport): string {
   const rejectionParts = report.logsSummary.split(" Rejected repair:");
-  const latestSummary =
-    rejectionParts.length === 1
-      ? report.logsSummary
-      : `${rejectionParts[0]} Rejected repair:${rejectionParts.at(-1)}`;
-  const summary = latestSummary
+  return [
+    report.stage,
+    report.failureClassification ?? "unknown",
+    report.attemptedCommand ?? "",
+    normalizeFailureSummaryLine(rejectionParts[0] ?? ""),
+    normalizeFailureSummaryLine(
+      rejectionParts.length === 1 ? "" : (rejectionParts.at(-1) ?? ""),
+    ),
+  ].join("\u0000");
+}
+
+/**
+ * Reduces a failure summary to its identity-bearing first line: run-varying
+ * noise (timestamps, ids, durations, ports, temp paths) must not make the
+ * same failure look new, or the repeated-failure limit never triggers.
+ */
+function normalizeFailureSummaryLine(summary: string): string {
+  return (summary.split("\n", 1)[0] ?? "")
     .trim()
     .toLowerCase()
     .replace(/\b\d{4}-\d{2}-\d{2}t\d{2}:\d{2}:\d{2}(?:\.\d+)?z\b/g, "<time>")
@@ -1580,13 +1596,11 @@ function preparationFailureFingerprint(report: ValidationReport): string {
       /\b\d+(?:\.\d+)?\s*(?:ms|milliseconds?|s|seconds?|minutes?)\b/g,
       "<duration>",
     )
+    .replace(/\/(?:private\/)?tmp\/[^\s"'`)\]]+/g, "<path>")
+    .replace(/\b(?:localhost|127\.0\.0\.1|0\.0\.0\.0):\d+\b/g, "<host>")
+    .replace(/\bports?\s+\d+\b/g, "port <port>")
     .replace(/\s+/g, " ")
     .trim();
-  return [
-    report.stage,
-    report.failureClassification ?? "unknown",
-    summary,
-  ].join("\u0000");
 }
 
 function assertValidationPassed(report: ValidationReport): void {
