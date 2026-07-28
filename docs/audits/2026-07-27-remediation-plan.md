@@ -220,6 +220,50 @@ diagnosable; 6–8 are correctness-preserving hardening and shrinkage.
 - No prompt-text unit tests (per repo testing rules); prompts change only where a validator enforces
   the same rule.
 
+## Addendum (2026-07-27, after three-repo validation runs)
+
+Runs on memos (Go root + `web/` React app), homer (single-package Vite), and linkwarden (Yarn Berry
+monorepo, `apps/web` + `apps/mobile`) — artifacts in `.makeademo-terminal-runs/terminal-2026-07-27T*`.
+
+**Confirmations (no plan change).** Homer succeeded end-to-end — the first non-Midday final video;
+the single-package path and workspace-yaml parse held. Memos was *not* security-rejected and the
+profiler correctly selected `web/` in a Go-rooted repo — selection generality is better than the
+worst case feared. Linkwarden's ambiguity error was exactly the actionable fail-closed behavior
+Phase 5 aims for ("Set demoBrief.preferredAppDir to one of: apps/web, apps/mobile").
+
+**New finding N1 (High) — flow-lock catch-22, no route back to Flow Planning.** Memos died in a
+structurally unwinnable loop: FlowSpec selected `fill-interaction-2-1` (exploration-verified,
+confidence 0.98), dynamic validation failed twice on the identical fresh-state locator timeout
+(`getByLabel('Filter queries by query key')` never visible), locator-regrounding re-ran and
+reproduced the same catalog entry, and when script repair dropped the failing action, static
+validation correctly rejected the script for not covering a FlowSpec-selected action — until the
+budget exhausted. The Action Catalog contained viable same-feature alternatives
+(`select-interaction-2-2`, `click-link-2-5`) that nothing was allowed to swap in, because Flow
+Planning never re-runs. **Plan change → new Phase 6.8:** when the same FlowSpec-selected action
+fails dynamic validation twice (post-regrounding), deterministically re-plan that feature's flow —
+prefer a backend swap to an alternative exercised same-feature action from the catalog; fall back to
+one bounded Flow Planning re-run with the failing action excluded. This also subsumes the audit's
+finding #8 (regrounding/reset lack repair paths) under one rule: every repeated validation failure
+must have an escape that changes an *input*, not just a retry.
+
+**New finding N2 (Medium) — exploration evidence is state-contaminated.** The failing locator was
+"verified" during exploration only because exploration checks elements after earlier interactions
+mutated page state; validation navigates fresh. **Plan change → extend Phase 2.5:** after a route's
+interactions, re-navigate once and re-verify visibility of collected locators from fresh state; mark
+each action `freshStateVisible`, and have Flow Planning prefer fresh-state actions (this is what
+would have made memos pick the calendar select instead of the hidden filter input).
+
+**New finding N3 (Medium) — native mobile workspaces count as browser candidates.** Linkwarden's
+Expo `apps/mobile` blocked auto-selection of the only real browser app. **Plan change → extend
+Phase 5.7:** exclude (or heavily downrank) workspaces whose dependencies mark them native
+(`expo`, `react-native` without `react-native-web` entry, `.expo/`), so a lone remaining browser
+candidate auto-selects.
+
+**Reprioritization.** Phase 5's fail-closed selection work is partially validated (the ambiguity
+error path already behaves well); N1 is now the highest-value single fix after Phase 1 — it killed
+the only deep non-Midday run, on the pipeline's most common late-stage failure shape
+(locator drift), and it converts a whole terminal-failure class into a self-healing one.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need

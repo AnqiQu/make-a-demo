@@ -408,3 +408,6 @@ coverage, systematic mocking-away of exactly the boundaries the ADR calls load-b
 | `terminal-2026-07-24T00-34-54-607Z` | failed | preflight "did not respond / exit 0" contradiction (H8) |
 | `terminal-2026-07-25T23-52-39-135Z` | failed | full C1/C2/C5 specimen; final error = bare Daytona 502 |
 | earlier 07-14/15/17 runs | failed | Daytona timeouts / no-output / artifact-upload 502s |
+| `terminal-2026-07-27T21-03-45-637Z` (memos) | failed | flow-lock catch-22: FlowSpec-selected `fill-interaction-2-1` fails dynamic validation from fresh state; script repair cannot drop it; regrounding reproduces it; no Flow Planning re-entry (see remediation-plan addendum) |
+| `terminal-2026-07-27T21-17-51-757Z` (homer) | **succeeded** | first non-Midday end-to-end success; single-package Vite + workspace yaml |
+| `terminal-2026-07-27T21-25-29-301Z` (linkwarden) | failed | actionable ambiguity error (good), but Expo `apps/mobile` counted as a browser candidate, blocking auto-selection of `apps/web` |
