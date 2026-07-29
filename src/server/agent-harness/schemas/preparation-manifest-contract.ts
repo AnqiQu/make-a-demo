@@ -5,6 +5,16 @@ const stringArray = {
   type: "array",
 } as const;
 
+const repoRelativePathArray = {
+  items: { minLength: 1, pattern: "^[^/\\\\]", type: "string" },
+  type: "array",
+} as const;
+
+const localAppPathArray = {
+  items: { minLength: 1, pattern: "^(?:/(?!/)|#|\\?)", type: "string" },
+  type: "array",
+} as const;
+
 const requiredFields = [
   "appDir",
   "appExplorationHints",
@@ -33,7 +43,6 @@ export function createPreparationManifestContract() {
   return {
     $schema: "https://json-schema.org/draft/2020-12/schema",
     additionalProperties: false,
-    contractVersion: "2026-07-18",
     invariants: [
       "all paths must reference the screened repository and must not be absolute",
       "every maker-requested feature must appear exactly once and preserve its exact text in requestedFeature",
@@ -49,7 +58,12 @@ export function createPreparationManifestContract() {
       appDir: { minLength: 1, type: "string" },
       appExplorationHints: stringArray,
       authBypassOrDemoIdentity: { minLength: 1, type: "string" },
-      baseUrl: { minLength: 1, type: "string" },
+      baseUrl: {
+        minLength: 1,
+        pattern:
+          "^http://(?:127\\.0\\.0\\.1|localhost|0\\.0\\.0\\.0)(?::\\d+)?(?:/|$)",
+        type: "string",
+      },
       blockedExternalServicesReplaced: stringArray,
       buildCommandUsed: { type: "string" },
       cleanupAndReproInstructions: stringArray,
@@ -69,7 +83,7 @@ export function createPreparationManifestContract() {
       productContext: {
         additionalProperties: false,
         properties: {
-          evidencePaths: stringArray,
+          evidencePaths: repoRelativePathArray,
           featureInventory: {
             items: {
               additionalProperties: false,
@@ -79,7 +93,7 @@ export function createPreparationManifestContract() {
                   type: "string",
                 },
                 description: { minLength: 1, type: "string" },
-                entryPaths: stringArray,
+                entryPaths: localAppPathArray,
                 fixtureNotes: stringArray,
                 id: {
                   minLength: 1,
@@ -88,7 +102,7 @@ export function createPreparationManifestContract() {
                 },
                 label: { minLength: 1, type: "string" },
                 requestedFeature: { minLength: 1, type: "string" },
-                sourcePaths: stringArray,
+                sourcePaths: repoRelativePathArray,
               },
               required: [
                 "authStrategy",

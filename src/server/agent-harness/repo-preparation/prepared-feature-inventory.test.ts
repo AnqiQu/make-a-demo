@@ -27,6 +27,38 @@ describe("assertPreparedFeatureInventory", () => {
     );
   });
 
+  it("requires prepared features to preserve exact requested-feature text", () => {
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: ["Time Tracker"] },
+        preparationManifest: manifestWithFeatures([
+          {
+            id: "time-tracker",
+            label: "Time Tracker",
+            requestedFeature: "time tracker",
+          },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).toThrow(/exact requested feature text.*Time Tracker/);
+  });
+
+  it("rejects residual template values in feature ids and descriptions", () => {
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest: manifestWithFeatures([
+          {
+            description: "replace-with-feature-description",
+            id: "tracker",
+            label: "Tracker",
+          },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).toThrow(/template/);
+  });
+
   it("requires every prepared feature to cite original product UI source", () => {
     expect(() =>
       assertPreparedFeatureInventory({
@@ -244,6 +276,7 @@ function multiAppProfile(): RepoProfile {
 function manifestWithFeatures(
   features: Array<{
     authStrategy?: "bypass" | "demo-identity" | "none";
+    description?: string;
     id: string;
     label: string;
     requestedFeature?: string;

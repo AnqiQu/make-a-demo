@@ -1430,8 +1430,12 @@ async function ensureValidPreparation(input: {
                 acceptedBaselinePatchSha256:
                   acceptedPreparation.workspaceDiff.patchSha256,
               }),
-          dependencyRepair,
-          repair: repairBaseline !== undefined,
+          repair:
+            repairBaseline === undefined
+              ? "none"
+              : dependencyRepair
+                ? "dependency"
+                : "runtime",
         },
       );
       const repairDelta =

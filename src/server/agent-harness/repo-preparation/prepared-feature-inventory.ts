@@ -44,6 +44,12 @@ export function assertPreparedFeatureInventory(input: {
   }
   for (const [index, feature] of context.featureInventory.entries()) {
     const path = `productContext.featureInventory[${index}]`;
+    if (
+      templateValuePattern.test(feature.id) ||
+      templateValuePattern.test(feature.description)
+    ) {
+      throw new Error(`${path} must replace template feature values`);
+    }
     if (feature.sourcePaths.length === 0) {
       throw new Error(`${path}.sourcePaths must contain source evidence`);
     }
@@ -80,6 +86,17 @@ export function assertPreparedFeatureInventory(input: {
     (feature) =>
       feature.requestedFeature === undefined ? [] : [feature.requestedFeature],
   );
+  for (const prepared of preparedRequestedFeatures) {
+    if (requestedFeatures.includes(prepared)) continue;
+    const exact = requestedFeatures.find(
+      (requested) => normalizeFeature(requested) === normalizeFeature(prepared),
+    );
+    if (exact !== undefined) {
+      throw new Error(
+        `PreparationManifest must preserve exact requested feature text: write "${exact}", not "${prepared}".`,
+      );
+    }
+  }
   const requested = countNormalizedFeatures(requestedFeatures);
   const prepared = countNormalizedFeatures(preparedRequestedFeatures);
   const missing = readFeatureCountDifference(requested, prepared);

@@ -1595,8 +1595,8 @@ describe("runAgentHarnessPipeline", () => {
       ],
     ).toMatchObject({
       acceptedBaselinePatchSha256: approvedDiff.patchSha256,
-      dependencyRepair: true,
       patchSha256: invalidRepairDiff.patchSha256,
+      repair: "dependency",
     });
   });
 
