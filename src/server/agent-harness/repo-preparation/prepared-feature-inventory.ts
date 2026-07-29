@@ -114,7 +114,7 @@ export function assertPreparationRuntimeTarget(input: {
   }
   const siblingTargets = (input.repoProfile.browserRuntimeCandidates ?? [])
     .map(({ dir }) => dir)
-    .filter((dir) => dir !== targetId);
+    .filter((dir) => dir !== targetId && dir !== ".");
   for (const [field, paths] of [
     [
       "productContext.evidencePaths",

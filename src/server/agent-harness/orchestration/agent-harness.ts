@@ -42,7 +42,7 @@ import {
   readValidationReport,
 } from "../schemas/artifacts";
 import { ensureSceneNavigation } from "../script-contract/demo-script-contract";
-import { assertScriptWritingChangesAllowed } from "../script-generation/read-only-boundary";
+import { readDisallowedScriptWritingChanges } from "../script-generation/read-only-boundary";
 import {
   PreparationFallbackRequiredError,
   createPreparationFallbackArtifact,
@@ -584,13 +584,6 @@ export async function runAgentHarnessPipeline(
               workspace: requireWorkspace(workspace),
             }),
           );
-          if (dependencies.captureWorkspaceDiff !== undefined) {
-            assertScriptWritingChangesAllowed(
-              await dependencies.captureWorkspaceDiff({
-                workspace: requireWorkspace(workspace),
-              }),
-            );
-          }
           return ensureSceneNavigation({
             actionCatalog,
             scriptCandidate: candidate,
@@ -607,6 +600,14 @@ export async function runAgentHarnessPipeline(
       for (;;) {
         const staticRepairAttempts =
           scriptRepairAttemptsByPhase["static-script-contract-validation"] ?? 0;
+        const boundaryViolations =
+          dependencies.captureWorkspaceDiff === undefined
+            ? []
+            : readDisallowedScriptWritingChanges(
+                await dependencies.captureWorkspaceDiff({
+                  workspace: requireWorkspace(workspace),
+                }),
+              );
         const staticContractValidation = await runValidationStage(
           "static-script-contract-validation",
           dependencies,
@@ -614,14 +615,16 @@ export async function runAgentHarnessPipeline(
           validationReports,
           stageStatuses,
           stageTimings,
-          () =>
-            dependencies.validateScriptContract({
-              actionCatalog,
-              contractOutputPath: DEMO_SCRIPT_OUTPUT_PATH,
-              flowSpec,
-              preparationManifest,
-              scriptCandidate,
-            }),
+          async () =>
+            boundaryViolations.length > 0
+              ? createScriptBoundaryViolationReport(boundaryViolations)
+              : dependencies.validateScriptContract({
+                  actionCatalog,
+                  contractOutputPath: DEMO_SCRIPT_OUTPUT_PATH,
+                  flowSpec,
+                  preparationManifest,
+                  scriptCandidate,
+                }),
           validationAttemptCounts,
           staticRepairAttempts,
         );
@@ -1245,16 +1248,33 @@ async function repairScriptCandidate(input: {
         }),
       ),
   );
-  if (input.dependencies.captureWorkspaceDiff !== undefined) {
-    assertScriptWritingChangesAllowed(
-      await input.dependencies.captureWorkspaceDiff({
-        workspace: input.workspace,
-      }),
-    );
-  }
   return ensureSceneNavigation({
     actionCatalog: input.actionCatalog,
     scriptCandidate: repairedCandidate,
+  });
+}
+
+function createScriptBoundaryViolationReport(
+  disallowedPaths: string[],
+): ValidationReport {
+  return readValidationReport({
+    artifactReferences: [],
+    blockedNetworkAttempts: [],
+    browserObservations: [],
+    consoleErrors: [],
+    failureClassification: "script modified app source",
+    logsSummary: `Script Writing modified disallowed workspace paths: ${disallowedPaths.join(", ")}. Only the demo-script artifacts under /workspace/.makeademo may change.`,
+    networkAttempts: [],
+    pageErrors: [],
+    retryCount: 0,
+    screenshots: [],
+    stage: "static-script-contract-validation",
+    status: "failed",
+    stderrExcerpts: [],
+    stdoutExcerpts: [],
+    suggestedRepairHints: [
+      "Revert every application-source change; Script Writing may only write the demo-script artifacts.",
+    ],
   });
 }
 

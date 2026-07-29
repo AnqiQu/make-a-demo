@@ -29,15 +29,13 @@ export function findScriptWritingContentChanges(input: {
     .sort();
 }
 
-export function assertScriptWritingChangesAllowed(
+/**
+ * Returns changed paths outside the demo-script artifact allowlist. Callers
+ * turn a non-empty result into a routable "script modified app source"
+ * validation failure rather than crashing the pipeline.
+ */
+export function readDisallowedScriptWritingChanges(
   changedPaths: string[],
-): void {
-  const disallowed = changedPaths.filter(
-    (path) => !allowedMakeADemoFiles.has(path),
-  );
-  if (disallowed.length > 0) {
-    throw new Error(
-      `Script Writing modified disallowed workspace paths: ${disallowed.join(", ")}`,
-    );
-  }
+): string[] {
+  return changedPaths.filter((path) => !allowedMakeADemoFiles.has(path));
 }

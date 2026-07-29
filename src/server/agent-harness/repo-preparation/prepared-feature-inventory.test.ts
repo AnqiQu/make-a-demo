@@ -114,6 +114,43 @@ describe("assertPreparedFeatureInventory", () => {
     );
   });
 
+  it("does not let a root browser candidate claim selected-app evidence", () => {
+    const preparationManifest = manifestWithFeatures([
+      {
+        id: "landing-page",
+        label: "Landing page",
+        sourcePaths: ["apps/dashboard/src/app/page.tsx"],
+      },
+    ]);
+    preparationManifest.appDir = "apps/dashboard";
+    preparationManifest.productContext.evidencePaths = [
+      "apps/dashboard/src/app/page.tsx",
+    ];
+    const profile = multiAppProfile();
+    profile.browserRuntimeCandidates = [
+      {
+        dir: ".",
+        evidencePaths: ["index.html"],
+        frameworks: ["vite"],
+        ports: [5173],
+        scripts: { dev: "vite" },
+      },
+      ...(profile.browserRuntimeCandidates ?? []).filter(
+        (candidate) => candidate.dir === "apps/dashboard",
+      ),
+    ];
+
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest,
+        repoProfile: profile,
+        repoSourcePaths: new Set(["apps/dashboard/src/app/page.tsx"]),
+        runPlan: dashboardRunPlan(),
+      }),
+    ).not.toThrow();
+  });
+
   it("rejects feature evidence owned by a non-selected browser application", () => {
     const preparationManifest = manifestWithFeatures([
       {

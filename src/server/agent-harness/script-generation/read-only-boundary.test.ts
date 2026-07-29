@@ -1,29 +1,27 @@
 import { describe, expect, it } from "vitest";
 import {
-  assertScriptWritingChangesAllowed,
   findScriptWritingContentChanges,
+  readDisallowedScriptWritingChanges,
 } from "./read-only-boundary";
 
-describe("assertScriptWritingChangesAllowed", () => {
+describe("readDisallowedScriptWritingChanges", () => {
   it("allows script artifacts under /workspace/.makeademo", () => {
-    expect(() =>
-      assertScriptWritingChangesAllowed([
+    expect(
+      readDisallowedScriptWritingChanges([
         "/workspace/.makeademo/demo-script.json",
         "/workspace/.makeademo/script-candidate.json",
         "/workspace/.makeademo/script-generation-report.json",
         "/workspace/.makeademo/static-script-contract-validation.json",
       ]),
-    ).not.toThrow();
+    ).toEqual([]);
   });
 
-  it("rejects unapproved files even when they are under /workspace/.makeademo", () => {
-    expect(() =>
-      assertScriptWritingChangesAllowed([
+  it("reports unapproved files even when they are under /workspace/.makeademo", () => {
+    expect(
+      readDisallowedScriptWritingChanges([
         "/workspace/.makeademo/script-backdoor.json",
       ]),
-    ).toThrow(
-      "Script Writing modified disallowed workspace paths: /workspace/.makeademo/script-backdoor.json",
-    );
+    ).toEqual(["/workspace/.makeademo/script-backdoor.json"]);
   });
 
   it("detects content changes to a file that was already dirty at the stage boundary", () => {
@@ -39,12 +37,12 @@ describe("assertScriptWritingChangesAllowed", () => {
     });
 
     expect(changedPaths).toEqual(["/workspace/README.md"]);
-    expect(() => assertScriptWritingChangesAllowed(changedPaths)).toThrow(
-      "Script Writing modified disallowed workspace paths: /workspace/README.md",
-    );
+    expect(readDisallowedScriptWritingChanges(changedPaths)).toEqual([
+      "/workspace/README.md",
+    ]);
   });
 
-  it("rejects app source, package, env, fixture, mock, and config edits", () => {
+  it("reports app source, package, env, fixture, mock, and config edits", () => {
     for (const path of [
       "/workspace/package.json",
       "/workspace/bun.lock",
@@ -56,9 +54,7 @@ describe("assertScriptWritingChangesAllowed", () => {
       "/workspace/.env.local",
       "/workspace/vite.config.ts",
     ]) {
-      expect(() => assertScriptWritingChangesAllowed([path]), path).toThrow(
-        "Script Writing modified disallowed workspace paths",
-      );
+      expect(readDisallowedScriptWritingChanges([path]), path).toEqual([path]);
     }
   });
 });

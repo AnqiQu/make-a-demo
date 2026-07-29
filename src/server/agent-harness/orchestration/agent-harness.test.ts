@@ -237,61 +237,69 @@ describe("runAgentHarnessPipeline", () => {
     });
   });
 
-  it("fails Script Writing when the diff contains app source edits", async () => {
-    await expect(
-      runAgentHarnessPipeline(
-        {
-          demoBrief: { keyProductFeatures: ["dashboard"] },
-          files: [
-            { path: "package.json", text: "{}" },
-            { path: "bun.lock", text: "" },
-          ],
-          repoStats: { fileCount: 2, sizeBytes: 200 },
-          repoUrl: "https://github.com/example/app",
-          runId: "run_002",
+  it("routes Script Writing app-source edits to script repair", async () => {
+    let diffChecks = 0;
+    const repairClassifications: Array<string | undefined> = [];
+    const result = await runAgentHarnessPipeline(
+      {
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        files: [
+          { path: "package.json", text: "{}" },
+          { path: "bun.lock", text: "" },
+        ],
+        repoStats: { fileCount: 2, sizeBytes: 200 },
+        repoUrl: "https://github.com/example/app",
+        runId: "run_002",
+      },
+      {
+        async captureWorkspaceDiff() {
+          diffChecks += 1;
+          return diffChecks === 1 ? ["/workspace/src/App.tsx"] : [];
         },
-        {
-          async captureWorkspaceDiff() {
-            return ["/workspace/src/App.tsx"];
-          },
-          async createWorkspace() {
-            return workspace();
-          },
-          async exploreApp() {
-            return {
-              kind: "artifacts" as const,
-              actionCatalog: actionCatalog(),
-              appMap: appMap(),
-              validationReport: report("app-exploration", "passed"),
-            };
-          },
-          async planFlow() {
-            return flowSpec();
-          },
-          async prepareRepo() {
-            return { manifest: preparationManifest() };
-          },
-          async resetCaptureRuntime() {
-            return report("capture-runtime-reset", "passed");
-          },
-          async synthesizeRunPlan() {
-            return runPlan();
-          },
-          async validateCapturePath() {
-            return report("capture-path-validation", "passed");
-          },
-          async validatePreparation() {
-            return report("preparation-preflight", "passed");
-          },
-          async validateScriptContract() {
-            return report("static-script-contract-validation", "passed");
-          },
-          async writeScript() {
-            return scriptCandidate();
-          },
+        async createWorkspace() {
+          return workspace();
         },
-      ),
-    ).rejects.toThrow("Script Writing modified disallowed workspace paths");
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairScript({ failureReport }) {
+          repairClassifications.push(failureReport.failureClassification);
+          return scriptCandidate();
+        },
+        async resetCaptureRuntime() {
+          return report("capture-runtime-reset", "passed");
+        },
+        async synthesizeRunPlan() {
+          return runPlan();
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(repairClassifications).toEqual(["script modified app source"]);
   });
 
   it("records async stage failures after the stage promise rejects", async () => {
@@ -2088,70 +2096,80 @@ describe("runAgentHarnessPipeline", () => {
     });
   });
 
-  it("rejects Script Repair when it mutates app source", async () => {
+  it("re-repairs a Script Repair that mutates app source", async () => {
     let diffChecks = 0;
+    let captureChecks = 0;
+    const repairClassifications: Array<string | undefined> = [];
 
-    await expect(
-      runAgentHarnessPipeline(
-        {
-          demoBrief: { keyProductFeatures: ["dashboard"] },
-          files: [
-            { path: "package.json", text: "{}" },
-            { path: "bun.lock", text: "" },
-          ],
-          repoStats: { fileCount: 2, sizeBytes: 200 },
-          repoUrl: "https://github.com/example/app",
-          runId: "run_repair_mutation",
+    const result = await runAgentHarnessPipeline(
+      {
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        files: [
+          { path: "package.json", text: "{}" },
+          { path: "bun.lock", text: "" },
+        ],
+        repoStats: { fileCount: 2, sizeBytes: 200 },
+        repoUrl: "https://github.com/example/app",
+        runId: "run_repair_mutation",
+      },
+      {
+        async captureWorkspaceDiff() {
+          diffChecks += 1;
+          return diffChecks === 2 ? ["/workspace/repo/src/App.tsx"] : [];
         },
-        {
-          async captureWorkspaceDiff() {
-            diffChecks += 1;
-            return diffChecks === 1 ? [] : ["/workspace/repo/src/App.tsx"];
-          },
-          async createWorkspace() {
-            return workspace();
-          },
-          async exploreApp() {
-            return {
-              kind: "artifacts" as const,
-              actionCatalog: actionCatalog(),
-              appMap: appMap(),
-              validationReport: report("app-exploration", "passed"),
-            };
-          },
-          async planFlow() {
-            return flowSpec();
-          },
-          async prepareRepo() {
-            return { manifest: preparationManifest() };
-          },
-          async repairScript() {
-            return scriptCandidate();
-          },
-          async resetCaptureRuntime() {
-            return report("capture-runtime-reset", "passed");
-          },
-          async synthesizeRunPlan() {
-            return runPlan();
-          },
-          async validateCapturePath() {
-            return {
-              ...report("capture-path-validation", "failed"),
-              failureClassification: "locator failure",
-            };
-          },
-          async validatePreparation() {
-            return report("preparation-preflight", "passed");
-          },
-          async validateScriptContract() {
-            return report("static-script-contract-validation", "passed");
-          },
-          async writeScript() {
-            return scriptCandidate();
-          },
+        async createWorkspace() {
+          return workspace();
         },
-      ),
-    ).rejects.toThrow("Script Writing modified disallowed workspace paths");
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairScript({ failureReport }) {
+          repairClassifications.push(failureReport.failureClassification);
+          return scriptCandidate();
+        },
+        async resetCaptureRuntime() {
+          return report("capture-runtime-reset", "passed");
+        },
+        async synthesizeRunPlan() {
+          return runPlan();
+        },
+        async validateCapturePath() {
+          captureChecks += 1;
+          return captureChecks === 1
+            ? {
+                ...report("capture-path-validation", "failed"),
+                failureClassification: "locator failure",
+              }
+            : report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(repairClassifications).toEqual([
+      "locator failure",
+      "script modified app source",
+    ]);
   });
 
   it("repairs preparation when a claimed auth bypass still reaches login", async () => {
