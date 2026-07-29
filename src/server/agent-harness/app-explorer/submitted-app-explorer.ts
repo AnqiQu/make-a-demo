@@ -944,16 +944,6 @@ function isAuthWall(route: {
   const hasIdentity = route.inputs.some((input) =>
     /email|username|user name/i.test(input),
   );
-  const visibleCopy = [
-    route.title ?? "",
-    ...route.headings,
-    ...actionLabels,
-    ...(route.forms ?? []),
-  ].join(" ");
-  const hasAuthCallToAction =
-    /\b(?:authenticate|log in|login|magic link|one[- ]time (?:code|password)|passkey|sign in|sign up|sso)\b/i.test(
-      visibleCopy,
-    );
   const hasIdentityProviderAction = actionLabels.some((button) =>
     /\b(?:continue|log in|sign in)\s+(?:with\s+)?(?:apple|facebook|github|google|linkedin|microsoft|sso)\b/i.test(
       button,
@@ -965,10 +955,13 @@ function isAuthWall(route: {
     );
   const redirected =
     route.requestedPath !== undefined && route.requestedPath !== route.path;
+  // A password + identity pair is a login form regardless of copy; an
+  // auth-looking path alone is not — marketing pages reuse those slugs, so
+  // the path must be corroborated by a credential input or provider button.
   return (
-    (hasPassword && hasIdentity && hasAuthCallToAction) ||
+    (hasPassword && hasIdentity) ||
     (hasAuthPath &&
-      (hasAuthCallToAction || hasIdentity || hasIdentityProviderAction)) ||
+      (hasPassword || hasIdentity || hasIdentityProviderAction)) ||
     (redirected && hasIdentityProviderAction)
   );
 }

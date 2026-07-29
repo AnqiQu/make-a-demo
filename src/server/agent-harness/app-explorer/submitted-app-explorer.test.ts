@@ -128,6 +128,34 @@ describe("exploreSubmittedApp", () => {
     expect(script).toContain("result.unreachableRoutes.push");
   });
 
+  it("detects a same-route login form that has no auth call-to-action copy", async () => {
+    const { result } = await exploreObservation({
+      routes: [
+        observedRoute({
+          buttons: ["Continue"],
+          headings: ["Welcome back"],
+          inputs: ["Email", "Password"],
+        }),
+      ],
+    });
+
+    expect(requireArtifacts(result).appMap.loginOrAuthWalls).toEqual(["/"]);
+  });
+
+  it("does not flag a marketing page on an auth-like path without an auth form", async () => {
+    const { result } = await exploreObservation({
+      routes: [
+        observedRoute({
+          buttons: ["Sign up for updates"],
+          headings: ["Join the newsletter"],
+          path: "/signup",
+        }),
+      ],
+    });
+
+    expect(requireArtifacts(result).appMap.loginOrAuthWalls).toEqual([]);
+  });
+
   it("does not ground a feature whose entry page merely loads", async () => {
     const feature = preparedFeature({ entryPaths: ["/"] });
     const { result } = await exploreObservation({
