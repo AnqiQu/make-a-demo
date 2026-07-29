@@ -1098,7 +1098,7 @@ const normalizeCrawlUrl = ${normalizeCrawlUrl.toString()};
 let browser;
 try {
   browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({ serviceWorkers: "block", viewport: { width: 1440, height: 900 } });
+  const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block", timezoneId: "UTC", viewport: { width: 1440, height: 900 } });
   ${createBrowserRuntimeNetworkPolicySource({
     ...(externalResourceManifest === undefined
       ? {}
@@ -1196,10 +1196,13 @@ try {
     if (after.title !== before.title) return after.title + " became visible";
     return undefined;
   };
+  const pushBounded = (list, value) => {
+    if (list.length < 50) list.push(value);
+  };
   page.on("console", (message) => {
-    if (message.type() === "error") result.consoleErrors.push(page.url() + ": " + message.text());
+    if (message.type() === "error") pushBounded(result.consoleErrors, page.url() + ": " + message.text());
   });
-  page.on("pageerror", (error) => result.pageErrors.push(page.url() + ": " + error.message));
+  page.on("pageerror", (error) => pushBounded(result.pageErrors, page.url() + ": " + error.message));
   const gotoRoute = async (url) => {
     // Dev servers compile each route on first hit; give the initial load a
     // cold-start budget and absorb one transient failure (mid-recompile
@@ -1270,7 +1273,13 @@ try {
                   : undefined;
           return locator === undefined
             ? []
-            : [{ controlKind: tag === "select" ? "select" : "fill", inputType: clean(element.getAttribute("type")).toLowerCase(), locator, name }];
+            : [{
+                controlKind: tag === "select" ? "select" : "fill",
+                inAuthForm: element.closest("form")?.querySelector("input[type=password]") != null,
+                inputType: clean(element.getAttribute("type")).toLowerCase(),
+                locator,
+                name,
+              }];
         }).slice(0, 12);
         const inputs = inputLocators.map((input) => input.name);
         const scrollTargets = document.documentElement.scrollHeight > window.innerHeight + 40
@@ -1354,7 +1363,7 @@ try {
       for (let index = 0; index < Math.min(observed.buttons.length, 8); index += 1) {
         const name = observed.buttons[index];
         const locatorEvidence = observed.buttonLocatorEvidence[index];
-        if (!name || !locatorEvidence || /\\b(?:buy|checkout|delete|destroy|disconnect|log out|logout|pay|purchase|remove|revoke|sign out)\\b/i.test(name)) continue;
+        if (!name || !locatorEvidence || /\\b(?:buy|checkout|delete|destroy|disconnect|log ?in|log ?out|pay|purchase|register|remove|revoke|sign ?in|sign ?out|sign ?up)\\b/i.test(name)) continue;
         try {
           await page.goto(routeUrl, { timeout: 20000, waitUntil: "domcontentloaded" });
           await page.waitForTimeout(250);
@@ -1388,7 +1397,7 @@ try {
         }
       }
       for (const input of observed.inputLocators.slice(0, 6)) {
-        if (!input.locatorEvidence || ["button", "checkbox", "file", "hidden", "radio", "submit"].includes(input.inputType)) continue;
+        if (!input.locatorEvidence || ["button", "checkbox", "file", "hidden", "password", "radio", "submit"].includes(input.inputType) || input.inAuthForm) continue;
         try {
           await page.goto(routeUrl, { timeout: 20000, waitUntil: "domcontentloaded" });
           await page.waitForTimeout(250);
@@ -1412,9 +1421,7 @@ try {
               ? "demo@example.com"
               : input.inputType === "number"
                 ? "1"
-                : input.inputType === "password"
-                  ? "makeademo-demo-password"
-                  : "MakeADemo sample";
+                : "MakeADemo sample";
             await interactionLocator.fill(value);
             if (await interactionLocator.inputValue() !== value) continue;
             outcome = input.name + " contained the observed demo value";
@@ -1505,9 +1512,13 @@ function createFeatureEntryTargets(
     string,
     { featureIds: Set<string>; requestedPath: string; url: string }
   >();
+  const baseOrigin = new URL(baseUrl).origin;
   for (const feature of featureInventory) {
     for (const entryPath of feature.entryPaths) {
       const url = new URL(entryPath, baseUrl);
+      // Agent-authored entry paths must stay inside the prepared app; an
+      // absolute URL to another origin is never a valid crawl target.
+      if (url.origin !== baseOrigin) continue;
       const absoluteUrl = url.toString();
       const existing = targets.get(absoluteUrl) ?? {
         featureIds: new Set<string>(),

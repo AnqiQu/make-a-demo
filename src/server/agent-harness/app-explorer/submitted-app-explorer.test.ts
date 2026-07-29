@@ -128,6 +128,35 @@ describe("exploreSubmittedApp", () => {
     expect(script).toContain("result.unreachableRoutes.push");
   });
 
+  it("rejects feature entry paths outside the app origin at target creation", async () => {
+    const { commands } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          entryPaths: ["https://evil.com/admin", "/#/editor"],
+        }),
+      ],
+      routes: [observedRoute()],
+    });
+    const script = readExplorerScript(commands);
+
+    expect(script).not.toContain("evil.com");
+    expect(script).toContain("/#/editor");
+  });
+
+  it("bounds error capture and never types into credential controls", async () => {
+    const { commands } = await exploreObservation({
+      routes: [observedRoute({ headings: ["Dashboard"] })],
+    });
+    const script = readExplorerScript(commands);
+
+    expect(script).toContain("pushBounded");
+    expect(script).toContain(
+      '["button", "checkbox", "file", "hidden", "password", "radio", "submit"]',
+    );
+    expect(script).toContain('timezoneId: "UTC"');
+    expect(script).toContain('locale: "en-US"');
+  });
+
   it("detects a same-route login form that has no auth call-to-action copy", async () => {
     const { result } = await exploreObservation({
       routes: [
