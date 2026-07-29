@@ -2817,7 +2817,7 @@ async function readWorkspaceContentSnapshot(
         '  printf "%s\\0%s\\0" "$path" "$fingerprint"',
         "}",
         `cd ${shellQuote(workspaceRepoDirectory)}`,
-        'git ls-files -co --exclude-standard -z | while IFS= read -r -d "" relative; do fingerprint_file "$PWD/$relative"; done',
+        'git ls-files -co -z -x node_modules -x .pnpm-store -x .yarn -x .npm -x .bun -x .turbo -x .cache | while IFS= read -r -d "" relative; do fingerprint_file "$PWD/$relative"; done',
         ...(options.includeMakeADemoArtifacts === false
           ? []
           : [
@@ -2879,6 +2879,7 @@ async function readPreparationWorkspaceDiff(
         "trap cleanup_index EXIT",
         'GIT_INDEX_FILE="$temporary_index" git read-tree HEAD',
         'GIT_INDEX_FILE="$temporary_index" git add -A',
+        'GIT_INDEX_FILE="$temporary_index" git ls-files -o -i --exclude-standard -z | grep -zEv "(^|/)(node_modules|\\.pnpm-store|\\.yarn|\\.npm|\\.bun|\\.turbo|\\.cache)(/|$)" | GIT_INDEX_FILE="$temporary_index" xargs -0 -r git add -f --',
         'GIT_INDEX_FILE="$temporary_index" git diff --cached --name-only -z HEAD > "$changed_paths"',
         'cat "$changed_paths"',
         "printf '\\0MAKEADEMO_HASHES\\0'",

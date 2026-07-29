@@ -103,6 +103,59 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(retryPrompt).toContain("Bearer [Redacted]");
   });
 
+  it("captures gitignored workspace paths while skipping dependency caches", async () => {
+    const commands: string[] = [];
+    const digest = "a".repeat(64);
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async uploadFiles() {},
+      async writeTextFile() {},
+      async execute(command) {
+        commands.push(command);
+        if (command.includes("MAKEADEMO_PATCH")) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: `dist/index.html\0\0MAKEADEMO_HASHES\0dist/index.html\0sha256:${digest}\0\0MAKEADEMO_PATCH\0diff --git a/dist/index.html b/dist/index.html`,
+          };
+        }
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout: `/workspace/repo/dist/index.html\0file:${digest}\0`,
+        };
+      },
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const diff = await harness.dependencies.capturePreparationWorkspaceDiff?.({
+      workspace,
+    });
+    const changes = await harness.dependencies.captureWorkspaceDiff?.({
+      workspace,
+    });
+
+    expect(diff?.changedPaths).toEqual(["/workspace/repo/dist/index.html"]);
+    expect(changes).toEqual(["/workspace/repo/dist/index.html"]);
+    const snapshotCommand =
+      commands.find(
+        (command) =>
+          command.includes("ls-files") && !command.includes("MAKEADEMO_PATCH"),
+      ) ?? "";
+    expect(snapshotCommand).not.toContain("--exclude-standard");
+    expect(snapshotCommand).toContain("node_modules");
+    const diffCommand =
+      commands.find((command) => command.includes("MAKEADEMO_PATCH")) ?? "";
+    expect(diffCommand).toContain("ls-files -o -i");
+    expect(diffCommand).toContain("add -f");
+    expect(diffCommand).toContain("node_modules");
+  });
+
   it("selects the product application before planning a multi-app monorepo", async () => {
     const stages: string[] = [];
     const workspace: AgentHarnessWorkspace = {
