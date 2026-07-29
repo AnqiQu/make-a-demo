@@ -430,6 +430,17 @@ export async function runAgentHarnessPipeline(
     };
     const preparationRepairAttemptsByPhase: Record<string, number> = {};
     const scriptRepairAttemptsByPhase: Record<string, number> = {};
+    const dynamicActionFailureCounts: Record<string, number> = {};
+    const excludedCatalogActionIds = new Set<string>();
+    const withoutExcludedActions = (catalog: ActionCatalog): ActionCatalog =>
+      excludedCatalogActionIds.size === 0
+        ? catalog
+        : readActionCatalog({
+            ...catalog,
+            actions: catalog.actions.filter(
+              (action) => !excludedCatalogActionIds.has(action.id),
+            ),
+          });
     const scriptRepairLimit = options.scriptRepairLimit ?? 3;
     const validationAttemptCounts: Record<string, number> = {};
     let preparationState = await ensureValidPreparation({
@@ -751,7 +762,51 @@ export async function runAgentHarnessPipeline(
           continue pipelineAttempt;
         }
 
-        if (capturePathValidation.failureClassification === "locator failure") {
+        // Flow-lock escape: when one catalog action keeps failing dynamic
+        // validation, retrying and re-grounding reproduce the same plan. The
+        // second failure removes the action from the catalog and re-plans the
+        // flow so an alternative demonstration must be selected.
+        const failingActionId = readFailingCatalogActionId(
+          capturePathValidation,
+          scriptCandidate,
+          actionCatalog,
+        );
+        let flowReplanned = false;
+        if (failingActionId !== undefined) {
+          const failures =
+            (dynamicActionFailureCounts[failingActionId] ?? 0) + 1;
+          dynamicActionFailureCounts[failingActionId] = failures;
+          if (failures >= 2 && !excludedCatalogActionIds.has(failingActionId)) {
+            excludedCatalogActionIds.add(failingActionId);
+            actionCatalog = await writeArtifact(
+              dependencies,
+              artifactPaths.actionCatalog,
+              withoutExcludedActions(actionCatalog),
+            );
+            flowSpec = await runAsyncStage(
+              "flow-replanning",
+              stageStatuses,
+              stageTimings,
+              async () =>
+                readFlowSpec(
+                  await dependencies.planFlow({
+                    actionCatalog,
+                    appMap,
+                    demoBrief: input.demoBrief,
+                    preparationManifest,
+                    repoProfile,
+                  }),
+                ),
+            );
+            await writeArtifact(dependencies, artifactPaths.flowSpec, flowSpec);
+            flowReplanned = true;
+          }
+        }
+
+        if (
+          !flowReplanned &&
+          capturePathValidation.failureClassification === "locator failure"
+        ) {
           const regrounding = await runAsyncStage(
             "locator-regrounding",
             stageStatuses,
@@ -802,7 +857,9 @@ export async function runAgentHarnessPipeline(
           actionCatalog = await writeArtifact(
             dependencies,
             artifactPaths.actionCatalog,
-            readActionCatalog(regrounding.actionCatalog),
+            withoutExcludedActions(
+              readActionCatalog(regrounding.actionCatalog),
+            ),
           );
           flowSpec = await runAsyncStage(
             "flow-replanning",
@@ -1573,6 +1630,52 @@ async function repairPreparationManifest(input: {
         opencodeSessionId?: string;
       }>,
   );
+}
+
+/**
+ * Identifies the ActionCatalog action behind a dynamic capture failure via the
+ * failing script action's sourceActionId, so repeated failures of one action
+ * can change the planning input instead of retrying the same plan.
+ */
+function readFailingCatalogActionId(
+  report: ValidationReport,
+  scriptCandidate: ScriptCandidate,
+  actionCatalog: ActionCatalog,
+): string | undefined {
+  const scriptActionId =
+    /Browser action ([A-Za-z0-9_][A-Za-z0-9_-]*) failed/.exec(
+      report.logsSummary,
+    )?.[1];
+  if (scriptActionId === undefined) {
+    return undefined;
+  }
+  const script = scriptCandidate.scriptJsonContent;
+  const scenes =
+    typeof script === "object" && script !== null
+      ? (script as { scenes?: unknown }).scenes
+      : undefined;
+  const scriptActions = Array.isArray(scenes)
+    ? scenes.flatMap((scene) =>
+        typeof scene === "object" &&
+        scene !== null &&
+        Array.isArray((scene as { actions?: unknown }).actions)
+          ? ((scene as { actions: unknown[] }).actions.filter(
+              (action): action is Record<string, unknown> =>
+                typeof action === "object" && action !== null,
+            ) ?? [])
+          : [],
+      )
+    : [];
+  const failingAction = scriptActions.find(
+    (action) => action.id === scriptActionId,
+  );
+  const candidateId =
+    typeof failingAction?.sourceActionId === "string"
+      ? failingAction.sourceActionId
+      : scriptActionId;
+  return actionCatalog.actions.some((action) => action.id === candidateId)
+    ? candidateId
+    : undefined;
 }
 
 function preparationFailureFingerprint(report: ValidationReport): string {

@@ -753,6 +753,104 @@ describe("runAgentHarnessPipeline", () => {
     });
   });
 
+  it("excludes an action that fails dynamic validation twice and re-plans the flow without it", async () => {
+    const planCatalogs: string[][] = [];
+    let captureAttempts = 0;
+
+    const result = await runAgentHarnessPipeline(
+      {
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        files: [
+          { path: "package.json", text: "{}" },
+          { path: "bun.lock", text: "" },
+        ],
+        repoStats: { fileCount: 2, sizeBytes: 200 },
+        repoUrl: "https://github.com/example/app",
+        runId: "run_flow_lock_escape",
+      },
+      {
+        async createWorkspace() {
+          return workspace();
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: {
+              ...actionCatalog(),
+              actions: [
+                ...actionCatalog().actions,
+                {
+                  confidence: 0.98,
+                  evidence: "Playwright exercised the dashboard toggle",
+                  exercised: true,
+                  expectedResult: "Dashboard summary becomes visible",
+                  featureIds: ["dashboard"],
+                  id: "toggle-dashboard-summary",
+                  kind: "click" as const,
+                  preferredLocator: {
+                    name: "Toggle summary",
+                    strategy: "role" as const,
+                    value: "button",
+                  },
+                  risks: [],
+                  route: "/",
+                },
+              ],
+            },
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow({ actionCatalog: catalog }) {
+          planCatalogs.push(
+            (catalog as { actions: Array<{ id: string }> }).actions.map(
+              ({ id }) => id,
+            ),
+          );
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairScript() {
+          return scriptCandidate();
+        },
+        async resetCaptureRuntime() {
+          return report("capture-runtime-reset", "passed");
+        },
+        async synthesizeRunPlan() {
+          return runPlan();
+        },
+        async validateCapturePath() {
+          captureAttempts += 1;
+          return captureAttempts <= 2
+            ? {
+                ...report("capture-path-validation", "failed"),
+                failureClassification: "assertion failure",
+                logsSummary:
+                  "CaptureBrowserActionFailureError: Browser action open-dashboard failed in Scene dashboard. expect(locator).toBeVisible() failed",
+              }
+            : report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(planCatalogs).toHaveLength(2);
+    expect(planCatalogs[0]).toContain("open-dashboard");
+    expect(planCatalogs[1]).not.toContain("open-dashboard");
+    expect(planCatalogs[1]).toContain("toggle-dashboard-summary");
+  });
+
   it("retries capture validation after a transient infrastructure failure without spending script repair", async () => {
     const calls: string[] = [];
     let captureAttempts = 0;
