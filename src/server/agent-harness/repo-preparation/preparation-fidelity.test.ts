@@ -459,6 +459,48 @@ describe("validatePreparationFidelity", () => {
     expect(report.status).toBe("passed");
   });
 
+  it("resolves the start command through the package script table to reject created entrypoints", () => {
+    const report = validateDiff({
+      createdFiles: ["server.mjs"],
+      manifestOverrides: { startCommandUsed: "npm run dev" },
+      patch: [
+        "diff --git a/server.mjs b/server.mjs",
+        '+import http from "node:http";',
+      ].join("\n"),
+      sourceFiles: {
+        "package.json": '{ "scripts": { "dev": "node server.mjs" } }',
+      },
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(
+      "The prepared start command launches newly created application entrypoint server.mjs.",
+    );
+  });
+
+  it("rejects a created environment file that changes authentication behavior", () => {
+    const report = validateDiff({
+      createdFiles: [".env.local"],
+      patch: [
+        "diff --git a/.env.local b/.env.local",
+        "+AUTH_DISABLED=1",
+        "+NEXT_PUBLIC_API_URL=http://127.0.0.1:3000",
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(".env.local");
+  });
+
+  it("allows a created environment file that only tunes runtime settings", () => {
+    const report = validateDiff({
+      createdFiles: [".env.local"],
+      patch: ["diff --git a/.env.local b/.env.local", "+PORT=3001"].join("\n"),
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
   it("rejects an authentication replacement that is not demo-gated", () => {
     const providerPath = "packages/identity/src/client/server.ts";
     const report = validateDemoDiff(providerPath, [

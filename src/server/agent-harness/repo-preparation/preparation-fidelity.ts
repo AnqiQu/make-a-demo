@@ -140,6 +140,11 @@ export function validatePreparationFidelity(input: {
     }
   }
 
+  const resolvedStartCommands = readResolvedStartCommands(
+    input.preparationManifest.startCommandUsed,
+    input.repoSourceFiles,
+    filePatches.get("package.json") ?? "",
+  );
   for (const path of createdPaths) {
     if (repairPaths.has(path)) continue;
     const patch = filePatches.get(path) ?? "";
@@ -148,6 +153,11 @@ export function validatePreparationFidelity(input: {
         `${path} calls back through its own listener from server-side code, which can recursively stall rendering. Use the fixture or adapter directly instead.`,
       );
       continue;
+    }
+    if (isDotenvPath(path) && containsAuthenticationTerms(patch)) {
+      violations.push(
+        `${path} changes authentication behavior through a created environment file; demo environment belongs in envUsed with a gated adaptation.`,
+      );
     }
     if (
       isProductPresentationPath(path) &&
@@ -164,7 +174,9 @@ export function validatePreparationFidelity(input: {
       );
     }
     if (
-      commandReferencesPath(input.preparationManifest.startCommandUsed, path)
+      resolvedStartCommands.some((command) =>
+        commandReferencesPath(command, path),
+      )
     ) {
       violations.push(
         `The prepared start command launches newly created application entrypoint ${path}.`,
@@ -560,6 +572,40 @@ function isVendoredAssetPath(path: string) {
 
 function commandReferencesPath(command: string, path: string) {
   return command.split(/\s+/).some((token) => token === path);
+}
+
+/**
+ * Resolves a package-manager start command one level through the script table
+ * so a created entrypoint cannot hide behind `npm run <script>`. Reads both
+ * the original package.json and script lines added by the preparation patch.
+ */
+function readResolvedStartCommands(
+  startCommandUsed: string,
+  repoSourceFiles: ReadonlyMap<string, string | undefined>,
+  packagePatch: string,
+): string[] {
+  const commands = [startCommandUsed];
+  const scriptName =
+    /^\s*(?:corepack\s+)?(?:bun|npm|pnpm|yarn)\s+(?:run\s+)?([\w:.-]+)/.exec(
+      startCommandUsed,
+    )?.[1];
+  if (scriptName === undefined) return commands;
+  const sources = [
+    repoSourceFiles.get("package.json") ?? "",
+    addedPatchText(packagePatch),
+  ];
+  for (const source of sources) {
+    const script = new RegExp(
+      `"${escapeRegExp(scriptName)}"\\s*:\\s*"([^"]+)"`,
+    ).exec(source)?.[1];
+    if (script !== undefined) commands.push(script);
+  }
+  return commands;
+}
+
+function isDotenvPath(path: string) {
+  const name = path.split("/").at(-1) ?? path;
+  return /^\.env(?:\..+)?$/.test(name) && name !== ".env.example";
 }
 
 function addedPatchText(patch: string) {
