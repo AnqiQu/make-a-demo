@@ -62,10 +62,12 @@ export function validatePreparationFidelity(input: {
 }): ValidationReport {
   const violations: string[] = [];
   const repairPaths = readInvalidRepairPaths(input);
+  const filePatches = parsePatchSections(input.workspaceDiff.patch);
   const demoGate = readDemoGateEvidence(
     input.preparationManifest,
     input.repoSourceFiles,
     input.workspaceDiff,
+    filePatches,
   );
   for (const path of repairPaths) {
     violations.push(
@@ -83,13 +85,14 @@ export function validatePreparationFidelity(input: {
 
   for (const path of modifiedOriginalPaths) {
     if (repairPaths.has(path)) continue;
-    const patch = readFilePatch(input.workspaceDiff.patch, path);
+    const patch = filePatches.get(path) ?? "";
     if (addsServerSelfRequest(path, patch, input.preparationManifest.baseUrl)) {
       violations.push(
         `${path} calls back through its own listener from server-side code, which can recursively stall rendering. Use the fixture or adapter directly instead.`,
       );
       continue;
     }
+    if (isFrameworkConfigPath(path)) continue;
     const addsPresentation = addsProductPresentation(patch);
     const demoSeam = isDemoSeamPath(path);
     const authenticationAdaptation = isAuthenticationAdaptation(path, patch);
@@ -101,13 +104,24 @@ export function validatePreparationFidelity(input: {
         );
         continue;
       }
+      const kind = authenticationAdaptation ? "authentication" : "integration";
       const violation = readDemoAdaptationViolation(
         demoGate,
         path,
         patch,
-        authenticationAdaptation ? "authentication" : "integration",
+        kind,
+        input.repoSourceFiles.get(path) ?? "",
       );
-      if (violation !== undefined) violations.push(violation);
+      if (violation !== undefined) {
+        violations.push(violation);
+        continue;
+      }
+      const unpreserved = readUnpreservedRemovedLine(patch);
+      if (unpreserved !== undefined) {
+        violations.push(
+          `${path} removes original ${kind} behavior (\`${unpreserved}\`) instead of preserving it behind the demo gate.`,
+        );
+      }
       continue;
     }
     if (demoSeam && !addsPresentation) {
@@ -128,7 +142,7 @@ export function validatePreparationFidelity(input: {
 
   for (const path of createdPaths) {
     if (repairPaths.has(path)) continue;
-    const patch = readFilePatch(input.workspaceDiff.patch, path);
+    const patch = filePatches.get(path) ?? "";
     if (addsServerSelfRequest(path, patch, input.preparationManifest.baseUrl)) {
       violations.push(
         `${path} calls back through its own listener from server-side code, which can recursively stall rendering. Use the fixture or adapter directly instead.`,
@@ -158,7 +172,7 @@ export function validatePreparationFidelity(input: {
     }
   }
 
-  const packagePatch = readFilePatch(input.workspaceDiff.patch, "package.json");
+  const packagePatch = filePatches.get("package.json") ?? "";
   if (/^-.*["']workspaces["']/m.test(packagePatch)) {
     violations.push(
       "package.json removes the original workspace configuration instead of adapting the original app.",
@@ -287,11 +301,14 @@ function onlyLocalizesExternalAssets(patch: string) {
     removed.length === added.length &&
     removed.every((before, index) => {
       const after = added[index] ?? "";
-      const external = /(["'])((?:https?:)?\/\/[^"']+)\1/.exec(before)?.[2];
+      const external =
+        /(["'])((?:https?:)?\/\/[^"']+)\1/.exec(before)?.[2] ??
+        /url\(\s*((?:https?:)?\/\/[^)\s"']+)\s*\)/i.exec(before)?.[1];
       const local =
         /(["'])((?:\.?\.\/|\/)[^"']+\.[a-z0-9]+(?:[?#][^"']*)?)\1/i.exec(
           after,
-        )?.[2];
+        )?.[2] ??
+        /url\(\s*((?:\.?\.\/|\/)[^)\s"']+\.[a-z0-9]+)\s*\)/i.exec(after)?.[1];
       return (
         external !== undefined &&
         local !== undefined &&
@@ -334,6 +351,7 @@ function readDemoGateEvidence(
   preparationManifest: PreparationManifest,
   repoSourceFiles: ReadonlyMap<string, string | undefined>,
   workspaceDiff: PreparationWorkspaceDiff,
+  filePatches: ReadonlyMap<string, string>,
 ): DemoGateEvidence {
   const configuredFlags = Object.entries(preparationManifest.envUsed)
     .filter(
@@ -354,7 +372,7 @@ function readDemoGateEvidence(
     ...workspaceDiff.changedPaths
       .map(toRepoRelativePath)
       .filter(isExecutableSourcePath)
-      .map((path) => addedPatchText(readFilePatch(workspaceDiff.patch, path))),
+      .map((path) => addedPatchText(filePatches.get(path) ?? "")),
   ];
   const flags = configuredFlags.filter((flag) =>
     sources.some((source) => readsDemoFlag(source, flag)),
@@ -374,12 +392,33 @@ function readDemoAdaptationViolation(
   path: string,
   patch: string,
   kind: "authentication" | "integration",
+  originalSource: string,
 ): string | undefined {
   if (demoGate.flags.length === 0) {
     return missingDemoGateViolation(path, kind);
   }
-  if (!hasConditionalDemoGate(patch, demoGate)) {
+  if (!hasConditionalDemoGate(patch, demoGate, originalSource)) {
     return `${path} does not conditionally use the repository's active MakeADemo demo gate for the ${kind} adaptation.`;
+  }
+  return undefined;
+}
+
+/**
+ * Returns the first removed line whose content is not recoverable from the
+ * additions. A gated adaptation must wrap original behavior, not delete it:
+ * every removed non-blank line must survive verbatim or token-by-token (the
+ * token fallback tolerates gate wrapping such as inline ternaries).
+ */
+function readUnpreservedRemovedLine(patch: string): string | undefined {
+  const additions = addedPatchText(patch);
+  for (const removed of changedPatchLines(patch, "-")) {
+    const line = removed.trim();
+    if (line.length < 3 || /^[{}()[\]<>/*,;`'"\\|&-]*$/.test(line)) continue;
+    if (additions.includes(line)) continue;
+    const tokens = line.match(/[A-Za-z0-9_$"'`./-]{3,}/g) ?? [];
+    if (tokens.length === 0) continue;
+    if (tokens.every((token) => additions.includes(token))) continue;
+    return line.length > 80 ? `${line.slice(0, 80)}…` : line;
   }
   return undefined;
 }
@@ -431,37 +470,59 @@ function missingDemoGateViolation(
   return `${path} changes ${kind} behavior without an active MakeADemo demo flag recorded in envUsed.`;
 }
 
-function hasConditionalDemoGate(patch: string, demoGate: DemoGateEvidence) {
-  const additions = addedPatchText(patch);
+function hasConditionalDemoGate(
+  patch: string,
+  demoGate: DemoGateEvidence,
+  originalSource: string,
+) {
+  const additions = stripComments(addedPatchText(patch));
+  const fileScope = `${stripComments(originalSource)}\n${additions}`;
   const tokens = [
     ...demoGate.flags.filter((flag) => readsDemoFlag(additions, flag)),
-    ...demoGate.identifiers,
+    ...demoGate.identifiers.filter((identifier) =>
+      isBoundInFile(fileScope, identifier),
+    ),
   ];
   return tokens.some((token) => isConditionalUse(additions, token));
+}
+
+function stripComments(source: string) {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/(?:^|(?<=\s))(?:\/\/|#).*$/gm, " ");
+}
+
+/** A gate identifier only counts inside a file that imports or declares it. */
+function isBoundInFile(source: string, identifier: string) {
+  const name = escapeRegExp(identifier);
+  return (
+    new RegExp(`\\bimport\\b[^;\\n]*[{,\\s]${name}\\s*[},\\s]`).test(source) ||
+    new RegExp(`\\b(?:const|let|var|final|bool|boolean)\\s+${name}\\b`).test(
+      source,
+    ) ||
+    new RegExp(`\\b(?:def|fn|func|function)\\s+${name}\\s*\\(`).test(source) ||
+    new RegExp(`\\bfrom\\b[^\\n]*\\bimport\\b[^\\n]*\\b${name}\\b`).test(source)
+  );
 }
 
 function readDemoGateIdentifiers(source: string, flags: string[]) {
   const identifiers = new Set<string>();
   for (const flag of flags) {
-    for (const match of source.matchAll(new RegExp(escapeRegExp(flag), "g"))) {
-      const index = match.index;
-      if (index === undefined) continue;
-      const context = source.slice(
-        Math.max(0, index - 100),
-        index + flag.length,
-      );
-      if (!readsDemoFlag(context, flag)) continue;
-      const prefix = source.slice(Math.max(0, index - 300), index);
-      const candidates = [
-        ...prefix.matchAll(
-          /(?:\b(?:const|final|let|var|bool|boolean)\s+|(?:^|\n)\s*)([A-Za-z_$][\w$]*)\s*(?::=|=(?!=))/g,
-        ),
-        ...prefix.matchAll(
-          /\b(?:def|fn|func|function)\s+([A-Za-z_$][\w$]*)\s*\(/g,
-        ),
-      ].sort((left, right) => (left.index ?? 0) - (right.index ?? 0));
-      const identifier = candidates.at(-1)?.[1];
-      if (identifier !== undefined) identifiers.add(identifier);
+    const name = escapeRegExp(flag);
+    const patterns = [
+      new RegExp(
+        `\\b(?:const|final|let|var|bool|boolean)\\s+([A-Za-z_$][\\w$]*)\\s*[:=][^;\\n]*(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`,
+        "g",
+      ),
+      new RegExp(
+        `\\b(?:def|fn|func|function)\\s+([A-Za-z_$][\\w$]*)\\s*\\([^)]*\\)[^]{0,160}?(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`,
+        "g",
+      ),
+    ];
+    for (const pattern of patterns) {
+      for (const match of source.matchAll(pattern)) {
+        if (match[1] !== undefined) identifiers.add(match[1]);
+      }
     }
   }
   return [...identifiers];
@@ -509,14 +570,52 @@ function addedPatchText(patch: string) {
     .join("\n");
 }
 
-function readFilePatch(patch: string, path: string) {
-  const marker = `diff --git a/${path} b/${path}`;
-  const start = patch.indexOf(marker);
-  if (start === -1) {
-    return "";
+/**
+ * Splits a unified diff into per-file sections in one pass. Section headers
+ * match only at line starts, so header-shaped text inside added or removed
+ * content cannot open a section. Renamed files register under both paths.
+ */
+function parsePatchSections(patch: string): Map<string, string> {
+  const sections = new Map<string, string>();
+  const lines = patch.split("\n");
+  let start = -1;
+  let paths: string[] = [];
+  const flush = (end: number) => {
+    if (start === -1) return;
+    const section = lines.slice(start, end).join("\n");
+    for (const path of paths) {
+      const existing = sections.get(path);
+      sections.set(
+        path,
+        existing === undefined ? section : `${existing}\n${section}`,
+      );
+    }
+  };
+  for (const [index, line] of lines.entries()) {
+    const header =
+      /^diff --git (?:"a\/(.+?)"|a\/(.+?)) (?:"b\/(.+?)"|b\/(.+))$/.exec(line);
+    if (header === null) continue;
+    flush(index);
+    start = index;
+    paths = [
+      ...new Set(
+        [header[1] ?? header[2], header[3] ?? header[4]].filter(
+          (path): path is string => path !== undefined,
+        ),
+      ),
+    ];
   }
-  const next = patch.indexOf("\ndiff --git ", start + marker.length);
-  return patch.slice(start, next === -1 ? undefined : next);
+  flush(lines.length);
+  return sections;
+}
+
+function isFrameworkConfigPath(path: string) {
+  const name = path.split("/").at(-1) ?? path;
+  return (
+    /^[^/]*\.config\.[cm]?[jt]sx?$/i.test(name) ||
+    /^tsconfig[^/]*\.json$/i.test(name) ||
+    name === ".env.example"
+  );
 }
 
 function toRepoRelativePath(path: string) {

@@ -338,6 +338,127 @@ describe("validatePreparationFidelity", () => {
     expect(report.status).toBe("passed");
   });
 
+  it("reads file patches through a line-anchored parse that added content cannot mask", () => {
+    const fixturePath = "src/demo/fixtures/notes.ts";
+    const sessionPath = "src/auth/session.ts";
+    const report = validateDiff({
+      createdFiles: [fixturePath],
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [sessionPath],
+      patch: [
+        `diff --git a/${fixturePath} b/${fixturePath}`,
+        `+diff --git a/${sessionPath} b/${sessionPath}`,
+        "+if (process.env.MAKEADEMO_DEMO === 'true') return demoSession();",
+        `diff --git a/${sessionPath} b/${sessionPath}`,
+        "-return loadSession(request);",
+        "+return createDemoSession();",
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(
+      `${sessionPath} does not conditionally use`,
+    );
+  });
+
+  it("attributes a renamed file's patch to its new path", () => {
+    const report = validateDiff({
+      createdFiles: ["src/demo-entry.ts"],
+      patch: [
+        "diff --git a/src/entry.ts b/src/demo-entry.ts",
+        "similarity index 62%",
+        "rename from src/entry.ts",
+        "rename to src/demo-entry.ts",
+        "+Bun.serve({ fetch: () => new Response(`<html><style>.a{}</style></html>`) });",
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(
+      "src/demo-entry.ts creates a standalone server",
+    );
+  });
+
+  it("rejects a gated authentication patch that deletes original behavior", () => {
+    const layoutPath = "apps/dashboard/src/app/(app)/layout.tsx";
+    const report = validateDemoDiff(layoutPath, [
+      "+const demoMode = process.env.MAKEADEMO_DEMO === 'true';",
+      "+if (!demoMode) console.warn('demo mode');",
+      "-if (!user) redirect('/login');",
+    ]);
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(
+      `${layoutPath} removes original authentication behavior`,
+    );
+  });
+
+  it("ignores demo gates that appear only inside comments", () => {
+    const sessionPath = "src/auth/session.ts";
+    const report = validateDemoDiff(sessionPath, [
+      "+// if (process.env.MAKEADEMO_DEMO === 'true') return demoSession();",
+      "+return createDemoSession();",
+      "-return loadSession(request);",
+    ]);
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(
+      `${sessionPath} does not conditionally use`,
+    );
+  });
+
+  it("rejects a gate identifier the patched file neither imports nor declares", () => {
+    const sessionPath = "src/auth/session.ts";
+    const report = validateDiff({
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [sessionPath],
+      patch: [
+        `diff --git a/${sessionPath} b/${sessionPath}`,
+        "-return loadSession(request);",
+        "+return isDemoMode ? demoSession() : loadSession(request);",
+      ].join("\n"),
+      sourceFiles: {
+        "src/config/demo-mode.ts":
+          "export const isDemoMode = process.env.MAKEADEMO_DEMO === 'true';",
+        [sessionPath]: "export function readSession(request) {}",
+      },
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(
+      `${sessionPath} does not conditionally use`,
+    );
+  });
+
+  it("exempts framework and build configuration from the demo gate requirement", () => {
+    const report = validateDiff({
+      modifiedFiles: ["vite.config.ts", "apps/dashboard/next.config.ts"],
+      patch: [
+        "diff --git a/vite.config.ts b/vite.config.ts",
+        "-  server: { port: 5173 },",
+        "+  server: { port: 4173, host: '127.0.0.1' },",
+        "diff --git a/apps/dashboard/next.config.ts b/apps/dashboard/next.config.ts",
+        "+  allowedDevOrigins: ['127.0.0.1'],",
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("accepts unquoted css url() asset localization", () => {
+    const stylePath = "src/styles/global.css";
+    const report = validateDiff({
+      modifiedFiles: [stylePath],
+      patch: [
+        `diff --git a/${stylePath} b/${stylePath}`,
+        "-body { background: url(https://cdn.example.com/bg.png); }",
+        "+body { background: url(/assets/bg.png); }",
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
   it("rejects an authentication replacement that is not demo-gated", () => {
     const providerPath = "packages/identity/src/client/server.ts";
     const report = validateDemoDiff(providerPath, [
