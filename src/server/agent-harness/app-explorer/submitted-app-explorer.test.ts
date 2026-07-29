@@ -583,6 +583,70 @@ describe("exploreSubmittedApp", () => {
     );
   });
 
+  it("recovers exploration results from the durable file when stdout is corrupted", async () => {
+    const protocol = JSON.stringify({
+      blockedNetworkAttempts: [],
+      consoleErrors: [],
+      pageErrors: [],
+      routes: [observedRoute({ headings: ["Dashboard"] })],
+      unreachableRoutes: [],
+    });
+    const result = await exploreSubmittedApp({
+      baseUrl,
+      preparationManifestId: "prep_001",
+      workspace: {
+        async destroy() {},
+        async execute() {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async executeSubmittedCode(command) {
+          return command.includes("exploration.json")
+            ? { exitCode: 0, stderr: "", stdout: protocol }
+            : {
+                exitCode: 0,
+                stderr: "",
+                stdout: '[makeademo:exploration] {"routes": [tru',
+              };
+        },
+      },
+    });
+
+    expect(requireArtifacts(result).appMap.discoveredRoutes[0]).toMatchObject({
+      headings: ["Dashboard"],
+    });
+  });
+
+  it("returns a repairable failure instead of throwing when the explorer crashes", async () => {
+    const result = await exploreSubmittedApp({
+      baseUrl,
+      preparationManifestId: "prep_001",
+      workspace: {
+        async destroy() {},
+        async execute() {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async executeSubmittedCode(command) {
+          return command.includes("exploration.json")
+            ? { exitCode: 1, stderr: "cat: no such file", stdout: "" }
+            : {
+                exitCode: 1,
+                stderr: `SyntaxError: unexpected token\n${"x".repeat(10_000)}`,
+                stdout: "",
+              };
+        },
+      },
+    });
+
+    expect(result.kind).toBe("repairable-failure");
+    if (result.kind !== "repairable-failure") throw new Error("unexpected");
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "runtime crash",
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain("SyntaxError");
+    expect(result.validationReport.logsSummary.length).toBeLessThan(3_000);
+  });
+
   it("returns a repairable report when no routes are discovered", async () => {
     const { result } = await exploreObservation({ routes: [] });
 
@@ -780,13 +844,13 @@ async function exploreObservation(input: {
         return {
           exitCode: 0,
           stderr: "",
-          stdout: JSON.stringify({
+          stdout: `\n[makeademo:exploration] ${JSON.stringify({
             blockedNetworkAttempts: input.blockedNetworkAttempts ?? [],
             consoleErrors: input.consoleErrors ?? [],
             pageErrors: input.pageErrors ?? [],
             routes: input.routes,
             unreachableRoutes: input.unreachableRoutes ?? [],
-          }),
+          })}\n`,
         };
       },
       ...(input.readSubmittedCodeAppStatus === undefined

@@ -106,6 +106,7 @@ type BrowserExplorationProtocol = {
     Pick<NetworkAttempt, "host"> & Partial<NetworkAttempt>
   >;
   consoleErrors: string[];
+  fatalError?: string;
   pageErrors: string[];
   routes: ObservedRoute[];
   unreachableRoutes?: UnreachableRoute[];
@@ -157,13 +158,18 @@ export async function exploreSubmittedApp(input: {
       timeoutError: error,
     });
   }
-  if (result.exitCode !== 0) {
-    throw new Error(
-      `Submitted app exploration failed: ${result.stderr || result.stdout}`,
-    );
-  }
 
-  const observation = readExplorationProtocol(result.stdout);
+  const observation =
+    readExplorationProtocol(result.stdout) ??
+    (await readExplorationProtocolFile(input.workspace));
+  if (observation === undefined) {
+    const appStatus = await readAppStatus(input.workspace);
+    return createCrashedExplorerFailure({
+      appStatus,
+      baseUrl: input.baseUrl,
+      result,
+    });
+  }
   if (observation.routes.length === 0) {
     const appStatus = await readAppStatus(input.workspace);
     return createRepairableExplorationFailure({
@@ -335,9 +341,11 @@ function createRepairableExplorationFailure(input: {
         : "app route not discoverable",
       logsSummary: appExited
         ? `The prepared app exited${input.appStatus?.exitCode === undefined ? "" : ` with code ${input.appStatus.exitCode}`} while Playwright was exploring it${diagnostics.output ? `: ${diagnostics.output}` : "."}`
-        : `Playwright completed exploration but did not discover a browser route to ground Flow Planning.${(
-            input.observation.unreachableRoutes ?? []
-          )
+        : `Playwright completed exploration but did not discover a browser route to ground Flow Planning.${
+            input.observation.fatalError === undefined
+              ? ""
+              : ` Explorer error: ${input.observation.fatalError}`
+          }${(input.observation.unreachableRoutes ?? [])
             .slice(0, 3)
             .map((route) => ` Unreachable ${route.url}: ${route.error}`)
             .join(" |")}`,
@@ -964,21 +972,85 @@ function normalizeRequestedFeature(value: string): string {
   return value.trim().replaceAll(/\s+/g, " ").toLowerCase();
 }
 
-function readExplorationProtocol(stdout: string): BrowserExplorationProtocol {
-  const lines = stdout
+const explorationProtocolMarker = "[makeademo:exploration] ";
+
+function readExplorationProtocol(
+  text: string,
+): BrowserExplorationProtocol | undefined {
+  const lines = text
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
     .reverse();
   for (const line of lines) {
+    const payload = line.startsWith(explorationProtocolMarker)
+      ? line.slice(explorationProtocolMarker.length)
+      : line;
     try {
-      const value = JSON.parse(line) as BrowserExplorationProtocol;
+      const value = JSON.parse(payload) as BrowserExplorationProtocol;
       if (Array.isArray(value.routes)) {
         return value;
       }
     } catch {}
   }
-  throw new Error("Submitted app explorer did not emit its JSON protocol.");
+  return undefined;
+}
+
+/**
+ * Durable fallback for a corrupted stdout stream: the generated explorer
+ * always writes its protocol to exploration.json before exiting.
+ */
+async function readExplorationProtocolFile(
+  workspace: AgentHarnessWorkspace,
+): Promise<BrowserExplorationProtocol | undefined> {
+  try {
+    const result = await executeSubmittedCode(
+      workspace,
+      `cat ${explorerDirectory}/exploration.json`,
+    );
+    return result.exitCode === 0
+      ? readExplorationProtocol(result.stdout)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function createCrashedExplorerFailure(input: {
+  appStatus: AgentHarnessSubmittedCodeAppStatus | undefined;
+  baseUrl: string;
+  result: { exitCode: number; stderr: string; stdout: string };
+}): Extract<SubmittedAppExplorationResult, { kind: "repairable-failure" }> {
+  const appExited = input.appStatus?.running === false;
+  const diagnostics = createAppStatusDiagnostics(input.appStatus);
+  const excerpt = (input.result.stderr || input.result.stdout)
+    .trim()
+    .slice(0, 2000);
+  return {
+    kind: "repairable-failure",
+    validationReport: readValidationReport({
+      artifactReferences: [explorerPath],
+      blockedNetworkAttempts: [],
+      browserObservations: [],
+      consoleErrors: [],
+      failureClassification: appExited ? "app route crashes" : "runtime crash",
+      logsSummary: `Browser exploration exited with code ${input.result.exitCode} without emitting its result protocol${excerpt ? `: ${excerpt}` : "."}`,
+      networkAttempts: [],
+      pageErrors: [],
+      retryCount: 0,
+      screenshots: [],
+      stage: "app-exploration",
+      status: "failed",
+      stderrExcerpts: diagnostics.stderrExcerpts,
+      stdoutExcerpts: diagnostics.stdoutExcerpts,
+      suggestedRepairHints: [
+        appExited
+          ? "Repair the app crash or reduce its runtime resource usage, then rerun browser exploration."
+          : "Repair the prepared app runtime so the browser explorer can load it, then rerun browser exploration.",
+      ],
+      urlChecked: input.baseUrl,
+    }),
+  };
 }
 
 function unique(values: string[]): string[] {
@@ -1002,12 +1074,14 @@ const baseUrl = ${JSON.stringify(baseUrl)};
 const baseOrigin = new URL(baseUrl).origin;
 const featureEntryTargets = ${JSON.stringify(featureEntryTargets)};
 const outputDirectory = ${JSON.stringify(explorerDirectory)};
+const deadlineAtMs = Date.now() + ${Math.floor(explorationCommandTimeoutMs * 0.7)};
 const result = { blockedNetworkAttempts: [], consoleErrors: [], pageErrors: [], routes: [], unreachableRoutes: [] };
 const isAppUnavailableError = (error) => /(?:ERR_CONNECTION_(?:CLOSED|REFUSED|RESET)|Target page, context or browser has been closed)/i.test(
   error instanceof Error ? error.message : String(error),
 );
-const browser = await chromium.launch({ headless: true });
+let browser;
 try {
+  browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({ serviceWorkers: "block", viewport: { width: 1440, height: 900 } });
   ${createBrowserRuntimeNetworkPolicySource({
     ...(externalResourceManifest === undefined
@@ -1117,7 +1191,7 @@ try {
   const seen = new Set();
   const maxRoutes = Math.min(30, Math.max(6, featureEntryTargets.length + 2));
   await mkdir(outputDirectory, { recursive: true });
-  while (queue.length > 0 && seen.size < maxRoutes) {
+  while (queue.length > 0 && seen.size < maxRoutes && Date.now() < deadlineAtMs) {
     const target = queue.shift();
     if (!target || seen.has(target.url)) continue;
     seen.add(target.url);
@@ -1347,10 +1421,13 @@ try {
       if (isAppUnavailableError(error)) break;
     }
   }
+} catch (error) {
+  result.fatalError = error instanceof Error ? error.message : String(error);
 } finally {
-  await browser.close();
+  if (browser) await browser.close().catch(() => {});
 }
-process.stdout.write(JSON.stringify(result));
+await writeFile(outputDirectory + "/exploration.json", JSON.stringify(result)).catch(() => {});
+process.stdout.write("\\n[makeademo:exploration] " + JSON.stringify(result) + "\\n");
 `;
 }
 
