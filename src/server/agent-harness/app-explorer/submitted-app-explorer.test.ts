@@ -4,7 +4,10 @@ import {
   type AgentHarnessWorkspace,
 } from "../daytona/workspace.interface";
 import type { PreparedDemoFeature } from "../schemas/artifacts";
-import { exploreSubmittedApp } from "./submitted-app-explorer";
+import {
+  exploreSubmittedApp,
+  normalizeCrawlUrl,
+} from "./submitted-app-explorer";
 
 const baseUrl = "http://127.0.0.1:3000";
 
@@ -110,6 +113,34 @@ describe("exploreSubmittedApp", () => {
     expect(script).toContain("observed.inputLocators.slice(0, 6)");
     expect(script).toContain("if (isAppUnavailableError(error)) throw error");
     expect(script).toContain("if (isAppUnavailableError(error)) break");
+  });
+
+  it("normalizes crawl URLs so cosmetic variants share one route identity", () => {
+    expect(
+      normalizeCrawlUrl("http://127.0.0.1:3000/pricing/?utm_source=x&ref=nav"),
+    ).toBe("http://127.0.0.1:3000/pricing");
+    expect(normalizeCrawlUrl("http://127.0.0.1:3000/pricing")).toBe(
+      "http://127.0.0.1:3000/pricing",
+    );
+    expect(normalizeCrawlUrl("http://127.0.0.1:3000/#/editor")).toBe(
+      "http://127.0.0.1:3000/#/editor",
+    );
+    expect(normalizeCrawlUrl("http://127.0.0.1:3000/docs#")).toBe(
+      "http://127.0.0.1:3000/docs",
+    );
+    expect(normalizeCrawlUrl("http://127.0.0.1:3000/a?page=2")).toBe(
+      "http://127.0.0.1:3000/a?page=2",
+    );
+  });
+
+  it("dedupes routes by normalized post-redirect URL inside the crawl", async () => {
+    const { commands } = await exploreObservation({
+      routes: [observedRoute({ headings: ["Dashboard"] })],
+    });
+    const script = readExplorerScript(commands);
+
+    expect(script).toContain("normalizeCrawlUrl(page.url())");
+    expect(script).toContain("seen.add(normalizeCrawlUrl(target.url))");
   });
 
   it("gives first route loads a cold-start budget with one retry", async () => {

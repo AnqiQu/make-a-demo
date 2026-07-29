@@ -112,6 +112,25 @@ type BrowserExplorationProtocol = {
   unreachableRoutes?: UnreachableRoute[];
 };
 
+/**
+ * Collapses cosmetic URL variants (tracking params, trailing slashes, bare
+ * fragments) into one route identity. Fragments are otherwise preserved
+ * because hash-routed apps use them as routes. This function is embedded
+ * verbatim into the generated explorer script — keep it self-contained.
+ */
+export function normalizeCrawlUrl(rawUrl: string): string {
+  const url = new URL(rawUrl);
+  for (const key of [...url.searchParams.keys()]) {
+    if (/^(?:utm_|mc_)|^(?:fbclid|gclid|msclkid|ref)$/.test(key)) {
+      url.searchParams.delete(key);
+    }
+  }
+  if (url.pathname.length > 1 && url.pathname.endsWith("/")) {
+    url.pathname = url.pathname.replace(/\/+$/, "");
+  }
+  return url.toString().replace(/[?#]+$/, "");
+}
+
 const explorerDirectory = "/workspace/.makeademo/exploration";
 const explorerPath = `${explorerDirectory}/explore-app.mjs`;
 const explorationCommandTimeoutMs = 5 * 60_000;
@@ -1079,6 +1098,7 @@ const result = { blockedNetworkAttempts: [], consoleErrors: [], pageErrors: [], 
 const isAppUnavailableError = (error) => /(?:ERR_CONNECTION_(?:CLOSED|REFUSED|RESET)|Target page, context or browser has been closed)/i.test(
   error instanceof Error ? error.message : String(error),
 );
+const normalizeCrawlUrl = ${normalizeCrawlUrl.toString()};
 let browser;
 try {
   browser = await chromium.launch({ headless: true });
@@ -1202,14 +1222,19 @@ try {
     { featureIds: [], requestedPath: new URL(baseUrl).pathname, url: new URL(baseUrl).toString() },
   ];
   const seen = new Set();
-  const maxRoutes = Math.min(30, Math.max(6, featureEntryTargets.length + 2));
+  const maxRoutes = Math.min(30, featureEntryTargets.length + 9);
   await mkdir(outputDirectory, { recursive: true });
   while (queue.length > 0 && seen.size < maxRoutes && Date.now() < deadlineAtMs) {
     const target = queue.shift();
-    if (!target || seen.has(target.url)) continue;
-    seen.add(target.url);
+    if (!target) continue;
+    const targetUrl = normalizeCrawlUrl(target.url);
+    if (seen.has(targetUrl)) continue;
+    seen.add(normalizeCrawlUrl(target.url));
     try {
       await gotoRoute(target.url);
+      const landedUrl = normalizeCrawlUrl(page.url());
+      if (landedUrl !== targetUrl && seen.has(landedUrl)) continue;
+      seen.add(landedUrl);
       const observed = await page.evaluate(() => {
         const clean = (value) => (value || "").replace(/\\s+/g, " ").trim();
         const visible = (element) => {
@@ -1342,8 +1367,19 @@ try {
           const before = await readVisibleState();
           await interactionLocator.click({ timeout: 4000 });
           await page.waitForTimeout(350);
-          const outcome = describeVisibleOutcome(before, await readVisibleState());
+          const after = await readVisibleState();
+          const outcome = describeVisibleOutcome(before, after);
           if (!outcome) continue;
+          if (after.url !== before.url) {
+            const landed = new URL(after.url);
+            if (landed.origin === baseOrigin && !seen.has(normalizeCrawlUrl(landed.href))) {
+              queue.push({
+                featureIds: [],
+                requestedPath: landed.pathname + landed.search + landed.hash,
+                url: landed.href,
+              });
+            }
+          }
           observed.interactions.push({
             kind: "click",
             locator: { name, strategy: "role", value: "button" },
@@ -1400,7 +1436,8 @@ try {
       }
       await page.goto(routeUrl, { timeout: 20000, waitUntil: "domcontentloaded" });
       await page.waitForTimeout(250);
-      const slug = path === "/" ? "root" : path.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || "route";
+      const slugHash = Math.abs([...path].reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) | 0, 7)).toString(36);
+      const slug = (path === "/" ? "root" : path.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || "route") + "-" + slugHash;
       const screenshot = outputDirectory + "/" + slug + ".png";
       const snapshot = outputDirectory + "/" + slug + ".aria.yml";
       await page.screenshot({ fullPage: true, path: screenshot });
@@ -1414,9 +1451,13 @@ try {
         screenshot,
         snapshot,
       });
-      for (const link of observed.links) {
+      const primaryNames = new Set(observed.primaryNavigation);
+      const orderedLinks = [...observed.links].sort(
+        (a, b) => Number(primaryNames.has(b.name)) - Number(primaryNames.has(a.name)),
+      );
+      for (const link of orderedLinks) {
         const linkTarget = new URL(link.href, baseUrl);
-        if (link.sameOrigin && linkTarget.origin === baseOrigin && !seen.has(linkTarget.toString())) {
+        if (link.sameOrigin && linkTarget.origin === baseOrigin && !seen.has(normalizeCrawlUrl(linkTarget.toString()))) {
           queue.push({
             featureIds: target.featureIds ?? [],
             requestedPath: linkTarget.pathname + linkTarget.search + linkTarget.hash,
