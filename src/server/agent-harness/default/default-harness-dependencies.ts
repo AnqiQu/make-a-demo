@@ -3729,10 +3729,11 @@ function createRuntimePreparationRepairPrompt(input: {
       ...(dependencyRepair
         ? [
             "Change only package manifests or recognized package-manager configuration required to resolve the reported dependency failure. Do not edit executable source, application scripts, workspace topology, or presentation files.",
-            "Do not edit lockfiles; the backend regenerates and verifies them with the detected package manager.",
             "Do not rewrite the PreparationManifest; the accepted runtime, authentication, fixtures, and Product Context remain authoritative for an install repair.",
           ]
         : []),
+      "Do not edit lockfiles (bun.lock, package-lock.json, pnpm-lock.yaml, yarn.lock) in any repair; the backend regenerates and verifies them with the detected package manager after your changes.",
+      "Any authentication or integration change must be conditionally selected by the repository's active MAKEADEMO_DEMO gate and must keep the original behavior reachable on the non-demo branch; deleting original behavior fails fidelity validation.",
       "For browser network failures, repair only unresolved URLs in the failure report. The backend already replays safe public GET resources, so preserve original product images, media, fonts, styles, and scripts. Adapt authenticated or stateful APIs at their service/data seams and never substitute visible assets.",
       ...(dependencyRepair
         ? ["Edit only the dependency files under /workspace/repo."]

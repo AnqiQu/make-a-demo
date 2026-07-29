@@ -459,6 +459,26 @@ describe("validatePreparationFidelity", () => {
     expect(report.status).toBe("passed");
   });
 
+  it("pairs each violation with a targeted repair hint", () => {
+    const sessionPath = "src/auth/session-provider.ts";
+    const report = validateDiff({
+      createdFiles: ["src/pages/demo-dashboard.tsx"],
+      modifiedFiles: [sessionPath],
+      patch: [
+        `diff --git a/${sessionPath} b/${sessionPath}`,
+        "-return loadSession(request);",
+        "+return createDemoSession();",
+        "diff --git a/src/pages/demo-dashboard.tsx b/src/pages/demo-dashboard.tsx",
+        "+export const DemoDashboard = () => <main>Tracker</main>;",
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.suggestedRepairHints).toHaveLength(2);
+    expect(report.suggestedRepairHints[0]).toContain("MAKEADEMO_DEMO");
+    expect(report.suggestedRepairHints[1]).toContain("original application");
+  });
+
   it("resolves the start command through the package script table to reject created entrypoints", () => {
     const report = validateDiff({
       createdFiles: ["server.mjs"],
