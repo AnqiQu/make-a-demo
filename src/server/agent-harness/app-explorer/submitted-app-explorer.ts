@@ -33,10 +33,12 @@ export type SubmittedAppExplorationResult =
       actionCatalog: ActionCatalog;
       appMap: AppMap;
       kind: "artifacts";
+      observation?: BrowserExplorationProtocol;
       validationReport: ValidationReport;
     }
   | {
       kind: "repairable-failure";
+      observation?: BrowserExplorationProtocol;
       validationReport: ValidationReport;
     };
 
@@ -415,7 +417,13 @@ function createExplorationArtifacts(input: {
     unreachableRoutes: input.observation.unreachableRoutes ?? [],
   });
 
-  return { actionCatalog, appMap, kind: "artifacts", validationReport };
+  return {
+    actionCatalog,
+    appMap,
+    kind: "artifacts",
+    observation: input.observation,
+    validationReport,
+  };
 }
 
 function createRepairableExplorationFailure(input: {
@@ -428,6 +436,7 @@ function createRepairableExplorationFailure(input: {
   const diagnostics = createAppStatusDiagnostics(input.appStatus);
   return {
     kind: "repairable-failure",
+    observation: input.observation,
     validationReport: readValidationReport({
       artifactReferences: [explorerPath],
       blockedNetworkAttempts: networkAttempts,
@@ -1184,6 +1193,19 @@ try {
     mode: "exploration",
   })}
   const page = await context.newPage();
+  const waitForQuietDom = async (settleMs, maxMs) => {
+    try {
+      await page.evaluate(([settle, max]) => new Promise((resolve) => {
+        let timer;
+        let observer;
+        const finish = () => { if (observer) observer.disconnect(); resolve(undefined); };
+        observer = new MutationObserver(() => { clearTimeout(timer); timer = setTimeout(finish, settle); });
+        observer.observe(document.documentElement, { attributes: true, characterData: true, childList: true, subtree: true });
+        timer = setTimeout(finish, settle);
+        setTimeout(finish, max);
+      }), [settleMs, maxMs]);
+    } catch {}
+  };
   const readAriaRootName = (snapshot) => {
     const firstLine = snapshot.split("\\n", 1)[0] || "";
     const match = /^-\\s+[a-zA-Z]+(?:\\s+("(?:[^"\\\\]|\\\\.)*"))?/.exec(firstLine);
@@ -1191,7 +1213,7 @@ try {
     try { return JSON.parse(match[1]); } catch { return ""; }
   };
   const createVerifiedRoleLocatorEvidence = async ({ candidateNames, role, route, targetHref }) => {
-    const queries = candidateNames.filter(Boolean).map((name) => ({ exact: false, name }));
+    const queries = candidateNames.filter(Boolean).flatMap((name) => [{ exact: true, name }, { exact: false, name }]);
     const seenQueries = new Set();
     for (const query of queries) {
       const key = JSON.stringify(query);
@@ -1292,7 +1314,7 @@ try {
       await page.goto(url, { timeout: 60000, waitUntil: "domcontentloaded" });
     }
     await page.waitForFunction(() => document.readyState === "complete", undefined, { timeout: 10000 }).catch(() => {});
-    await page.waitForTimeout(250);
+    await waitForQuietDom(300, 2500);
   };
   const queue = [
     ...featureEntryTargets,
@@ -1439,17 +1461,19 @@ try {
       observed.interactions = [];
       const routeUrl = page.url();
       for (let index = 0; index < Math.min(observed.buttons.length, 8); index += 1) {
+        if (Date.now() >= deadlineAtMs) break;
         const name = observed.buttons[index];
         const locatorEvidence = observed.buttonLocatorEvidence[index];
         if (!name || !locatorEvidence || /\\b(?:buy|checkout|delete|destroy|disconnect|log ?in|log ?out|pay|purchase|register|remove|revoke|sign ?in|sign ?out|sign ?up)\\b/i.test(name)) continue;
         try {
           await page.goto(routeUrl, { timeout: 20000, waitUntil: "domcontentloaded" });
-          await page.waitForTimeout(250);
-          const interactionLocator = page.getByRole("button", { name, exact: false });
+          await waitForQuietDom(300, 2500);
+          const exactLocator = page.getByRole("button", { name, exact: true });
+          const interactionLocator = await exactLocator.count() === 1 ? exactLocator : page.getByRole("button", { name, exact: false });
           if (await interactionLocator.count() !== 1 || !(await interactionLocator.isVisible())) continue;
           const before = await readVisibleState();
           await interactionLocator.click({ timeout: 4000 });
-          await page.waitForTimeout(350);
+          await waitForQuietDom(250, 1500);
           const after = await readVisibleState();
           const outcome = describeVisibleOutcome(before, after);
           if (!outcome) continue;
@@ -1475,10 +1499,11 @@ try {
         }
       }
       for (const input of observed.inputLocators.slice(0, 6)) {
+        if (Date.now() >= deadlineAtMs) break;
         if (!input.locatorEvidence || ["button", "checkbox", "file", "hidden", "password", "radio", "submit"].includes(input.inputType) || input.inAuthForm) continue;
         try {
           await page.goto(routeUrl, { timeout: 20000, waitUntil: "domcontentloaded" });
-          await page.waitForTimeout(250);
+          await waitForQuietDom(300, 2500);
           const interactionLocator = createInteractionLocator(input.locator);
           if (await interactionLocator.count() !== 1 || !(await interactionLocator.isVisible())) continue;
           let outcome;
@@ -1516,15 +1541,16 @@ try {
         }
       }
       await page.goto(routeUrl, { timeout: 20000, waitUntil: "domcontentloaded" });
-      await page.waitForTimeout(250);
+      await waitForQuietDom(300, 2500);
       // Downstream validation replays every action from a fresh navigation,
       // so evidence gathered in interaction-mutated page state must be
       // re-proven here or dropped; emitting it would fail deterministically.
       const freshInteractions = [];
       for (const interaction of observed.interactions) {
         try {
+          const freshExact = page.getByRole("button", { name: interaction.name, exact: true });
           const freshLocator = interaction.kind === "click"
-            ? page.getByRole("button", { name: interaction.name, exact: false })
+            ? (await freshExact.count() === 1 ? freshExact : page.getByRole("button", { name: interaction.name, exact: false }))
             : createInteractionLocator(interaction.locator);
           if (await freshLocator.count() === 1 && await freshLocator.isVisible()) {
             freshInteractions.push(interaction);

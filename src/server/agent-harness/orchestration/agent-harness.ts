@@ -507,6 +507,16 @@ export async function runAgentHarnessPipeline(
             explorationValidation,
           ),
         ]);
+        if (
+          explorationValidation.status === "failed" &&
+          exploration.observation !== undefined
+        ) {
+          await writeArtifact(
+            dependencies,
+            `${artifactPaths.validationAttempts}/app-exploration/attempt-${explorationAttempt}-observation.json`,
+            exploration.observation,
+          );
+        }
         if (explorationValidation.status === "passed") {
           if (exploration.kind !== "artifacts") {
             throw new Error(

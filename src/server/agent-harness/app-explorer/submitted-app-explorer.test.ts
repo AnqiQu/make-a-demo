@@ -129,6 +129,35 @@ describe("exploreSubmittedApp", () => {
     expect(script).toContain("result.unreachableRoutes.push");
   });
 
+  it("settles the dom around interactions instead of using fixed waits", async () => {
+    const { commands } = await exploreObservation({
+      routes: [observedRoute({ headings: ["Dashboard"] })],
+    });
+    const script = readExplorerScript(commands);
+
+    expect(script).toContain("MutationObserver");
+    expect(script).not.toContain("waitForTimeout(350)");
+    expect(script).toContain('getByRole("button", { name, exact: true })');
+  });
+
+  it("stops interaction rounds at the exploration deadline", async () => {
+    const { commands } = await exploreObservation({
+      routes: [observedRoute({ headings: ["Dashboard"] })],
+    });
+    const script = readExplorerScript(commands);
+
+    expect(script.split("deadlineAtMs").length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("attaches the observation to a grounding failure for diagnosis", async () => {
+    const { result } = await exploreObservation({ routes: [] });
+
+    expect(result).toMatchObject({
+      kind: "repairable-failure",
+      observation: { routes: [] },
+    });
+  });
+
   it("rejects feature entry paths outside the app origin at target creation", async () => {
     const { commands } = await exploreObservation({
       featureInventory: [
