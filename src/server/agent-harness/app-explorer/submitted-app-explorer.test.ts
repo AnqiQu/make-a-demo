@@ -115,6 +115,39 @@ describe("exploreSubmittedApp", () => {
     expect(script).toContain("if (isAppUnavailableError(error)) break");
   });
 
+  it("re-verifies interactions from fresh navigation state and stops inheriting feature ids", async () => {
+    const { commands } = await exploreObservation({
+      routes: [observedRoute({ headings: ["Dashboard"] })],
+    });
+    const script = readExplorerScript(commands);
+
+    expect(script).toContain("observed.interactions = freshInteractions");
+    // Feature ids survive only on unreachable entry targets; crawled links
+    // and interaction-discovered URLs must not inherit them.
+    expect(script.split("featureIds: target.featureIds ?? []")).toHaveLength(2);
+    expect(script).toContain("result.unreachableRoutes.push");
+  });
+
+  it("does not ground a feature whose entry page merely loads", async () => {
+    const feature = preparedFeature({ entryPaths: ["/"] });
+    const { result } = await exploreObservation({
+      featureInventory: [feature],
+      routes: [
+        observedRoute({
+          featureIds: [feature.id],
+          headings: ["Articles"],
+          links: [{ href: "/editor", name: "Editor" }],
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    expect(artifacts.validationReport).toMatchObject({
+      failureClassification: "requested feature not observable",
+      status: "failed",
+    });
+  });
+
   it("normalizes crawl URLs so cosmetic variants share one route identity", () => {
     expect(
       normalizeCrawlUrl("http://127.0.0.1:3000/pricing/?utm_source=x&ref=nav"),
@@ -382,6 +415,14 @@ describe("exploreSubmittedApp", () => {
           forms: ["registration"],
           headings: ["Create account"],
           inputs: ["Email", "Password"],
+          interactions: [
+            {
+              kind: "fill",
+              locator: { strategy: "label", value: "Email" },
+              name: "Email",
+              outcome: "Email contained the observed demo value",
+            },
+          ],
           path: "/#/signup",
           requestedPath: "/#/signup",
         }),
@@ -563,6 +604,13 @@ describe("exploreSubmittedApp", () => {
           buttons: ["Open global feed"],
           featureIds: [feature.id],
           headings: ["Global Feed"],
+          interactions: [
+            {
+              kind: "click",
+              name: "Open global feed",
+              outcome: "Global feed articles became visible",
+            },
+          ],
           text: ["Global Feed"],
         }),
       ],

@@ -800,9 +800,12 @@ function readExplorationFailure(
         const actions = actionCatalog.actions.filter((action) =>
           action.featureIds?.includes(feature.id),
         );
+        // A feature is demonstrable only when something on its route was
+        // actually exercised in the browser; a page that merely loads is
+        // evidence of reachability, not of the feature.
         return (
           actions.some((action) => action.kind === "assert") &&
-          actions.some((action) => action.kind !== "assert")
+          actions.some((action) => action.exercised === true)
         );
       })
       .map((feature) => feature.id),
@@ -1436,6 +1439,23 @@ try {
       }
       await page.goto(routeUrl, { timeout: 20000, waitUntil: "domcontentloaded" });
       await page.waitForTimeout(250);
+      // Downstream validation replays every action from a fresh navigation,
+      // so evidence gathered in interaction-mutated page state must be
+      // re-proven here or dropped; emitting it would fail deterministically.
+      const freshInteractions = [];
+      for (const interaction of observed.interactions) {
+        try {
+          const freshLocator = interaction.kind === "click"
+            ? page.getByRole("button", { name: interaction.name, exact: false })
+            : createInteractionLocator(interaction.locator);
+          if (await freshLocator.count() === 1 && await freshLocator.isVisible()) {
+            freshInteractions.push(interaction);
+          }
+        } catch (error) {
+          if (isAppUnavailableError(error)) throw error;
+        }
+      }
+      observed.interactions = freshInteractions;
       const slugHash = Math.abs([...path].reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) | 0, 7)).toString(36);
       const slug = (path === "/" ? "root" : path.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || "route") + "-" + slugHash;
       const screenshot = outputDirectory + "/" + slug + ".png";
@@ -1459,7 +1479,7 @@ try {
         const linkTarget = new URL(link.href, baseUrl);
         if (link.sameOrigin && linkTarget.origin === baseOrigin && !seen.has(normalizeCrawlUrl(linkTarget.toString()))) {
           queue.push({
-            featureIds: target.featureIds ?? [],
+            featureIds: [],
             requestedPath: linkTarget.pathname + linkTarget.search + linkTarget.hash,
             url: linkTarget.toString(),
           });
