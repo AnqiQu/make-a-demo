@@ -306,6 +306,54 @@ are backend-generated (allowed under the non-goals: the validator enforces it).
 exploration now dies before any flow is planned. N4's bounded install retry is small and
 belongs with the Phase 2 batch since Midday hits it first.
 
+## Addendum (2026-07-29, after the post-Phase-2 Midday and homer runs)
+
+Runs `terminal-2026-07-29T02-20-53-693Z` (midday) and `terminal-2026-07-29T02-40-31-919Z`
+(homer), both with all Phase 1 + Phase 2 fixes. Both failed, both informatively.
+
+**Phase 2 gate: passed on the evidence level.** Homer's exploration discovered the
+hash-switched `/#additional-page` through the new post-interaction enqueue and
+fresh-verified its controls — the Action Catalog was correct and reproducible. Midday
+never reached exploration (see N7), so the exploration gate is untested there.
+
+**New finding N6 (High) — a scene can pass static validation without navigating to its
+route, and navigation cannot be added.** Homer's FlowSpec selected a fill and an assert on
+`/#additional-page` but no navigate action. Static validation then (a) rejected the script
+agent's attempts to add a goto ("was not selected for FlowSpec feature"; "type goto does
+not match ActionCatalog kind assert") and (b) accepted the final scene that fills and
+asserts without ever navigating there. Capture deterministically failed the assert from
+`/` four times; five script repairs were spent inside the same catch-22 class as the memos
+flow-lock — the fix required changing an input no repair path may change.
+**Plan change → new Phase 6.9 (do before 6.8):** navigation is infrastructure, not
+feature content — a scene's route is derivable from its actions' catalog routes. Either
+the backend compiler inserts the goto when the next action's route differs from the
+current one, or static validation always permits a goto targeting a selected action's
+route (making Script Repair's rejected fix legal). Prefer whichever is smaller in the
+compiler seam; the agent should never have to author navigation the catalog already knows.
+
+**New finding N7 (Medium) — persistently unreachable dependency hosts need honest
+classification, not retries.** Midday's `xlsx` tarball from `cdn.sheetjs.com` failed with
+`ConnectionClosed` for the third consecutive run, including through N4's in-gate retry;
+the install window opens egress fully (`networkBlockAll: false`), so the host is
+unreachable from the sandbox itself (datacenter-IP blocking, most likely) and no retry
+policy applies. Repairs never addressed the dependency; one eventually made the install
+pass with the package absent, and the app 500'd at preflight as `missing dependency`.
+**Plan change → extend N4:** when the post-retry install failure still carries a network
+signature, classify it `external network required`, name the unreachable host and package
+in the summary, and hint the repair agent to pin a registry-hosted version or vendor the
+package. The repair prompt may state that rule because the classifier enforces it.
+
+**Note on the homer regression.** Homer succeeded on 07-27 and failed now because the
+Phase 2 grounding contract changed the catalog composition Flow Planning sees (features
+now ground through exercised fills, and the agent stopped selecting navigate actions).
+The latent N6 hole predates Phase 2; stronger evidence exposed it. This is the expected
+direction: failures are moving later in the pipeline and getting more specific.
+
+**Reprioritization.** 6.9 (navigation derivability) is now the single highest-value fix:
+it is small, it unlocks homer end-to-end, and it removes one of the two legs of every
+observed flow-lock. Then 6.8 (bounded re-planning escape), then N4's classification
+upgrade for Midday, then Phase 3.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
