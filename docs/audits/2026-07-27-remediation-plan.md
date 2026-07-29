@@ -264,6 +264,48 @@ error path already behaves well); N1 is now the highest-value single fix after P
 the only deep non-Midday run, on the pipeline's most common late-stage failure shape
 (locator drift), and it converts a whole terminal-failure class into a self-healing one.
 
+## Addendum (2026-07-28, after the post-Phase-1 Midday run)
+
+Run `terminal-2026-07-28T23-59-37-121Z`, the first Midday run with all nine Phase 1 fixes
+in place. **Phase 1 gate: passed.** The run failed in 8.5 minutes (previously ~40) with a
+truthful terminal error — real stage (`app-exploration`), real classification, the failing
+route and error text preserved, per-attempt artifacts intact, no masked 502s. The causal
+chain is fully readable from the artifacts for the first time.
+
+**Confirmation — Phase 2 is exactly the Midday blocker.** The terminal failure is the C2
+global error gate: exploration attempt 1 died on `goto: net::ERR_ABORTED` at `/` (dev
+server mid-recompile) and attempt 2 on a Turbopack lazy-chunk load error at one deep route
+(`/account/date-and-locale`), with only one grounded observation before the gate killed the
+run and five preparation repairs were burned on browser-transient noise no repo edit can
+fix. **Plan change → sharpen Phase 2.1:** dev-mode browser-transient errors (chunk-load
+failures, HMR/dev-overlay errors, `ERR_ABORTED` during recompile) are route evidence,
+never terminal, and must not enter the repair router at all; the scoped gate fails only on
+ungrounded features or unreachable feature entry routes.
+
+**New finding N4 (Medium) — non-registry dependency tarballs fail the install window as a
+generic install failure.** Midday pins `xlsx` to `https://cdn.sheetjs.com/...`, and the
+first install died with `ConnectionClosed downloading tarball`, costing two repair rounds
+plus a failed lockfile reconciliation before a later install happened to succeed.
+**Plan change → extend Phase 4.4 and the Phase 1.3 transient class:** (a) one bounded
+in-gate install retry when the failure carries a network signature (`ConnectionClosed`,
+`ECONNRESET`, registry 5xx) before any agent repair; (b) when the install-window network
+policy itself blocks a lockfile-declared host, classify as
+`external network required` naming the host instead of `install failure`, so the failure
+states its actual cause. Lockfile-declared tarball hosts are part of the dependency
+closure and must be permitted during the install window.
+
+**New finding N5 (Low, bounded by landed fixes) — lockfile-edit rejection loop.** The
+dependency-repair agent twice edited `bun.lock` and was correctly fidelity-rejected,
+consuming two of five repairs. The landed 1.6 fingerprint now caps identical rejections at
+two, and Phase 3.6's per-violation hints cover the feedback; additionally, the
+dependency-repair prompt should state the already-validator-enforced rule that lockfiles
+are backend-generated (allowed under the non-goals: the validator enforces it).
+
+**Reprioritization.** Unchanged in substance — Phase 2 (with the sharpened 2.1) and Phase
+6.8 remain the top two; this run moves Phase 2 ahead of 6.8 for Midday specifically, since
+exploration now dies before any flow is planned. N4's bounded install retry is small and
+belongs with the Phase 2 batch since Midday hits it first.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
