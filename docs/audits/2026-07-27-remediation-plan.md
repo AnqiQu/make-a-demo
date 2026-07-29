@@ -354,6 +354,58 @@ it is small, it unlocks homer end-to-end, and it removes one of the two legs of 
 observed flow-lock. Then 6.8 (bounded re-planning escape), then N4's classification
 upgrade for Midday, then Phase 3.
 
+## Addendum (2026-07-29, after the 6.9/6.8/N7 gate runs)
+
+Runs `terminal-2026-07-29T03-29-00-693Z` (homer) and `terminal-2026-07-29T03-43-31-621Z`
+(midday), both with 6.9 + 6.8 + N7 on top of Phases 1–2.
+
+**Homer: first fully clean end-to-end run.** `pipeline.succeeded`, `composite/final-video.mp4`,
+~8 minutes, zero repair stages of any kind. All three browser scenes start with a
+navigate-grounded goto — including `goto /#additional-page`, the exact scene N6 deadlocked —
+and capture-path validation passed on the first attempt. 6.9 is validated in the wild; 6.8
+never triggered (it remains an untested backstop, which is the desired state).
+
+**Midday: N7 worked; the terminal blocker moved one layer down (N8).** The classification
+fired verbatim ("Dependency install cannot reach cdn.sheetjs.com for package xlsx") and the
+hint steered the repair agent to real fixes. The six-attempt trace: (1) fidelity rejection —
+`layout.tsx` UI modification; (2) fidelity rejection — `next.config.ts` demo-gate wiring;
+(3) fidelity pass → preflight fails on the CDN (first N7 hint); (4) fidelity rejection —
+hand-edited `bun.lock` (the N5 guard, now costing one attempt instead of looping);
+(5) **fidelity pass with the textbook fix** — root `"overrides": {"xlsx": "0.18.5"}` —
+→ preflight still fails downloading the CDN tarball; (6) fidelity rejection — rewrote the
+`export.ts` call site to drop `node-xlsx` (feature logic; correctly forbidden) → budget
+exhausted after 5 repair attempts.
+
+**New finding N8 (High) — bun downloads URL tarballs during resolution even when an
+override discards them, so `overrides` cannot rescue an unreachable tarball host.**
+Verified locally on bun 1.3.14 (the sandbox version) with registry-reachable/CDN-blocked
+networking: `node-xlsx@0.24.0` + root override `xlsx → 0.18.5` fails with
+`ConnectionRefused downloading tarball xlsx@https://cdn.sheetjs.com/...` on both a fresh
+resolve and a stale-lockfile re-resolve. No lockfile-regeneration strategy on our side
+changes this. The CDN reference lives in `node-xlsx`'s own manifest (`node-xlsx@0.24.0` pins
+`xlsx: https://cdn.sheetjs.com/...`; `node-xlsx@0.22.0` still resolves registry
+`xlsx: ^0.18.5`), so the only fidelity-legal, in-sandbox fix is **changing the direct
+dependent's version in package.json** to one whose transitive graph is registry-only —
+`node-xlsx@0.22.0` qualifies and keeps the same `build()` API.
+Vendoring is not actionable from inside the sandbox: the host is unreachable, so the agent
+cannot fetch the tarball to vendor it.
+**Plan change → N8 (small, before Phase 3):** sharpen the `external network required`
+hint in the same branch N7 added: (a) delete the "or vendor it into the repository"
+clause; (b) state that `overrides`/`resolutions` cannot bypass an unreachable tarball URL
+because the package manager still downloads it during resolution; (c) instruct the agent
+to search the lockfile for the direct dependency whose manifest pins the unreachable URL
+and change **that** package's version in package.json to one that resolves entirely from
+the registry. Prompt-text only; no new mechanism.
+
+**Budget shape observation (no change yet).** The 5-attempt global repair budget was split
+across three unrelated threads (UI fidelity, demo gate, network dependency), leaving two
+attempts for the real blocker. The N8 hint should collapse the network thread to one
+attempt; restructure budgets only if a post-N8 run still exhausts.
+
+**Priority confirmed.** Phase 3 next (this run is a live fidelity-contract specimen: three
+of six rejections were fidelity calls, all accurate), Phase 4 still parallel-capable. One
+new open decision added below.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
@@ -364,3 +416,8 @@ upgrade for Midday, then Phase 3.
    table still binds; otherwise remove and accept slower OpenCode runs.
 3. **YAML parsing** (5.6): stay with the minimal regex relaxation vs. adding a yaml dependency —
    decide on first real-repo failure, not preemptively.
+4. **Dependency-adaptation seam under fidelity** (Phase 3): when the classification is
+   `external network required` and no registry-resolving version of the direct dependent
+   exists, should fidelity permit a minimal import + call-site swap (the fix rejected in
+   Midday attempt 6)? Default **no** — fidelity stays strict; Midday itself does not need
+   it (`node-xlsx@0.22.0` exists). Revisit only on a repo where no version escape exists.
