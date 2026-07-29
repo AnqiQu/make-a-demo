@@ -2030,7 +2030,7 @@ async function validateSubmittedCodeRuntime(input: {
           stderr: result.stderr,
           stdout: result.stdout,
           suggestedRepairHints: [
-            `Host ${unreachable.host} stays unreachable from the sandbox. Replace ${unreachable.packageName ?? "the affected dependency"} with a registry-hosted version in package.json, or vendor it into the repository; do not retry the same URL.`,
+            `Host ${unreachable.host} stays unreachable from the sandbox; do not retry the same URL. Package-manager overrides or resolutions cannot bypass it because the tarball is still downloaded during resolution. Search the lockfile for the direct dependency whose manifest pins ${unreachable.packageName ?? "the unreachable tarball"} to ${unreachable.host} and change that package's version in package.json to one that resolves entirely from the registry.`,
           ],
         });
       }

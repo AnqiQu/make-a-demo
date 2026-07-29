@@ -2511,7 +2511,11 @@ describe("createDefaultAgentHarnessDependencies", () => {
     });
     expect(report.logsSummary).toContain("cdn.sheetjs.com");
     expect(report.logsSummary).toContain("xlsx");
-    expect(report.suggestedRepairHints.join(" ")).toContain("registry");
+    const hints = report.suggestedRepairHints.join(" ");
+    expect(hints).toContain("registry");
+    expect(hints).toContain("lockfile");
+    expect(hints).toContain("overrides");
+    expect(hints).not.toContain("vendor");
   });
 
   it("bounds install and build commands with explicit timeouts", async () => {
