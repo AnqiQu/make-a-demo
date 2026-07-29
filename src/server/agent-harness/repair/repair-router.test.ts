@@ -48,6 +48,16 @@ describe("RepairRouter", () => {
     expect(isDependencyRepairFailure("missing dependency")).toBe(true);
   });
 
+  it("fails a sandbox capacity failure instead of routing it to any repair agent", () => {
+    expect(
+      classifyRepairRoute({
+        failureClassification: "sandbox capacity exceeded",
+        logsSummary:
+          "The sandbox killed the prepared app: the cgroup reports 2 OOM kill(s).",
+      }),
+    ).toBe("fail");
+  });
+
   it("fails an unrecognized classification instead of keyword-routing its logs", () => {
     expect(
       classifyRepairRoute({

@@ -4,6 +4,7 @@ import {
   type AgentHarnessWorkspace,
 } from "../daytona/workspace.interface";
 import type { PreparedDemoFeature } from "../schemas/artifacts";
+import { sandboxCapacityProbeCommand } from "../tools/sandbox-capacity";
 import {
   exploreSubmittedApp,
   normalizeCrawlUrl,
@@ -850,6 +851,61 @@ describe("exploreSubmittedApp", () => {
     });
   });
 
+  it("classifies an app killed by the sandbox as sandbox capacity exceeded", async () => {
+    const { result } = await exploreObservation({
+      capacityProbeOutput: [
+        "memory.max: 2147483648",
+        "oom_kill 2",
+        "Mem:            2048        1900          48",
+        "nproc: 1",
+      ].join("\n"),
+      readSubmittedCodeAppStatus: async () => ({
+        exitCode: 0,
+        running: false,
+        stderr: "",
+        stdout: "GET /account 200 in 456ms",
+      }),
+      routes: [],
+    });
+
+    expect(result).toMatchObject({
+      kind: "repairable-failure",
+      validationReport: {
+        failureClassification: "sandbox capacity exceeded",
+        logsSummary: expect.stringContaining("2 OOM kill"),
+        status: "failed",
+      },
+    });
+    expect(result.validationReport.suggestedRepairHints.join(" ")).toContain(
+      "MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT",
+    );
+  });
+
+  it("keeps the crash classification when the sandbox shows no OOM kills", async () => {
+    const { result } = await exploreObservation({
+      capacityProbeOutput: [
+        "memory.max: max",
+        "oom_kill 0",
+        "Mem:            7942        1200        6000",
+        "nproc: 4",
+      ].join("\n"),
+      readSubmittedCodeAppStatus: async () => ({
+        exitCode: 0,
+        running: false,
+        stderr: "",
+        stdout: "GET /account 200 in 456ms",
+      }),
+      routes: [],
+    });
+
+    expect(result).toMatchObject({
+      kind: "repairable-failure",
+      validationReport: {
+        failureClassification: "app route crashes",
+      },
+    });
+  });
+
   it("keeps route discovery classification while exposing a running app's output", async () => {
     const { result } = await exploreObservation({
       readSubmittedCodeAppStatus: async () => ({
@@ -900,8 +956,8 @@ describe("exploreSubmittedApp", () => {
           return { exitCode: 0, stderr: "", stdout: "" };
         },
         async executeSubmittedCode(_command, options) {
-          timeoutMs = options?.timeoutMs;
-          throw new AgentHarnessCommandTimeoutError(timeoutMs ?? 0);
+          timeoutMs ??= options?.timeoutMs;
+          throw new AgentHarnessCommandTimeoutError(options?.timeoutMs ?? 0);
         },
         async readSubmittedCodeAppStatus() {
           return {
@@ -958,6 +1014,7 @@ async function exploreObservation(input: {
     resourceType?: string;
     url?: string;
   }>;
+  capacityProbeOutput?: string;
   consoleErrors?: string[];
   featureInventory?: PreparedDemoFeature[];
   pageErrors?: string[];
@@ -989,6 +1046,13 @@ async function exploreObservation(input: {
       },
       async executeSubmittedCode(command) {
         commands.push(command);
+        if (command === sandboxCapacityProbeCommand) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: input.capacityProbeOutput ?? "",
+          };
+        }
         return {
           exitCode: 0,
           stderr: "",

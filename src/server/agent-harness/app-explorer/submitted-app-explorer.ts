@@ -17,6 +17,11 @@ import {
   readAppMap,
   readValidationReport,
 } from "../schemas/artifacts";
+import {
+  type SandboxCapacityEvidence,
+  readSandboxCapacityEvidence,
+  sandboxCapacityProbeCommand,
+} from "../tools/sandbox-capacity";
 
 /**
  * The typed outcome of browser exploration. `repairable-failure` deliberately
@@ -154,6 +159,20 @@ export async function exploreSubmittedApp(input: {
     input.externalResourceManifest,
   );
   const encodedScript = Buffer.from(script).toString("base64");
+  const capacityFailure = async (
+    appStatus: AgentHarnessSubmittedCodeAppStatus | undefined,
+  ) => {
+    if (appStatus?.running !== false) return undefined;
+    const evidence = await readWorkspaceCapacityEvidence(input.workspace);
+    if (evidence === undefined || (evidence.oomKills ?? 0) === 0) {
+      return undefined;
+    }
+    return createSandboxCapacityFailure({
+      appStatus,
+      baseUrl: input.baseUrl,
+      evidence,
+    });
+  };
   let result: Awaited<ReturnType<typeof executeSubmittedCode>>;
   try {
     result = await executeSubmittedCode(
@@ -171,11 +190,14 @@ export async function exploreSubmittedApp(input: {
     }
     const appStatus = await readAppStatus(input.workspace);
     if (appStatus?.running !== false) throw error;
-    return createExitedAppExplorationFailure({
-      appStatus,
-      baseUrl: input.baseUrl,
-      timeoutError: error,
-    });
+    return (
+      (await capacityFailure(appStatus)) ??
+      createExitedAppExplorationFailure({
+        appStatus,
+        baseUrl: input.baseUrl,
+        timeoutError: error,
+      })
+    );
   }
 
   const observation =
@@ -183,19 +205,25 @@ export async function exploreSubmittedApp(input: {
     (await readExplorationProtocolFile(input.workspace));
   if (observation === undefined) {
     const appStatus = await readAppStatus(input.workspace);
-    return createCrashedExplorerFailure({
-      appStatus,
-      baseUrl: input.baseUrl,
-      result,
-    });
+    return (
+      (await capacityFailure(appStatus)) ??
+      createCrashedExplorerFailure({
+        appStatus,
+        baseUrl: input.baseUrl,
+        result,
+      })
+    );
   }
   if (observation.routes.length === 0) {
     const appStatus = await readAppStatus(input.workspace);
-    return createRepairableExplorationFailure({
-      appStatus,
-      baseUrl: input.baseUrl,
-      observation,
-    });
+    return (
+      (await capacityFailure(appStatus)) ??
+      createRepairableExplorationFailure({
+        appStatus,
+        baseUrl: input.baseUrl,
+        observation,
+      })
+    );
   }
 
   return createExplorationArtifacts({
@@ -205,6 +233,56 @@ export async function exploreSubmittedApp(input: {
     preparationManifestId: input.preparationManifestId,
     requestedFeatures: input.requestedFeatures ?? [],
   });
+}
+
+async function readWorkspaceCapacityEvidence(
+  workspace: AgentHarnessWorkspace,
+): Promise<SandboxCapacityEvidence | undefined> {
+  try {
+    const result = await executeSubmittedCode(
+      workspace,
+      sandboxCapacityProbeCommand,
+      { timeoutMs: 30_000 },
+    );
+    return readSandboxCapacityEvidence(`${result.stdout}\n${result.stderr}`);
+  } catch {
+    return undefined;
+  }
+}
+
+function createSandboxCapacityFailure(input: {
+  appStatus: AgentHarnessSubmittedCodeAppStatus;
+  baseUrl: string;
+  evidence: SandboxCapacityEvidence;
+}): Extract<SubmittedAppExplorationResult, { kind: "repairable-failure" }> {
+  const diagnostics = createAppStatusDiagnostics(input.appStatus);
+  const memoryCeiling =
+    input.evidence.memoryMaxBytes === undefined
+      ? ""
+      : ` under a ${Math.round(input.evidence.memoryMaxBytes / (1024 * 1024))} MiB memory ceiling`;
+  return {
+    kind: "repairable-failure",
+    validationReport: readValidationReport({
+      artifactReferences: [explorerPath],
+      blockedNetworkAttempts: [],
+      browserObservations: [],
+      consoleErrors: [],
+      failureClassification: "sandbox capacity exceeded",
+      logsSummary: `The sandbox killed the prepared app: the cgroup reports ${input.evidence.oomKills} OOM kill(s)${memoryCeiling}. The app needs more resources than the submitted-code sandbox provides.${diagnostics.output ? ` App output: ${diagnostics.output}` : ""}`,
+      networkAttempts: [],
+      pageErrors: [],
+      retryCount: 0,
+      screenshots: [],
+      stage: "app-exploration",
+      status: "failed",
+      stderrExcerpts: diagnostics.stderrExcerpts,
+      stdoutExcerpts: diagnostics.stdoutExcerpts,
+      suggestedRepairHints: [
+        "Rebuild the MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT snapshot with a larger sandbox class (more memory and cpu); no repository change can add sandbox capacity.",
+      ],
+      urlChecked: input.baseUrl,
+    }),
+  };
 }
 
 function createExitedAppExplorationFailure(input: {
