@@ -447,6 +447,47 @@ dying on known-illegal moves.
 **Priority.** N9 first (small, unblocks the next Midday gate), then Phase 3 with N10 folded
 in. Phase 4 remains parallel-capable.
 
+## Addendum (2026-07-30, after the post-N9/Phase-3 Midday run)
+
+Run `terminal-2026-07-29T23-34-31-233Z` (midday), on the 4-cpu/8-GiB snapshot with all of
+Phases 1–3 (through commit `204568f`; the 3.7/3.10 commits may have raced the run start).
+
+**N9 gate: passed.** No OOM, no silent exit — the app served 22 crawled routes and stayed
+healthy through the whole run. The capacity ceiling is gone.
+
+**Phase 3 checks: no false positives.** All fidelity rejections were pre-existing rules
+firing correctly (initial layout.tsx UI edit; two `bun.lock` hand-edits), and
+`next.config.ts` never re-entered the failure set (the 3.5 exemption held). The N8
+dependency chain was re-fixed by the agent in two attempts (each run starts from the
+unfixed repo, so the xlsx cycle recurs by design).
+
+**New finding N11 (High) — exploration cannot exercise interactions on hydration-heavy,
+dense-UI apps, so strict grounding reports 0 features.** Exploration ran once, ~75s for 22
+routes, `browserObservations: 0`, and failed as `prepared feature not observable` (0 of 3).
+The interaction loop's guards filtered every candidate: (a) `getByRole("button", {name,
+exact: false})` must match exactly one element — dense dashboards repeat button names and
+`exact: false` widens matches, so `count() !== 1` skips almost everything; (b) icon-only
+buttons carry empty accessible names and are skipped outright; (c) the click-outcome window
+is a fixed 350ms — hydration-heavy pages have not attached handlers or finished animating,
+so no visible outcome is observed and the interaction is dropped. The failure text blames
+the preparation, but no repository change can fix explorer fragility — the two repairs the
+budget would have granted were unwinnable (and in fact the budget was already exhausted by
+the xlsx + fidelity threads, so the grounding failure got zero).
+**Plan change → N11 (next implementation batch):** (a) wait for hydration before
+interacting (readiness beyond `domcontentloaded` — e.g. bounded network-quiet or
+mutation-settle instead of the fixed 250ms); (b) widen the outcome window to a bounded
+mutation-aware wait (~1.5s) instead of 350ms; (c) resolve repeated-name buttons instead of
+skipping: scope to the first match inside `main`/`nav` landmarks (the previously deferred
+matchCount>1 work, now load-bearing); (d) on exploration failure, mirror
+`exploration.json`, `app-map.json`, and `action-catalog.json` into local run artifacts —
+this diagnosis required inferring from timing because none were persisted.
+
+**New finding N12 (Medium) — prompt rules do not bind; salvage lockfile edits
+deterministically.** The agent hand-edited `bun.lock` twice *despite* the N10 standing rule
+in its prompt. The validator caught both (one attempt each). Since the backend regenerates
+lockfiles anyway, a repair patch touching only-lockfiles-plus-legal-files should have the
+lockfile hunks stripped and proceed, not burn an attempt.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
