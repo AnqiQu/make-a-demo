@@ -74,7 +74,10 @@ export async function runDependencyInstallThroughGate(input: {
 
   await input.openNetwork();
   try {
-    const result = await input.runCommand(input.command);
+    let result = await input.runCommand(input.command);
+    if (result.exitCode !== 0 && isTransientNetworkInstallFailure(result)) {
+      result = await input.runCommand(input.command);
+    }
     return {
       ...result,
       status: result.exitCode === 0 ? "succeeded" : "failed",
@@ -82,6 +85,18 @@ export async function runDependencyInstallThroughGate(input: {
   } finally {
     await input.closeNetwork();
   }
+}
+
+/**
+ * A dropped connection or registry outage during the open install window is
+ * worth one immediate retry; only a repeated failure is a real repair signal.
+ */
+function isTransientNetworkInstallFailure(
+  result: DependencyInstallCommandResult,
+): boolean {
+  return /(?:ConnectionClosed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|network timeout|ERR_SOCKET_TIMEOUT|503 Service Unavailable|502 Bad Gateway|504 Gateway Timeout)/i.test(
+    `${result.stderr}\n${result.stdout}`,
+  );
 }
 
 function isAllowedDependencyInstallCommand(command: string): boolean {

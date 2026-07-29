@@ -59,4 +59,48 @@ describe("dependency install gate", () => {
     });
     expect(events).toEqual(["opened", "ran", "closed"]);
   });
+
+  it("retries once inside the open window when the install fails with a network signature", async () => {
+    let runs = 0;
+
+    const result = await runDependencyInstallThroughGate({
+      command: "bun install --frozen-lockfile",
+      closeNetwork: async () => {},
+      openNetwork: async () => {},
+      runCommand: async () => {
+        runs += 1;
+        return runs === 1
+          ? {
+              exitCode: 1,
+              stderr:
+                "error: ConnectionClosed downloading tarball xlsx@https://cdn.sheetjs.com/xlsx-0.20.2/xlsx-0.20.2.tgz",
+              stdout: "",
+            }
+          : { exitCode: 0, stderr: "", stdout: "installed" };
+      },
+    });
+
+    expect(result).toMatchObject({ status: "succeeded" });
+    expect(runs).toBe(2);
+  });
+
+  it("does not retry a deterministic install failure", async () => {
+    let runs = 0;
+
+    await runDependencyInstallThroughGate({
+      command: "bun install --frozen-lockfile",
+      closeNetwork: async () => {},
+      openNetwork: async () => {},
+      runCommand: async () => {
+        runs += 1;
+        return {
+          exitCode: 1,
+          stderr: "error: lockfile had changes, but lockfile is frozen",
+          stdout: "",
+        };
+      },
+    });
+
+    expect(runs).toBe(1);
+  });
 });
