@@ -41,6 +41,7 @@ import {
   readScriptCandidate,
   readValidationReport,
 } from "../schemas/artifacts";
+import { ensureSceneNavigation } from "../script-contract/demo-script-contract";
 import { assertScriptWritingChangesAllowed } from "../script-generation/read-only-boundary";
 import {
   PreparationFallbackRequiredError,
@@ -579,7 +580,10 @@ export async function runAgentHarnessPipeline(
               }),
             );
           }
-          return candidate;
+          return ensureSceneNavigation({
+            actionCatalog,
+            scriptCandidate: candidate,
+          });
         },
       );
       await writeArtifact(
@@ -1191,7 +1195,10 @@ async function repairScriptCandidate(input: {
       }),
     );
   }
-  return repairedCandidate;
+  return ensureSceneNavigation({
+    actionCatalog: input.actionCatalog,
+    scriptCandidate: repairedCandidate,
+  });
 }
 
 type AcceptedPreparationCandidate = {

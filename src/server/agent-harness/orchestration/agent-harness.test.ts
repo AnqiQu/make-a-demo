@@ -638,6 +638,121 @@ describe("runAgentHarnessPipeline", () => {
     );
   });
 
+  it("derives missing scene navigation before validating the script contract", async () => {
+    let validatedCandidate: unknown;
+
+    const result = await runAgentHarnessPipeline(
+      {
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        files: [
+          { path: "package.json", text: "{}" },
+          { path: "bun.lock", text: "" },
+        ],
+        repoStats: { fileCount: 2, sizeBytes: 200 },
+        repoUrl: "https://github.com/example/app",
+        runId: "run_navigation_derived",
+      },
+      {
+        async createWorkspace() {
+          return workspace();
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: {
+              ...actionCatalog(),
+              actions: [
+                ...actionCatalog().actions,
+                {
+                  confidence: 1,
+                  evidence: "Playwright loaded /",
+                  expectedResult: "Dashboard becomes visible",
+                  featureIds: ["dashboard"],
+                  id: "navigate-route-1",
+                  kind: "navigate" as const,
+                  preferredLocator: {
+                    reason:
+                      "Navigation actions target an observed route, not an element.",
+                    strategy: "css" as const,
+                    value: "body",
+                  },
+                  risks: [],
+                  route: "/",
+                },
+              ],
+            },
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async resetCaptureRuntime() {
+          return report("capture-runtime-reset", "passed");
+        },
+        async synthesizeRunPlan() {
+          return runPlan();
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract({ scriptCandidate: candidate }) {
+          validatedCandidate = candidate;
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return {
+            ...scriptCandidate(),
+            scriptJsonContent: {
+              scenes: [
+                {
+                  actions: [
+                    {
+                      id: "open",
+                      locator: {
+                        name: "Open dashboard",
+                        role: "button",
+                        strategy: "role",
+                      },
+                      sourceActionId: "open-dashboard",
+                      type: "click",
+                    },
+                  ],
+                  featureId: "dashboard",
+                  id: "dashboard",
+                  type: "playwright-recording",
+                },
+              ],
+              scriptId: "script_001",
+            },
+          };
+        },
+      },
+    );
+
+    expect(result.status).toBe("passed");
+    const scenes = (
+      validatedCandidate as {
+        scriptJsonContent: {
+          scenes: Array<{ actions: Array<Record<string, unknown>> }>;
+        };
+      }
+    ).scriptJsonContent.scenes;
+    expect(scenes[0]?.actions[0]).toEqual({
+      id: "dashboard-navigate",
+      path: "/",
+      sourceActionId: "navigate-route-1",
+      type: "goto",
+    });
+  });
+
   it("retries capture validation after a transient infrastructure failure without spending script repair", async () => {
     const calls: string[] = [];
     let captureAttempts = 0;

@@ -3,9 +3,11 @@ import type { BrowserAction } from "../../pipeline/06-footage-capture/browser-ac
 import {
   DEMO_SCRIPT_OUTPUT_PATH,
   readActionCatalog,
+  readScriptCandidate,
 } from "../schemas/artifacts";
 import {
   createDemoScriptContract,
+  ensureSceneNavigation,
   validateDemoScriptCandidateContract,
 } from "./demo-script-contract";
 
@@ -474,6 +476,81 @@ describe("DemoScriptContract", () => {
     ).toMatchObject({ status: "passed" });
   });
 
+  it("accepts a navigate-grounded goto without requiring FlowSpec selection", () => {
+    const catalog = readActionCatalog({
+      ...actionCatalog(),
+      actions: [...actionCatalog().actions, navigateAction()],
+    });
+    const script = validDemoScript();
+    (
+      script.scenes[0]?.actions as unknown as Array<Record<string, unknown>>
+    ).unshift({
+      id: "dashboard-navigate",
+      path: "/",
+      sourceActionId: "navigate-dashboard",
+      type: "goto",
+    });
+
+    expect(
+      validateDemoScriptCandidateContract({
+        actionCatalog: catalog,
+        flowSpec: flowSpec(),
+        preparationManifest: preparationManifest(),
+        scriptCandidate: scriptCandidate(script),
+      }),
+    ).toMatchObject({ status: "passed" });
+  });
+
+  it("derives the missing Scene navigation from the catalog route", () => {
+    const catalog = readActionCatalog({
+      ...actionCatalog(),
+      actions: [...actionCatalog().actions, navigateAction()],
+    });
+    const candidate = readScriptCandidate(scriptCandidate(validDemoScript()));
+
+    const augmented = ensureSceneNavigation({
+      actionCatalog: catalog,
+      scriptCandidate: candidate,
+    });
+
+    const scenes = (
+      augmented.scriptJsonContent as {
+        scenes: Array<{ actions: Array<Record<string, unknown>> }>;
+      }
+    ).scenes;
+    expect(scenes[0]?.actions[0]).toEqual({
+      id: "dashboard-navigate",
+      path: "/",
+      sourceActionId: "navigate-dashboard",
+      type: "goto",
+    });
+    expect(
+      validateDemoScriptCandidateContract({
+        actionCatalog: catalog,
+        flowSpec: flowSpec(),
+        preparationManifest: preparationManifest(),
+        scriptCandidate: augmented,
+      }),
+    ).toMatchObject({ status: "passed" });
+    expect(
+      ensureSceneNavigation({
+        actionCatalog: catalog,
+        scriptCandidate: augmented,
+      }),
+    ).toBe(augmented);
+  });
+
+  it("leaves a Scene unchanged when its route has no observed navigate action", () => {
+    const candidate = readScriptCandidate(scriptCandidate(validDemoScript()));
+
+    expect(
+      ensureSceneNavigation({
+        actionCatalog: readActionCatalog(actionCatalog()),
+        scriptCandidate: candidate,
+      }),
+    ).toBe(candidate);
+  });
+
   it("rejects a grounded goto action whose target differs from its observed route", () => {
     const catalog = actionCatalog();
     catalog.actions.push({
@@ -794,6 +871,24 @@ function actionCatalog() {
     ],
     appMapId: "appmap_001",
     id: "actions_001",
+  };
+}
+
+function navigateAction() {
+  return {
+    confidence: 1,
+    evidence: "Playwright loaded /",
+    expectedResult: "Dashboard becomes visible",
+    featureIds: ["dashboard"],
+    id: "navigate-dashboard",
+    kind: "navigate",
+    preferredLocator: {
+      reason: "Navigation actions target an observed route, not an element.",
+      strategy: "css",
+      value: "body",
+    },
+    risks: [],
+    route: "/",
   };
 }
 

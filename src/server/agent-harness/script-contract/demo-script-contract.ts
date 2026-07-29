@@ -438,6 +438,95 @@ export function createDemoScriptContract(
   };
 }
 
+/**
+ * Prepends a grounded goto to every browser Scene that does not begin with
+ * one: a Scene's route is already known from its first action's ActionCatalog
+ * evidence, so navigation is backend-derived infrastructure and script agents
+ * never have to author it. Idempotent; Scenes whose route has no observed
+ * navigate action are left untouched.
+ */
+export function ensureSceneNavigation(input: {
+  actionCatalog: ActionCatalog;
+  scriptCandidate: ScriptCandidate;
+}): ScriptCandidate {
+  const script = input.scriptCandidate.scriptJsonContent;
+  if (typeof script !== "object" || script === null) {
+    return input.scriptCandidate;
+  }
+  const scenes = (script as { scenes?: unknown }).scenes;
+  if (!Array.isArray(scenes)) {
+    return input.scriptCandidate;
+  }
+  const actionsById = new Map(
+    input.actionCatalog.actions.map((action) => [action.id, action]),
+  );
+  const navigateByRoute = new Map(
+    input.actionCatalog.actions
+      .filter((action) => action.kind === "navigate")
+      .map((action) => [action.route, action]),
+  );
+  let changed = false;
+  const augmentedScenes = scenes.map((scene) => {
+    if (typeof scene !== "object" || scene === null) {
+      return scene;
+    }
+    const record = scene as Record<string, unknown>;
+    if (
+      record.type !== "playwright-recording" ||
+      !Array.isArray(record.actions)
+    ) {
+      return scene;
+    }
+    const actions = record.actions as unknown[];
+    const first = actions[0];
+    if (
+      typeof first === "object" &&
+      first !== null &&
+      (first as Record<string, unknown>).type === "goto"
+    ) {
+      return scene;
+    }
+    const firstGrounded = actions.find(
+      (action): action is Record<string, unknown> =>
+        typeof action === "object" &&
+        action !== null &&
+        typeof (action as Record<string, unknown>).sourceActionId === "string",
+    );
+    const route =
+      firstGrounded === undefined
+        ? undefined
+        : actionsById.get(firstGrounded.sourceActionId as string)?.route;
+    const navigate =
+      route === undefined ? undefined : navigateByRoute.get(route);
+    if (navigate === undefined) {
+      return scene;
+    }
+    changed = true;
+    return {
+      ...record,
+      actions: [
+        {
+          id: `${record.id}-navigate`,
+          path: navigate.route,
+          sourceActionId: navigate.id,
+          type: "goto",
+        },
+        ...actions,
+      ],
+    };
+  });
+  if (!changed) {
+    return input.scriptCandidate;
+  }
+  return {
+    ...input.scriptCandidate,
+    scriptJsonContent: {
+      ...(script as Record<string, unknown>),
+      scenes: augmentedScenes,
+    },
+  };
+}
+
 export function validateDemoScriptCandidateContract(input: {
   actionCatalog?: unknown;
   flowSpec: unknown;
@@ -767,8 +856,14 @@ function assertActionMatchesCatalog(
       `Browser action ${action.id} uses ActionCatalog route ${sourceAction.route} outside the selected FlowSpec`,
     );
   }
+  // Navigation is infrastructure, not feature content: a goto grounded in an
+  // observed navigate action for a selected route is always legal, whether or
+  // not Flow Planning listed the navigate action explicitly.
+  const navigateWithinSelectedRoutes =
+    action.type === "goto" && sourceAction.kind === "navigate";
   if (
     requireSelectedRoute &&
+    !navigateWithinSelectedRoutes &&
     !selectedFeature?.referencedActionIds.includes(sourceAction.id)
   ) {
     throw new Error(
@@ -777,6 +872,7 @@ function assertActionMatchesCatalog(
   }
   if (
     requireSelectedRoute &&
+    !navigateWithinSelectedRoutes &&
     selectedFeature !== undefined &&
     !sourceAction.featureIds?.includes(selectedFeature.featureId)
   ) {
