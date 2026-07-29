@@ -112,6 +112,18 @@ describe("exploreSubmittedApp", () => {
     expect(script).toContain("if (isAppUnavailableError(error)) break");
   });
 
+  it("gives first route loads a cold-start budget with one retry", async () => {
+    const { commands } = await exploreObservation({
+      routes: [observedRoute({ headings: ["Dashboard"] })],
+    });
+    const script = readExplorerScript(commands);
+
+    expect(script).toContain("const gotoRoute = async (url) =>");
+    expect(script).toContain("timeout: 60000");
+    expect(script).toContain('document.readyState === "complete"');
+    expect(script).not.toContain("waitForTimeout(500)");
+  });
+
   it("verifies unique locators without coupling evidence to DOM indexes", async () => {
     const { commands } = await exploreObservation({
       routes: [observedRoute({ headings: ["Dashboard"] })],

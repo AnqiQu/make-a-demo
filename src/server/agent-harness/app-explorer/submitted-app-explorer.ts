@@ -1184,6 +1184,19 @@ try {
     if (message.type() === "error") result.consoleErrors.push(page.url() + ": " + message.text());
   });
   page.on("pageerror", (error) => result.pageErrors.push(page.url() + ": " + error.message));
+  const gotoRoute = async (url) => {
+    // Dev servers compile each route on first hit; give the initial load a
+    // cold-start budget and absorb one transient failure (mid-recompile
+    // reloads surface as ERR_ABORTED) before treating the route as broken.
+    try {
+      await page.goto(url, { timeout: 60000, waitUntil: "domcontentloaded" });
+    } catch (error) {
+      if (isAppUnavailableError(error)) throw error;
+      await page.goto(url, { timeout: 60000, waitUntil: "domcontentloaded" });
+    }
+    await page.waitForFunction(() => document.readyState === "complete", undefined, { timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(250);
+  };
   const queue = [
     ...featureEntryTargets,
     { featureIds: [], requestedPath: new URL(baseUrl).pathname, url: new URL(baseUrl).toString() },
@@ -1196,8 +1209,7 @@ try {
     if (!target || seen.has(target.url)) continue;
     seen.add(target.url);
     try {
-      await page.goto(target.url, { timeout: 20000, waitUntil: "domcontentloaded" });
-      await page.waitForTimeout(500);
+      await gotoRoute(target.url);
       const observed = await page.evaluate(() => {
         const clean = (value) => (value || "").replace(/\\s+/g, " ").trim();
         const visible = (element) => {
