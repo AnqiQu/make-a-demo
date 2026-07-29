@@ -1,4 +1,9 @@
 import {
+  assertSandboxMeetsCapacityFloor,
+  readSandboxCapacityEvidence,
+  sandboxCapacityProbeCommand,
+} from "../src/server/agent-harness/tools/sandbox-capacity";
+import {
   createOpenCodeProviderSandboxSecrets,
   ensureOpenCodeProviderDaytonaSecret,
 } from "../src/server/shared/integrations/agents/opencode-provider-secrets";
@@ -91,6 +96,22 @@ try {
       submittedCodeNetworkOpened = false;
     }
   }
+  console.log("Verifying submitted-code sandbox capacity for dev servers...");
+  const capacityProbe = await handle.workspace.executeSubmittedCode?.(
+    sandboxCapacityProbeCommand,
+  );
+  if (capacityProbe === undefined) {
+    throw new Error(
+      "Prepared Daytona workspace lacks submitted-code execution.",
+    );
+  }
+  console.log(capacityProbe.stdout.trim());
+  assertSandboxMeetsCapacityFloor(
+    readSandboxCapacityEvidence(
+      `${capacityProbe.stdout}\n${capacityProbe.stderr}`,
+    ),
+  );
+
   console.log(
     "Verifying exact submitted-code runtime and Capture SDK under network lockdown...",
   );
