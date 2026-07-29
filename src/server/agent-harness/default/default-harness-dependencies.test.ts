@@ -2469,6 +2469,51 @@ describe("createDefaultAgentHarnessDependencies", () => {
     }
   });
 
+  it("classifies a persistently unreachable dependency host as external network required", async () => {
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode(command) {
+        if (command.includes("install")) {
+          return {
+            exitCode: 1,
+            stderr:
+              "bun install v1.3.14 (0d9b296a)\nerror: ConnectionClosed downloading tarball xlsx@https://cdn.sheetjs.com/xlsx-0.20.2/xlsx-0.20.2.tgz",
+            stdout: "",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async setSubmittedCodeNetworkAccess() {},
+      async startSubmittedCodeApp() {},
+      async stopSubmittedCodeApp() {},
+      async syncSubmittedCodeWorkspace() {},
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: preparationManifest(),
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "external network required",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain("cdn.sheetjs.com");
+    expect(report.logsSummary).toContain("xlsx");
+    expect(report.suggestedRepairHints.join(" ")).toContain("registry");
+  });
+
   it("bounds install and build commands with explicit timeouts", async () => {
     const timeouts: Array<{ command: string; timeoutMs: number | undefined }> =
       [];

@@ -95,7 +95,10 @@ import {
   type ScriptWritingContentSnapshot,
   findScriptWritingContentChanges,
 } from "../script-generation/read-only-boundary";
-import { runDependencyInstallThroughGate } from "../tools/dependency-install-gate";
+import {
+  hasNetworkInstallFailureSignature,
+  runDependencyInstallThroughGate,
+} from "../tools/dependency-install-gate";
 import {
   createLockfileReconciliationCommand,
   planLockfileReconciliation,
@@ -2015,6 +2018,22 @@ async function validateSubmittedCodeRuntime(input: {
       });
     }
     if (result.status === "failed") {
+      const unreachable = readUnreachableDependencyHost(result);
+      if (unreachable !== undefined) {
+        return failedPreparationValidation({
+          attemptedCommand: installCommand,
+          classification: "external network required",
+          exitCode: result.exitCode,
+          logsSummary: `Dependency install cannot reach ${unreachable.host}${unreachable.packageName === undefined ? "" : ` for package ${unreachable.packageName}`}; a retry inside the open install window failed with the same network error: ${result.stderr || result.stdout}`,
+          manifest,
+          stage,
+          stderr: result.stderr,
+          stdout: result.stdout,
+          suggestedRepairHints: [
+            `Host ${unreachable.host} stays unreachable from the sandbox. Replace ${unreachable.packageName ?? "the affected dependency"} with a registry-hosted version in package.json, or vendor it into the repository; do not retry the same URL.`,
+          ],
+        });
+      }
       return failedPreparationValidation({
         attemptedCommand: installCommand,
         classification: "install failure",
@@ -3251,6 +3270,7 @@ function validationReport(input: {
   status?: "failed" | "passed";
   stderrExcerpts?: string[];
   stdoutExcerpts?: string[];
+  suggestedRepairHints?: string[];
   urlChecked?: string;
 }): ValidationReport {
   return {
@@ -3273,7 +3293,7 @@ function validationReport(input: {
     status: input.status ?? "passed",
     stderrExcerpts: input.stderrExcerpts ?? [],
     stdoutExcerpts: input.stdoutExcerpts ?? [],
-    suggestedRepairHints: [],
+    suggestedRepairHints: input.suggestedRepairHints ?? [],
     ...(input.attemptedCommand === undefined
       ? {}
       : { attemptedCommand: input.attemptedCommand }),
@@ -3344,6 +3364,7 @@ function failedPreparationValidation(input: {
   stage: string;
   stderr?: string;
   stdout?: string;
+  suggestedRepairHints?: string[];
 }): ValidationReport {
   return validationReport({
     ...(input.attemptedCommand === undefined
@@ -3358,8 +3379,40 @@ function failedPreparationValidation(input: {
     networkAttempts: input.blockedNetworkAttempts ?? [],
     stderrExcerpts: input.stderr ? [input.stderr.slice(-500)] : [],
     stdoutExcerpts: input.stdout ? [input.stdout.slice(-500)] : [],
+    ...(input.suggestedRepairHints === undefined
+      ? {}
+      : { suggestedRepairHints: input.suggestedRepairHints }),
     urlChecked: input.manifest.baseUrl,
   });
+}
+
+/**
+ * Extracts the unreachable host (and the package when the package manager
+ * names it) from a network-signature install failure that already survived
+ * the gate's in-window retry, so the repair prompt can pin a registry-hosted
+ * version or vendor the dependency instead of retrying an unreachable URL.
+ */
+function readUnreachableDependencyHost(result: {
+  stderr: string;
+  stdout: string;
+}): { host: string; packageName?: string } | undefined {
+  if (!hasNetworkInstallFailureSignature({ ...result, exitCode: 1 })) {
+    return undefined;
+  }
+  const output = `${result.stderr}\n${result.stdout}`;
+  const tarball = /tarball ([^@\s]+)@(https?:\/\/[^\s"'`]+)/.exec(output);
+  const url = tarball?.[2] ?? /https?:\/\/[^\s"'`]+/.exec(output)?.[0];
+  if (url === undefined) {
+    return undefined;
+  }
+  try {
+    return {
+      host: new URL(url).host,
+      ...(tarball?.[1] === undefined ? {} : { packageName: tarball[1] }),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function readErrorMessage(error: unknown): string {

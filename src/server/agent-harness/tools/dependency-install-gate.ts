@@ -75,7 +75,7 @@ export async function runDependencyInstallThroughGate(input: {
   await input.openNetwork();
   try {
     let result = await input.runCommand(input.command);
-    if (result.exitCode !== 0 && isTransientNetworkInstallFailure(result)) {
+    if (result.exitCode !== 0 && hasNetworkInstallFailureSignature(result)) {
       result = await input.runCommand(input.command);
     }
     return {
@@ -89,9 +89,11 @@ export async function runDependencyInstallThroughGate(input: {
 
 /**
  * A dropped connection or registry outage during the open install window is
- * worth one immediate retry; only a repeated failure is a real repair signal.
+ * worth one immediate retry; a failure that repeats through the retry means
+ * the host is unreachable from the sandbox and callers should classify it as
+ * an external network requirement rather than a generic install failure.
  */
-function isTransientNetworkInstallFailure(
+export function hasNetworkInstallFailureSignature(
   result: DependencyInstallCommandResult,
 ): boolean {
   return /(?:ConnectionClosed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|network timeout|ERR_SOCKET_TIMEOUT|503 Service Unavailable|502 Bad Gateway|504 Gateway Timeout)/i.test(
