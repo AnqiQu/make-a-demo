@@ -4037,6 +4037,18 @@ function explorationProtocol(blockedNetworkAttempts: NetworkAttempt[] = []) {
         forms: [],
         headings: ["Dashboard"],
         inputs: [],
+        interactions: [
+          {
+            kind: "click",
+            locator: {
+              name: "Open Dashboard",
+              strategy: "role",
+              value: "button",
+            },
+            name: "Open Dashboard",
+            outcome: "Dashboard detail became visible",
+          },
+        ],
         links: [],
         path: "/",
         primaryNavigation: [],
