@@ -453,7 +453,7 @@ describe("exploreSubmittedApp", () => {
     );
   });
 
-  it("keeps external attempts as evidence while reporting the browser failure", async () => {
+  it("keeps unrelated browser errors as evidence when features remain observable", async () => {
     const { result } = await exploreObservation({
       blockedNetworkAttempts: [
         {
@@ -462,26 +462,44 @@ describe("exploreSubmittedApp", () => {
           resourceType: "fetch",
           url: "https://api.example.com/v1",
         },
-        {
-          host: "api.example.com",
-          method: "GET",
-          resourceType: "fetch",
-          url: "https://api.example.com/v1",
-        },
       ],
-      pageErrors: [`${baseUrl}/: render failed`],
+      consoleErrors: [`${baseUrl}/legal: Failed to load chunk /_next/x.js`],
+      pageErrors: [`${baseUrl}/legal: render failed`],
       routes: [observedRoute({ headings: ["Welcome"], text: ["Welcome"] })],
     });
     const artifacts = requireArtifacts(result);
 
     expect(artifacts.validationReport).toMatchObject({
-      failureClassification: "browser console/page error",
+      failureClassification: "none",
       blockedNetworkAttempts: [
         expect.objectContaining({ url: "https://api.example.com/v1" }),
       ],
+      pageErrors: [`${baseUrl}/legal: render failed`],
+      status: "passed",
+    });
+  });
+
+  it("names the unreachable feature entry route instead of a generic missing feature", async () => {
+    const feature = preparedFeature();
+    const { result } = await exploreObservation({
+      featureInventory: [feature],
+      routes: [observedRoute()],
+      unreachableRoutes: [
+        {
+          error: "goto: net::ERR_ABORTED at /#/editor",
+          featureIds: [feature.id],
+          url: `${baseUrl}/#/editor`,
+        },
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    expect(artifacts.validationReport).toMatchObject({
+      failureClassification: "app route not discoverable",
       status: "failed",
     });
-    expect(artifacts.validationReport.logsSummary).toContain("1 page error");
+    expect(artifacts.validationReport.logsSummary).toContain("/#/editor");
+    expect(artifacts.validationReport.logsSummary).toContain("ERR_ABORTED");
   });
 
   it("keeps blocked side effects as evidence when the feature remains observable", async () => {
@@ -736,6 +754,11 @@ async function exploreObservation(input: {
   >;
   requestedFeatures?: string[];
   routes: Array<Record<string, unknown>>;
+  unreachableRoutes?: Array<{
+    error: string;
+    featureIds?: string[];
+    url: string;
+  }>;
 }) {
   const commands: string[] = [];
   const result = await exploreSubmittedApp({
@@ -762,6 +785,7 @@ async function exploreObservation(input: {
             consoleErrors: input.consoleErrors ?? [],
             pageErrors: input.pageErrors ?? [],
             routes: input.routes,
+            unreachableRoutes: input.unreachableRoutes ?? [],
           }),
         };
       },

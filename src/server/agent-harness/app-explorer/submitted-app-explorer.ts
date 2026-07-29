@@ -96,6 +96,11 @@ type ObservedInteraction = {
   name: string;
   outcome: string;
 };
+type UnreachableRoute = {
+  error: string;
+  featureIds?: string[];
+  url: string;
+};
 type BrowserExplorationProtocol = {
   blockedNetworkAttempts: Array<
     Pick<NetworkAttempt, "host"> & Partial<NetworkAttempt>
@@ -103,6 +108,7 @@ type BrowserExplorationProtocol = {
   consoleErrors: string[];
   pageErrors: string[];
   routes: ObservedRoute[];
+  unreachableRoutes?: UnreachableRoute[];
 };
 
 const explorerDirectory = "/workspace/.makeademo/exploration";
@@ -303,6 +309,7 @@ function createExplorationArtifacts(input: {
     explicitAuthenticationFeatureIds,
     featureInventory: input.featureInventory,
     networkAttempts,
+    unreachableRoutes: input.observation.unreachableRoutes ?? [],
   });
 
   return { actionCatalog, appMap, kind: "artifacts", validationReport };
@@ -328,7 +335,12 @@ function createRepairableExplorationFailure(input: {
         : "app route not discoverable",
       logsSummary: appExited
         ? `The prepared app exited${input.appStatus?.exitCode === undefined ? "" : ` with code ${input.appStatus.exitCode}`} while Playwright was exploring it${diagnostics.output ? `: ${diagnostics.output}` : "."}`
-        : "Playwright completed exploration but did not discover a browser route to ground Flow Planning.",
+        : `Playwright completed exploration but did not discover a browser route to ground Flow Planning.${(
+            input.observation.unreachableRoutes ?? []
+          )
+            .slice(0, 3)
+            .map((route) => ` Unreachable ${route.url}: ${route.error}`)
+            .join(" |")}`,
       networkAttempts,
       pageErrors: unique(input.observation.pageErrors),
       retryCount: 0,
@@ -642,12 +654,14 @@ function createExplorationValidationReport(input: {
   explicitAuthenticationFeatureIds: ReadonlySet<string>;
   featureInventory: PreparedDemoFeature[];
   networkAttempts: NetworkAttempt[];
+  unreachableRoutes: UnreachableRoute[];
 }): ValidationReport {
   const failure = readExplorationFailure(
     input.appMap,
     input.featureInventory,
     input.actionCatalog,
     input.explicitAuthenticationFeatureIds,
+    input.unreachableRoutes,
   );
   const actionableConsoleErrors = input.appMap.consoleErrors.filter(
     isActionableBrowserConsoleError,
@@ -660,10 +674,15 @@ function createExplorationValidationReport(input: {
       ...(input.appMap.screenshots ?? []),
     ],
     blockedNetworkAttempts: input.networkAttempts,
-    browserObservations: input.appMap.discoveredRoutes.map(
-      (route) =>
-        `${route.path}: ${route.headings.join(", ") || route.title || "visible route"}`,
-    ),
+    browserObservations: [
+      ...input.appMap.discoveredRoutes.map(
+        (route) =>
+          `${route.path}: ${route.headings.join(", ") || route.title || "visible route"}`,
+      ),
+      ...input.unreachableRoutes.map(
+        (route) => `unreachable ${route.url}: ${route.error}`,
+      ),
+    ],
     consoleErrors: input.appMap.consoleErrors,
     ...(failure === undefined
       ? { failureClassification: "none" }
@@ -699,21 +718,29 @@ function createExplorationValidationReport(input: {
   });
 }
 
+/**
+ * Decides whether exploration failed. Browser errors alone are never terminal:
+ * dev-server noise (chunk-load races, HMR reloads, aborted navigations) stays
+ * in the report as evidence. Exploration fails only when a feature cannot be
+ * demonstrated — its entry route is unreachable, it has no grounded evidence,
+ * or authentication blocks it without the maker requesting auth footage.
+ */
 function readExplorationFailure(
   appMap: AppMap,
   featureInventory: PreparedDemoFeature[],
   actionCatalog: ActionCatalog,
   explicitAuthenticationFeatureIds: ReadonlySet<string>,
+  unreachableRoutes: UnreachableRoute[],
 ): { classification: string; message: string } | undefined {
-  const actionableConsoleErrors = appMap.consoleErrors.filter(
-    isActionableBrowserConsoleError,
-  );
-  if (appMap.pageErrors.length > 0 || actionableConsoleErrors.length > 0) {
-    return {
-      classification: "browser console/page error",
-      message: `Browser exploration observed ${formatCount(appMap.pageErrors.length, "page error")} and ${formatCount(actionableConsoleErrors.length, "console error")}: ${[...appMap.pageErrors, ...actionableConsoleErrors].slice(0, 6).join(" | ")}.`,
-    };
-  }
+  const unreachableForFeatures = (featureIds: ReadonlySet<string>) =>
+    unreachableRoutes.filter((route) =>
+      (route.featureIds ?? []).some((featureId) => featureIds.has(featureId)),
+    );
+  const formatUnreachable = (routes: UnreachableRoute[]) =>
+    `Feature entry routes failed to load: ${routes
+      .slice(0, 2)
+      .map((route) => `${route.url}: ${route.error}`)
+      .join(" | ")}.`;
   const featuresById = new Map(
     featureInventory.map((feature) => [feature.id, feature]),
   );
@@ -753,27 +780,47 @@ function readExplorationFailure(
       })
       .map((feature) => feature.id),
   );
-  const missingRequestedFeatures = featureInventory
-    .filter(
-      (feature) =>
-        feature.requestedFeature !== undefined &&
-        !groundedFeatureIds.has(feature.id),
-    )
-    .map((feature) => feature.requestedFeature as string);
+  const missingRequestedFeatures = featureInventory.filter(
+    (feature) =>
+      feature.requestedFeature !== undefined &&
+      !groundedFeatureIds.has(feature.id),
+  );
   if (missingRequestedFeatures.length > 0) {
+    const unreachable = unreachableForFeatures(
+      new Set(missingRequestedFeatures.map(({ id }) => id)),
+    );
+    if (unreachable.length > 0) {
+      return {
+        classification: "app route not discoverable",
+        message: formatUnreachable(unreachable),
+      };
+    }
     return {
       classification: "requested feature not observable",
-      message: `App Exploration found no browser evidence for requested features: ${missingRequestedFeatures.join(", ")}.`,
+      message: `App Exploration found no browser evidence for requested features: ${missingRequestedFeatures
+        .map((feature) => feature.requestedFeature as string)
+        .join(", ")}.`,
     };
   }
   if (
     !featureInventory.some((feature) => feature.requestedFeature !== undefined)
   ) {
-    const observedPreparedFeatureCount = featureInventory.filter((feature) =>
-      groundedFeatureIds.has(feature.id),
-    ).length;
+    const ungroundedFeatures = featureInventory.filter(
+      (feature) => !groundedFeatureIds.has(feature.id),
+    );
+    const observedPreparedFeatureCount =
+      featureInventory.length - ungroundedFeatures.length;
     const requiredPreparedFeatureCount = Math.min(3, featureInventory.length);
     if (observedPreparedFeatureCount < requiredPreparedFeatureCount) {
+      const unreachable = unreachableForFeatures(
+        new Set(ungroundedFeatures.map(({ id }) => id)),
+      );
+      if (unreachable.length > 0) {
+        return {
+          classification: "app route not discoverable",
+          message: formatUnreachable(unreachable),
+        };
+      }
       return {
         classification: "prepared feature not observable",
         message: `App Exploration observed ${observedPreparedFeatureCount} prepared features but needs ${requiredPreparedFeatureCount} to plan the default demo.`,
@@ -797,10 +844,6 @@ function isActionableBrowserConsoleError(error: string): boolean {
   return !/(?:ERR_BLOCKED_BY_CLIENT|_next\/webpack-hmr.*ERR_INVALID_HTTP_RESPONSE)/i.test(
     error,
   );
-}
-
-function formatCount(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 function uniqueNetworkAttempts(attempts: NetworkAttempt[]): NetworkAttempt[] {
@@ -959,7 +1002,7 @@ const baseUrl = ${JSON.stringify(baseUrl)};
 const baseOrigin = new URL(baseUrl).origin;
 const featureEntryTargets = ${JSON.stringify(featureEntryTargets)};
 const outputDirectory = ${JSON.stringify(explorerDirectory)};
-const result = { blockedNetworkAttempts: [], consoleErrors: [], pageErrors: [], routes: [] };
+const result = { blockedNetworkAttempts: [], consoleErrors: [], pageErrors: [], routes: [], unreachableRoutes: [] };
 const isAppUnavailableError = (error) => /(?:ERR_CONNECTION_(?:CLOSED|REFUSED|RESET)|Target page, context or browser has been closed)/i.test(
   error instanceof Error ? error.message : String(error),
 );
@@ -1296,7 +1339,11 @@ try {
         }
       }
     } catch (error) {
-      result.pageErrors.push(target.url + ": " + (error instanceof Error ? error.message : String(error)));
+      result.unreachableRoutes.push({
+        error: error instanceof Error ? error.message : String(error),
+        featureIds: target.featureIds ?? [],
+        url: target.url,
+      });
       if (isAppUnavailableError(error)) break;
     }
   }
