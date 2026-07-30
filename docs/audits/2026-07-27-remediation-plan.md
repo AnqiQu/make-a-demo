@@ -488,6 +488,38 @@ in its prompt. The validator caught both (one attempt each). Since the backend r
 lockfiles anyway, a repair patch touching only-lockfiles-plus-legal-files should have the
 lockfile hunks stripped and proceed, not burn an attempt.
 
+## Addendum (2026-07-30, after the post-N11 Midday run)
+
+Run `terminal-2026-07-30T00-18-52-089Z` (midday), with N11 and the `4be064d` gate fix.
+
+**N11 evidence mirroring: validated immediately.** The run failed at grounding again, and
+`attempt-1-observation.json` made the diagnosis a three-command read instead of a
+timing reconstruction: 10 routes crawled, 0 interactions, and — decisively — 9 of 10
+routes rendered **empty** (no headings, no text, no buttons) with 18 page errors all
+reading `Module not found: Can't resolve 'use-stick-to-bottom'` plus 500s. The explorer
+observed truthfully; the app was broken. The interaction changes remain unproven on a
+healthy Midday (the one content-bearing route had 3 buttons, 0 exercised — insufficient
+sample while 90% of the app was down).
+
+**New finding N13 (High) — scoped workspace installs omit root-declared dependencies, and
+grounding failure masks the runtime evidence.** `use-stick-to-bottom` is declared only in
+midday's **root** package.json; dashboard source imports it relying on hoisting. The run
+plan's `bun install --filter=@midday/...` list never includes the root workspace, so root
+dependencies are structurally absent and every chat-widget route crashes. (Earlier runs
+predate upstream's chat widget — each run clones HEAD, so upstream drift activated the
+latent hole.) Downstream, the failure surfaced as `prepared feature not observable`, and a
+repair agent was asked to fix feature observability when the real problem was a missing
+module — unwinnable routing.
+**Plan change → N13:** (a) include the root workspace in scoped bun installs (or drop the
+filter when root dependencies exist); (b) exploration failure classification must prefer
+load-breaking runtime evidence: when page errors carry module-not-found (or dominant 500s),
+classify `missing dependency` naming the module — routing into the dependency-repair
+machinery that already works — instead of `prepared feature not observable`.
+
+**Infra note.** The run terminated on two consecutive OpenCode repair commands hanging
+silently for 5 minutes (inactivity timeout) — provider stall, not pipeline logic. Watch for
+recurrence before adding machinery.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
