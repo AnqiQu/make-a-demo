@@ -550,7 +550,9 @@ function stripComments(source: string) {
 function isBoundInFile(source: string, identifier: string) {
   const name = escapeRegExp(identifier);
   return (
-    new RegExp(`\\bimport\\b[^;\\n]*[{,\\s]${name}\\s*[},\\s]`).test(source) ||
+    new RegExp(`\\bimport\\b[^;]{0,300}[{,\\s]${name}\\s*[},\\s]`).test(
+      source,
+    ) ||
     new RegExp(`\\b(?:const|let|var|final|bool|boolean)\\s+${name}\\b`).test(
       source,
     ) ||
@@ -565,7 +567,7 @@ function readDemoGateIdentifiers(source: string, flags: string[]) {
     const name = escapeRegExp(flag);
     const patterns = [
       new RegExp(
-        `\\b(?:const|final|let|var|bool|boolean)\\s+([A-Za-z_$][\\w$]*)\\s*[:=][^;\\n]*(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`,
+        `\\b(?:const|final|let|var|bool|boolean)\\s+([A-Za-z_$][\\w$]*)\\s*[:=][^;]{0,200}(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`,
         "g",
       ),
       new RegExp(

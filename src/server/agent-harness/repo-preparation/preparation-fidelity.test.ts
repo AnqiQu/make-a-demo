@@ -430,6 +430,49 @@ describe("validatePreparationFidelity", () => {
     );
   });
 
+  it("recognizes a line-wrapped gate binding in a created helper module", () => {
+    const gatePath = "src/utils/demo-mode.ts";
+    const sessionPath = "src/auth/session.ts";
+    const report = validateDiff({
+      createdFiles: [gatePath],
+      manifestOverrides: { envUsed: { NEXT_PUBLIC_MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [sessionPath],
+      patch: [
+        `diff --git a/${gatePath} b/${gatePath}`,
+        "+export const isDemoMode =",
+        "+  process.env.NEXT_PUBLIC_MAKEADEMO_DEMO === 'true';",
+        `diff --git a/${sessionPath} b/${sessionPath}`,
+        "+import { isDemoMode } from '../utils/demo-mode';",
+        "-if (!session) redirect('/login');",
+        "+if (!isDemoMode && !session) redirect('/login');",
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("recognizes a gate identifier bound through a line-wrapped import", () => {
+    const gatePath = "src/utils/demo-mode.ts";
+    const sessionPath = "src/auth/session.ts";
+    const report = validateDiff({
+      createdFiles: [gatePath],
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [sessionPath],
+      patch: [
+        `diff --git a/${gatePath} b/${gatePath}`,
+        "+export const isDemoMode = process.env.MAKEADEMO_DEMO === 'true';",
+        `diff --git a/${sessionPath} b/${sessionPath}`,
+        "+import {",
+        "+  isDemoMode,",
+        "+} from '../utils/demo-mode';",
+        "-if (!session) redirect('/login');",
+        "+if (!isDemoMode && !session) redirect('/login');",
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
   it("exempts framework and build configuration from the demo gate requirement", () => {
     const report = validateDiff({
       modifiedFiles: ["vite.config.ts", "apps/dashboard/next.config.ts"],
