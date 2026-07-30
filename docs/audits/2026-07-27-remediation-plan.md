@@ -520,6 +520,31 @@ machinery that already works — instead of `prepared feature not observable`.
 silently for 5 minutes (inactivity timeout) — provider stall, not pipeline logic. Watch for
 recurrence before adding machinery.
 
+## Addendum (2026-07-30, after the post-N13 Midday run)
+
+Run `terminal-2026-07-30T05-27-19-277Z` (midday). Failed before any pipeline logic: the
+very first agent stage (Runtime Target Selection) died three times in 12 seconds, each
+OpenCode process exiting 1 within ~3.5s and emitting nothing but PTY prompt noise. The
+OpenAI key is valid and the pinned model exists (verified from the workstation), and the
+Daytona provider secret ensured successfully — the sandbox-to-provider path itself is the
+suspect, consistent with the prior run's two 5-minute silent agent hangs (blackholed vs
+refused egress through the secret-substitution path). N13's changes were never reached;
+nothing here is midday-specific.
+
+**New finding N14 (High, repo-agnostic) — agent-runner failures are undiagnosable and
+unclassified.** (a) On nonzero OpenCode exit the harness excerpts the PTY stream, which
+carries only escape codes — the runner's real error (provider status, auth, crash) is
+never captured. Capture OpenCode's own error channel (its log file tail, or run headless
+so stderr is meaningful) and include it in the failure. (b) Three identical sub-5s exits
+retried within 12 seconds is thrashing: classify fast repeated agent-launch failures as an
+infrastructure failure naming the agent runner (not "did not produce valid required
+artifact", which mis-blames the artifact contract), and space the retries (30s+) so
+transient provider blips can clear.
+
+**Action.** Retry the run once before treating this as persistent; land N14 either way —
+it is general diagnosability/robustness, applies to every repo, and the next such failure
+should name its cause.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
