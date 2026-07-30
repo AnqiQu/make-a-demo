@@ -901,12 +901,17 @@ function readExplorationFailure(
         const actions = actionCatalog.actions.filter((action) =>
           action.featureIds?.includes(feature.id),
         );
-        // A feature is demonstrable only when something on its route was
-        // actually exercised in the browser; a page that merely loads is
-        // evidence of reachability, not of the feature.
+        // A browser-exercised interaction proves the feature. Without one,
+        // verified assert evidence counts only when its visible text matches
+        // the feature, so read-only pages can ground while a wrong entry
+        // route that merely renders unrelated content cannot.
         return (
-          actions.some((action) => action.kind === "assert") &&
-          actions.some((action) => action.exercised === true)
+          actions.some((action) => action.exercised === true) ||
+          actions.some(
+            (action) =>
+              action.kind === "assert" &&
+              assertEvidenceMatchesFeature(action, feature),
+          )
         );
       })
       .map((feature) => feature.id),
@@ -971,23 +976,39 @@ function readExplorationFailure(
   return undefined;
 }
 
+function assertEvidenceMatchesFeature(
+  action: ActionCatalog["actions"][number],
+  feature: PreparedDemoFeature,
+): boolean {
+  const locator = action.preferredLocator;
+  const evidenceText =
+    (locator.strategy === "text" ? locator.value : locator.name) ?? "";
+  const featureTokens = semanticTokens(
+    `${feature.id} ${feature.label} ${feature.requestedFeature ?? ""} ${feature.description}`,
+  );
+  return semanticTokens(evidenceText).some((token) =>
+    featureTokens.includes(token),
+  );
+}
+
 /**
- * Lists routes whose catalog carries both assert and exercised evidence — the
+ * Lists routes whose catalog carries exercised or assert evidence — the
  * routes a preparation repair can reselect features onto with confidence.
+ * The steering deliberately offers only reselection: rewriting product UI to
+ * make features observable is a fidelity violation.
  */
 function formatGroundedRoutes(actionCatalog: ActionCatalog): string {
-  const exercisedRoutes = new Set(
-    actionCatalog.actions
-      .filter((action) => action.exercised === true)
-      .map((action) => action.route),
-  );
-  const routes = [...exercisedRoutes].filter((route) =>
-    actionCatalog.actions.some(
-      (action) => action.kind === "assert" && action.route === route,
+  const routes = [
+    ...new Set(
+      actionCatalog.actions
+        .filter(
+          (action) => action.exercised === true || action.kind === "assert",
+        )
+        .map((action) => action.route),
     ),
-  );
+  ];
   if (routes.length === 0) return "";
-  return ` Browser evidence was grounded on: ${routes.slice(0, 6).join(", ")}. Reselect featureInventory entries onto these routes (update entryPaths and sourcePaths) or make the missing features render observable content.`;
+  return ` Browser evidence was grounded on: ${routes.slice(0, 6).join(", ")}. Reselect featureInventory entries onto these routes (update entryPaths and sourcePaths).`;
 }
 
 function readMissingModule(pageErrors: string[]): string | undefined {

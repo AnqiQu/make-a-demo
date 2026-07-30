@@ -186,13 +186,6 @@ describe("exploreSubmittedApp", () => {
       routes: [
         observedRoute({
           headings: ["Transactions"],
-          interactions: [
-            {
-              kind: "click",
-              name: "Search transactions",
-              outcome: "opened the search panel",
-            },
-          ],
           path: "/transactions",
         }),
         observedRoute({ headings: [], text: [] }),
@@ -205,6 +198,38 @@ describe("exploreSubmittedApp", () => {
     });
     expect(result.validationReport.logsSummary).toContain("/transactions");
     expect(result.validationReport.logsSummary).toContain("Reselect");
+    // Steering must not invite repairs the fidelity contract rejects, such as
+    // editing product UI to make features render.
+    expect(result.validationReport.logsSummary).not.toContain(
+      "render observable content",
+    );
+  });
+
+  it("grounds a read-only feature on feature-matching assert evidence", async () => {
+    const { result } = await exploreObservation({
+      featureInventory: [
+        {
+          authStrategy: "none",
+          description: "Adjust date and locale preferences",
+          entryPaths: ["/settings/locale"],
+          fixtureNotes: [],
+          id: "date-locale-preferences",
+          label: "Date & locale preferences",
+          sourcePaths: ["src/app/settings/locale/page.tsx"],
+        },
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["date-locale-preferences"],
+          headings: ["Locale", "Time Zone"],
+          path: "/settings/locale",
+          title: "Date & Locale",
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    expect(artifacts.validationReport.status).toBe("passed");
   });
 
   it("classifies module-not-found page errors as a missing dependency", async () => {
@@ -305,7 +330,9 @@ describe("exploreSubmittedApp", () => {
       routes: [
         observedRoute({
           featureIds: [feature.id],
-          headings: ["Articles"],
+          // Visible content unrelated to the feature: reachability evidence,
+          // not feature evidence.
+          headings: ["Welcome back"],
           links: [{ href: "/editor", name: "Editor" }],
         }),
       ],
