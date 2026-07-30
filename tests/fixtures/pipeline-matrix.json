@@ -1,6 +1,16 @@
 {
   "entries": [
     {
+      "name": "homer",
+      "repoUrl": "https://github.com/bastienwirtz/homer",
+      "productSummary": "Homer is a static homepage for self-hosted services: a YAML-configured dashboard of service tiles with search and theming."
+    },
+    {
+      "name": "conduit",
+      "repoUrl": "https://github.com/TonyMckes/conduit-realworld-example-app",
+      "productSummary": "Conduit is a Medium-style social blogging platform: write, favorite, and comment on articles and follow authors."
+    },
+    {
       "name": "midday",
       "repoUrl": "https://github.com/midday-ai/midday"
     },
