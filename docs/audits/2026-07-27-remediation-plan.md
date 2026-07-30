@@ -611,6 +611,16 @@ burned wholly or partly on hand-edited `bun.lock` hunks (attempt-2's rejection w
 lockfile-only). The xlsx CDN dependency class makes lockfile edits near-inevitable in
 dependency repairs; strip lockfile hunks deterministically instead of burning attempts.
 
+**N16 landed (same day).** `5c8b568` (b + c — with one refinement over the sketch above:
+grounding requires an exercised interaction **or** an assert whose visible text
+token-matches the feature, not any assert, so a wrong entry route rendering unrelated
+content still cannot ground), `353df6d` (d), `eaebf75` (a — applied to every navigation,
+including interaction reloads and the fresh-state re-verification, which would otherwise
+drop exercised evidence on skeleton-first apps). The explorer also gained its first
+behavioral gate: `submitted-app-explorer.script.test.ts` builds the real generated script
+and runs it under bun + chromium against a deferred-content page, proving the content
+wait, aria harvest, text-locator verification, and fill exercise end-to-end.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
