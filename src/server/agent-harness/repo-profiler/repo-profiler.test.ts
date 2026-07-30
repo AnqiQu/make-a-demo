@@ -69,6 +69,32 @@ describe("profileRepo", () => {
     ]);
   });
 
+  it("records the root package name so scoped installs can include root dependencies", () => {
+    const profile = profileRepo({
+      files: [
+        {
+          path: "package.json",
+          text: JSON.stringify({
+            dependencies: { "use-stick-to-bottom": "^1.0.0" },
+            name: "midday",
+            workspaces: ["apps/*"],
+          }),
+        },
+        { path: "bun.lock", text: "" },
+        {
+          path: "apps/web/package.json",
+          text: JSON.stringify({
+            name: "@midday/web",
+            scripts: { dev: "next dev" },
+          }),
+        },
+      ],
+      repoUrl: "https://github.com/example/app",
+    });
+
+    expect(profile.rootPackageName).toBe("midday");
+  });
+
   it("derives a deterministic RepoProfile from package metadata and repo files", () => {
     const profile = profileRepo({
       commitSha: "abc123",

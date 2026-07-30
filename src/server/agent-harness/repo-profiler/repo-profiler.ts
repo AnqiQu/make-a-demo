@@ -155,6 +155,13 @@ export function profileRepo(input: RepoProfileInput): RepoProfile {
       ]),
     ].sort(),
     rootDir: input.rootDir ?? "/workspace",
+    ...optionalString(
+      "rootPackageName",
+      typeof rootPackage?.json.name === "string" &&
+        rootPackage.json.name.trim().length > 0
+        ? rootPackage.json.name
+        : undefined,
+    ),
     securityWarnings: packages.flatMap((entry) =>
       entry.scripts.postinstall === undefined
         ? []

@@ -89,6 +89,32 @@ describe("resolveRuntimeTarget", () => {
     });
   });
 
+  it("includes the root package in scoped installs so root dependencies install", () => {
+    const target = resolveRuntimeTarget({
+      preparationManifest: manifest("apps/dashboard/src/app/page.tsx"),
+      repoProfile: profile({
+        packageManager: "bun",
+        packageScripts: {
+          "dev:dashboard":
+            "turbo dev --filter=@midday/dashboard -- --port 3101",
+        },
+        rootPackageName: "midday",
+        workspacePackages: [
+          {
+            dir: "apps/dashboard",
+            name: "@midday/dashboard",
+            ports: [3001],
+            scripts: { dev: "next dev -p 3001" },
+          },
+        ],
+      }),
+    });
+
+    expect(target?.install.command).toBe(
+      "bun install --frozen-lockfile --filter=@midday/dashboard --filter=midday",
+    );
+  });
+
   it("runs a workspace-local script when no scoped root script exists", () => {
     const target = resolveRuntimeTarget({
       preparationManifest: manifest("packages/web/src/routes/home.tsx"),

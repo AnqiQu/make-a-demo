@@ -770,13 +770,27 @@ function createExplorationValidationReport(input: {
   networkAttempts: NetworkAttempt[];
   unreachableRoutes: UnreachableRoute[];
 }): ValidationReport {
-  const failure = readExplorationFailure(
+  const groundingFailure = readExplorationFailure(
     input.appMap,
     input.featureInventory,
     input.actionCatalog,
     input.explicitAuthenticationFeatureIds,
     input.unreachableRoutes,
   );
+  // Load-breaking runtime evidence outranks grounding counts: a route that
+  // crashes before rendering cannot ground anything, and only the dependency
+  // repair path can fix it.
+  const missingModule =
+    groundingFailure === undefined
+      ? undefined
+      : readMissingModule(input.appMap.pageErrors);
+  const failure =
+    missingModule === undefined
+      ? groundingFailure
+      : {
+          classification: "missing dependency",
+          message: `App routes crash before rendering: Module not found: Can't resolve '${missingModule}'. Install or declare the missing package for the selected app; feature grounding cannot proceed until routes render.`,
+        };
   const actionableConsoleErrors = input.appMap.consoleErrors.filter(
     isActionableBrowserConsoleError,
   );
@@ -953,6 +967,17 @@ function readExplorationFailure(
       classification: "auth wall",
       message: "Every discovered route is blocked by authentication.",
     };
+  }
+  return undefined;
+}
+
+function readMissingModule(pageErrors: string[]): string | undefined {
+  for (const error of pageErrors) {
+    const match =
+      /(?:module not found|can't resolve|cannot find module)[^'"`]*['"`]([^'"`\s]+)['"`]/i.exec(
+        error,
+      );
+    if (match?.[1] !== undefined) return match[1];
   }
   return undefined;
 }

@@ -149,6 +149,31 @@ describe("exploreSubmittedApp", () => {
     expect(script.split("deadlineAtMs").length).toBeGreaterThanOrEqual(5);
   });
 
+  it("classifies module-not-found page errors as a missing dependency", async () => {
+    const { result } = await exploreObservation({
+      featureInventory: [
+        {
+          authStrategy: "none",
+          description: "Dashboard overview",
+          entryPaths: ["/"],
+          fixtureNotes: [],
+          id: "dashboard-overview",
+          label: "Dashboard overview",
+          sourcePaths: ["src/app/page.tsx"],
+        },
+      ],
+      pageErrors: [
+        "http://127.0.0.1:3001/: ./src/components/chat/conversation.tsx Module not found: Can't resolve 'use-stick-to-bottom'",
+      ],
+      routes: [observedRoute({ headings: [], text: [] })],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "missing dependency",
+      logsSummary: expect.stringContaining("use-stick-to-bottom"),
+    });
+  });
+
   it("attaches the observation to a grounding failure for diagnosis", async () => {
     const { result } = await exploreObservation({ routes: [] });
 

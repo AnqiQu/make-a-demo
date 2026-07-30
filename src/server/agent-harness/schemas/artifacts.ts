@@ -80,6 +80,7 @@ export type RepoProfile = {
   browserRuntimeCandidates?: RepoBrowserRuntimeCandidate[];
   detectedFrameworks: string[];
   packageScripts: Record<string, string>;
+  rootPackageName?: string;
   candidateAppDirs: string[];
   candidateInstallCommands: string[];
   candidateBuildCommands: string[];
@@ -419,6 +420,7 @@ export function readRepoProfile(value: unknown): RepoProfile {
     repoUrl: readNonEmptyString(record, "repoUrl"),
     requiredEnvHints: readStringArray(record, "requiredEnvHints"),
     rootDir: readNonEmptyString(record, "rootDir"),
+    ...optionalString(record, "rootPackageName"),
     securityWarnings: readStringArray(record, "securityWarnings"),
     unsupportedReasons: readStringArray(record, "unsupportedReasons"),
     workspaces: readWorkspaces(record.workspaces),

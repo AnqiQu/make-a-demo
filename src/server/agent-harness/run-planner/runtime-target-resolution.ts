@@ -251,14 +251,24 @@ function createTargetInstallCommand(
     workspacePackage,
     additionalWorkspaceNames,
   ).map(readWorkspaceFilter);
-  return filters.some((filter) => filter === undefined)
-    ? command
-    : `${command}${filters
-        .map(
-          (filter) =>
-            ` --${packageManager === "npm" ? "workspace" : "filter"}=${filter}`,
-        )
-        .join("")}`;
+  if (filters.some((filter) => filter === undefined)) {
+    return command;
+  }
+  // Filter-scoped installs skip the workspace root, whose package.json can
+  // declare dependencies the selected app resolves through hoisting. npm is
+  // exempt: it installs root dependencies regardless of --workspace flags.
+  const rootFilter =
+    packageManager !== "npm" &&
+    repoProfile.rootPackageName !== undefined &&
+    !filters.includes(repoProfile.rootPackageName)
+      ? [repoProfile.rootPackageName]
+      : [];
+  return `${command}${[...filters, ...rootFilter]
+    .map(
+      (filter) =>
+        ` --${packageManager === "npm" ? "workspace" : "filter"}=${filter}`,
+    )
+    .join("")}`;
 }
 
 function readWorkspaceDependencyClosure(
