@@ -139,7 +139,12 @@ export function normalizeCrawlUrl(rawUrl: string): string {
 }
 
 const explorerDirectory = "/workspace/.makeademo/exploration";
-const explorerPath = `${explorerDirectory}/explore-app.mjs`;
+// The script itself lives outside /workspace: bun resolves imports by walking
+// up from the script's directory before consulting NODE_PATH, so a submitted
+// repo shipping its own @playwright/test would otherwise shadow the image's
+// pinned install — the only one whose browsers exist in the image.
+const explorerRuntimeDirectory = "/tmp/makeademo/exploration";
+const explorerPath = `${explorerRuntimeDirectory}/explore-app.mjs`;
 const explorationCommandTimeoutMs = 5 * 60_000;
 
 /**
@@ -180,7 +185,7 @@ export async function exploreSubmittedApp(input: {
     result = await executeSubmittedCode(
       input.workspace,
       [
-        `mkdir -p ${explorerDirectory}`,
+        `mkdir -p ${explorerRuntimeDirectory}`,
         `printf %s ${shellQuote(encodedScript)} | base64 -d > ${explorerPath}`,
         `NODE_PATH="$(npm root -g)" bun ${explorerPath}`,
       ].join(" && "),

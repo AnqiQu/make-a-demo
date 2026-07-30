@@ -65,9 +65,14 @@ describe("exploreSubmittedApp", () => {
     const artifacts = requireArtifacts(result);
 
     expect(commands).toHaveLength(1);
+    // The script must run from outside /workspace: bun resolves imports by
+    // walking up from the script's directory, so a submitted repo that ships
+    // its own @playwright/test would otherwise shadow the image's pinned
+    // install (whose browsers are the only ones present).
     expect(commands[0]).toContain(
-      'NODE_PATH="$(npm root -g)" bun /workspace/.makeademo/exploration/explore-app.mjs',
+      'NODE_PATH="$(npm root -g)" bun /tmp/makeademo/exploration/explore-app.mjs',
     );
+    expect(commands[0]).not.toContain("bun /workspace");
     expect(readExplorerScript(commands)).toContain(
       "await interactionLocator.click",
     );
