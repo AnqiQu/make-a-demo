@@ -621,6 +621,36 @@ behavioral gate: `submitted-app-explorer.script.test.ts` builds the real generat
 and runs it under bun + chromium against a deferred-content page, proving the content
 wait, aria harvest, text-locator verification, and fill exercise end-to-end.
 
+## Addendum (2026-07-30, after the post-N16 homer + midday matrix run)
+
+Matrix report `matrix-report-2026-07-30T21-58-31-099Z`. **Homer passed end-to-end**
+(final video in ~8.5 min) — the N16 canary held: content wait, new grounding predicate,
+and relocated explorer script did not regress the green path. Midday
+(`terminal-2026-07-30T21-37-52-105Z`) produced its healthiest preparation yet — fidelity
+attempt-1 passed clean for the first time, the xlsx CDN failure was repaired in two
+attempts (one burned on an N12 `bun.lock` hand-edit — the recurrence class already
+recorded above), and preflight passed with three of five budget attempts unused — then
+failed at a new terminal blocker: the exploration command ran its full 300s without
+returning (no marker, no artifacts), and the failure path consumed ~7 more minutes of
+status reads and teardown.
+
+**New finding N17 (High) — N16a's content wait can push the crawl past the exploration
+command budget on streaming-SSR apps.** The wait (≤15s) applies to observation and every
+interaction reload; on an app that re-streams each navigation this multiplies a ~90s
+crawl several-fold. The script's 210s internal deadline only bounds *starting* new work —
+a single in-flight navigation can cost ~150s (60s goto + one retry + readyState +
+content wait), far beyond the 90s post-deadline headroom, and NODE_PATH/browser-launch
+causes are ruled out (the fallback is proven in-sandbox by the 06-04 run, and the
+behavioral test proves NODE_PATH beats bun auto-install in the relocated layout).
+**Plan → N17:** (i) clamp the script's long waits — goto timeout, content wait, goto
+retry — to the remaining deadline budget so the script always finalizes inside the
+command budget, degrading to thinner tail evidence instead of a timeout; (ii) on
+command timeout, attempt one read of the durable `exploration.json` before failing, so a
+marginally late script still yields its result; (iii) resize
+`explorationCommandTimeoutMs` 300s → 420s — the budget was calibrated before
+per-navigation content waits existed, and feature entry routes are crawled first, so
+added budget goes to feature evidence.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
