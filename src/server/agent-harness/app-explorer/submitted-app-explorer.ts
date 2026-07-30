@@ -954,7 +954,7 @@ function readExplorationFailure(
       }
       return {
         classification: "prepared feature not observable",
-        message: `App Exploration observed ${observedPreparedFeatureCount} prepared features but needs ${requiredPreparedFeatureCount} to plan the default demo.`,
+        message: `App Exploration observed ${observedPreparedFeatureCount} prepared features but needs ${requiredPreparedFeatureCount} to plan the default demo.${formatGroundedRoutes(actionCatalog)}`,
       };
     }
   }
@@ -969,6 +969,25 @@ function readExplorationFailure(
     };
   }
   return undefined;
+}
+
+/**
+ * Lists routes whose catalog carries both assert and exercised evidence — the
+ * routes a preparation repair can reselect features onto with confidence.
+ */
+function formatGroundedRoutes(actionCatalog: ActionCatalog): string {
+  const exercisedRoutes = new Set(
+    actionCatalog.actions
+      .filter((action) => action.exercised === true)
+      .map((action) => action.route),
+  );
+  const routes = [...exercisedRoutes].filter((route) =>
+    actionCatalog.actions.some(
+      (action) => action.kind === "assert" && action.route === route,
+    ),
+  );
+  if (routes.length === 0) return "";
+  return ` Browser evidence was grounded on: ${routes.slice(0, 6).join(", ")}. Reselect featureInventory entries onto these routes (update entryPaths and sourcePaths) or make the missing features render observable content.`;
 }
 
 function readMissingModule(pageErrors: string[]): string | undefined {
@@ -1470,6 +1489,20 @@ try {
           })) ?? null,
         };
       }));
+      if (observed.headings.length === 0 && observed.text.length === 0) {
+        // Display-only routes (chart and widget dashboards) render no semantic
+        // headings or named controls; harvest assert candidates from the
+        // accessibility tree so such pages can still ground features. Each
+        // candidate is verified as a unique visible text locator below.
+        try {
+          const aria = typeof page.locator("body").ariaSnapshot === "function" ? await page.locator("body").ariaSnapshot() : "";
+          const ariaTextCandidates = [...new Set([
+            ...[...aria.matchAll(/-\\s+[a-z]+ "([^"\\n]{3,80})"/g)].map((match) => match[1]),
+            ...[...aria.matchAll(/-\\s+text: (\\S[^\\n]{2,79})$/gm)].map((match) => match[1].trim()),
+          ])].slice(0, 6);
+          observed.text.push(...ariaTextCandidates);
+        } catch {}
+      }
       observed.textLocatorEvidence = await Promise.all(observed.text.map((text) =>
         createVerifiedDirectLocatorEvidence({
           locator: { exact: true, strategy: "text", value: text },

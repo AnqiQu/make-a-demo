@@ -149,6 +149,64 @@ describe("exploreSubmittedApp", () => {
     expect(script.split("deadlineAtMs").length).toBeGreaterThanOrEqual(5);
   });
 
+  it("harvests assert text from the aria snapshot when a route renders no semantic content", async () => {
+    const { commands } = await exploreObservation({
+      routes: [observedRoute({ headings: [] })],
+    });
+    const script = readExplorerScript(commands);
+
+    expect(script).toContain(
+      "observed.headings.length === 0 && observed.text.length === 0",
+    );
+    expect(script).toContain("ariaTextCandidates");
+  });
+
+  it("names grounded routes when prepared features are not observable", async () => {
+    const { result } = await exploreObservation({
+      featureInventory: [
+        {
+          authStrategy: "none",
+          description: "Review transactions",
+          entryPaths: ["/transactions"],
+          fixtureNotes: [],
+          id: "transaction-review",
+          label: "Transaction review",
+          sourcePaths: ["src/app/transactions/page.tsx"],
+        },
+        {
+          authStrategy: "none",
+          description: "Dashboard overview",
+          entryPaths: ["/"],
+          fixtureNotes: [],
+          id: "dashboard-overview",
+          label: "Dashboard overview",
+          sourcePaths: ["src/app/page.tsx"],
+        },
+      ],
+      routes: [
+        observedRoute({
+          headings: ["Transactions"],
+          interactions: [
+            {
+              kind: "click",
+              name: "Search transactions",
+              outcome: "opened the search panel",
+            },
+          ],
+          path: "/transactions",
+        }),
+        observedRoute({ headings: [], text: [] }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "prepared feature not observable",
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain("/transactions");
+    expect(result.validationReport.logsSummary).toContain("Reselect");
+  });
+
   it("classifies module-not-found page errors as a missing dependency", async () => {
     const { result } = await exploreObservation({
       featureInventory: [
