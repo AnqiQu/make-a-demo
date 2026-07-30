@@ -1384,6 +1384,18 @@ try {
       await page.goto(url, { timeout: 60000, waitUntil: "domcontentloaded" });
     }
     await page.waitForFunction(() => document.readyState === "complete", undefined, { timeout: 10000 }).catch(() => {});
+    // Dev servers compile and stream first-hit routes behind a DOM-quiet
+    // skeleton; observing that shell yields empty evidence. Wait for the
+    // first meaningful content — a no-op on pages that render immediately.
+    await page.waitForFunction(() => {
+      const hasBox = (element) => {
+        const box = element.getBoundingClientRect();
+        return box.width > 0 && box.height > 0;
+      };
+      const semantic = document.querySelectorAll("a[href], button, [role=button], input, textarea, select, h1, h2, h3, [role=heading], table, [role=grid]");
+      if (Array.from(semantic).some(hasBox)) return true;
+      return ((document.body && document.body.innerText) || "").trim().length >= 40;
+    }, undefined, { timeout: 15000 }).catch(() => {});
     await waitForQuietDom(300, 2500);
   };
   const queue = [
@@ -1550,8 +1562,7 @@ try {
         const locatorEvidence = observed.buttonLocatorEvidence[index];
         if (!name || !locatorEvidence || /\\b(?:buy|checkout|delete|destroy|disconnect|log ?in|log ?out|pay|purchase|register|remove|revoke|sign ?in|sign ?out|sign ?up)\\b/i.test(name)) continue;
         try {
-          await page.goto(routeUrl, { timeout: 20000, waitUntil: "domcontentloaded" });
-          await waitForQuietDom(300, 2500);
+          await gotoRoute(routeUrl);
           const exactLocator = page.getByRole("button", { name, exact: true });
           const interactionLocator = await exactLocator.count() === 1 ? exactLocator : page.getByRole("button", { name, exact: false });
           if (await interactionLocator.count() !== 1 || !(await interactionLocator.isVisible())) continue;
@@ -1586,8 +1597,7 @@ try {
         if (Date.now() >= deadlineAtMs) break;
         if (!input.locatorEvidence || ["button", "checkbox", "file", "hidden", "password", "radio", "submit"].includes(input.inputType) || input.inAuthForm) continue;
         try {
-          await page.goto(routeUrl, { timeout: 20000, waitUntil: "domcontentloaded" });
-          await waitForQuietDom(300, 2500);
+          await gotoRoute(routeUrl);
           const interactionLocator = createInteractionLocator(input.locator);
           if (await interactionLocator.count() !== 1 || !(await interactionLocator.isVisible())) continue;
           let outcome;
@@ -1624,8 +1634,7 @@ try {
           if (isAppUnavailableError(error)) throw error;
         }
       }
-      await page.goto(routeUrl, { timeout: 20000, waitUntil: "domcontentloaded" });
-      await waitForQuietDom(300, 2500);
+      await gotoRoute(routeUrl);
       // Downstream validation replays every action from a fresh navigation,
       // so evidence gathered in interaction-mutated page state must be
       // re-proven here or dropped; emitting it would fail deterministically.
