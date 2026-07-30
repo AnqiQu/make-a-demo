@@ -4,9 +4,12 @@ import { createReadStream } from "node:fs";
 import { lstat, readFile, readdir, readlink, rm, stat } from "node:fs/promises";
 import { basename, extname, join, resolve } from "node:path";
 import {
-  type SecretQuarantineManifest,
   containsPrivateKeyMaterial,
-  isSecretCandidatePath,
+  isEnvironmentFileName,
+  isSecretInspectionPath,
+} from "../repo-security/secret-predicates";
+import {
+  type SecretQuarantineManifest,
   quarantineRepoSecrets,
 } from "../repo-security/secret-quarantine";
 import { assertSafeGithubRepoUrl } from "./github-repo-url";
@@ -75,6 +78,8 @@ const privateKeySentinel = "-----BEGIN PRIVATE KEY-----";
 const readableFileNames = new Set([
   ".env",
   ".env.example",
+  ".npmrc",
+  ".yarnrc",
   "astro.config.mjs",
   "bun.lock",
   "package-lock.json",
@@ -295,10 +300,10 @@ async function readFileTextIfUseful(
 
 function isUsefulTextPath(relativePath: string): boolean {
   return (
-    /^\.env(?:\..+)?$/i.test(basename(relativePath)) ||
+    isEnvironmentFileName(relativePath) ||
     readableFileNames.has(basename(relativePath)) ||
     readableExtensions.has(extname(relativePath)) ||
-    isSecretCandidatePath(relativePath)
+    isSecretInspectionPath(relativePath)
   );
 }
 

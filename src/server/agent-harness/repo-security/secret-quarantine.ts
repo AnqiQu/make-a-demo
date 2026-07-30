@@ -1,4 +1,10 @@
-import { posix } from "node:path";
+import {
+  containsPrivateKeyMaterial,
+  isCredentialRegistryConfig,
+  isEnvironmentSecretFileName,
+  isPrivateKeyFileName,
+  looksLikeEnvironmentAssignments,
+} from "./secret-predicates";
 
 const secretQuarantineManifestVersion = "2026-07-15" as const;
 
@@ -26,7 +32,11 @@ export function quarantineRepoSecrets(files: RepoFile[]): {
 } {
   const entries = files.flatMap((file): SecretQuarantineEntry[] => {
     const path = normalizePath(file.path);
-    if (isPrivateEnvironmentFile(path)) {
+    if (
+      isEnvironmentSecretFileName(path) ||
+      isCredentialRegistryConfig(path, file.text) ||
+      looksLikeEnvironmentAssignments(file.text)
+    ) {
       const environmentKeys = readEnvironmentKeys(file.text);
       return [
         {
@@ -36,10 +46,7 @@ export function quarantineRepoSecrets(files: RepoFile[]): {
         },
       ];
     }
-    if (
-      containsPrivateKeyMaterial(file.text) ||
-      isDedicatedPrivateKeyPath(path)
-    ) {
+    if (containsPrivateKeyMaterial(file.text) || isPrivateKeyFileName(path)) {
       return [{ kind: "private-key-file", path }];
     }
     return [];
@@ -60,23 +67,6 @@ export function quarantineRepoSecrets(files: RepoFile[]): {
   };
 }
 
-/** Returns whether the snapshot reader should inspect a normally-binary path. */
-export function isSecretCandidatePath(path: string): boolean {
-  const filename = posix.basename(normalizePath(path)).toLowerCase();
-  const extension = posix.extname(filename);
-  return (
-    filename === "id_ed25519" ||
-    filename === "id_rsa" ||
-    [".key", ".p12", ".pem", ".pfx"].includes(extension)
-  );
-}
-
-function isPrivateEnvironmentFile(path: string): boolean {
-  const filename = posix.basename(path).toLowerCase();
-  if (!/^\.env(?:\..+)?$/.test(filename)) return false;
-  return !/\.(?:example|sample|template)$/.test(filename);
-}
-
 function readEnvironmentKeys(text: string | undefined): string[] {
   if (text === undefined) return [];
   return [
@@ -90,20 +80,6 @@ function readEnvironmentKeys(text: string | undefined): string[] {
         .filter((key): key is string => key !== undefined),
     ),
   ].sort();
-}
-
-/** Detects PEM and OpenSSH private-key blocks without matching certificates. */
-export function containsPrivateKeyMaterial(text: string | undefined): boolean {
-  return /-----BEGIN (?:(?:OPENSSH|RSA|DSA|EC|ENCRYPTED) )?PRIVATE KEY-----/.test(
-    text ?? "",
-  );
-}
-
-function isDedicatedPrivateKeyPath(path: string): boolean {
-  const filename = posix.basename(path).toLowerCase();
-  const extension = posix.extname(filename);
-  if (filename === "id_ed25519" || filename === "id_rsa") return true;
-  return extension === ".key" || extension === ".p12" || extension === ".pfx";
 }
 
 function normalizePath(path: string): string {

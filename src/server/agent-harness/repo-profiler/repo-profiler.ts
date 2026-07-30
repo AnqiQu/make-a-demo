@@ -1,4 +1,5 @@
 import { posix } from "node:path";
+import { isEnvironmentFileName } from "../repo-security/secret-predicates";
 import {
   type PackageManager,
   type RepoProfile,
@@ -103,7 +104,7 @@ export function profileRepo(input: RepoProfileInput): RepoProfile {
   );
   const candidatePorts = readCandidatePorts(packageScripts);
   const envExamples = files
-    .filter((file) => /^\.env(?:\..+)?$/.test(posix.basename(file.path)))
+    .filter((file) => isEnvironmentFileName(file.path))
     .map((file) => file.path);
 
   return {

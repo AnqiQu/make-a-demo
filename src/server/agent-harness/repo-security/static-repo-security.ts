@@ -1,8 +1,10 @@
 import { posix } from "node:path";
 import {
-  type SecretQuarantineManifest,
   containsPrivateKeyMaterial,
-} from "./secret-quarantine";
+  isEnvironmentSecretFileName,
+  isPrivateKeyFileName,
+} from "./secret-predicates";
+import type { SecretQuarantineManifest } from "./secret-quarantine";
 
 type StaticRepoSecurityFile = {
   path: string;
@@ -34,8 +36,6 @@ const lockfiles = new Set([
   "pnpm-lock.yaml",
   "yarn.lock",
 ]);
-const secretFileNames = new Set(["id_ed25519", "id_rsa"]);
-const privateKeyContainerExtensions = new Set([".key", ".p12", ".pfx"]);
 const externalServicePackages = [
   "airtable",
   "aws-sdk",
@@ -156,20 +156,11 @@ function symlinkEscapesRepo(path: string, target: string): boolean {
 }
 
 function isCommittedSecretFile(filename: string): boolean {
-  const normalized = filename.toLowerCase();
-  if (normalized === ".env") return true;
-  if (!normalized.startsWith(".env.")) return false;
-  return !/\.(?:example|sample|template)$/.test(normalized);
+  return isEnvironmentSecretFileName(filename);
 }
 
 function isPrivateKeyPath(filename: string): boolean {
-  const normalized = filename.toLowerCase();
-  const extensionIndex = normalized.lastIndexOf(".");
-  const extension = extensionIndex < 0 ? "" : normalized.slice(extensionIndex);
-  return (
-    secretFileNames.has(normalized) ||
-    privateKeyContainerExtensions.has(extension)
-  );
+  return isPrivateKeyFileName(filename);
 }
 
 function inspectPackageJson(

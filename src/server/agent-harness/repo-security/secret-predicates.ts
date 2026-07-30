@@ -1,0 +1,110 @@
+import { posix } from "node:path";
+
+const environmentFileNames = new Set([".envrc", ".netrc", ".pgpass"]);
+const registryConfigFileNames = new Set([".npmrc", ".yarnrc"]);
+const privateKeyFileNames = new Set([
+  "id_dsa",
+  "id_ecdsa",
+  "id_ed25519",
+  "id_rsa",
+]);
+const privateKeyExtensions = new Set([
+  ".jks",
+  ".key",
+  ".p8",
+  ".p12",
+  ".pfx",
+  ".ppk",
+]);
+const exampleSuffixPattern = /\.(?:example|sample|template)$/;
+
+function secretFileName(path: string): string {
+  return posix.basename(path.replaceAll("\\", "/")).toLowerCase();
+}
+
+/** Env-shaped filename that may carry real values; example variants excluded. */
+export function isEnvironmentSecretFileName(path: string): boolean {
+  const name = secretFileName(path);
+  if (exampleSuffixPattern.test(name)) return false;
+  return (
+    environmentFileNames.has(name) ||
+    /^\.env(?:\..+)?$/.test(name) ||
+    /.\.env$/.test(name) ||
+    name.endsWith(".tfvars")
+  );
+}
+
+/** Env-family filename including example variants, for env-hint discovery. */
+export function isEnvironmentFileName(path: string): boolean {
+  const name = secretFileName(path);
+  return (
+    isEnvironmentSecretFileName(name) ||
+    /^\.env(?:\..+)?$/.test(name) ||
+    /.\.env\.(?:example|sample|template)$/.test(name)
+  );
+}
+
+/**
+ * Package-manager registry config that carries credentials. Registry-only
+ * config is legitimate and required by installs, so the filename alone never
+ * condemns it; unreadable content fails closed.
+ */
+export function isCredentialRegistryConfig(
+  path: string,
+  text: string | undefined,
+): boolean {
+  if (!registryConfigFileNames.has(secretFileName(path))) return false;
+  if (text === undefined) return true;
+  return /_auth|_password|:always-auth|npm_token/i.test(text);
+}
+
+/** Filenames that are private-key containers regardless of content. */
+export function isPrivateKeyFileName(path: string): boolean {
+  const name = secretFileName(path);
+  return (
+    privateKeyFileNames.has(name) ||
+    privateKeyExtensions.has(posix.extname(name))
+  );
+}
+
+/**
+ * Paths worth reading as text for secret inspection even when normally
+ * binary. Includes `.pem`, which certificates share with private keys, so
+ * content decides rather than the name.
+ */
+export function isSecretInspectionPath(path: string): boolean {
+  return (
+    isPrivateKeyFileName(path) || posix.extname(secretFileName(path)) === ".pem"
+  );
+}
+
+/** Detects PEM, PGP, and PuTTY private-key blocks without matching certificates. */
+export function containsPrivateKeyMaterial(text: string | undefined): boolean {
+  return /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|PuTTY-User-Key-File-\d/.test(
+    text ?? "",
+  );
+}
+
+/**
+ * Content fallback for env files under non-env names: every non-comment line
+ * is an UPPER_SNAKE assignment with a non-placeholder value, at least three of
+ * them. Build files with targets or prose never satisfy the all-lines rule.
+ */
+export function looksLikeEnvironmentAssignments(
+  text: string | undefined,
+): boolean {
+  if (text === undefined) return false;
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"));
+  if (lines.length < 3) return false;
+  const assignments = lines.filter((line) =>
+    /^(?:export\s+)?[A-Z][A-Z0-9_]{2,}=\S/.test(line),
+  );
+  if (assignments.length !== lines.length) return false;
+  const placeholders = assignments.filter((line) =>
+    /=["']?(?:x{3,}|changeme|replace|your[-_]|<|\{\{|\$\{)/i.test(line),
+  );
+  return placeholders.length < assignments.length;
+}

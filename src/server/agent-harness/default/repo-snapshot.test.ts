@@ -157,6 +157,101 @@ describe("readGithubRepoSnapshot", () => {
     expect(excludedPaths).not.toContain("certificates/public.pem");
   });
 
+  it("quarantines credential-shaped files beyond dotenv names", async () => {
+    const runDirectory = join(
+      tmpdir(),
+      `makeademo-secret-predicates-${crypto.randomUUID()}`,
+    );
+    await mkdir(runDirectory, { recursive: true });
+    let excludedPaths: string[] = [];
+    const git: RepoSnapshotGit = {
+      async archiveRevision(input) {
+        excludedPaths = input.excludedPaths ?? [];
+        await writeFile(input.archivePath, "sanitized execution archive");
+      },
+      async clone(input) {
+        await mkdir(join(input.checkoutPath, "config"), { recursive: true });
+        await mkdir(join(input.checkoutPath, "packages", "app"), {
+          recursive: true,
+        });
+        await mkdir(join(input.checkoutPath, "notes"), { recursive: true });
+        await writeFile(join(input.checkoutPath, "package.json"), "{}");
+        await writeFile(
+          join(input.checkoutPath, ".envrc"),
+          "export AWS_SECRET_ACCESS_KEY=abc123\n",
+        );
+        await writeFile(
+          join(input.checkoutPath, "config", "prod.env"),
+          "API_KEY=live-key\n",
+        );
+        await writeFile(
+          join(input.checkoutPath, ".npmrc"),
+          "//registry.npmjs.org/:_authToken=npm_secret\n",
+        );
+        await writeFile(
+          join(input.checkoutPath, "packages", "app", ".npmrc"),
+          "registry=https://registry.npmjs.org/\n",
+        );
+        await writeFile(
+          join(input.checkoutPath, "config", "prod.tfvars"),
+          'db_password = "hunter2"\n',
+        );
+        await writeFile(
+          join(input.checkoutPath, "notes", "legacy-key.txt"),
+          "PuTTY-User-Key-File-2: ssh-rsa\nPrivate-Lines: 14\n",
+        );
+        await writeFile(
+          join(input.checkoutPath, "config", "secrets.txt"),
+          "STRIPE_KEY=sk_live_abc\nDB_URL=postgres://prod\nSMTP_PASS=hunter2\n",
+        );
+        await writeFile(
+          join(input.checkoutPath, "Makefile"),
+          "CFLAGS=-O2\nbuild:\n\tmake all\n",
+        );
+        await writeFile(join(input.checkoutPath, "signing.p8"), "binary");
+        await writeFile(
+          join(input.checkoutPath, ".env.sample"),
+          "API_KEY=replace-me\n",
+        );
+      },
+      async readHead() {
+        return "abc123def456";
+      },
+    };
+
+    const snapshot = await readGithubRepoSnapshot(
+      {
+        log: async () => undefined,
+        repoUrl: "https://github.com/acme/predicate-app",
+        runDirectory,
+      },
+      { git },
+    );
+
+    expect(excludedPaths).toEqual([
+      ".envrc",
+      ".npmrc",
+      "config/prod.env",
+      "config/prod.tfvars",
+      "config/secrets.txt",
+      "notes/legacy-key.txt",
+      "signing.p8",
+    ]);
+    expect(
+      snapshot.secretQuarantineManifest.entries.find(
+        (entry) => entry.path === "notes/legacy-key.txt",
+      )?.kind,
+    ).toBe("private-key-file");
+    expect(
+      snapshot.secretQuarantineManifest.entries.find(
+        (entry) => entry.path === ".envrc",
+      )?.environmentKeys,
+    ).toEqual(["AWS_SECRET_ACCESS_KEY"]);
+    expect(excludedPaths).not.toContain("packages/app/.npmrc");
+    expect(excludedPaths).not.toContain("Makefile");
+    expect(excludedPaths).not.toContain(".env.sample");
+  });
+
   it("passes absolute checkout and archive paths to Git when the run directory is relative", async () => {
     await rm(".makeademo-test-runs", { force: true, recursive: true });
     const receivedPaths: string[] = [];
