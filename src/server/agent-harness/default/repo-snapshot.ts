@@ -1,7 +1,15 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { lstat, readFile, readdir, readlink, rm, stat } from "node:fs/promises";
+import {
+  lstat,
+  open,
+  readFile,
+  readdir,
+  readlink,
+  rm,
+  stat,
+} from "node:fs/promises";
 import { basename, extname, join, resolve } from "node:path";
 import {
   containsPrivateKeyMaterial,
@@ -160,6 +168,10 @@ export async function readGithubRepoSnapshot(
         ? {}
         : { excludedPaths: quarantine.excludedPaths }),
     });
+    await assertArchiveExcludesQuarantinedPaths(
+      archivePath,
+      quarantine.excludedPaths,
+    );
     const sourceArchive = {
       commitSha,
       path: archivePath,
@@ -187,7 +199,75 @@ export async function readGithubRepoSnapshot(
   }
 }
 
-const defaultRepoSnapshotGit: RepoSnapshotGit = {
+/**
+ * Fails closed when the archive that reaches agents and the runtime still
+ * contains any quarantined path. This is the one assertion on the one
+ * mechanism that removes secrets; it must read the real tar members.
+ */
+async function assertArchiveExcludesQuarantinedPaths(
+  archivePath: string,
+  excludedPaths: string[],
+): Promise<void> {
+  if (excludedPaths.length === 0) return;
+  const members = new Set(
+    (await readTarMemberPaths(archivePath)).map((member) =>
+      member.replace(/^\.\//, ""),
+    ),
+  );
+  const leaked = excludedPaths.filter((path) => members.has(path));
+  if (leaked.length > 0) {
+    throw new Error(
+      `Screened repository archive still contains quarantined path(s): ${leaked.join(", ")}.`,
+    );
+  }
+}
+
+async function readTarMemberPaths(archivePath: string): Promise<string[]> {
+  const handle = await open(archivePath, "r");
+  try {
+    const members: string[] = [];
+    const header = Buffer.alloc(512);
+    let position = 0;
+    let overrideName: string | undefined;
+    for (;;) {
+      const { bytesRead } = await handle.read(header, 0, 512, position);
+      if (bytesRead < 512 || header.every((byte) => byte === 0)) break;
+      position += 512;
+      const size = Number.parseInt(
+        header.toString("ascii", 124, 136).replaceAll("\0", " ").trim() || "0",
+        8,
+      );
+      const dataBytes = Math.ceil(size / 512) * 512;
+      const typeflag = String.fromCharCode(header[156] ?? 0);
+      if (typeflag === "L" || typeflag === "x" || typeflag === "g") {
+        const data = Buffer.alloc(size);
+        await handle.read(data, 0, size, position);
+        const text = data.toString("utf8");
+        if (typeflag === "L") {
+          overrideName = text.replace(/\0+$/, "");
+        } else if (typeflag === "x") {
+          overrideName =
+            /(?:^|\n)\d+ path=([^\n]+)\n/.exec(text)?.[1] ?? overrideName;
+        }
+      } else {
+        const rawName = header.toString("utf8", 0, 100).split("\0", 1)[0] ?? "";
+        const prefix =
+          header.toString("utf8", 345, 500).split("\0", 1)[0] ?? "";
+        members.push(
+          overrideName ??
+            (prefix.length > 0 ? `${prefix}/${rawName}` : rawName),
+        );
+        overrideName = undefined;
+      }
+      position += dataBytes;
+    }
+    return members;
+  } finally {
+    await handle.close();
+  }
+}
+
+export const defaultRepoSnapshotGit: RepoSnapshotGit = {
   async archiveRevision(input) {
     const excludedPathspecs = (input.excludedPaths ?? []).map(
       (path) => `:(exclude,top,literal)${path}`,

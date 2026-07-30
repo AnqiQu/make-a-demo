@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   appendFile,
@@ -10,12 +11,39 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
   type RepoSnapshotGit,
   assertRepoSourceArchiveIntegrity,
+  defaultRepoSnapshotGit,
   readGithubRepoSnapshot,
 } from "./repo-snapshot";
+
+const run = promisify(execFile);
+
+async function createRealGitCheckout(checkoutPath: string): Promise<void> {
+  await mkdir(checkoutPath, { recursive: true });
+  await writeFile(join(checkoutPath, "package.json"), "{}");
+  await writeFile(
+    join(checkoutPath, ".env"),
+    "DATABASE_URL=postgres://production-secret\n",
+  );
+  await writeFile(join(checkoutPath, "index.ts"), "export const app = 1;\n");
+  const git = (...args: string[]) =>
+    run("git", [
+      "-C",
+      checkoutPath,
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test",
+      ...args,
+    ]);
+  await git("init");
+  await git("add", "-A");
+  await git("commit", "-m", "seed");
+}
 
 describe("readGithubRepoSnapshot", () => {
   it("reads workspace declarations needed to classify nested packages", async () => {
@@ -250,6 +278,69 @@ describe("readGithubRepoSnapshot", () => {
     expect(excludedPaths).not.toContain("packages/app/.npmrc");
     expect(excludedPaths).not.toContain("Makefile");
     expect(excludedPaths).not.toContain(".env.sample");
+  });
+
+  it("proves the real archive omits quarantined paths through the real git", async () => {
+    const runDirectory = join(
+      tmpdir(),
+      `makeademo-real-archive-${crypto.randomUUID()}`,
+    );
+    await mkdir(runDirectory, { recursive: true });
+    const git: RepoSnapshotGit = {
+      archiveRevision: defaultRepoSnapshotGit.archiveRevision,
+      async clone(input) {
+        await createRealGitCheckout(input.checkoutPath);
+      },
+      readHead: defaultRepoSnapshotGit.readHead,
+    };
+
+    const snapshot = await readGithubRepoSnapshot(
+      {
+        log: async () => undefined,
+        repoUrl: "https://github.com/acme/real-archive-app",
+        runDirectory,
+      },
+      { git },
+    );
+
+    expect(snapshot.secretQuarantineManifest.entries).toEqual([
+      expect.objectContaining({ kind: "environment-file", path: ".env" }),
+    ]);
+    const archive = await readFile(snapshot.sourceArchive.path);
+    expect(archive.includes("index.ts")).toBe(true);
+    expect(archive.includes("production-secret")).toBe(false);
+  });
+
+  it("rejects an archive that still contains a quarantined path", async () => {
+    const runDirectory = join(
+      tmpdir(),
+      `makeademo-leaky-archive-${crypto.randomUUID()}`,
+    );
+    await mkdir(runDirectory, { recursive: true });
+    const git: RepoSnapshotGit = {
+      async archiveRevision(input) {
+        await defaultRepoSnapshotGit.archiveRevision({
+          archivePath: input.archivePath,
+          checkoutPath: input.checkoutPath,
+          commitSha: input.commitSha,
+        });
+      },
+      async clone(input) {
+        await createRealGitCheckout(input.checkoutPath);
+      },
+      readHead: defaultRepoSnapshotGit.readHead,
+    };
+
+    await expect(
+      readGithubRepoSnapshot(
+        {
+          log: async () => undefined,
+          repoUrl: "https://github.com/acme/leaky-archive-app",
+          runDirectory,
+        },
+        { git },
+      ),
+    ).rejects.toThrow(/quarantined path/);
   });
 
   it("passes absolute checkout and archive paths to Git when the run directory is relative", async () => {
