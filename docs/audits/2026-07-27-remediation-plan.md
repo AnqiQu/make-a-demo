@@ -545,6 +545,72 @@ transient provider blips can clear.
 it is general diagnosability/robustness, applies to every repo, and the next such failure
 should name its cause.
 
+## Addendum (2026-07-30, after the post-N13-retry Midday run)
+
+Run `terminal-2026-07-30T05-38-38-791Z` (midday). The provider blip cleared and N13 held:
+root dependencies installed, no module-not-found errors, and grounding improved 0/3 → 1/3
+across two exploration attempts — the deepest Midday run yet. The remaining ungrounded
+features sat on display-only chart/widget routes that render no headings, no `main p`
+text, and no named controls, so no assert evidence could exist for them.
+
+**New finding N15 (High, general to display-heavy apps) — display-only routes cannot
+produce assert evidence.** Landed as `c58a5e0`: when a route observes zero headings and
+zero text, harvest assert candidates from the accessibility tree (`ariaSnapshot`) and
+verify each as a unique visible text locator; on grounding failure, name the routes that
+carry browser evidence so repairs reselect features onto them instead of guessing.
+
+## Addendum (2026-07-30, after the pipeline-matrix run)
+
+Matrix report `matrix-report-2026-07-30T06-16-23-886Z`: midday failed
+(`terminal-2026-07-30T06-04-40-923Z`); vite-spa, pnpm-monorepo, and npm-express-static
+were skipped — their `MAKEADEMO_MATRIX_REPO_*` repo URLs are not configured yet, so the
+matrix currently gates nothing but Midday.
+
+**This run is not an N15 gate.** The matrix process loaded the explorer module at
+06:04:40Z; the session transcript shows the N15 harvest edit was written to
+`submitted-app-explorer.ts` at 06:06:30Z (committed 06:07 local as `c58a5e0`). The run
+executed the pre-N15 explorer — consistent with its failure message lacking the N15
+steering suffix. Midday must be rerun to gate N15. The current script was verified
+end-to-end locally instead: the real generated script, extracted from the upload command
+and run under bun against a headings-free table page, produced harvest text, 4 verified
+text asserts, and an exercised fill — a groundable route.
+
+**New finding N16 (High) — three grounding gaps the run exposes in current code.**
+(a) *Observation races streamed content.* `gotoRoute` settles on quiet DOM (300ms/2.5s),
+but dev servers serve a DOM-quiet skeleton while compiling or streaming a first-hit route:
+`/account` (visited first) observed title-only-empty while `/account/date-and-locale`
+(same layout, seconds later) observed 5 verified headings; `/`, `/inbox/settings`, and
+`/invoices/products` were empty the same way. Add a bounded content-presence wait
+(visible link/heading/control or minimal body text, ~15s cap) between `readyState` and
+the quiet settle — a no-op on pages that render immediately.
+(b) *The per-feature `exercised` requirement is stronger than its own consumer.*
+`/account/date-and-locale` carried 5 verified asserts for `date-locale-preferences` yet
+stayed ungrounded: its only controls are combobox trigger buttons whose dropdown-open
+produces no describable outcome. The FlowSpec seam already permits navigation + unique
+visible assertion when no exercised action exists; exploration grounding should match —
+ground on ≥1 verified assert action, keep exercised preferred downstream. Title-only pages
+still fail (no verified content → no assert actions), so the 2.5 hole stays closed. Note
+N15 alone is structurally insufficient without this: harvested asserts can never satisfy
+the exercised leg on a display-only route.
+(c) *N15's steering invites fidelity violations.* Post-exploration repairs edited
+`layout.tsx` plus 6 settings components to "make features observable" — exactly what the
+fidelity gate rejects (2 attempts burned, budget exhausted). The steering text's "or make
+the missing features render observable content" clause must go; steer only toward
+reselecting `featureInventory` entries onto evidence-bearing routes.
+(d) *Latent: repos that ship `@playwright/test` shadow the explorer's runtime.* Verified
+locally: bun resolves the explorer's `@playwright/test` import by walking up from
+`/workspace/.makeademo/exploration` into the repo's `node_modules`, consulting `NODE_PATH`
+only as a fallback. Midday escaped (its 1.58.2 is an uninstalled optional-peer
+resolution), but any repo that materializes its own `@playwright/test` pins the explorer
+to that version — whose browser revision is absent from the image (1.58 wants
+`chromium_headless_shell-1208`; the image ships 1223). Move the explorer script outside
+`/workspace` so resolution deterministically reaches the image's pinned install.
+
+**N12 recurrence (priority raised Medium → High).** Two of the five repair attempts were
+burned wholly or partly on hand-edited `bun.lock` hunks (attempt-2's rejection was
+lockfile-only). The xlsx CDN dependency class makes lockfile edits near-inevitable in
+dependency repairs; strip lockfile hunks deterministically instead of burning attempts.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
