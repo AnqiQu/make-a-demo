@@ -681,6 +681,18 @@ attempt-5/attempt-6 contrast is the proof) and re-validate, instead of burning a
 attempt. Lockfiles are backend-owned: package.json drives reconciliation at the next
 install window, so stripping agent lockfile edits never desynchronizes the runtime.
 
+**N12 landed (2026-07-31) as `637df1c`, with a correction to the analysis above.** The
+repair-delta attribution is structurally unreliable: preflight-3's successful install ran
+its lockfile reconciliation *between* the two diff captures, so the `bun.lock` delta
+blamed on repair-5 was most likely the backend's own reconciliation write — the "agent
+hand-edited despite the prompt rule" reading in this and earlier addenda was at least
+partly misattribution. The landed fix is accordingly simpler and stronger than the
+restore-and-revalidate sketch: lockfile paths are no longer fidelity violations at all —
+not in repair deltas, not in the modified-original checks. Ownership is enforced where
+it actually binds: frozen installation re-derives lockfile content from package.json at
+every install window, and the runtime network policy bounds what any lockfile can reach.
+No violation, no burned attempts, no attribution problem.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
