@@ -535,6 +535,55 @@ describe("exploreSubmittedApp", () => {
     expect(result.validationReport.status).toBe("passed");
   });
 
+  it("attaches managed-app stderr to a failed exploration verdict", async () => {
+    const ssrError =
+      "⨯ Error [TRPCClientError]: Failed to parse URL from /api/demo-trpc/invoice.get";
+    const { result } = await exploreObservation({
+      featureInventory: [preparedFeature()],
+      readSubmittedCodeAppStatus: async () => ({
+        running: true,
+        stderr: ssrError,
+        stdout: "",
+      }),
+      routes: [
+        observedRoute({
+          featureIds: ["post-article"],
+          headings: [],
+          path: "/#/editor",
+          text: [],
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.stderrExcerpts.join("\n")).toContain(
+      "Failed to parse URL",
+    );
+    expect(result.validationReport.suggestedRepairHints.join(" ")).toContain(
+      "Server-side runtime errors",
+    );
+  });
+
+  it("keeps the exploration verdict intact when app status cannot be read", async () => {
+    const { result } = await exploreObservation({
+      featureInventory: [preparedFeature()],
+      readSubmittedCodeAppStatus: async () => {
+        throw new Error("status channel unavailable");
+      },
+      routes: [
+        observedRoute({
+          featureIds: ["post-article"],
+          headings: [],
+          path: "/#/editor",
+          text: [],
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.stderrExcerpts).toEqual([]);
+  });
+
   it("classifies module-not-found page errors as a missing dependency", async () => {
     const { result } = await exploreObservation({
       featureInventory: [

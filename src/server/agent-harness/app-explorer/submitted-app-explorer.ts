@@ -245,13 +245,33 @@ export async function exploreSubmittedApp(input: {
     );
   }
 
-  return createExplorationArtifacts({
+  const artifacts = createExplorationArtifacts({
     baseUrl: input.baseUrl,
     featureInventory: input.featureInventory ?? [],
     observation,
     preparationManifestId: input.preparationManifestId,
     requestedFeatures: input.requestedFeatures ?? [],
   });
+  if (artifacts.validationReport.status !== "failed") return artifacts;
+  // Browser-side evidence cannot see server-side render failures: an SSR
+  // throw leaves pageErrors and consoleErrors empty while routes stream no
+  // content. The managed app's stderr is evidence, never a gate — dev
+  // servers also log benign errors.
+  const diagnostics = createAppStatusDiagnostics(
+    await readAppStatus(input.workspace),
+  );
+  if (diagnostics.stderrExcerpts.length === 0) return artifacts;
+  return {
+    ...artifacts,
+    validationReport: {
+      ...artifacts.validationReport,
+      stderrExcerpts: diagnostics.stderrExcerpts,
+      suggestedRepairHints: [
+        "Server-side runtime errors were observed while routes rendered; inspect the stderr evidence before changing feature selection.",
+        ...artifacts.validationReport.suggestedRepairHints,
+      ],
+    },
+  };
 }
 
 async function readWorkspaceCapacityEvidence(
@@ -499,8 +519,10 @@ function createAppStatusDiagnostics(
   stderrExcerpts: string[];
   stdoutExcerpts: string[];
 } {
-  const stderrExcerpt = appStatus?.stderr.slice(-500) ?? "";
-  const stdoutExcerpt = appStatus?.stdout.slice(-500) ?? "";
+  // One server-side render error with its cause and stack runs 1-2KB; a
+  // shorter tail truncates the error name away and leaves only frame noise.
+  const stderrExcerpt = appStatus?.stderr.slice(-2000) ?? "";
+  const stdoutExcerpt = appStatus?.stdout.slice(-2000) ?? "";
   return {
     output: [stderrExcerpt, stdoutExcerpt].filter(Boolean).join("\n"),
     stderrExcerpts: stderrExcerpt ? [stderrExcerpt] : [],
