@@ -844,6 +844,13 @@ than the `artifacts/` JSON mirror; best-effort with `exploration.evidence.persis
 `exploration.evidence.unavailable` events, so evidence transfer can never turn a
 diagnosable failure into an infrastructure error — the pre-existing failed-exploration
 tests, whose fake workspaces lack download support, now pin the swallow path).
+Generality verified beyond Midday by replaying framework-diverse scenarios through the
+real validator: a CRA Intercom widget wrap (`REACT_APP_` flag), a Vue
+`<template v-if>` session-recorder gate (`VITE_` flag), and a SvelteKit `{#if}`
+error-reporter gate all pass, while an ungated Vue re-arrangement and a gated React
+wrap that injects a new banner stay rejected. Known conservative boundaries fail
+closed: reformat-while-wrapping and attribute-level gates (`<div v-if>`) keep the old
+strict rejection, and static-HTML script tags have no gate lane at all.
 
 ## Open decisions to confirm before Phase 4/7
 
