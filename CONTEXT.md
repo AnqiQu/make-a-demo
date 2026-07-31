@@ -44,6 +44,9 @@
 - **Compositing**: The stage where MakeADemo assembles Captured Scene Clips and compositor-native Synthetic Scenes, in Demo Script order, into the final demo video with overlays, transitions, music, and other presentation effects.
 - **Draft Composite**: A temporary composited demo video produced for quality review before MakeADemo accepts it as the final output.
 
+- **Navigation Chrome**: The harvested strings shared across an explored app rather than belonging to one page: the union of every route's primary-navigation entries plus, when at least four routes exist, any string repeated on more than half the routes. Chrome cannot evidence rendered content.
+- **Route-Distinct Evidence**: A route's harvested headings and text minus Navigation Chrome. Feature grounding, reselection steering, and Flow Spec assertion quality all require Route-Distinct Evidence; buttons, inputs, and links never qualify because controls exist identically in hollow and healthy apps.
+
 - **Pipeline Stage**: One user-visible step in the MakeADemo Pipeline with clear inputs, outputs, and failure states.
 - **Pipeline Job**: One execution of the MakeADemo Pipeline for a submitted project.
 - **External Seam**: A stable boundary around infrastructure or third-party behavior, such as sandbox execution, browser automation, model calls, artifact storage, auth, or rendering.

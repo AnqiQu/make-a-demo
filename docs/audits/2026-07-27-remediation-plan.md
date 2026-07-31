@@ -920,6 +920,27 @@ already propagates N21b), and fixture-literal or absolute-URL checks (overfit).
 Acceptance: Midday either renders data or fails at exploration with the empty-app
 classification and SSR evidence; homer stays green.
 
+**N21 landed (same day).** `5904113` + `b9f2b38` (N21a — `readRouteDistinctContent`
+computes Navigation Chrome vs Route-Distinct Evidence, both now CONTEXT.md glossary
+terms; grounding additionally requires a feature-tagged content-bearing route; the
+hollow case classifies `empty/unmeaningful app state` when no route has content, and
+reselection steering names only content-bearing routes otherwise; headingless routes
+emit up to three text asserts distinct-first; the aria harvest fires whenever selector
+text is only the route's own nav/link names — proven against a real chromium table
+page — and all text harvesting moved to `innerText`, killing the stylesheet-in-headings
+leak). `b535381` (N21b — `assertFlowSpecGrounded` rejects chrome-only asserts whenever
+the catalog offers a route-distinct one, naming the qualifying asserts; contract
+invariant added). `64efe7c` (N21c — failed exploration verdicts attach a 2KB
+managed-app stderr tail with an inspect-stderr hint; excerpts raised from 500 chars so
+one full SSR error survives). `23eb620` (N21d — exploration evidence mirrors to
+`exploration-evidence/` on success as well as failure). Replay verification against
+the hollow run's own app-map + action-catalog: the artifacts that passed every gate
+now fail as "prepared feature not observable" with steering naming exactly the two
+routes that genuinely rendered content (`/account/date-and-locale`,
+`/tracker?create=true`) — the empty-app classification is reserved for the
+no-content-anywhere case, and on a live rerun the verdict additionally carries the
+`Failed to parse URL` stderr evidence pointing at the data path.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
