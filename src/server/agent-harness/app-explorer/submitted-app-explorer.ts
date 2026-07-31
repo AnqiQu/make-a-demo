@@ -145,7 +145,9 @@ const explorerDirectory = "/workspace/.makeademo/exploration";
 // pinned install — the only one whose browsers exist in the image.
 const explorerRuntimeDirectory = "/tmp/makeademo/exploration";
 const explorerPath = `${explorerRuntimeDirectory}/explore-app.mjs`;
-const explorationCommandTimeoutMs = 5 * 60_000;
+// Sized for per-navigation content waits on streaming-SSR apps; the script's
+// own deadline stays at 70% of this budget, leaving headroom to finalize.
+const explorationCommandTimeoutMs = 7 * 60_000;
 
 /**
  * Explores the real prepared app with Playwright inside the secret-free

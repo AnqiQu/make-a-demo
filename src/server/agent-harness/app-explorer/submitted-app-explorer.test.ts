@@ -1159,7 +1159,7 @@ describe("exploreSubmittedApp", () => {
       },
     });
 
-    expect(timeoutMs).toBe(5 * 60_000);
+    expect(timeoutMs).toBe(7 * 60_000);
     expect(result).toMatchObject({
       kind: "repairable-failure",
       validationReport: {
