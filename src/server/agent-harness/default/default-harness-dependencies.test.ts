@@ -1,7 +1,9 @@
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { createPipelineEventLogger } from "../../shared/logging/pipeline-event-logger";
 import {
@@ -25,6 +27,8 @@ import type {
 import { createPreparationManifestTemplate } from "../schemas/preparation-manifest-template";
 import { createDefaultAgentHarnessDependencies } from "./default-harness-dependencies";
 import type { RepoSourceArchive } from "./repo-snapshot";
+
+const execFileAsync = promisify(execFile);
 
 describe("createDefaultAgentHarnessDependencies", () => {
   it("uses GPT-5.6 Terra for agent stages by default", async () => {
@@ -3504,6 +3508,112 @@ describe("createDefaultAgentHarnessDependencies", () => {
       });
     } finally {
       await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("mirrors exploration evidence into the run directory when exploration fails", async () => {
+    const outputRoot = await mkdtemp(
+      join(tmpdir(), "makeademo-exploration-evidence-"),
+    );
+    const sandboxEvidence = await mkdtemp(
+      join(tmpdir(), "makeademo-sandbox-evidence-"),
+    );
+    await mkdir(join(sandboxEvidence, "exploration"), { recursive: true });
+    await writeFile(
+      join(sandboxEvidence, "exploration", "login-abc123.png"),
+      "captured-login",
+    );
+    await writeFile(
+      join(sandboxEvidence, "exploration", "login-abc123.aria.yml"),
+      "- heading: Login",
+    );
+    const archiveCommands: string[] = [];
+    const base = blockedImageExplorationWorkspace(() => {});
+    const workspace: AgentHarnessWorkspace = {
+      ...base,
+      async executeSubmittedCode(command) {
+        if (command.includes("exploration-evidence.tar")) {
+          archiveCommands.push(command);
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        return (
+          base.executeSubmittedCode?.(command) ?? {
+            exitCode: 0,
+            stderr: "",
+            stdout: "",
+          }
+        );
+      },
+      async downloadSubmittedCodeFiles(files) {
+        for (const file of files) {
+          await execFileAsync("tar", [
+            "-cf",
+            file.destinationPath,
+            "-C",
+            sandboxEvidence,
+            "exploration",
+          ]);
+        }
+      },
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      externalResourceFetcher: async () => {
+        throw new Error("controller fetch failed");
+      },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot,
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    try {
+      const result = await harness.dependencies.exploreApp({
+        actionCatalogPath: "/workspace/.makeademo/action-catalog.json",
+        appMapPath: "/workspace/.makeademo/app-map.json",
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        preparationManifest: preparationManifest(),
+        preparationValidation: validationReport(
+          "preparation-preflight",
+          "passed",
+        ),
+        repoProfile: repoProfile(),
+        workspace,
+      });
+
+      expect(result.validationReport.status).toBe("failed");
+      await expect(
+        readFile(
+          join(
+            outputRoot,
+            "exploration-evidence",
+            "exploration",
+            "login-abc123.png",
+          ),
+          "utf8",
+        ),
+      ).resolves.toBe("captured-login");
+      await expect(
+        readFile(
+          join(
+            outputRoot,
+            "exploration-evidence",
+            "exploration",
+            "login-abc123.aria.yml",
+          ),
+          "utf8",
+        ),
+      ).resolves.toBe("- heading: Login");
+      expect(
+        archiveCommands.some(
+          (command) =>
+            command.includes("tar -cf") &&
+            command.includes("-C '/workspace/.makeademo'") &&
+            command.includes("-- 'exploration'"),
+        ),
+      ).toBe(true);
+    } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+      await rm(sandboxEvidence, { force: true, recursive: true });
     }
   });
 

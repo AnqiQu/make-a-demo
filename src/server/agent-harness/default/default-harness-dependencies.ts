@@ -32,6 +32,7 @@ import {
   exploreSubmittedApp,
   isExplicitAuthenticationFeature,
 } from "../app-explorer/submitted-app-explorer";
+import { downloadSubmittedCodeArchive } from "../daytona/submitted-code-artifact-archive";
 import { uploadSubmittedCodeExternalResourceCache } from "../daytona/submitted-code-external-resource-cache";
 import {
   AgentHarnessCommandTimeoutError,
@@ -638,7 +639,7 @@ export async function createDefaultAgentHarnessDependencies(
       return workspaceHandle.workspace;
     },
     async exploreApp({ demoBrief, preparationManifest, workspace }) {
-      return await runWithExternalResourceBroker({
+      const result = await runWithExternalResourceBroker({
         markUnresolved: (result, attempts) => ({
           ...result,
           validationReport: unresolvedExternalResourceValidation(
@@ -664,6 +665,14 @@ export async function createDefaultAgentHarnessDependencies(
         stage: "app-exploration",
         workspace,
       });
+      if (result.validationReport.status === "failed") {
+        await persistExplorationEvidence({
+          logger: options.logger,
+          outputRoot: options.outputRoot,
+          workspace,
+        });
+      }
+      return result;
     },
     async planFlow({
       actionCatalog,
@@ -3157,6 +3166,40 @@ async function tryReadPreparationManifest(
       failureClassification: "invalid-schema",
       ok: false,
     };
+  }
+}
+
+/**
+ * Exploration screenshots and aria snapshots exist only inside the sandbox
+ * and are destroyed with it, yet on a failed exploration they are the
+ * evidence that explains blank or ungrounded routes. Mirroring them is
+ * best-effort: evidence transfer must never turn a diagnosable pipeline
+ * failure into an infrastructure error.
+ */
+async function persistExplorationEvidence(input: {
+  logger: PipelineEventLogger | undefined;
+  outputRoot: string;
+  workspace: AgentHarnessWorkspace;
+}): Promise<void> {
+  const localDirectory = join(input.outputRoot, "exploration-evidence");
+  try {
+    await downloadSubmittedCodeArchive({
+      archiveName: "exploration-evidence.tar",
+      compression: "none",
+      entries: ["exploration"],
+      localDirectory,
+      remoteDirectory: makeADemoDirectory,
+      workspace: input.workspace,
+    });
+    await input.logger?.info({
+      event: "exploration.evidence.persisted",
+      path: localDirectory,
+    });
+  } catch (error) {
+    await input.logger?.warn({
+      error: readUnknownErrorMessage(error),
+      event: "exploration.evidence.unavailable",
+    });
   }
 }
 
