@@ -651,6 +651,12 @@ marginally late script still yields its result; (iii) resize
 per-navigation content waits existed, and feature entry routes are crawled first, so
 added budget goes to feature evidence.
 
+**N17 landed (same day).** `e262382` (ii — with a staleness guard: the run command now
+`rm -f`s the durable protocol before the script starts, so a timed-out attempt can never
+resurrect an earlier attempt's crawl), `f84db61` (i — gated behaviorally: the real
+generated script against a 20s-slow server with a 2s deadline finalizes in ~2s instead
+of being killed at 25s), `c39c515` (iii).
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
