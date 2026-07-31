@@ -390,7 +390,9 @@ describe("exploreSubmittedApp", () => {
     const script = readExplorerScript(commands);
 
     expect(script).toContain("const gotoRoute = async (url) =>");
-    expect(script).toContain("timeout: 60000");
+    // The 60s cold-start budget is clamped to the remaining exploration
+    // deadline so in-flight navigations cannot outlive the command budget.
+    expect(script).toContain("Math.min(60000, Math.max(1000, remainingMs()))");
     expect(script).toContain('document.readyState === "complete"');
     expect(script).not.toContain("waitForTimeout(500)");
   });

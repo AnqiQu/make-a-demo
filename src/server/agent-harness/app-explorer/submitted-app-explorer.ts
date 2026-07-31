@@ -1383,29 +1383,35 @@ try {
     if (message.type() === "error") pushBounded(result.consoleErrors, page.url() + ": " + message.text());
   });
   page.on("pageerror", (error) => pushBounded(result.pageErrors, page.url() + ": " + error.message));
+  const remainingMs = () => Math.max(0, deadlineAtMs - Date.now());
   const gotoRoute = async (url) => {
     // Dev servers compile each route on first hit; give the initial load a
     // cold-start budget and absorb one transient failure (mid-recompile
     // reloads surface as ERR_ABORTED) before treating the route as broken.
+    // Every long wait is clamped to the remaining deadline so in-flight
+    // work always finalizes inside the exploration command budget.
+    const gotoTimeoutMs = () => Math.min(60000, Math.max(1000, remainingMs()));
     try {
-      await page.goto(url, { timeout: 60000, waitUntil: "domcontentloaded" });
+      await page.goto(url, { timeout: gotoTimeoutMs(), waitUntil: "domcontentloaded" });
     } catch (error) {
-      if (isAppUnavailableError(error)) throw error;
-      await page.goto(url, { timeout: 60000, waitUntil: "domcontentloaded" });
+      if (isAppUnavailableError(error) || remainingMs() < 1000) throw error;
+      await page.goto(url, { timeout: gotoTimeoutMs(), waitUntil: "domcontentloaded" });
     }
     await page.waitForFunction(() => document.readyState === "complete", undefined, { timeout: 10000 }).catch(() => {});
-    // Dev servers compile and stream first-hit routes behind a DOM-quiet
-    // skeleton; observing that shell yields empty evidence. Wait for the
-    // first meaningful content — a no-op on pages that render immediately.
-    await page.waitForFunction(() => {
-      const hasBox = (element) => {
-        const box = element.getBoundingClientRect();
-        return box.width > 0 && box.height > 0;
-      };
-      const semantic = document.querySelectorAll("a[href], button, [role=button], input, textarea, select, h1, h2, h3, [role=heading], table, [role=grid]");
-      if (Array.from(semantic).some(hasBox)) return true;
-      return ((document.body && document.body.innerText) || "").trim().length >= 40;
-    }, undefined, { timeout: 15000 }).catch(() => {});
+    if (remainingMs() > 0) {
+      // Dev servers compile and stream first-hit routes behind a DOM-quiet
+      // skeleton; observing that shell yields empty evidence. Wait for the
+      // first meaningful content — a no-op on pages that render immediately.
+      await page.waitForFunction(() => {
+        const hasBox = (element) => {
+          const box = element.getBoundingClientRect();
+          return box.width > 0 && box.height > 0;
+        };
+        const semantic = document.querySelectorAll("a[href], button, [role=button], input, textarea, select, h1, h2, h3, [role=heading], table, [role=grid]");
+        if (Array.from(semantic).some(hasBox)) return true;
+        return ((document.body && document.body.innerText) || "").trim().length >= 40;
+      }, undefined, { timeout: Math.min(15000, Math.max(1, remainingMs())) }).catch(() => {});
+    }
     await waitForQuietDom(300, 2500);
   };
   const queue = [

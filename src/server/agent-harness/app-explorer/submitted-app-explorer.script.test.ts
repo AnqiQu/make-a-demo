@@ -109,4 +109,71 @@ describe("generated exploration script", () => {
       server.close();
     }
   }, 30_000);
+
+  it("abandons in-flight waits once the exploration deadline passes", async () => {
+    // Responses arrive only after 20s — far beyond a clamped goto budget but
+    // inside an unclamped 60s one.
+    const pendingTimers: NodeJS.Timeout[] = [];
+    const server = createServer((_request, response) => {
+      pendingTimers.push(
+        setTimeout(() => {
+          try {
+            response.writeHead(200, {
+              "content-type": "text/html; charset=utf-8",
+            });
+            response.end(
+              "<!doctype html><html><head><title>Slow</title></head><body><h1>Slow app</h1></body></html>",
+            );
+          } catch {}
+        }, 20_000),
+      );
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      )
+        .replaceAll("/workspace/.makeademo/exploration", outputDirectory)
+        .replace(
+          /deadlineAtMs = Date\.now\(\) \+ \d+/,
+          "deadlineAtMs = Date.now() + 2000",
+        );
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+
+      const startedAt = Date.now();
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const elapsedMs = Date.now() - startedAt;
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        routes: unknown[];
+        unreachableRoutes: unknown[];
+      };
+
+      // The script must finalize shortly after its deadline instead of
+      // riding out full-length navigation waits.
+      expect(elapsedMs).toBeLessThan(8_000);
+      expect(result.routes).toHaveLength(0);
+      expect(result.unreachableRoutes.length).toBeGreaterThan(0);
+    } finally {
+      for (const timer of pendingTimers) clearTimeout(timer);
+      server.close();
+    }
+  }, 30_000);
 });
