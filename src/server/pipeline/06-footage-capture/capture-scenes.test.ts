@@ -6,7 +6,9 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import type { AgentHarnessWorkspaceHandle } from "../../agent-harness/daytona/workspace.interface";
+import type { ExternalResourceManifest } from "../../shared/external-resources/external-resource-manifest.schema";
 import { captureScenesFromScript } from "./capture-scenes";
+import { PreparedWorkspacePlaywrightSceneRecorder } from "./playwright-scene-recorder";
 import type { SceneRecorder } from "./scene-recorder.interface";
 
 const execFileAsync = promisify(execFile);
@@ -272,7 +274,7 @@ describe("captureScenesFromScript", () => {
     expect(manifest.rawTakePath).toBeUndefined();
   });
 
-  it("runs Footage Capture scripts, trimming, and probing inside the prepared workspace", async () => {
+  it("runs Footage Capture remotely and trims clips locally from the downloaded raw take", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
     const tempRoot = join(workspace, "runs");
     const executedCommands: string[] = [];
@@ -307,10 +309,10 @@ describe("captureScenesFromScript", () => {
           const archiveSource = await mkdtemp(
             join(tmpdir(), "makeademo-capture-output-"),
           );
-          await mkdir(join(archiveSource, "scene-clips"), { recursive: true });
+          await mkdir(join(archiveSource, "raw-scenes"), { recursive: true });
           await writeFile(
-            join(archiveSource, "scene-clips", "scene-001.webm"),
-            "downloaded video",
+            join(archiveSource, "raw-scenes", "continuous-take.webm"),
+            "raw take",
           );
           await mkdir(dirname(files[0]?.destinationPath ?? ""), {
             recursive: true,
@@ -321,7 +323,7 @@ describe("captureScenesFromScript", () => {
             "-C",
             archiveSource,
             "--",
-            "scene-clips/scene-001.webm",
+            "raw-scenes/continuous-take.webm",
           ]);
         },
         async execute(command) {
@@ -349,9 +351,6 @@ describe("captureScenesFromScript", () => {
               stdout:
                 "/workspace/.makeademo/footage-capture-runs/capture-sandbox/work/continuous-take/playwright-videos/raw.webm\n",
             };
-          }
-          if (command.includes("ffprobe")) {
-            return { exitCode: 0, stderr: "", stdout: "1.200\n" };
           }
           if (command.includes("bun ")) {
             return {
@@ -381,6 +380,47 @@ describe("captureScenesFromScript", () => {
       },
     };
 
+    const externalResourceCache: {
+      directory: string;
+      manifest: ExternalResourceManifest;
+    } = {
+      directory: externalResourceDirectory,
+      manifest: {
+        entries: [
+          {
+            contentType: "image/svg+xml",
+            headers: {},
+            relativePath: `resources/${externalResourceDigest}`,
+            sha256: `sha256:${externalResourceDigest}`,
+            sizeBytes: externalResourceBody.byteLength,
+            status: 200,
+            url: "https://assets.example.com/logo.svg",
+          },
+        ],
+        version: "2026-07-15",
+      },
+    };
+    const trims: Array<{
+      durationMs: number;
+      outputVideoPath: string;
+      rawTakePath: string;
+      sceneId: string;
+    }> = [];
+    const recorder = new PreparedWorkspacePlaywrightSceneRecorder({
+      clipTrimmer: async (trim) => {
+        trims.push({
+          durationMs: trim.durationMs,
+          outputVideoPath: trim.outputVideoPath,
+          rawTakePath: trim.rawTakePath,
+          sceneId: trim.sceneId,
+        });
+        await writeFile(trim.outputVideoPath, "trimmed video");
+        return { durationSeconds: trim.durationMs / 1000 };
+      },
+      externalResourceCache,
+      preparationWorkspace,
+    });
+
     const manifest = await captureScenesFromScript({
       baseUrl: "https://preview.example.test/",
       captureRuntimeReset: {
@@ -388,25 +428,9 @@ describe("captureScenesFromScript", () => {
         stage: "capture-runtime-reset",
         status: "passed",
       },
-      externalResourceCache: {
-        directory: externalResourceDirectory,
-        manifest: {
-          entries: [
-            {
-              contentType: "image/svg+xml",
-              headers: {},
-              relativePath: `resources/${externalResourceDigest}`,
-              sha256: `sha256:${externalResourceDigest}`,
-              sizeBytes: externalResourceBody.byteLength,
-              status: 200,
-              url: "https://assets.example.com/logo.svg",
-            },
-          ],
-          version: "2026-07-15",
-        },
-      },
+      externalResourceCache,
       keepTemp: false,
-      preparationWorkspace,
+      recorder,
       runId: "capture-sandbox",
       scriptPackage: validDemoScript(),
       tempRoot,
@@ -414,7 +438,7 @@ describe("captureScenesFromScript", () => {
 
     expect(manifest.scenes).toEqual([
       expect.objectContaining({
-        durationSeconds: 1.2,
+        durationSeconds: 1.25,
         markerEndMs: 900,
         markerStartMs: 100,
         sceneId: "scene-001",
@@ -439,33 +463,50 @@ describe("captureScenesFromScript", () => {
     expect(submittedCommands.join("\n")).toMatch(
       /tar -xzf .*capture-inputs\.tgz.*continuous-take/s,
     );
-    expect(submittedCommands.join("\n")).toContain("ffmpeg");
-    expect(submittedCommands.join("\n")).toContain("ffprobe");
-    const trimCommand = submittedCommands.find((command) =>
-      command.startsWith("ffmpeg "),
-    );
-    expect(trimCommand).toMatch(/-i .* -ss /);
-    expect(trimCommand).toContain("-c:v libvpx-vp9");
-    expect(trimCommand).not.toContain("-c copy");
+    // Encoding never runs in the sandbox: the raw take is downloaded and
+    // clips are trimmed and probed locally, so the artifacts compositing
+    // consumes are the ones that were verified.
+    expect(submittedCommands.join("\n")).not.toContain("ffmpeg");
+    expect(submittedCommands.join("\n")).not.toContain("ffprobe");
     const outputArchiveCommand = submittedCommands.find(
       (command) =>
         command.includes("capture-outputs.tar") && command.includes("tar -cf"),
     );
-    expect(outputArchiveCommand).toContain("scene-clips/scene-001.webm");
-    expect(outputArchiveCommand).not.toContain(
-      "raw-scenes/continuous-take.webm",
-    );
+    expect(outputArchiveCommand).toContain("raw-scenes/continuous-take.webm");
+    expect(outputArchiveCommand).not.toContain("scene-clips");
     expect(executedCommands.join("\n")).not.toContain("ffmpeg");
     expect(executedCommands.join("\n")).not.toContain("ffprobe");
     expect(downloadedSources).toEqual([
       expect.stringMatching(/capture-outputs\.tar$/),
+    ]);
+    expect(trims).toEqual([
+      {
+        durationMs: 1250,
+        outputVideoPath: join(
+          manifest.runDirectory,
+          "scene-clips",
+          "scene-001.webm",
+        ),
+        rawTakePath: join(
+          manifest.runDirectory,
+          "raw-scenes",
+          "continuous-take.webm",
+        ),
+        sceneId: "scene-001",
+      },
     ]);
     await expect(
       readFile(
         join(manifest.runDirectory, "scene-clips", "scene-001.webm"),
         "utf8",
       ),
-    ).resolves.toBe("downloaded video");
+    ).resolves.toBe("trimmed video");
+    // keepTemp=false drops the local raw take after trimming.
+    await expect(
+      readFile(
+        join(manifest.runDirectory, "raw-scenes", "continuous-take.webm"),
+      ),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("requires a prepared workspace when no explicit test recorder is injected", async () => {

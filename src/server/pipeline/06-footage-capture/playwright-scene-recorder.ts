@@ -17,6 +17,7 @@ import {
   CAPTURE_SCRIPT_TIMEOUT_MS,
 } from "./capture-execution-budget";
 import {
+  type CaptureRuntimeProtocol,
   formatCaptureRuntimeProtocolLog,
   readCaptureRuntimeProtocol,
   readSuccessfulCaptureSceneRanges,
@@ -141,60 +142,20 @@ export class DefaultPlaywrightSceneRecorder implements SceneRecorder {
     await rm(rawTakePath, { force: true });
     await rename(recordedVideoPath, rawTakePath);
 
-    const markerRanges = readSuccessfulCaptureSceneRanges({
-      expectedStepIdsByScene: expectedStepIdsByScene(input),
-      protocol,
-      requireValidationLifecycle: false,
-      requireVisibleAssertions: false,
-      sceneIds: input.scenes.map((scene) => scene.id),
-    });
-    const recordedScenes: RecordedScene[] = [];
-    const clipRanges = createNonOverlappingClipRanges({
-      markerRanges,
+    return trimRecordedScenes({
+      clipTrimmer: this.clipTrimmer,
       postRollMs: this.postRollMs,
       preRollMs: this.preRollMs,
-      sceneIds: input.scenes.map((scene) => scene.id),
+      protocol,
+      rawTakePath,
+      recordInput: input,
+      sceneClipsDirectory,
     });
-
-    for (const scene of input.scenes) {
-      const range = markerRanges.get(scene.id);
-      if (range === undefined) {
-        throw new Error(`Scene ${scene.id} did not emit complete markers.`);
-      }
-
-      const clipRange = clipRanges.get(scene.id);
-      if (clipRange === undefined) {
-        throw new Error(`Scene ${scene.id} did not receive a clip range.`);
-      }
-      const { endMs, startMs } = clipRange;
-      const outputVideoPath = join(sceneClipsDirectory, `${scene.id}.webm`);
-      const trimResult = await this.clipTrimmer({
-        durationMs: endMs - startMs,
-        outputVideoPath,
-        rawTakePath,
-        sceneId: scene.id,
-        startMs,
-      });
-
-      recordedScenes.push({
-        durationSeconds: trimResult.durationSeconds,
-        markerEndMs: range.endedAtMs,
-        markerStartMs: range.startedAtMs,
-        sceneId: scene.id,
-        sectionId: input.sectionId,
-        videoPath: outputVideoPath,
-      });
-    }
-
-    if (input.retainRawTake === false) {
-      await rm(rawTakePath, { force: true });
-    }
-
-    return recordedScenes;
   }
 }
 
 export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
+  private readonly clipTrimmer: SceneClipTrimmer;
   private readonly headed: boolean;
   private readonly postRollMs: number;
   private readonly preRollMs: number;
@@ -202,6 +163,7 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
 
   constructor(
     private readonly options: {
+      clipTrimmer?: SceneClipTrimmer;
       headed?: boolean;
       externalResourceCache?: {
         directory: string;
@@ -213,6 +175,7 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
       sceneTimeoutMs?: number;
     },
   ) {
+    this.clipTrimmer = options.clipTrimmer ?? trimSceneClipWithFfmpeg;
     this.headed = options.headed ?? false;
     this.postRollMs = options.postRollMs ?? 350;
     this.preRollMs = options.preRollMs ?? 250;
@@ -240,7 +203,6 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
     const remoteSceneWorkspace = `${remoteRunDirectory}/work/continuous-take`;
     const remoteVideoScratchDirectory = `${remoteSceneWorkspace}/playwright-videos`;
     const remoteRawScenesDirectory = `${remoteRunDirectory}/raw-scenes`;
-    const remoteSceneClipsDirectory = `${remoteRunDirectory}/scene-clips`;
     const remoteScenePath = `${remoteSceneWorkspace}/demo-script.ts`;
     const remoteRawTakePath = `${remoteRawScenesDirectory}/continuous-take.webm`;
     const localSceneWorkspace = join(
@@ -283,7 +245,7 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
 
     await executeSubmittedCode(
       workspace,
-      `mkdir -p ${shellQuote(remoteSceneWorkspace)} ${shellQuote(remoteVideoScratchDirectory)} ${shellQuote(remoteRawScenesDirectory)} ${shellQuote(remoteSceneClipsDirectory)}`,
+      `mkdir -p ${shellQuote(remoteSceneWorkspace)} ${shellQuote(remoteVideoScratchDirectory)} ${shellQuote(remoteRawScenesDirectory)}`,
     );
     await uploadSubmittedCodeArchive({
       archiveName: "capture-inputs.tgz",
@@ -342,97 +304,96 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
       `rm -f ${shellQuote(remoteRawTakePath)} && mv ${shellQuote(remoteRecordedVideoPath)} ${shellQuote(remoteRawTakePath)}`,
     );
 
-    const markerRanges = readSuccessfulCaptureSceneRanges({
-      expectedStepIdsByScene: expectedStepIdsByScene(input),
-      protocol,
-      requireValidationLifecycle: false,
-      requireVisibleAssertions: false,
-      sceneIds: input.scenes.map((scene) => scene.id),
-    });
-    const recordedScenes: RecordedScene[] = [];
-    const downloadEntries =
-      input.retainRawTake === false ? [] : ["raw-scenes/continuous-take.webm"];
-    const clipRanges = createNonOverlappingClipRanges({
-      markerRanges,
-      postRollMs: this.postRollMs,
-      preRollMs: this.preRollMs,
-      sceneIds: input.scenes.map((scene) => scene.id),
-    });
-
-    for (const scene of input.scenes) {
-      const range = markerRanges.get(scene.id);
-      if (range === undefined) {
-        throw new Error(`Scene ${scene.id} did not emit complete markers.`);
-      }
-
-      const clipRange = clipRanges.get(scene.id);
-      if (clipRange === undefined) {
-        throw new Error(`Scene ${scene.id} did not receive a clip range.`);
-      }
-      const { endMs, startMs } = clipRange;
-      const remoteOutputVideoPath = `${remoteSceneClipsDirectory}/${scene.id}.webm`;
-      const localOutputVideoPath = join(
-        localSceneClipsDirectory,
-        `${scene.id}.webm`,
-      );
-      const durationSeconds = (endMs - startMs) / 1000;
-      const trimResult = await executeSubmittedCode(
-        workspace,
-        [
-          "ffmpeg",
-          "-y",
-          "-i",
-          shellQuote(remoteRawTakePath),
-          "-ss",
-          shellQuote((startMs / 1000).toFixed(3)),
-          "-t",
-          shellQuote(durationSeconds.toFixed(3)),
-          "-an",
-          "-c:v",
-          "libvpx-vp9",
-          "-deadline",
-          "good",
-          "-cpu-used",
-          "4",
-          "-crf",
-          "30",
-          "-b:v",
-          "0",
-          shellQuote(remoteOutputVideoPath),
-        ].join(" "),
-      );
-      if (trimResult.exitCode !== 0) {
-        throw new Error(
-          `Failed to trim Scene ${scene.id} with ffmpeg.\n${[trimResult.stdout, trimResult.stderr].filter(Boolean).join("\n")}`,
-        );
-      }
-      const probedDurationSeconds = await probeRemoteVideoDurationSeconds({
-        videoPath: remoteOutputVideoPath,
-        workspace,
-      });
-
-      downloadEntries.push(`scene-clips/${scene.id}.webm`);
-      recordedScenes.push({
-        durationSeconds: probedDurationSeconds,
-        markerEndMs: range.endedAtMs,
-        markerStartMs: range.startedAtMs,
-        sceneId: scene.id,
-        sectionId: input.sectionId,
-        videoPath: localOutputVideoPath,
-      });
-    }
-
+    // Encoding never runs in the sandbox: it competes for memory with the
+    // dev server there, and a sandbox-side encode can be OOM-killed while
+    // still reporting exit 0. Download the raw take and trim locally, so the
+    // clips compositing consumes are the ones that were probed.
     await downloadSubmittedCodeArchive({
       archiveName: "capture-outputs.tar",
       compression: "none",
-      entries: downloadEntries,
+      entries: ["raw-scenes/continuous-take.webm"],
       localDirectory: input.runDirectory,
       remoteDirectory: remoteRunDirectory,
       workspace,
     });
 
-    return recordedScenes;
+    return trimRecordedScenes({
+      clipTrimmer: this.clipTrimmer,
+      postRollMs: this.postRollMs,
+      preRollMs: this.preRollMs,
+      protocol,
+      rawTakePath: join(localRawScenesDirectory, "continuous-take.webm"),
+      recordInput: input,
+      sceneClipsDirectory: localSceneClipsDirectory,
+    });
   }
+}
+
+/**
+ * Derives per-Scene clip ranges from the capture protocol markers and trims
+ * each clip out of the raw take, deleting the raw take afterwards unless the
+ * caller retains it for diagnostics.
+ */
+async function trimRecordedScenes(input: {
+  clipTrimmer: SceneClipTrimmer;
+  postRollMs: number;
+  preRollMs: number;
+  protocol: CaptureRuntimeProtocol;
+  rawTakePath: string;
+  recordInput: RecordSceneInput;
+  sceneClipsDirectory: string;
+}): Promise<RecordedScene[]> {
+  const sceneIds = input.recordInput.scenes.map((scene) => scene.id);
+  const markerRanges = readSuccessfulCaptureSceneRanges({
+    expectedStepIdsByScene: expectedStepIdsByScene(input.recordInput),
+    protocol: input.protocol,
+    requireValidationLifecycle: false,
+    requireVisibleAssertions: false,
+    sceneIds,
+  });
+  const clipRanges = createNonOverlappingClipRanges({
+    markerRanges,
+    postRollMs: input.postRollMs,
+    preRollMs: input.preRollMs,
+    sceneIds,
+  });
+  const recordedScenes: RecordedScene[] = [];
+
+  for (const scene of input.recordInput.scenes) {
+    const range = markerRanges.get(scene.id);
+    if (range === undefined) {
+      throw new Error(`Scene ${scene.id} did not emit complete markers.`);
+    }
+
+    const clipRange = clipRanges.get(scene.id);
+    if (clipRange === undefined) {
+      throw new Error(`Scene ${scene.id} did not receive a clip range.`);
+    }
+    const { endMs, startMs } = clipRange;
+    const outputVideoPath = join(input.sceneClipsDirectory, `${scene.id}.webm`);
+    const trimResult = await input.clipTrimmer({
+      durationMs: endMs - startMs,
+      outputVideoPath,
+      rawTakePath: input.rawTakePath,
+      sceneId: scene.id,
+      startMs,
+    });
+
+    recordedScenes.push({
+      durationSeconds: trimResult.durationSeconds,
+      markerEndMs: range.endedAtMs,
+      markerStartMs: range.startedAtMs,
+      sceneId: scene.id,
+      sectionId: input.recordInput.sectionId,
+      videoPath: outputVideoPath,
+    });
+  }
+
+  if (input.recordInput.retainRawTake === false) {
+    await rm(input.rawTakePath, { force: true });
+  }
+
+  return recordedScenes;
 }
 
 function createNonOverlappingClipRanges(input: {
@@ -576,38 +537,6 @@ async function probeVideoDurationSeconds(videoPath: string): Promise<number> {
   const durationSeconds = Number(result.stdout.trim());
   if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
     throw new Error(`ffprobe returned invalid duration for ${videoPath}`);
-  }
-
-  return durationSeconds;
-}
-
-async function probeRemoteVideoDurationSeconds(input: {
-  videoPath: string;
-  workspace: AgentHarnessWorkspace;
-}): Promise<number> {
-  const result = await executeSubmittedCode(
-    input.workspace,
-    [
-      "ffprobe",
-      "-v",
-      "error",
-      "-show_entries",
-      "format=duration",
-      "-of",
-      "default=noprint_wrappers=1:nokey=1",
-      shellQuote(input.videoPath),
-    ].join(" "),
-  );
-
-  if (result.exitCode !== 0) {
-    throw new Error(
-      `Failed to probe trimmed Scene clip duration.\n${[result.stdout, result.stderr].filter(Boolean).join("\n")}`,
-    );
-  }
-
-  const durationSeconds = Number(result.stdout.trim());
-  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
-    throw new Error(`ffprobe returned invalid duration for ${input.videoPath}`);
   }
 
   return durationSeconds;
