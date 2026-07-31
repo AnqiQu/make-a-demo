@@ -31,6 +31,7 @@ import {
   type SubmittedAppExplorationResult,
   exploreSubmittedApp,
   isExplicitAuthenticationFeature,
+  readRouteDistinctContent,
 } from "../app-explorer/submitted-app-explorer";
 import { downloadSubmittedCodeArchive } from "../daytona/submitted-code-artifact-archive";
 import { uploadSubmittedCodeExternalResourceCache } from "../daytona/submitted-code-external-resource-cache";
@@ -2620,6 +2621,20 @@ function assertFlowSpecGrounded(input: {
       feature,
     ]),
   );
+  const distinctContentByRoute = readRouteDistinctContent(
+    input.appMap.discoveredRoutes,
+  );
+  const assertTargetText = (action: ActionCatalog["actions"][number]) =>
+    (
+      (action.preferredLocator.strategy === "text"
+        ? action.preferredLocator.value
+        : action.preferredLocator.name) ?? ""
+    ).trim();
+  const isRouteDistinctAssert = (action: ActionCatalog["actions"][number]) =>
+    action.kind === "assert" &&
+    (distinctContentByRoute.get(action.route) ?? []).includes(
+      assertTargetText(action),
+    );
   for (const feature of input.flowSpec.features) {
     const selectedActions: ActionCatalog["actions"] = [];
     const selectedActionKinds = new Set<
@@ -2692,6 +2707,26 @@ function assertFlowSpecGrounded(input: {
     if (!selectedActionKinds.has("assert")) {
       throw new Error(
         `FlowSpec feature ${feature.featureId} must select both an interaction and visible assertion from ActionCatalog`,
+      );
+    }
+    // Chrome-only asserts pass on a page that renders nothing: when the
+    // catalog offers an assert on route-distinct content for this feature,
+    // the FlowSpec must use one. Enforced only when satisfiable, so the
+    // planning retry loop can never wedge on an evidence-poor catalog.
+    const qualifyingAsserts = input.actionCatalog.actions.filter(
+      (action) =>
+        action.featureIds?.includes(feature.featureId) &&
+        isRouteDistinctAssert(action),
+    );
+    if (
+      qualifyingAsserts.length > 0 &&
+      !selectedActions.some(isRouteDistinctAssert)
+    ) {
+      throw new Error(
+        `FlowSpec feature ${feature.featureId} asserts only globally-repeated navigation text. Select an assert targeting route-distinct visible content; qualifying ActionCatalog asserts: ${qualifyingAsserts
+          .slice(0, 3)
+          .map((action) => `${action.id} ("${assertTargetText(action)}")`)
+          .join(", ")}`,
       );
     }
     if (exercisedActions.length > 0) {

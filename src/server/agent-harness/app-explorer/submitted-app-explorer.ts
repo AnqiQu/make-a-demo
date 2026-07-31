@@ -529,7 +529,7 @@ async function readAppStatus(
  * content: controls exist identically in hollow and healthy apps, so they
  * cannot evidence rendered data.
  */
-function readRouteDistinctContent(
+export function readRouteDistinctContent(
   routes: ReadonlyArray<{
     headings: string[];
     path: string;

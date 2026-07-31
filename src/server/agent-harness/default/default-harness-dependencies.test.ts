@@ -437,6 +437,56 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
   });
 
+  it("repairs FlowSpecs that assert only navigation chrome when route-distinct asserts exist", async () => {
+    const chromeOnly = {
+      ...flowSpec(),
+      features: flowSpec().features.map((feature) => ({
+        ...feature,
+        referencedActionIds: ["open-dashboard", "assert-chrome"],
+      })),
+    };
+    const distinct = {
+      ...flowSpec(),
+      features: flowSpec().features.map((feature) => ({
+        ...feature,
+        referencedActionIds: ["open-dashboard", "assert-data"],
+      })),
+    };
+    const { attempts, prompts, result } = await runFlowPlanningScenario({
+      actionCatalog: chromeAndDataCatalog(),
+      appMap: sidebarAppMap(),
+      candidates: [chromeOnly, distinct],
+    });
+
+    expect(result).toEqual(distinct);
+    expect(attempts).toBe(2);
+    expect(prompts[1]).toContain("route-distinct");
+    expect(prompts[1]).toContain("assert-data");
+  });
+
+  it("accepts chrome-only assertions when the catalog offers nothing route-distinct", async () => {
+    const catalog = chromeAndDataCatalog();
+    const chromeOnlyCatalog = {
+      ...catalog,
+      actions: catalog.actions.filter((action) => action.id !== "assert-data"),
+    };
+    const chromeOnly = {
+      ...flowSpec(),
+      features: flowSpec().features.map((feature) => ({
+        ...feature,
+        referencedActionIds: ["open-dashboard", "assert-chrome"],
+      })),
+    };
+    const { attempts, result } = await runFlowPlanningScenario({
+      actionCatalog: chromeOnlyCatalog,
+      appMap: sidebarAppMap(),
+      candidates: [chromeOnly],
+    });
+
+    expect(result).toEqual(chromeOnly);
+    expect(attempts).toBe(1);
+  });
+
   it("repairs FlowSpecs that select an assertion without a feature interaction", async () => {
     const completeFlowSpec = flowSpec();
     const assertionOnly = {
@@ -4340,6 +4390,72 @@ function capturePathScriptCandidate(): ScriptCandidate {
     sourcePreparationManifestId: "prep_001",
     unsupportedPieces: [],
     validationArtifacts: [],
+  };
+}
+
+function sidebarAppMap(): AppMap {
+  const base = appMap();
+  return {
+    ...base,
+    discoveredRoutes: [
+      {
+        buttons: [],
+        forms: [],
+        headings: [],
+        inputs: [],
+        links: [],
+        path: "/",
+        primaryNavigation: ["Categories"],
+        screenshots: [],
+        text: ["Categories", "INV-1001 Aperture Labs"],
+      },
+    ],
+  };
+}
+
+function chromeAndDataCatalog(): ActionCatalog {
+  const base = actionCatalog();
+  return {
+    ...base,
+    actions: [
+      {
+        confidence: 1,
+        evidence: "Playwright loaded the dashboard",
+        expectedResult: "Dashboard becomes visible",
+        featureIds: ["dashboard"],
+        id: "open-dashboard",
+        kind: "navigate",
+        preferredLocator: {
+          reason: "Navigation targets an observed route, not an element.",
+          strategy: "css",
+          value: "body",
+        },
+        risks: [],
+        route: "/",
+      },
+      {
+        confidence: 0.85,
+        evidence: "Playwright observed visible text on /",
+        expectedResult: "Categories remains visible",
+        featureIds: ["dashboard"],
+        id: "assert-chrome",
+        kind: "assert",
+        preferredLocator: { strategy: "text", value: "Categories" },
+        risks: [],
+        route: "/",
+      },
+      {
+        confidence: 0.85,
+        evidence: "Playwright observed visible text on /",
+        expectedResult: "INV-1001 Aperture Labs remains visible",
+        featureIds: ["dashboard"],
+        id: "assert-data",
+        kind: "assert",
+        preferredLocator: { strategy: "text", value: "INV-1001 Aperture Labs" },
+        risks: [],
+        route: "/",
+      },
+    ],
   };
 }
 
