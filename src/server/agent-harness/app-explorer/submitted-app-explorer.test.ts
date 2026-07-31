@@ -275,6 +275,259 @@ describe("exploreSubmittedApp", () => {
     );
   });
 
+  it("fails a hollow app whose feature routes render only shared navigation chrome", async () => {
+    const chrome = [
+      "Categories",
+      "Connect bank",
+      "Import",
+      "Create new",
+      "Settings",
+      "Products",
+    ];
+    const hollowRoute = (path: string, overrides: Record<string, unknown>) =>
+      observedRoute({
+        path,
+        primaryNavigation: chrome,
+        text: chrome,
+        ...overrides,
+      });
+    const feature = (id: string, label: string, entryPath: string) => ({
+      authStrategy: "none" as const,
+      description: `Demonstrate ${label}.`,
+      entryPaths: [entryPath],
+      fixtureNotes: [],
+      id,
+      label,
+      sourcePaths: [`src/app${entryPath}/page.tsx`],
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [
+        feature("invoice-management", "Invoice management", "/invoices"),
+        feature("transaction-review", "Transaction review", "/transactions"),
+        feature("expense-tracking", "Expense tracking", "/expenses"),
+      ],
+      routes: [
+        hollowRoute("/invoices", {
+          featureIds: ["invoice-management"],
+          interactions: [
+            {
+              kind: "fill",
+              locator: { strategy: "placeholder", value: "Search invoices..." },
+              name: "Search invoices...",
+              outcome: "The field contained the observed demo value",
+            },
+          ],
+        }),
+        hollowRoute("/transactions", {
+          featureIds: ["transaction-review"],
+          interactions: [
+            {
+              kind: "fill",
+              locator: {
+                strategy: "placeholder",
+                value: "Search transactions...",
+              },
+              name: "Search transactions...",
+              outcome: "The field contained the observed demo value",
+            },
+          ],
+        }),
+        hollowRoute("/expenses", { featureIds: ["expense-tracking"] }),
+        hollowRoute("/settings", {}),
+        hollowRoute("/products", {}),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "empty/unmeaningful app state",
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain("navigation chrome");
+    expect(result.validationReport.logsSummary).toContain("/invoices");
+    expect(result.validationReport.logsSummary).toContain("data path");
+  });
+
+  it("steers hollow feature routes toward routes that render distinct content", async () => {
+    const chrome = ["Dashboard", "Reports", "Settings"];
+    const feature = (id: string, label: string, entryPath: string) => ({
+      authStrategy: "none" as const,
+      description: `Demonstrate ${label}.`,
+      entryPaths: [entryPath],
+      fixtureNotes: [],
+      id,
+      label,
+      sourcePaths: [`src/app${entryPath}/page.tsx`],
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [
+        feature("invoice-management", "Invoice management", "/invoices"),
+        feature("transaction-review", "Transaction review", "/transactions"),
+        feature("report-review", "Report review", "/reports"),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["invoice-management"],
+          path: "/invoices",
+          primaryNavigation: chrome,
+          text: chrome,
+          interactions: [
+            {
+              kind: "fill",
+              locator: { strategy: "placeholder", value: "Search invoices..." },
+              name: "Search invoices...",
+              outcome: "The field contained the observed demo value",
+            },
+          ],
+        }),
+        observedRoute({
+          featureIds: ["transaction-review"],
+          path: "/transactions",
+          primaryNavigation: chrome,
+          text: chrome,
+        }),
+        observedRoute({
+          featureIds: ["report-review"],
+          headings: ["Quarterly revenue"],
+          path: "/reports",
+          primaryNavigation: chrome,
+          text: [...chrome, "Revenue grew 14% quarter over quarter"],
+        }),
+        observedRoute({
+          path: "/about",
+          primaryNavigation: chrome,
+          text: chrome,
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "prepared feature not observable",
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain("/reports");
+    expect(result.validationReport.logsSummary).not.toContain(
+      "grounded on: /invoices",
+    );
+  });
+
+  it("grounds exercised features normally when their routes render distinct content", async () => {
+    const chrome = ["Home", "Invoices", "Transactions", "Settings"];
+    const feature = (id: string, label: string, entryPath: string) => ({
+      authStrategy: "none" as const,
+      description: `Demonstrate ${label}.`,
+      entryPaths: [entryPath],
+      fixtureNotes: [],
+      id,
+      label,
+      sourcePaths: [`src/app${entryPath}/page.tsx`],
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [
+        feature("invoice-management", "Invoice management", "/invoices"),
+        feature("transaction-review", "Transaction review", "/transactions"),
+        feature("locale-preferences", "Locale preferences", "/settings"),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["invoice-management"],
+          path: "/invoices",
+          primaryNavigation: chrome,
+          text: [...chrome, "INV-1001 Aperture Labs $4,200 unpaid"],
+          interactions: [
+            {
+              kind: "fill",
+              locator: { strategy: "placeholder", value: "Search invoices..." },
+              name: "Search invoices...",
+              outcome: "The list filtered to Aperture Labs",
+            },
+          ],
+        }),
+        observedRoute({
+          featureIds: ["transaction-review"],
+          headings: ["Transactions"],
+          path: "/transactions",
+          primaryNavigation: chrome,
+          text: [...chrome, "Figma -$180 Software"],
+        }),
+        observedRoute({
+          featureIds: ["locale-preferences"],
+          headings: ["Locale preferences"],
+          path: "/settings",
+          primaryNavigation: chrome,
+          text: chrome,
+        }),
+        observedRoute({
+          path: "/about",
+          primaryNavigation: chrome,
+          text: chrome,
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("passed");
+  });
+
+  it("emits up to three text asserts per headingless route, distinct content first", async () => {
+    const { result } = await exploreObservation({
+      routes: [
+        observedRoute({
+          path: "/invoices",
+          primaryNavigation: ["Categories", "Import"],
+          text: [
+            "Categories",
+            "Import",
+            "INV-1001 Aperture Labs $4,200",
+            "Cedar & Co. overdue",
+          ],
+        }),
+      ],
+    });
+    const textAsserts = requireArtifacts(result)
+      .actionCatalog.actions.filter((action) =>
+        String(action.id).startsWith("assert-visible-text-"),
+      )
+      .map((action) => action.preferredLocator.value);
+
+    expect(textAsserts).toEqual([
+      "INV-1001 Aperture Labs $4,200",
+      "Cedar & Co. overdue",
+      "Categories",
+    ]);
+  });
+
+  it("keeps a small site groundable when its text repeats across routes", async () => {
+    const { result } = await exploreObservation({
+      featureInventory: [
+        {
+          authStrategy: "none" as const,
+          description: "Browse bookmarked services.",
+          entryPaths: ["/"],
+          fixtureNotes: [],
+          id: "service-dashboard",
+          label: "Service dashboard",
+          sourcePaths: ["index.html"],
+        },
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["service-dashboard"],
+          headings: ["My services"],
+          path: "/",
+          primaryNavigation: ["My services"],
+          text: ["My services"],
+        }),
+        observedRoute({
+          headings: ["My services"],
+          path: "/settings",
+          primaryNavigation: ["My services"],
+          text: ["My services"],
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("passed");
+  });
+
   it("classifies module-not-found page errors as a missing dependency", async () => {
     const { result } = await exploreObservation({
       featureInventory: [

@@ -518,12 +518,65 @@ async function readAppStatus(
   }
 }
 
+/**
+ * Splits harvested route evidence into shared navigation chrome and
+ * route-distinct content, keyed by route path. Chrome is the union of every
+ * route's primaryNavigation strings plus — only when at least four routes
+ * exist — any string repeated on more than half the routes. Headings are
+ * excluded only by repetition, never by nav membership: a page title matching
+ * its nav label is normal content, while a string repeated on most routes is
+ * site chrome wherever it appears. Buttons, inputs, and links never count as
+ * content: controls exist identically in hollow and healthy apps, so they
+ * cannot evidence rendered data.
+ */
+function readRouteDistinctContent(
+  routes: ReadonlyArray<{
+    headings: string[];
+    path: string;
+    primaryNavigation?: string[];
+    text: string[];
+  }>,
+): Map<string, string[]> {
+  const trimmed = (values: string[]) =>
+    values.map((value) => value.trim()).filter((value) => value.length > 0);
+  const navChrome = new Set(
+    routes.flatMap((route) => trimmed(route.primaryNavigation ?? [])),
+  );
+  const occurrences = new Map<string, number>();
+  for (const route of routes) {
+    for (const value of new Set(trimmed([...route.headings, ...route.text]))) {
+      occurrences.set(value, (occurrences.get(value) ?? 0) + 1);
+    }
+  }
+  const repeatedChrome = new Set(
+    routes.length < 4
+      ? []
+      : [...occurrences]
+          .filter(([, count]) => count > routes.length / 2)
+          .map(([value]) => value),
+  );
+  return new Map(
+    routes.map((route) => [
+      route.path,
+      unique([
+        ...trimmed(route.headings).filter(
+          (value) => !repeatedChrome.has(value),
+        ),
+        ...trimmed(route.text).filter(
+          (value) => !repeatedChrome.has(value) && !navChrome.has(value),
+        ),
+      ]),
+    ]),
+  );
+}
+
 function createActions(
   routes: ObservedRoute[],
   featureInventory: PreparedDemoFeature[],
   explicitAuthenticationFeatureIds: ReadonlySet<string>,
 ) {
   const actions: Array<Record<string, unknown>> = [];
+  const distinctContentByRoute = readRouteDistinctContent(routes);
   routes.forEach((route, routeIndex) => {
     const matchFeatureIds = (evidence: string) =>
       matchActionFeatureIds(
@@ -571,31 +624,46 @@ function createActions(
       });
     });
     if (route.headings.length === 0) {
-      const visibleText = route.text.find(
-        (text, index) =>
-          text.length > 0 &&
-          (route.textLocatorEvidence === undefined ||
-            Boolean(route.textLocatorEvidence[index])),
-      );
-      if (visibleText !== undefined) {
-        const textIndex = route.text.indexOf(visibleText);
-        const id = `assert-visible-text-${routeIndex + 1}`;
-        actions.push({
-          confidence: 0.85,
-          evidence: `Playwright observed visible text on ${route.path}`,
-          expectedResult: `${visibleText} remains visible`,
-          featureIds: matchFeatureIds(visibleText),
-          id,
-          kind: "assert",
-          ...createLocatorCandidateFields(
+      const verifiedTexts = route.text
+        .map((text, index) => ({ index, text }))
+        .filter(
+          ({ index, text }) =>
+            text.length > 0 &&
+            (route.textLocatorEvidence === undefined ||
+              Boolean(route.textLocatorEvidence[index])),
+        );
+      // Route-distinct text first: chrome-only asserts are ungroundable for
+      // data features, so downstream planning needs content candidates ahead
+      // of navigation labels.
+      const distinct = new Set(distinctContentByRoute.get(route.path) ?? []);
+      const textCandidates = [
+        ...verifiedTexts.filter(({ text }) => distinct.has(text.trim())),
+        ...verifiedTexts.filter(({ text }) => !distinct.has(text.trim())),
+      ].slice(0, 3);
+      textCandidates.forEach(
+        ({ index: textIndex, text: visibleText }, order) => {
+          const id =
+            order === 0
+              ? `assert-visible-text-${routeIndex + 1}`
+              : `assert-visible-text-${routeIndex + 1}-${order + 1}`;
+          actions.push({
+            confidence: 0.85,
+            evidence: `Playwright observed visible text on ${route.path}`,
+            expectedResult: `${visibleText} remains visible`,
+            featureIds: matchFeatureIds(visibleText),
             id,
-            route.textLocatorEvidence?.[textIndex],
-          ),
-          preferredLocator: { strategy: "text", value: visibleText },
-          risks: [],
-          route: route.path,
-        });
-      } else {
+            kind: "assert",
+            ...createLocatorCandidateFields(
+              id,
+              route.textLocatorEvidence?.[textIndex],
+            ),
+            preferredLocator: { strategy: "text", value: visibleText },
+            risks: [],
+            route: route.path,
+          });
+        },
+      );
+      if (textCandidates.length === 0) {
         const visibleButton = route.buttons.find(
           (button, index) =>
             button.length > 0 &&
@@ -928,6 +996,30 @@ function readExplorationFailure(
       message: `Explored ${appMap.discoveredRoutes.length} route(s) that served their document shell but rendered no visible content — no headings, text, links, or controls appeared within the content wait. The prepared runtime's data fixtures or demo gating are blocking rendering; repair the prepared app so its routes render their content.`,
     };
   }
+  const distinctContentByRoute = readRouteDistinctContent(
+    appMap.discoveredRoutes,
+  );
+  const contentRoutePaths = new Set(
+    [...distinctContentByRoute]
+      .filter(([, content]) => content.length > 0)
+      .map(([path]) => path),
+  );
+  // When no route anywhere renders route-distinct content, grounding failures
+  // are a data-rendering defect, not a feature-selection problem: exercised
+  // controls and chrome asserts exist identically in hollow and healthy apps.
+  const hollowFailure = (features: PreparedDemoFeature[]) =>
+    contentRoutePaths.size > 0
+      ? undefined
+      : {
+          classification: "empty/unmeaningful app state",
+          message: `Explored ${appMap.discoveredRoutes.length} route(s) but every route rendered only globally-repeated navigation chrome — no route-distinct headings, text, or data appeared within the content wait. Feature entry routes affected: ${[
+            ...new Set(features.flatMap((feature) => feature.entryPaths)),
+          ]
+            .slice(0, 4)
+            .join(
+              ", ",
+            )}. The prepared runtime's data fixtures or demo gating are not rendering content; repair the prepared app's data path.`,
+        };
   const groundedFeatureIds = new Set(
     featureInventory
       .filter((feature) => {
@@ -937,14 +1029,17 @@ function readExplorationFailure(
         // A browser-exercised interaction proves the feature. Without one,
         // verified assert evidence counts only when its visible text matches
         // the feature, so read-only pages can ground while a wrong entry
-        // route that merely renders unrelated content cannot.
+        // route that merely renders unrelated content cannot. Either way the
+        // feature needs a tagged route with route-distinct content: exercising
+        // a search box on a page that renders nothing demonstrates nothing.
         return (
-          actions.some((action) => action.exercised === true) ||
-          actions.some(
-            (action) =>
-              action.kind === "assert" &&
-              assertEvidenceMatchesFeature(action, feature),
-          )
+          (actions.some((action) => action.exercised === true) ||
+            actions.some(
+              (action) =>
+                action.kind === "assert" &&
+                assertEvidenceMatchesFeature(action, feature),
+            )) &&
+          actions.some((action) => contentRoutePaths.has(action.route))
         );
       })
       .map((feature) => feature.id),
@@ -964,12 +1059,14 @@ function readExplorationFailure(
         message: formatUnreachable(unreachable),
       };
     }
-    return {
-      classification: "requested feature not observable",
-      message: `App Exploration found no browser evidence for requested features: ${missingRequestedFeatures
-        .map((feature) => feature.requestedFeature as string)
-        .join(", ")}.`,
-    };
+    return (
+      hollowFailure(missingRequestedFeatures) ?? {
+        classification: "requested feature not observable",
+        message: `App Exploration found no browser evidence for requested features: ${missingRequestedFeatures
+          .map((feature) => feature.requestedFeature as string)
+          .join(", ")}.`,
+      }
+    );
   }
   if (
     !featureInventory.some((feature) => feature.requestedFeature !== undefined)
@@ -990,10 +1087,12 @@ function readExplorationFailure(
           message: formatUnreachable(unreachable),
         };
       }
-      return {
-        classification: "prepared feature not observable",
-        message: `App Exploration observed ${observedPreparedFeatureCount} prepared features but needs ${requiredPreparedFeatureCount} to plan the default demo.${formatGroundedRoutes(actionCatalog)}`,
-      };
+      return (
+        hollowFailure(ungroundedFeatures) ?? {
+          classification: "prepared feature not observable",
+          message: `App Exploration observed ${observedPreparedFeatureCount} prepared features but needs ${requiredPreparedFeatureCount} to plan the default demo.${formatGroundedRoutes(actionCatalog, contentRoutePaths)}`,
+        }
+      );
     }
   }
   if (
@@ -1025,17 +1124,24 @@ function assertEvidenceMatchesFeature(
 }
 
 /**
- * Lists routes whose catalog carries exercised or assert evidence — the
- * routes a preparation repair can reselect features onto with confidence.
+ * Lists routes whose catalog carries exercised or assert evidence and whose
+ * page renders route-distinct content — the routes a preparation repair can
+ * reselect features onto with confidence. A chrome-only route with evidence
+ * is not a reselection target: its asserts prove nothing renders there.
  * The steering deliberately offers only reselection: rewriting product UI to
  * make features observable is a fidelity violation.
  */
-function formatGroundedRoutes(actionCatalog: ActionCatalog): string {
+function formatGroundedRoutes(
+  actionCatalog: ActionCatalog,
+  contentRoutePaths: ReadonlySet<string>,
+): string {
   const routes = [
     ...new Set(
       actionCatalog.actions
         .filter(
-          (action) => action.exercised === true || action.kind === "assert",
+          (action) =>
+            (action.exercised === true || action.kind === "assert") &&
+            contentRoutePaths.has(action.route),
         )
         .map((action) => action.route),
     ),
