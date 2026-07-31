@@ -912,6 +912,22 @@ function readExplorationFailure(
       message: `Prepared feature routes redirected to authentication for: ${blockedFeatures.join(", ")}.`,
     };
   }
+  // Routes that serve their document shell but yield only structural actions
+  // (no asserts, clicks, or fills anywhere) mean the prepared runtime renders
+  // nothing — a rendering defect, not a feature-selection problem. Unreachable
+  // routes carry sharper evidence, so they keep their own classification.
+  if (
+    unreachableRoutes.length === 0 &&
+    appMap.discoveredRoutes.length > 0 &&
+    actionCatalog.actions.every(
+      (action) => action.kind === "navigate" || action.kind === "scroll",
+    )
+  ) {
+    return {
+      classification: "empty/unmeaningful app state",
+      message: `Explored ${appMap.discoveredRoutes.length} route(s) that served their document shell but rendered no visible content — no headings, text, links, or controls appeared within the content wait. The prepared runtime's data fixtures or demo gating are blocking rendering; repair the prepared app so its routes render their content.`,
+    };
+  }
   const groundedFeatureIds = new Set(
     featureInventory
       .filter((feature) => {

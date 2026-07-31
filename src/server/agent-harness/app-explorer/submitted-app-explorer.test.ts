@@ -242,6 +242,39 @@ describe("exploreSubmittedApp", () => {
     expect(artifacts.validationReport.status).toBe("passed");
   });
 
+  it("classifies an app whose routes render no content as empty app state", async () => {
+    const features = [
+      "cash-and-runway-overview",
+      "invoice-status-overview",
+      "financial-work-queues",
+    ].map((id) => ({
+      authStrategy: "none" as const,
+      description: `Show the ${id.replaceAll("-", " ")}`,
+      entryPaths: ["/"],
+      fixtureNotes: [],
+      id,
+      label: id.replaceAll("-", " "),
+      sourcePaths: ["src/app/page.tsx"],
+    }));
+    const { result } = await exploreObservation({
+      featureInventory: features,
+      routes: [
+        observedRoute({
+          featureIds: features.map(({ id }) => id),
+          title: "Overview | Midday",
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "empty/unmeaningful app state",
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain(
+      "rendered no visible content",
+    );
+  });
+
   it("classifies module-not-found page errors as a missing dependency", async () => {
     const { result } = await exploreObservation({
       featureInventory: [
