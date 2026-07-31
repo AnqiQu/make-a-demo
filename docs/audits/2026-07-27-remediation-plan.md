@@ -756,6 +756,15 @@ probes the exact artifacts compositing consumes. Rejected alternative: keeping r
 trims and adding OOM classification (N9b pattern) — it diagnoses the failure without
 removing it, and local trimming subsumes it.
 
+**N19 landed (same day).** `75f0def` (i — the failure-path `rm` in
+`captureScenesFromScript` is gone, and its rethrow-only try/catch with it),
+`a6366b3` (ii — the marker-range → clip-range → trim loop both recorders duplicated is
+now one shared `trimRecordedScenes` helper; the remote recorder downloads the raw take
+and trims through the same injectable `clipTrimmer` seam as the local one; no ffmpeg or
+ffprobe command reaches the sandbox anymore). The rewritten remote-flow test pins the
+new contract, including that the sandbox-bound output archive carries only the raw take
+and that the local raw-take copy is dropped after trimming unless retention is on.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
