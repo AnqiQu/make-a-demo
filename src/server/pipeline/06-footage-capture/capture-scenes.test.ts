@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -547,6 +547,33 @@ describe("captureScenesFromScript", () => {
     ).rejects.toThrow("scenes[0].durationSeconds is not allowed");
 
     expect(recordSceneWasCalled).toBe(false);
+  });
+
+  it("keeps the capture run directory when recording fails", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
+    const tempRoot = join(workspace, "runs");
+    const recorder: SceneRecorder = {
+      async recordScenes() {
+        throw new Error("recording exploded");
+      },
+    };
+
+    await expect(
+      captureScenesFromScript({
+        baseUrl: "http://localhost:3000",
+        keepTemp: false,
+        recorder,
+        runId: "capture-keeps-evidence",
+        scriptPackage: validDemoScript(),
+        tempRoot,
+      }),
+    ).rejects.toThrow("recording exploded");
+
+    // The run directory is the failure's diagnosis (stdout, markers, clips);
+    // it must survive the error.
+    await expect(
+      readdir(join(tempRoot, "capture-keeps-evidence")),
+    ).resolves.toContain("raw-scenes");
   });
 
   it("rejects malformed Demo Scripts before recording starts", async () => {

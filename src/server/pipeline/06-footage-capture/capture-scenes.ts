@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentHarnessWorkspaceHandle } from "../../agent-harness/daytona/workspace.interface";
 import type { ExternalResourceManifest } from "../../shared/external-resources/external-resource-manifest.schema";
@@ -80,97 +80,88 @@ export async function captureScenesFromScript(
   }
   const scenes: CapturedSceneManifestEntry[] = [];
 
-  try {
-    if (browserScenes.length > 0) {
-      const recorder = input.recorder ?? createPreparedWorkspaceRecorder(input);
-      if (
-        input.recorder === undefined &&
-        (input.captureRuntimeReset?.stage !== "capture-runtime-reset" ||
-          input.captureRuntimeReset.status !== "passed" ||
-          input.captureRuntimeReset.artifactPath.trim().length === 0)
-      ) {
-        throw new Error(
-          "Footage Capture requires a passed capture-runtime-reset proof",
-        );
-      }
-      if (scriptPackage.demoPlaywrightScript === undefined) {
-        throw new Error(
-          "Footage Capture requires compiled Playwright source for browser Scenes.",
-        );
-      }
-      const recordedScenes = await recorder.recordScenes({
-        baseUrl: input.baseUrl,
-        demoPlaywrightScript: scriptPackage.demoPlaywrightScript,
-        ...(input.externalResourceCache === undefined
-          ? {}
-          : {
-              externalResourceManifest: input.externalResourceCache.manifest,
-            }),
-        retainRawTake: keepTemp,
-        runDirectory,
-        scenes: browserScenes,
-        sectionId: "demo-script",
-        ...(scriptPackage.setupActions === undefined
-          ? {}
-          : { setupActions: scriptPackage.setupActions }),
-      });
-
-      scenes.push(...recordedScenes);
+  // On failure the run directory is deliberately retained: it holds the
+  // diagnosis (stdout, scene markers, downloaded clips).
+  if (browserScenes.length > 0) {
+    const recorder = input.recorder ?? createPreparedWorkspaceRecorder(input);
+    if (
+      input.recorder === undefined &&
+      (input.captureRuntimeReset?.stage !== "capture-runtime-reset" ||
+        input.captureRuntimeReset.status !== "passed" ||
+        input.captureRuntimeReset.artifactPath.trim().length === 0)
+    ) {
+      throw new Error(
+        "Footage Capture requires a passed capture-runtime-reset proof",
+      );
     }
-
-    const manifestPath = join(runDirectory, "capture-manifest.json");
-    const manifest: CaptureManifest = {
+    if (scriptPackage.demoPlaywrightScript === undefined) {
+      throw new Error(
+        "Footage Capture requires compiled Playwright source for browser Scenes.",
+      );
+    }
+    const recordedScenes = await recorder.recordScenes({
       baseUrl: input.baseUrl,
-      ...(input.captureRuntimeReset === undefined
-        ? {}
-        : {
-            captureRuntimeResetArtifactPath:
-              input.captureRuntimeReset.artifactPath,
-          }),
-      createdAt: new Date().toISOString(),
+      demoPlaywrightScript: scriptPackage.demoPlaywrightScript,
       ...(input.externalResourceCache === undefined
         ? {}
         : {
-            externalResourceManifestSha256: `sha256:${createHash("sha256")
-              .update(JSON.stringify(input.externalResourceCache.manifest))
-              .digest("hex")}`,
+            externalResourceManifest: input.externalResourceCache.manifest,
           }),
-      keepTemp,
-      manifestPath,
+      retainRawTake: keepTemp,
       runDirectory,
-      runId,
-      scenes,
-      scriptDigest,
-      scriptId: scriptPackage.scriptId,
-      ...(browserScenes.length === 0
+      scenes: browserScenes,
+      sectionId: "demo-script",
+      ...(scriptPackage.setupActions === undefined
         ? {}
-        : {
-            markerLogPath: join(runDirectory, "scene-markers.jsonl"),
-            stderrLogPath: join(runDirectory, "stderr.log"),
-            stdoutLogPath: join(runDirectory, "stdout.log"),
-          }),
-      ...(keepTemp && browserScenes.length > 0
-        ? {
-            rawTakePath: join(
-              runDirectory,
-              "raw-scenes",
-              "continuous-take.webm",
-            ),
-          }
-        : {}),
-      qualityFindings: [],
-      temporary: true,
-      title: scriptPackage.title,
-    };
+        : { setupActions: scriptPackage.setupActions }),
+    });
 
-    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-    return manifest;
-  } catch (error) {
-    if (!keepTemp) {
-      await rm(runDirectory, { force: true, recursive: true });
-    }
-    throw error;
+    scenes.push(...recordedScenes);
   }
+
+  const manifestPath = join(runDirectory, "capture-manifest.json");
+  const manifest: CaptureManifest = {
+    baseUrl: input.baseUrl,
+    ...(input.captureRuntimeReset === undefined
+      ? {}
+      : {
+          captureRuntimeResetArtifactPath:
+            input.captureRuntimeReset.artifactPath,
+        }),
+    createdAt: new Date().toISOString(),
+    ...(input.externalResourceCache === undefined
+      ? {}
+      : {
+          externalResourceManifestSha256: `sha256:${createHash("sha256")
+            .update(JSON.stringify(input.externalResourceCache.manifest))
+            .digest("hex")}`,
+        }),
+    keepTemp,
+    manifestPath,
+    runDirectory,
+    runId,
+    scenes,
+    scriptDigest,
+    scriptId: scriptPackage.scriptId,
+    ...(browserScenes.length === 0
+      ? {}
+      : {
+          markerLogPath: join(runDirectory, "scene-markers.jsonl"),
+          stderrLogPath: join(runDirectory, "stderr.log"),
+          stdoutLogPath: join(runDirectory, "stdout.log"),
+        }),
+    ...(keepTemp && browserScenes.length > 0
+      ? {
+          rawTakePath: join(runDirectory, "raw-scenes", "continuous-take.webm"),
+        }
+      : {}),
+    qualityFindings: [],
+    temporary: true,
+    title: scriptPackage.title,
+  };
+
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  return manifest;
 }
 
 function createPreparedWorkspaceRecorder(input: CaptureScenesFromScriptInput) {
