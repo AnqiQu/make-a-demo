@@ -722,6 +722,10 @@ alternatives were examined and rejected for now: this run's `sourcePaths` all po
 the same page, the repo profile carries no route paths, and `appExplorationHints` is
 prose; revisit seeding only if a run shows evidence-bearing routes going unvisited.
 
+**N18 landed (same day) as `2ad4b66`.** The empty-shell predicate is "routes discovered,
+catalog holds only structural actions (navigate/scroll)", guarded so unreachable feature
+routes keep their sharper own classification.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
