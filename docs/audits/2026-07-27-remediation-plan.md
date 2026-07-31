@@ -681,7 +681,8 @@ attempt-5/attempt-6 contrast is the proof) and re-validate, instead of burning a
 attempt. Lockfiles are backend-owned: package.json drives reconciliation at the next
 install window, so stripping agent lockfile edits never desynchronizes the runtime.
 
-**N12 landed (2026-07-31) as `637df1c`, with a correction to the analysis above.** The
+**N12 landed (2026-07-31) as `637df1c`, with a correction to the analysis above** (see
+the addendum below for the gate result). The
 repair-delta attribution is structurally unreliable: preflight-3's successful install ran
 its lockfile reconciliation *between* the two diff captures, so the `bun.lock` delta
 blamed on repair-5 was most likely the backend's own reconciliation write — the "agent
@@ -692,6 +693,34 @@ not in repair deltas, not in the modified-original checks. Ownership is enforced
 it actually binds: frozen installation re-derives lockfile content from package.json at
 every install window, and the runtime network policy bounds what any lockfile can reach.
 No violation, no burned attempts, no attribution problem.
+
+## Addendum (2026-07-31, after the post-N12 Midday run)
+
+Run `terminal-2026-07-31T05-45-22-558Z`. **N12 passed its gate** — zero lockfile
+rejections, and the xlsx dependency was repaired in a single attempt (previously two).
+The run then regressed to 0/3 grounding through preparation nondeterminism, not code:
+same upstream SHA as the 2/3 run, but this preparation selected **all three features on
+`/`** and its manifest claimed the overview renders "local deterministic data" — false.
+`/` served its title and streamed no body content, so every crawl target normalized into
+one blank page with zero links; the frontier collapsed after a single route, nothing
+could ground, and the steering had nothing to offer. Three repairs then flailed at
+product-UI edits (`[locale]/layout.tsx` twice, `packages/events/src/client.tsx` once) —
+all correctly rejected by fidelity — and the budget died.
+
+**New finding N18 (High, general) — a blank-rendering app is classified as a feature
+problem.** When exploration reaches routes that serve their document shell but render no
+body evidence anywhere (the action catalog holds only `navigate` actions after the
+content waits), the failure surfaces as `prepared feature not observable` with no
+steering — pointing repairs at feature selection and UI when the defect is the prepared
+runtime's rendering (data fixtures or demo gating blocking the whole tree).
+**Plan → N18:** in the exploration failure classifier, detect the navigate-only catalog
+(routes discovered, zero evidence actions) and classify it as
+`empty/unmeaningful app state` — already registered in the repair router's preparation
+list and currently emitted by nothing — with a message naming the runtime symptom and
+directing the repair at the prepared runtime's fixtures/gating. Frontier-seeding
+alternatives were examined and rejected for now: this run's `sourcePaths` all point at
+the same page, the repo profile carries no route paths, and `appExplorationHints` is
+prose; revisit seeding only if a run shows evidence-bearing routes going unvisited.
 
 ## Open decisions to confirm before Phase 4/7
 
