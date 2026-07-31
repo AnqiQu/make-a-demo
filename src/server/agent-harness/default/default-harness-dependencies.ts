@@ -666,13 +666,14 @@ export async function createDefaultAgentHarnessDependencies(
         stage: "app-exploration",
         workspace,
       });
-      if (result.validationReport.status === "failed") {
-        await persistExplorationEvidence({
-          logger: options.logger,
-          outputRoot: options.outputRoot,
-          workspace,
-        });
-      }
+      // On success as much as on failure: the screenshots are the standing
+      // human audit for evidence classes the automated gates miss (a run can
+      // pass every gate while the video shows an empty app).
+      await persistExplorationEvidence({
+        logger: options.logger,
+        outputRoot: options.outputRoot,
+        workspace,
+      });
       return result;
     },
     async planFlow({

@@ -3667,6 +3667,83 @@ describe("createDefaultAgentHarnessDependencies", () => {
     }
   });
 
+  it("mirrors exploration evidence into the run directory when exploration passes", async () => {
+    const outputRoot = await mkdtemp(
+      join(tmpdir(), "makeademo-exploration-evidence-pass-"),
+    );
+    const sandboxEvidence = await mkdtemp(
+      join(tmpdir(), "makeademo-sandbox-evidence-pass-"),
+    );
+    await mkdir(join(sandboxEvidence, "exploration"), { recursive: true });
+    await writeFile(
+      join(sandboxEvidence, "exploration", "root-ok.png"),
+      "captured-root",
+    );
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode(command) {
+        if (command.includes("exploration-evidence.tar")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        if (!command.includes("explore-app.mjs")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        return { exitCode: 0, stderr: "", stdout: explorationProtocol() };
+      },
+      async downloadSubmittedCodeFiles(files) {
+        for (const file of files) {
+          await execFileAsync("tar", [
+            "-cf",
+            file.destinationPath,
+            "-C",
+            sandboxEvidence,
+            "exploration",
+          ]);
+        }
+      },
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot,
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    try {
+      const result = await harness.dependencies.exploreApp({
+        actionCatalogPath: "/workspace/.makeademo/action-catalog.json",
+        appMapPath: "/workspace/.makeademo/app-map.json",
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        preparationManifest: preparationManifest(),
+        preparationValidation: validationReport(
+          "preparation-preflight",
+          "passed",
+        ),
+        repoProfile: repoProfile(),
+        workspace,
+      });
+
+      expect(result.validationReport.status).toBe("passed");
+      await expect(
+        readFile(
+          join(
+            outputRoot,
+            "exploration-evidence",
+            "exploration",
+            "root-ok.png",
+          ),
+          "utf8",
+        ),
+      ).resolves.toBe("captured-root");
+    } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+      await rm(sandboxEvidence, { force: true, recursive: true });
+    }
+  });
+
   it("propagates controller programming errors instead of requesting repo repair", async () => {
     const outputRoot = await mkdtemp(
       join(tmpdir(), "makeademo-resource-controller-failure-"),
