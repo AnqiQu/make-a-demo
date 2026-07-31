@@ -852,6 +852,74 @@ wrap that injects a new banner stay rejected. Known conservative boundaries fail
 closed: reformat-while-wrapping and attribute-level gates (`<div v-if>`) keep the old
 strict rejection, and static-HTML script tags have no gate lane at all.
 
+## Addendum (2026-07-31, after the first passing Midday run)
+
+Run `terminal-2026-07-31T22-44-31-689Z` **passed end-to-end in 871s and produced
+Midday's first final video** — preparation converged in 2 attempts (one `node-xlsx`
+dependency repair), every gate green on the first try, 8 scenes composited. The N20
+lane held: the prep's demo gates in layouts and the tRPC client passed fidelity as
+gated adaptations. But the video shows an empty application: chrome, headings, and
+settings copy render; every data surface is blank.
+
+**New finding N21 (Critical) — a hollow-shell run passes every gate.** Two halves:
+
+*The prep's bug (the class our gates must catch):* the agent authored complete fixture
+data (`trpc-fixtures.ts`: three invoices, three transactions, team, user) and a
+same-origin `/api/demo-trpc` fixture endpoint — then pointed the browser tRPC client at
+the **relative URL** `"/api/demo-trpc"` inside a `"use client"` module that also
+executes during SSR, where Node fetch cannot parse a relative URL. Eleven
+`TypeError: Failed to parse URL` throws sit in `capture/submitted-app-runtime.log`;
+zero successful fixture requests occurred all run. Server-side prefetch was gated off
+entirely (`if (isDemoMode) return;`), so nothing hydrated from that side either. Data
+subtrees threw — the harvested evidence contains neither fixture literals ("Aperture",
+"Figma", "INV-", amounts: grep zero across app-map and action-catalog) nor empty-state
+copy ("No transactions": also zero), the signature of a thrown render, not empty data.
+
+*Why every gate passed (the systemic gap, general to any repo):*
+(a) Exploration passed as "explored 12 route(s)": nine routes harvested only the
+identical 6-string sidebar, two harvested nothing at all, and grounding succeeded
+because `exercised` fills count unconditionally — search fills whose outcome is the
+self-referential "field contained the observed demo value". The N18 empty-app branch
+requires *all* actions to be navigate/scroll and was defeated by those same fills.
+(b) The flow spec declared `requiredAppState: ["Invoice fixtures are loaded."]` and
+asserted only the sidebar link "Categories" — text present on every route;
+`assertFlowSpecGrounded` checks referential integrity, never assert-target quality.
+(c) All three script asserts target chrome; capture-path validation passed each in
+under 500ms (server-rendered, present on arrival).
+(d) The SSR errors sat in stderr no gate reads: preflight reads a curl exit code
+(`/invoices` → 200 on the shell), exploration reads browser pageErrors, capture reads
+browser consoleErrors.
+(e) N20b retains exploration screenshots only on failed exploration; this one passed,
+so the 5-second human tell was discarded. Bonus defect: `/tracker?create=true` leaked
+raw `number-flow-react` CSS into harvested `headings` (textContent includes `<style>`
+text).
+
+**Plan → N21 (a–d), pulled ahead of Phase 4 (which is explicitly parallel):** shared
+concept: **navigation chrome** = union of per-route `primaryNavigation` strings plus,
+when ≥4 routes exist, strings appearing on more than half the routes;
+**route-distinct content** = a route's harvested headings/text minus chrome (buttons,
+inputs, and links excluded — controls exist identically in hollow and healthy apps).
+(N21a) grounding additionally requires ≥1 feature-tagged route with route-distinct
+content; when features fail only on that, classify `empty/unmeaningful app state`
+(already routed to preparation repair) naming the chrome-only routes, else keep
+reselection steering; emit up to 3 distinct-first text asserts per route (today:
+exactly one, first-verified — how "Categories" became the only candidate); broaden the
+N15 aria-harvest trigger to "all harvested text ⊆ the route's own nav/link names" and
+harvest with `innerText` so stylesheet text cannot fake distinctness. (N21b)
+`assertFlowSpecGrounded` requires per feature ≥1 assert targeting non-chrome text —
+enforced only when the catalog offers one, so the retry loop cannot wedge; rejection
+steering names the qualifying asserts. (N21c) the grounding-failure path attaches a
+~2KB managed-app stderr tail as evidence (not a gate — dev servers log benign errors);
+repair prompts already interpolate stderr excerpts. (N21d) persist exploration
+evidence on success too. Rejected: preflight body/data-endpoint probing (the hollow
+shell returns rich 200 HTML; content truth belongs to the browser stage), prose
+reconciliation of `requiredAppState` (a fuzzy validator tuned like a prompt — its
+checkable shadow is N21b), stderr-content gating (framework whack-a-mole), a
+scene-level chrome check in the script contract (`assertBrowserActionsGrounded`
+already propagates N21b), and fixture-literal or absolute-URL checks (overfit).
+Acceptance: Midday either renders data or fails at exploration with the empty-app
+classification and SSR evidence; homer stays green.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
