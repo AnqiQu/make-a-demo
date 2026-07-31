@@ -52,6 +52,8 @@ export function readDependencyRepairDelta(
  * replacing it with a newly authored demo application. During dependency
  * repair, executable source must remain unchanged from the accepted baseline.
  * Auth and integration edits must conditionally use a source-backed demo gate.
+ * Presentation files accept only external-asset localization or a demo-gated
+ * wrap that re-introduces existing markup without adding new presentation.
  */
 type FidelityViolation = { hint: string; message: string };
 
@@ -118,7 +120,8 @@ export function validatePreparationFidelity(input: {
       continue;
     }
     if (isFrameworkConfigPath(path)) continue;
-    const addsPresentation = addsProductPresentation(patch);
+    const originalSource = input.repoSourceFiles.get(path) ?? "";
+    const addsPresentation = addsProductPresentation(patch, originalSource);
     const demoSeam = isDemoSeamPath(path);
     const authenticationAdaptation = isAuthenticationAdaptation(path, patch);
     const integrationAdaptation = isIntegrationAdaptation(path, patch);
@@ -136,7 +139,7 @@ export function validatePreparationFidelity(input: {
         path,
         patch,
         kind,
-        input.repoSourceFiles.get(path) ?? "",
+        originalSource,
       );
       if (violation !== undefined) {
         violations.push({ hint: repairHints.gate, message: violation });
@@ -155,7 +158,14 @@ export function validatePreparationFidelity(input: {
       continue;
     }
     if (isProductPresentationPath(path)) {
-      if (!onlyLocalizesExternalAssets(patch)) {
+      // A demo-gated wrap of existing markup preserves the product rather
+      // than restyling it: sandboxed demos must be able to gate off analytics
+      // beacons, chat widgets, and similar integrations that live in layouts.
+      const gatedWrap =
+        !addsPresentation &&
+        readUnpreservedRemovedLine(patch) === undefined &&
+        hasConditionalDemoGate(patch, demoGate, originalSource);
+      if (!onlyLocalizesExternalAssets(patch) && !gatedWrap) {
         violations.push({
           hint: repairHints.preserveUi,
           message: `${path} modifies original product UI, styling, or brand assets instead of preserving them.`,
@@ -331,8 +341,15 @@ function isServerExecutionPath(path: string) {
   );
 }
 
-function addsProductPresentation(patch: string) {
-  const additions = changedPatchLines(patch, "+").join("\n");
+/**
+ * Added lines whose content already exists in the original file are ignored:
+ * a demo-gate wrap re-adds the line it wraps, and re-introduced original
+ * markup is preservation, not new authorship.
+ */
+function addsProductPresentation(patch: string, originalSource = "") {
+  const additions = changedPatchLines(patch, "+")
+    .filter((line) => !originalSource.includes(line.trim()))
+    .join("\n");
   return (
     /<!doctype\s+html|<(?:a|article|aside|body|button|canvas|dialog|div|footer|form|h[1-6]|header|html|img|input|label|li|main|nav|ol|p|section|select|span|style|svg|table|textarea|ul|video)\b/i.test(
       additions,

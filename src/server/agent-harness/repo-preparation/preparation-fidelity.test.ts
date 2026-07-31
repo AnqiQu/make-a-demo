@@ -828,6 +828,93 @@ describe("validatePreparationFidelity", () => {
 
     expect(report.status).toBe("passed");
   });
+
+  it("allows a demo-gated wrap that hides an existing component in original layout UI", () => {
+    const layoutPath = "apps/dashboard/src/app/layout.tsx";
+    const report = validateDiff({
+      createdFiles: ["src/utils/demo-mode.ts"],
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [layoutPath],
+      patch: [
+        `diff --git a/${layoutPath} b/${layoutPath}`,
+        '+import { isDemoMode } from "@/utils/demo-mode";',
+        "-          <Analytics />",
+        "+          {!isDemoMode && <Analytics />}",
+        "diff --git a/src/utils/demo-mode.ts b/src/utils/demo-mode.ts",
+        "new file mode 100644",
+        '+export const isDemoMode = process.env.MAKEADEMO_DEMO === "true";',
+      ].join("\n"),
+      sourceFiles: { [layoutPath]: "          <Analytics />\n" },
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("allows a multiline demo-gated wrap that re-introduces the wrapped markup", () => {
+    const layoutPath = "apps/dashboard/src/app/layout.tsx";
+    const report = validateDiff({
+      createdFiles: ["src/utils/demo-mode.ts"],
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [layoutPath],
+      patch: [
+        `diff --git a/${layoutPath} b/${layoutPath}`,
+        '+import { isDemoMode } from "@/utils/demo-mode";',
+        "-          <Analytics />",
+        "+          {!isDemoMode && (",
+        "+            <Analytics />",
+        "+          )}",
+        "diff --git a/src/utils/demo-mode.ts b/src/utils/demo-mode.ts",
+        "new file mode 100644",
+        '+export const isDemoMode = process.env.MAKEADEMO_DEMO === "true";',
+      ].join("\n"),
+      sourceFiles: { [layoutPath]: "          <Analytics />\n" },
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("rejects a demo-gated wrap that introduces markup missing from the original file", () => {
+    const layoutPath = "apps/dashboard/src/app/layout.tsx";
+    const report = validateDiff({
+      createdFiles: ["src/utils/demo-mode.ts"],
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [layoutPath],
+      patch: [
+        `diff --git a/${layoutPath} b/${layoutPath}`,
+        '+import { isDemoMode } from "@/utils/demo-mode";',
+        "-          <Analytics />",
+        "+          {isDemoMode ? <main>Demo build</main> : <Analytics />}",
+        "diff --git a/src/utils/demo-mode.ts b/src/utils/demo-mode.ts",
+        "new file mode 100644",
+        '+export const isDemoMode = process.env.MAKEADEMO_DEMO === "true";',
+      ].join("\n"),
+      sourceFiles: { [layoutPath]: "          <Analytics />\n" },
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(layoutPath);
+  });
+
+  it("rejects an ungated re-arrangement of original markup", () => {
+    const layoutPath = "apps/dashboard/src/app/layout.tsx";
+    const report = validateDiff({
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [layoutPath],
+      patch: [
+        `diff --git a/${layoutPath} b/${layoutPath}`,
+        "-          <Analytics />",
+        "-          <Toaster />",
+        "+          <Toaster />",
+        "+          <Analytics />",
+      ].join("\n"),
+      sourceFiles: {
+        [layoutPath]: "          <Analytics />\n          <Toaster />\n",
+      },
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(layoutPath);
+  });
 });
 
 function validateDemoDiff(
