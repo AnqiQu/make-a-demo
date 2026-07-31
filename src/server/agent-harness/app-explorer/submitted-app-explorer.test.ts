@@ -159,16 +159,23 @@ describe("exploreSubmittedApp", () => {
     expect(script.split("deadlineAtMs").length).toBeGreaterThanOrEqual(5);
   });
 
-  it("harvests assert text from the aria snapshot when a route renders no semantic content", async () => {
+  it("harvests assert text from the aria snapshot when a route renders only navigation names", async () => {
     const { commands } = await exploreObservation({
       routes: [observedRoute({ headings: [] })],
     });
     const script = readExplorerScript(commands);
 
-    expect(script).toContain(
+    // The harvest must fire whenever the primary selectors found nothing
+    // beyond the route's own nav and link names — not only on fully empty
+    // pages: data tables render outside the paragraph/list selectors.
+    expect(script).toContain("routeNavNames");
+    expect(script).toContain("ariaTextCandidates");
+    expect(script).not.toContain(
       "observed.headings.length === 0 && observed.text.length === 0",
     );
-    expect(script).toContain("ariaTextCandidates");
+    // Rendered text only: textContent would admit <style> and <script> text
+    // as heading or paragraph evidence.
+    expect(script).toContain("element.innerText");
   });
 
   it("names grounded routes when prepared features are not observable", async () => {

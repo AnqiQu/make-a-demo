@@ -110,6 +110,103 @@ describe("generated exploration script", () => {
     }
   }, 30_000);
 
+  it("harvests table content on a route whose selector text is only its own navigation", async () => {
+    // The sidebar renders as main li entries, so the primary text harvest is
+    // non-empty but carries only nav names; the data rows live in a table the
+    // paragraph/list selectors never reach.
+    const sidebarTablePage = `<!doctype html><html><head><title>Sidebar App</title></head><body>
+<main>
+<nav><ul><li><a href="/">Invoices</a></li><li><a href="/">Settings</a></li></ul></nav>
+<table><tbody><tr><td>Aperture Labs</td><td>4,200.00</td></tr></tbody></table>
+</main>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(sidebarTablePage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-table-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        routes: Array<{ text: string[] }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      expect(result.routes[0]?.text.join(" ")).toContain("Aperture Labs");
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
+  it("keeps stylesheet text out of harvested headings", async () => {
+    const styledHeadingPage = `<!doctype html><html><head><title>Styled App</title></head><body>
+<div role="heading" aria-level="1"><style>.decor{color:red}</style>Quarterly report</div>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(styledHeadingPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-styled-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        routes: Array<{ headings: string[] }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      expect(result.routes[0]?.headings).toContain("Quarterly report");
+      expect(result.routes[0]?.headings.join(" ")).not.toContain("{");
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
   it("abandons in-flight waits once the exploration deadline passes", async () => {
     // Responses arrive only after 20s — far beyond a clamped goto budget but
     // inside an unclamped 60s one.

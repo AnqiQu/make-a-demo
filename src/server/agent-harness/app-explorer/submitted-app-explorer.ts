@@ -1563,7 +1563,7 @@ try {
           const box = element.getBoundingClientRect();
           return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
         };
-        const texts = (selector, limit = 40) => Array.from(document.querySelectorAll(selector)).filter(visible).map((element) => clean(element.textContent || element.getAttribute("aria-label"))).filter(Boolean).slice(0, limit);
+        const texts = (selector, limit = 40) => Array.from(document.querySelectorAll(selector)).filter(visible).map((element) => clean(element.innerText || element.getAttribute("aria-label"))).filter(Boolean).slice(0, limit);
         const links = Array.from(document.querySelectorAll("a[href]")).filter(visible).map((element) => {
           const target = new URL(element.href, location.href);
           const explicitName = clean(element.getAttribute("aria-label"));
@@ -1624,7 +1624,7 @@ try {
           links,
           primaryNavigation: texts("nav a, [role=navigation] a"),
           scrollTargets,
-          text: Array.from(document.querySelectorAll("main p, main li, article p, [role=main] p")).filter(visible).map((element) => clean(element.textContent)).filter(Boolean).slice(0, 80),
+          text: Array.from(document.querySelectorAll("main p, main li, article p, [role=main] p")).filter(visible).map((element) => clean(element.innerText)).filter(Boolean).slice(0, 80),
           title: document.title || clean(document.querySelector("h1")?.textContent) || location.pathname,
         };
       });
@@ -1667,11 +1667,13 @@ try {
           })) ?? null,
         };
       }));
-      if (observed.headings.length === 0 && observed.text.length === 0) {
-        // Display-only routes (chart and widget dashboards) render no semantic
-        // headings or named controls; harvest assert candidates from the
-        // accessibility tree so such pages can still ground features. Each
-        // candidate is verified as a unique visible text locator below.
+      const routeNavNames = new Set([...observed.primaryNavigation, ...observed.links.map((link) => link.name)].filter(Boolean));
+      if (![...observed.headings, ...observed.text].some((value) => value && !routeNavNames.has(value))) {
+        // Routes whose selector harvest found nothing beyond their own nav
+        // and link names — display-only dashboards, and data tables outside
+        // the paragraph/list selectors — get assert candidates from the
+        // accessibility tree so rendered content can still ground features.
+        // Each candidate is verified as a unique visible text locator below.
         try {
           const aria = typeof page.locator("body").ariaSnapshot === "function" ? await page.locator("body").ariaSnapshot() : "";
           const ariaTextCandidates = [...new Set([
