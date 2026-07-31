@@ -726,6 +726,36 @@ prose; revisit seeding only if a run shows evidence-bearing routes going unvisit
 catalog holds only structural actions (navigate/scroll)", guarded so unreachable feature
 routes keep their sharper own classification.
 
+## Addendum (2026-07-31, after the post-N18 Midday run)
+
+Run `terminal-2026-07-31T06-28-13-825Z`. **The deepest Midday run ever — every agentic
+stage passed for the first time**: preparation converged in 4 repairs, exploration
+grounded, flow planning and script writing produced a 8-scene script ("Midday
+Transaction Workflows"), static and capture-path validation passed, the continuous take
+recorded, and two of three scene clips trimmed and probed cleanly. The pipeline is now
+failing in compositing-input handling — territory only Homer had reached.
+
+**New finding N19 (High) — capture trusts sandbox-side encodes it cannot verify, and
+destroys the evidence when they fail.**
+(a) The third remote VP9 trim (`create-transaction.webm`) exited 0 yet left a ~5KB
+structurally-corrupt file (ffprobe: "exceeds containing master element… End of file"),
+discovered only by the next command. Leading mechanism, matching the N9 precedent
+exactly: Daytona session commands report exit 0 for OOM-killed processes, and the third
+sequential VP9 encode ran beside the dev server and a just-finished browser recording in
+the 8 GiB sandbox. Two clips passing first also fits accumulating memory pressure.
+(b) `captureScenesFromScript`'s catch block `rm`s the local capture run directory on
+failure with `keepTemp=false`, deleting stdout, scene markers, and downloaded clips
+exactly when they are the diagnosis (the 1.8 principle, unapplied to capture).
+**Plan → N19:** (i) retain the capture run directory on failure — delete only on
+success; (ii) move scene trimming and probing local: always download the raw take
+(~tens of MB), reuse the existing local `trimSceneClipWithFfmpeg` +
+`probeVideoDurationSeconds`, and delete the remote trim block and
+`probeRemoteVideoDurationSeconds` — a net code reduction that removes encoder memory
+pressure from the sandbox entirely, unifies the local and remote recorder flows, and
+probes the exact artifacts compositing consumes. Rejected alternative: keeping remote
+trims and adding OOM classification (N9b pattern) — it diagnoses the failure without
+removing it, and local trimming subsumes it.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
