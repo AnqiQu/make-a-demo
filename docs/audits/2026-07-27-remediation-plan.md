@@ -829,6 +829,22 @@ script; the login page's own server work is demo-gated off) is therefore still o
 the N19 evidence-retention principle, unapplied to exploration. Plan: mirror the
 exploration directory into the local artifacts when the exploration verdict fails.
 
+**N20 + N20b landed (same day).** `5d4c135` (N20 — the presentation branch accepts a
+gated wrap: no foreign presentation, every removed line preserved, conditional use of
+the active demo gate; `addsProductPresentation` now ignores added lines whose content
+already exists in the original file, so wrap formatting cannot flip the verdict, and
+the adaptation branch shares the same detector). Four new tests pin the lane: the
+Midday-shaped single-line wrap and the multiline form pass; a gated wrap introducing
+foreign markup and an ungated re-arrangement stay rejected. The run's own artifacts
+replay correctly against the landed code: attempt-5 passes, attempt-1's true positive
+still fails. `83a113e` (N20b — on a failed exploration, `exploreApp` downloads
+`/workspace/.makeademo/exploration` into `exploration-evidence/` in the run directory,
+following the wiring's existing `external-resources/` local-evidence pattern rather
+than the `artifacts/` JSON mirror; best-effort with `exploration.evidence.persisted` /
+`exploration.evidence.unavailable` events, so evidence transfer can never turn a
+diagnosable failure into an infrastructure error — the pre-existing failed-exploration
+tests, whose fake workspaces lack download support, now pin the swallow path).
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
