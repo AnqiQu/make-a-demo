@@ -73,6 +73,11 @@ describe("exploreSubmittedApp", () => {
       'NODE_PATH="$(npm root -g)" bun /tmp/makeademo/exploration/explore-app.mjs',
     );
     expect(commands[0]).not.toContain("bun /workspace");
+    // A stale durable protocol from an earlier attempt must never be
+    // recovered as this attempt's result.
+    expect(commands[0]).toContain(
+      "rm -f /workspace/.makeademo/exploration/exploration.json",
+    );
     expect(readExplorerScript(commands)).toContain(
       "await interactionLocator.click",
     );
@@ -893,13 +898,48 @@ describe("exploreSubmittedApp", () => {
           return { exitCode: 0, stderr: "", stdout: "" };
         },
         async executeSubmittedCode(command) {
+          if (command.includes("explore-app.mjs")) {
+            return {
+              exitCode: 0,
+              stderr: "",
+              stdout: '[makeademo:exploration] {"routes": [tru',
+            };
+          }
           return command.includes("exploration.json")
             ? { exitCode: 0, stderr: "", stdout: protocol }
-            : {
-                exitCode: 0,
-                stderr: "",
-                stdout: '[makeademo:exploration] {"routes": [tru',
-              };
+            : { exitCode: 0, stderr: "", stdout: "" };
+        },
+      },
+    });
+
+    expect(requireArtifacts(result).appMap.discoveredRoutes[0]).toMatchObject({
+      headings: ["Dashboard"],
+    });
+  });
+
+  it("recovers the durable exploration result when the command times out", async () => {
+    const protocol = JSON.stringify({
+      blockedNetworkAttempts: [],
+      consoleErrors: [],
+      pageErrors: [],
+      routes: [observedRoute({ headings: ["Dashboard"] })],
+      unreachableRoutes: [],
+    });
+    const result = await exploreSubmittedApp({
+      baseUrl,
+      preparationManifestId: "prep_001",
+      workspace: {
+        async destroy() {},
+        async execute() {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async executeSubmittedCode(command) {
+          if (command.includes("explore-app.mjs")) {
+            throw new AgentHarnessCommandTimeoutError(300_000);
+          }
+          return command.includes("exploration.json")
+            ? { exitCode: 0, stderr: "", stdout: protocol }
+            : { exitCode: 0, stderr: "", stdout: "" };
         },
       },
     });
@@ -919,13 +959,16 @@ describe("exploreSubmittedApp", () => {
           return { exitCode: 0, stderr: "", stdout: "" };
         },
         async executeSubmittedCode(command) {
+          if (command.includes("explore-app.mjs")) {
+            return {
+              exitCode: 1,
+              stderr: `SyntaxError: unexpected token\n${"x".repeat(10_000)}`,
+              stdout: "",
+            };
+          }
           return command.includes("exploration.json")
             ? { exitCode: 1, stderr: "cat: no such file", stdout: "" }
-            : {
-                exitCode: 1,
-                stderr: `SyntaxError: unexpected token\n${"x".repeat(10_000)}`,
-                stdout: "",
-              };
+            : { exitCode: 0, stderr: "", stdout: "" };
         },
       },
     });

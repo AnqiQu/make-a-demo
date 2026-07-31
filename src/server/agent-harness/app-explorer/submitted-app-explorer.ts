@@ -181,11 +181,13 @@ export async function exploreSubmittedApp(input: {
     });
   };
   let result: Awaited<ReturnType<typeof executeSubmittedCode>>;
+  let recoveredObservation: BrowserExplorationProtocol | undefined;
   try {
     result = await executeSubmittedCode(
       input.workspace,
       [
         `mkdir -p ${explorerRuntimeDirectory}`,
+        `rm -f ${explorerDirectory}/exploration.json`,
         `printf %s ${shellQuote(encodedScript)} | base64 -d > ${explorerPath}`,
         `NODE_PATH="$(npm root -g)" bun ${explorerPath}`,
       ].join(" && "),
@@ -195,19 +197,27 @@ export async function exploreSubmittedApp(input: {
     if (!(error instanceof AgentHarnessCommandTimeoutError)) {
       throw error;
     }
-    const appStatus = await readAppStatus(input.workspace);
-    if (appStatus?.running !== false) throw error;
-    return (
-      (await capacityFailure(appStatus)) ??
-      createExitedAppExplorationFailure({
-        appStatus,
-        baseUrl: input.baseUrl,
-        timeoutError: error,
-      })
-    );
+    // A script that finishes marginally after the command budget still
+    // leaves its durable protocol behind; recover the crawl instead of
+    // discarding it.
+    recoveredObservation = await readExplorationProtocolFile(input.workspace);
+    if (recoveredObservation === undefined) {
+      const appStatus = await readAppStatus(input.workspace);
+      if (appStatus?.running !== false) throw error;
+      return (
+        (await capacityFailure(appStatus)) ??
+        createExitedAppExplorationFailure({
+          appStatus,
+          baseUrl: input.baseUrl,
+          timeoutError: error,
+        })
+      );
+    }
+    result = { exitCode: 0, stderr: "", stdout: "" };
   }
 
   const observation =
+    recoveredObservation ??
     readExplorationProtocol(result.stdout) ??
     (await readExplorationProtocolFile(input.workspace));
   if (observation === undefined) {
