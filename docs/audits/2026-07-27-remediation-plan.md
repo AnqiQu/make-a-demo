@@ -657,6 +657,30 @@ resurrect an earlier attempt's crawl), `f84db61` (i — gated behaviorally: the 
 generated script against a 20s-slow server with a 2s deadline finalizes in ~2s instead
 of being killed at 25s), `c39c515` (iii).
 
+## Addendum (2026-07-31, after the post-N17 Midday run)
+
+Run `terminal-2026-07-31T05-10-06-978Z`. **Every open exploration gate passed.**
+Exploration completed inside its budget across 12 routes; 9 routes carry harvested text
+evidence with exercised search fills (the previous generation observed near-universal
+emptiness); grounding went 0/3 → **2/3** (`transaction-workspace`, `invoice-workspace`);
+and the reselection steering worked end-to-end — the failure message named 6
+evidence-bearing routes, and repair-5 correctly swapped the ungroundable
+`dashboard-overview` (entry `/`, a chart page that renders nothing without data, where
+the 15s content wait rightly expired) for `transaction-categories` on
+`/transactions/categories`, a steered route with full evidence. The next exploration
+pass would very likely have grounded 3/3.
+
+**The sole terminal blocker is now N12.** Repair-5's patch also carried a `bun.lock`
+hunk (the attempt-5 workspace diff had no lockfile entry; attempt-6 did — the agent's
+session re-applied its earlier hand-pin), so fidelity rejected the winning repair and
+the budget died. Third consecutive run burning attempts on lockfile hand-edits, this
+time terminally. **Implement N12 now:** on a fidelity failure whose lockfile violation
+is severable, deterministically restore the workspace lockfile(s) to the recorded
+backend-generated content (the workspace-diff mechanism already distinguishes it — the
+attempt-5/attempt-6 contrast is the proof) and re-validate, instead of burning a repair
+attempt. Lockfiles are backend-owned: package.json drives reconciliation at the next
+install window, so stripping agent lockfile edits never desynchronizes the runtime.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
