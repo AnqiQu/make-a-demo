@@ -765,6 +765,70 @@ ffprobe command reaches the sandbox anymore). The rewritten remote-flow test pin
 new contract, including that the sandbox-bound output archive carries only the raw take
 and that the local raw-take copy is dropped after trimming unless retention is on.
 
+## Addendum (2026-07-31, after the post-N19 Midday run)
+
+Run `terminal-2026-07-31T21-24-39-296Z` (719s). Preparation nondeterminism produced a
+different demo shape than the capture-reaching run — this prep scoped Midday to its
+auth + MFA surface (a demo-gated `proxy.ts` redirects every other route to
+`/mfa/setup`) — and the run died back in exploration repair. Every individual repair
+was correct: fidelity attempt-1 was a true positive (the prep agent had rewritten
+`mfa-settings-list.tsx` and two sibling components; the repair reverted to a minimal
+gated-auth set that then passed three consecutive checks), preflight repairs fixed the
+network-blocked `xlsx` CDN tarball (repinned to a registry-resolvable version) and a
+307 redirect loop, and exploration completed inside budget. `/mfa/setup` rendered and
+grounded `mfa-setup` on assert evidence; `/login` served its title but streamed no body
+content (N18's blank-render class, now route-scoped with a healthy sibling route as
+contrast), so `sign-in` and `sign-in-providers` never grounded → 1/3, correctly
+classified "prepared feature not observable" with reselection steering.
+
+**New finding N20 (Critical) — the fidelity presentation rule vetoes the exact
+demo-gated adaptation its own hints prescribe, and burned the run's remaining budget
+rejecting a correct repair twice.** The runtime repair agent, acting on the only
+network evidence in the observation (openpanel.dev `op1.js` blocked as a script on both
+routes), made the textbook edit in the root layout: `+import { isDemoMode } …` plus
+`-<Analytics />` / `+{!isDemoMode && <Analytics />}`. Replaying
+`validatePreparationFidelity` against the run's own artifacts (attempt-5 diff +
+screened sources + manifest) reproduces the verdict exactly, and probing the internal
+predicates isolates the branch: the patch adds no presentation by the checker's own
+detector (`addsProductPresentation: false`), preserves every removed line
+(`readUnpreservedRemovedLine: undefined`), and conditionally uses the bound gate
+identifier — but the file's patch carries no auth/integration trigger terms, so it
+lands in the `isProductPresentationPath` branch, whose only escape is external-asset
+localization. The gated-adaptation contract the hints prescribe ("conditionally select
+the demo path while preserving the normal behavior") is structurally unreachable for
+any presentation-path file without those terms. The agent, correctly convinced its fix
+was right, resubmitted `layout.tsx` byte-identically (attempt-6 differs only in
+`proxy.ts`), was rejected identically, and the global budget (5) was exhausted — two of
+five attempts consumed vetoing one correct edit. The class is general: analytics
+beacons, chat widgets, consent banners, and error reporters live in layouts and pages
+across most real apps, and they are precisely what sandboxed demos must gate off.
+
+**Plan → N20:** accept a **gated wrap** in the presentation branch: a patch that (i)
+adds no *foreign* presentation, (ii) preserves every removed line
+(`readUnpreservedRemovedLine === undefined`), and (iii) conditionally uses the active
+demo gate (`hasConditionalDemoGate`) — three existing predicates, no new machinery. For
+(i), make the presentation detector original-aware: skip added lines whose trimmed
+content already exists in the original file, so the multiline wrap form
+(`{!isDemoMode && (` / `<Analytics />` / `)}`) — which the current detector flags —
+counts as preservation rather than authorship; the auth/integration adaptation branch
+shares the detector, fixing the identical fragility there. The change is
+widening-only: the filtered detector can only match less, and the acceptance only adds
+a pass lane, so no currently-green repo can regress. Verified by replaying the run's
+artifacts against a prototyped fix: attempt-5 flips to passed; attempt-1's true
+positive stays failed; a multiline wrap passes; a gated wrap introducing foreign markup,
+an ungated re-arrangement of existing markup, and a gated deletion all stay rejected
+(CSS files cannot satisfy the gate leg — a flag mention in a comment is stripped, and
+CSS cannot express a conditional flag read).
+
+**Secondary finding N20b (Medium) — exploration evidence dies with the sandbox.** The
+exploration verdict references `/workspace/.makeademo/exploration/*.png` and
+`*.aria.yml` for both routes, but only `writeArtifact` JSONs are mirrored locally, so
+the screenshots that would show *why* `/login` streamed no body were destroyed with the
+sandbox. Why `/login` blanks while `/mfa/setup` renders (same root layout, same blocked
+script; the login page's own server work is demo-gated off) is therefore still open —
+the N19 evidence-retention principle, unapplied to exploration. Plan: mirror the
+exploration directory into the local artifacts when the exploration verdict fails.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
