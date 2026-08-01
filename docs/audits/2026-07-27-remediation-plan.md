@@ -941,6 +941,65 @@ routes that genuinely rendered content (`/account/date-and-locale`,
 no-content-anywhere case, and on a live rerun the verdict additionally carries the
 `Failed to parse URL` stderr evidence pointing at the data path.
 
+## Addendum (2026-08-01, after the post-N21 homer + midday matrix run)
+
+Homer failed (`terminal-2026-07-31T23-57-37-519Z`, 417s); Midday "passed"
+(`terminal-2026-08-01T00-04-34-456Z`, 1232s) with data still broken. Neither failure
+is an N21 regression, and the N21 machinery visibly worked: homer's exploration passed
+under the new grounding on its real 2-route crawl, Midday's exploration evidence is
+now mirrored locally on success (the screenshots that diagnosed this run), and every
+accepted assert targets route-distinct content.
+
+**New finding N22 (High) — flow planning burns its budget on constraints the catalog
+cannot satisfy, then dies with a misclassified error.** Homer's prep listed two
+features (`dashboard-service-cards`, `display-preferences`) whose tagged evidence
+pools are byte-identical: both may reference only `navigate-route-1` +
+`assert-heading-1-1`. The uniqueness rule ("at least one action not reused by another
+feature") is therefore unsatisfiable — replay confirms attempt 1 died on it, attempt 2
+(agent added the untagged `assert-heading-1-2`/`fill-interaction-1-1` differentiators)
+died on "not grounded for feature", attempt 3 reverted and died on uniqueness again.
+The doomed loop ended worse than it started: somewhere in attempt 3's session an
+OpenCode permission denial appeared, and `throwIfRequiredArtifactWriteWasDenied` —
+which matches a denial line anywhere in output that mentions the artifact name
+anywhere — converted three honest validation rejections into "harness configuration
+failure: required artifact write was denied", suppressing the real error. (The full
+session stdout is not persisted, only a 2KB tail, so the actual denied call is
+unrecoverable — the evidence-bounding class again.) **Plan → N22:** (a) like N21b's
+never-demand-the-impossible rule, `assertFlowSpecGrounded`'s caller should detect
+before spending agent attempts that the tagged action pools cannot satisfy uniqueness
+(or assert+interaction coverage) for the selected inventory, and fail with a
+repairable preparation classification: "browser evidence cannot distinguish prepared
+features X and Y; merge them or reselect distinct entry routes"; (b) the write-denied
+classifier must correlate the denial to the artifact (same line), and an
+attempts-exhausted failure must carry the last validation error, never be preempted.
+An earlier repo-preparation attempt also failed with a PTY-echo hang (`stty -echo`
+prompt garbage, exit 1) — recovered by the 1.3 retry; infra flake, recorded only.
+
+**New finding N23 (Critical) — under gate pressure, preparation shrinks the demo
+scope instead of fixing the data path.** This Midday prep selected as its three
+features: locale preferences, date/time formatting (both on
+`/account/date-and-locale`) and the tracker create-project modal — the only surfaces
+that render without data — and confessed in its own manifest: "The prepared demo
+covers account date-and-locale preferences only; banking, invoices, inbox, reports…
+still require their normal services", while its own product summary calls Midday a
+financial/invoicing/time-tracking platform. The relative-URL SSR bug recurred a third
+time (`Failed to parse URL from /api/trpc/trackerProjects.get`; this prep created no
+fixture route at all), `/` renders a literally blank page (screenshot evidence), and
+the tracker page's project table is permanent skeleton loaders. Every gate passed
+honestly — the selected features genuinely ground on route-distinct content — so the
+gap is feature-selection accountability, not evidence truthfulness. The requested-
+feature machinery that would force data surfaces never engaged because the matrix
+submits `importantFeatures: []`. **Plan → N23:** (i) config, no code: the matrix's
+midday entry must request data-bearing features (e.g. invoicing and transactions) the
+way a real maker would — requested-feature grounding then forces the prep onto data
+routes, where hollow rendering fails exploration and the N21c stderr evidence steers
+repair directly at the SSR fetch bug; (ii) record the open design question for
+feature-free briefs — whether preparation's inventory must cover the workflow domains
+its own productContext.summary enumerates — rather than inventing a fuzzy relevance
+gate now; (iii) optional one-line preparation standing rule: fixture endpoints fetched
+by browser code that also runs during SSR must use absolute same-origin URLs or be
+gated to client-only execution (third recurrence of this exact bug class).
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
