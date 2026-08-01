@@ -1019,6 +1019,36 @@ suppresses the attempts-exhausted error, which already carries the last validati
 message; the misclassification and fail-fast paths are both now test-pinned).
 N23ii (feature-free-brief inventory coverage) remains a recorded open design question.
 
+## Addendum (2026-08-01, after the post-N22/N23 matrix run — infrastructure incident)
+
+Both entries failed in under 90 seconds (`terminal-2026-08-01T01-11-17-607Z` homer,
+`terminal-2026-08-01T01-12-15-631Z` midday): every OpenCode agent command — six of
+six across two fresh sandboxes — exited 1 after ~4 seconds emitting only PTY
+bootstrap echo (`stty -echo`, bracketed-paste codes, bare `>` continuation prompts)
+and not one byte of OpenCode output. **Diagnosis: Daytona platform-side PTY
+regression, not pipeline code.** Evidence: (1) the identical signature first appeared
+as a self-healing one-off in the 23:57 homer run — before N22/N23 existed — and the
+00:04 midday run had 20 minutes of healthy agent commands after it; nothing that
+touches the agent-command path landed since; (2) each run died on its *first* agent
+stage (repo-preparation for homer, runtime-target-selection for midday) — different
+repos, prompts, and stages, so no pipeline logic is in the frame; (3) the
+`stty -echo` in the output is Daytona's own session bootstrap, and its echo
+suppression visibly failed — the typed command lines are echoed back as `>`
+continuations; (4) control-plane calls (secret ensure, sandbox create, log persist)
+all succeeded; the opencode binary is frozen in the prebuilt snapshot, which nobody
+rebuilt. Next step: verify cheaply with `scripts/verify-daytona-image.mts` (one
+sandbox) before spending a matrix run; the 23:57 occurrence self-healed, so the
+incident may pass on its own.
+
+**Recorded finding N24 (Medium, not landed) — hardening against this class:**
+(a) an agent command that exits nonzero having produced zero OpenCode output should
+classify as an infrastructure failure (1.3 retry/backoff semantics and honest
+reporting) instead of burning artifact attempts and surfacing as "did not produce
+valid required artifact", which misdirects diagnosis at the artifact contract;
+(b) the agent image installs OpenCode unpinned (`curl -fsSL https://opencode.ai/install | bash`)
+while bun, pnpm, and yarn are all version-pinned — pin it and record it in
+`tools-lock.json` so snapshot rebuilds are deterministic.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
