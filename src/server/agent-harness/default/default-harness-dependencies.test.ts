@@ -437,6 +437,39 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
   });
 
+  it("keeps the last validation error when a permission denial concerns another file", async () => {
+    const invalid = {
+      ...flowSpec(),
+      features: flowSpec().features.map((feature) => ({
+        ...feature,
+        referencedActionIds: ["invented-action"],
+      })),
+    };
+    const denialAboutAnotherFile = [
+      "Planning FlowSpec at /workspace/.makeademo/flow-spec.json",
+      "Error: edit of /workspace/.makeademo/action-catalog.json was blocked by a permission rule",
+    ].join("\n");
+
+    await expect(
+      runFlowPlanningScenario({
+        candidates: [invalid],
+        openCodeStdout: denialAboutAnotherFile,
+      }),
+    ).rejects.toThrow(/unknown ActionCatalog action invented-action/);
+  });
+
+  it("fails fast when the required artifact write itself is denied", async () => {
+    const deniedArtifactWrite =
+      "Error: write to /workspace/.makeademo/flow-spec.json was blocked by a permission rule";
+
+    await expect(
+      runFlowPlanningScenario({
+        candidates: [null],
+        openCodeStdout: deniedArtifactWrite,
+      }),
+    ).rejects.toThrow(/required artifact write was denied/);
+  });
+
   it("repairs FlowSpecs that assert only navigation chrome when route-distinct asserts exist", async () => {
     const chromeOnly = {
       ...flowSpec(),
@@ -4664,6 +4697,7 @@ async function runFlowPlanningScenario(input: {
   demoBrief?: { keyProductFeatures?: string[] };
   env?: Record<string, string | undefined>;
   onPrompt?: (prompt: string, attempt: number) => void;
+  openCodeStdout?: string;
   preparationManifest?: PreparationManifest;
 }) {
   let attempts = 0;
@@ -4702,7 +4736,11 @@ async function runFlowPlanningScenario(input: {
         models.push(runInput.model);
         prompts.push(runInput.prompt);
         input.onPrompt?.(runInput.prompt, attempts);
-        return { exitCode: 0, stderr: "", stdout: "planned" };
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout: input.openCodeStdout ?? "planned",
+        };
       },
     },
     outputRoot: "/tmp/makeademo-test",

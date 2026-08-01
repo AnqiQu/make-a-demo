@@ -3545,15 +3545,21 @@ function throwIfRequiredArtifactWriteWasDenied(input: {
   result: Pick<OpenCodeHarnessRunResult, "stderr" | "stdout">;
   stage: string;
 }): void {
-  const output = `${input.result.stderr}\n${input.result.stdout}`;
   const artifactName = input.path.slice(input.path.lastIndexOf("/") + 1);
-  const mentionsArtifact =
-    output.includes(input.path) || output.includes(artifactName);
-  const reportsPermissionDenial =
-    /(?:write|create|edit)[^\n]{0,120}(?:blocked|denied)[^\n]{0,120}permission|(?:blocked|denied)[^\n]{0,120}(?:permission|write|creation)|specified a rule which prevents you from using this specific tool call/i.test(
-      output,
+  const denialPattern =
+    /(?:write|create|edit)[^\n]{0,120}(?:blocked|denied)[^\n]{0,120}permission|(?:blocked|denied)[^\n]{0,120}(?:permission|write|creation)|specified a rule which prevents you from using this specific tool call/i;
+  // OpenCode reports a denied tool call and its arguments on one event line,
+  // so the denial line itself names the file it concerns. A denial about some
+  // other path is agent noise a retry can route around — reporting it as a
+  // harness configuration failure would suppress the real validation error.
+  const artifactWriteDenied = `${input.result.stderr}\n${input.result.stdout}`
+    .split("\n")
+    .some(
+      (line) =>
+        (line.includes(input.path) || line.includes(artifactName)) &&
+        denialPattern.test(line),
     );
-  if (mentionsArtifact && reportsPermissionDenial) {
+  if (artifactWriteDenied) {
     throw new Error(
       `${input.stage} harness configuration failure: required artifact write was denied for ${input.path}.`,
     );
