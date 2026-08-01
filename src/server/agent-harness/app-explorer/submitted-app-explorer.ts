@@ -1066,11 +1066,59 @@ function readExplorationFailure(
       })
       .map((feature) => feature.id),
   );
+  // Features forced onto identical tagged evidence — exactly one assert and
+  // one interaction each, all shared — can never both satisfy the FlowSpec
+  // uniqueness rule. That is a feature-inventory defect flow planning cannot
+  // repair, so it must fail here, where preparation repair can merge or
+  // reselect the features.
+  const forcedEvidenceKey = (featureId: string): string | undefined => {
+    const tagged = actionCatalog.actions.filter((action) =>
+      action.featureIds?.includes(featureId),
+    );
+    const asserts = unique(
+      tagged.filter((action) => action.kind === "assert").map(({ id }) => id),
+    );
+    const interactions = unique(
+      tagged.filter((action) => action.kind !== "assert").map(({ id }) => id),
+    );
+    return asserts.length === 1 && interactions.length === 1
+      ? `${asserts[0]}|${interactions[0]}`
+      : undefined;
+  };
+  const collisionGroups = [
+    ...[...groundedFeatureIds]
+      .reduce((groups, featureId) => {
+        const key = forcedEvidenceKey(featureId);
+        if (key !== undefined) {
+          groups.set(key, [...(groups.get(key) ?? []), featureId]);
+        }
+        return groups;
+      }, new Map<string, string[]>())
+      .values(),
+  ].filter((group) => group.length > 1);
+  const indistinguishableMessage = (group: string[]) =>
+    `Browser evidence cannot distinguish prepared features ${group.join(
+      " and ",
+    )}: each is forced onto the same tagged assert and interaction, so FlowSpec uniqueness is unsatisfiable. Merge these features or reselect distinct entry routes and evidence in the featureInventory.`;
   const missingRequestedFeatures = featureInventory.filter(
     (feature) =>
       feature.requestedFeature !== undefined &&
       !groundedFeatureIds.has(feature.id),
   );
+  const requestedIds = new Set(
+    featureInventory
+      .filter((feature) => feature.requestedFeature !== undefined)
+      .map(({ id }) => id),
+  );
+  const requestedCollision = collisionGroups.find(
+    (group) => group.filter((id) => requestedIds.has(id)).length > 1,
+  );
+  if (requestedCollision !== undefined) {
+    return {
+      classification: "requested feature not observable",
+      message: indistinguishableMessage(requestedCollision),
+    };
+  }
   if (missingRequestedFeatures.length > 0) {
     const unreachable = unreachableForFeatures(
       new Set(missingRequestedFeatures.map(({ id }) => id)),
@@ -1096,10 +1144,26 @@ function readExplorationFailure(
     const ungroundedFeatures = featureInventory.filter(
       (feature) => !groundedFeatureIds.has(feature.id),
     );
+    const indistinguishableExtras = collisionGroups.reduce(
+      (count, group) => count + group.length - 1,
+      0,
+    );
     const observedPreparedFeatureCount =
-      featureInventory.length - ungroundedFeatures.length;
+      featureInventory.length -
+      ungroundedFeatures.length -
+      indistinguishableExtras;
     const requiredPreparedFeatureCount = Math.min(3, featureInventory.length);
     if (observedPreparedFeatureCount < requiredPreparedFeatureCount) {
+      if (
+        collisionGroups.length > 0 &&
+        featureInventory.length - ungroundedFeatures.length >=
+          requiredPreparedFeatureCount
+      ) {
+        return {
+          classification: "prepared feature not observable",
+          message: indistinguishableMessage(collisionGroups[0] ?? []),
+        };
+      }
       const unreachable = unreachableForFeatures(
         new Set(ungroundedFeatures.map(({ id }) => id)),
       );

@@ -474,6 +474,117 @@ describe("exploreSubmittedApp", () => {
     expect(result.validationReport.status).toBe("passed");
   });
 
+  it("fails features that browser evidence cannot distinguish before flow planning", async () => {
+    const feature = (id: string, label: string, entryPath: string) => ({
+      authStrategy: "none" as const,
+      description: `Demonstrate ${label}.`,
+      entryPaths: [entryPath],
+      fixtureNotes: [],
+      id,
+      label,
+      sourcePaths: [`src${entryPath}.tsx`],
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [
+        feature("card-dashboard", "Card dashboard", "/"),
+        feature("theme-dashboard", "Theme dashboard", "/"),
+        feature("service-search", "Service search", "/search"),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["card-dashboard", "theme-dashboard"],
+          headings: ["Demo dashboard"],
+          path: "/",
+        }),
+        observedRoute({
+          featureIds: ["service-search"],
+          headings: ["Search results"],
+          path: "/search",
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "prepared feature not observable",
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain("cannot distinguish");
+    expect(result.validationReport.logsSummary).toContain("card-dashboard");
+    expect(result.validationReport.logsSummary).toContain("theme-dashboard");
+  });
+
+  it("tolerates indistinguishable features when enough distinguishable ones ground", async () => {
+    const feature = (id: string, label: string, entryPath: string) => ({
+      authStrategy: "none" as const,
+      description: `Demonstrate ${label}.`,
+      entryPaths: [entryPath],
+      fixtureNotes: [],
+      id,
+      label,
+      sourcePaths: [`src${entryPath}.tsx`],
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [
+        feature("card-dashboard", "Card dashboard", "/"),
+        feature("theme-dashboard", "Theme dashboard", "/"),
+        feature("service-search", "Service search", "/search"),
+        feature("report-review", "Report review", "/reports"),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["card-dashboard", "theme-dashboard"],
+          headings: ["Demo dashboard"],
+          path: "/",
+        }),
+        observedRoute({
+          featureIds: ["service-search"],
+          headings: ["Search results"],
+          path: "/search",
+        }),
+        observedRoute({
+          featureIds: ["report-review"],
+          headings: ["Report review"],
+          path: "/reports",
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("passed");
+  });
+
+  it("fails requested features that are forced onto identical evidence", async () => {
+    const feature = (id: string, label: string, requestedFeature: string) => ({
+      authStrategy: "none" as const,
+      description: `Demonstrate ${label}.`,
+      entryPaths: ["/"],
+      fixtureNotes: [],
+      id,
+      label,
+      requestedFeature,
+      sourcePaths: ["src/page.tsx"],
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [
+        feature("card-dashboard", "Card dashboard", "card dashboard"),
+        feature("theme-dashboard", "Theme dashboard", "theme dashboard"),
+      ],
+      requestedFeatures: ["card dashboard", "theme dashboard"],
+      routes: [
+        observedRoute({
+          featureIds: ["card-dashboard", "theme-dashboard"],
+          headings: ["Demo dashboard"],
+          path: "/",
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "requested feature not observable",
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain("cannot distinguish");
+  });
+
   it("emits up to three text asserts per headingless route, distinct content first", async () => {
     const { result } = await exploreObservation({
       routes: [
