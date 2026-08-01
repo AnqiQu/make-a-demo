@@ -12,7 +12,9 @@
     },
     {
       "name": "midday",
-      "repoUrl": "https://github.com/midday-ai/midday"
+      "repoUrl": "https://github.com/midday-ai/midday",
+      "productSummary": "Midday is an all-in-one financial management platform for freelancers and small businesses: track transactions, send invoices, and see business health at a glance.",
+      "importantFeatures": ["invoicing", "transactions"]
     },
     {
       "name": "vite-spa",
