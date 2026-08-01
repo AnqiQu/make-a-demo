@@ -1000,6 +1000,25 @@ gate now; (iii) optional one-line preparation standing rule: fixture endpoints f
 by browser code that also runs during SSR must use absolute same-origin URLs or be
 gated to client-only execution (third recurrence of this exact bug class).
 
+**N22 + N23 landed (same day).** `d942ce7` (N23i — the matrix midday entry now submits
+a product summary and `importantFeatures: ["invoicing", "transactions"]` like a real
+maker; requested-feature coverage forces preparation onto the data routes). `c377889`
+(N23iii — the preparation standing rule that said "browser clients may use relative
+same-origin routes" now warns that data-fetching layers shared with SSR cannot fetch
+relative URLs and must gate to client-only execution or call the fixture module
+directly server-side — the prior wording actively pointed agents into the recurring
+bug). `24b6767` (N22a — exploration now fails features forced onto identical tagged
+evidence — exactly one shared assert and one shared interaction each — with "browser
+evidence cannot distinguish…" steering to merge or reselect, before flow planning can
+burn attempts on unsatisfiable uniqueness; requested-feature collisions fail the same
+way, and a collision is tolerated when enough distinguishable features remain. Replay:
+homer's deadlocked run now fails at exploration naming `dashboard-service-cards` and
+`display-preferences`). `5593d9f` (N22b — the write-denied classifier requires the
+denial line itself to name the artifact, so a denial about another path no longer
+suppresses the attempts-exhausted error, which already carries the last validation
+message; the misclassification and fail-fast paths are both now test-pinned).
+N23ii (feature-free-brief inventory coverage) remains a recorded open design question.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
