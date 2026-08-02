@@ -1129,12 +1129,37 @@ function readExplorationFailure(
         message: formatUnreachable(unreachable),
       };
     }
+    // Naming what the feature's routes actually showed turns "no evidence"
+    // into actionable steering: a chrome-only route means the data path is
+    // broken, which the repair agent cannot see from the feature name alone.
+    const chromeOnlyRouteEvidence = missingRequestedFeatures
+      .map((feature) => {
+        const taggedRoutes = unique(
+          actionCatalog.actions
+            .filter((action) => action.featureIds?.includes(feature.id))
+            .map((action) => action.route),
+        );
+        const routes =
+          taggedRoutes.length > 0 ? taggedRoutes : feature.entryPaths;
+        if (
+          routes.length === 0 ||
+          routes.some((route) => contentRoutePaths.has(route))
+        ) {
+          return "";
+        }
+        return ` Requested feature "${feature.requestedFeature}" routes ${routes
+          .slice(0, 4)
+          .join(
+            ", ",
+          )} rendered only globally-repeated navigation chrome — no route-distinct headings, text, or data; repair the prepared app's data path for these routes.`;
+      })
+      .join("");
     return (
       hollowFailure(missingRequestedFeatures) ?? {
         classification: "requested feature not observable",
         message: `App Exploration found no browser evidence for requested features: ${missingRequestedFeatures
           .map((feature) => feature.requestedFeature as string)
-          .join(", ")}.`,
+          .join(", ")}.${chromeOnlyRouteEvidence}`,
       }
     );
   }

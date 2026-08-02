@@ -1161,6 +1161,50 @@ describe("exploreSubmittedApp", () => {
     });
   });
 
+  it("names chrome-only routes when a requested feature's data never rendered", async () => {
+    const invoicing = preparedFeature({
+      description: "Demonstrate invoicing",
+      entryPaths: ["/invoices"],
+      id: "invoicing",
+      label: "Invoices",
+      requestedFeature: "invoicing",
+    });
+    const transactions = preparedFeature({
+      description: "Demonstrate transactions",
+      entryPaths: ["/transactions"],
+      id: "transactions",
+      label: "Transactions",
+      requestedFeature: "transactions",
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [invoicing, transactions],
+      routes: [
+        observedRoute({
+          featureIds: ["invoicing"],
+          headings: ["Invoices"],
+          path: "/invoices",
+          requestedPath: "/invoices",
+        }),
+        observedRoute({
+          buttons: ["Review"],
+          featureIds: ["transactions"],
+          path: "/transactions",
+          primaryNavigation: ["Categories", "Connect bank"],
+          requestedPath: "/transactions",
+          text: ["Categories", "Connect bank"],
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "requested feature not observable",
+      logsSummary: expect.stringContaining(
+        'Requested feature "transactions" routes /transactions rendered only globally-repeated navigation chrome',
+      ),
+      status: "failed",
+    });
+  });
+
   it("grounds scrolling when the prepared page has scrollable content", async () => {
     const { result } = await exploreObservation({
       routes: [
