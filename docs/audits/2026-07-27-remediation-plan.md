@@ -1101,25 +1101,25 @@ identically. Three mechanisms compounded:
   (missing gate → gate hint; unpreserved removal → name the line). Counterfactual:
   an accurate message at attempt 3 means repair 3 gates two lines and *keeps*
   `session.ts`.
-- **N25b — repair-episode evidence amnesia (High, feature).** A fidelity-failure
-  repair prompt carries only the fidelity report (whose stderr is empty). The
-  exploration failure that opened the episode — with the Supabase stderr naming file
-  and line — appeared in exactly one prompt (repair 2) and then vanished; repairs
-  3–5 saw only wrap-shape complaints and optimized for exactly that. Fix: the repair
-  loop should retain the episode's most recent failed report per stage and include
-  the still-unresolved downstream failure (classification, summary, stderr excerpts)
-  in every subsequent repair prompt until that gate passes again.
-- **N25c — full-reset rebuild loses non-violating work (High, feature).** A fidelity
-  veto restores the workspace from the screened source, deletes the manifest, and
-  discards the OpenCode session (`repairPreparation`,
-  `default-harness-dependencies.ts:979-986`); the fresh agent rebuilds from the
-  vetoed diff artifact. Nothing tells it which parts of the vetoed candidate were
-  fine, so after three beatings over `page.tsx` it minimized the diff and dropped
-  `session.ts` — a file no veto ever named. Fix (prompt-level, keeps reset
-  semantics): the fidelity-repair prompt should enumerate the violating files from
-  the report and state that all other files in the vetoed workspace diff passed this
-  gate and should be re-applied unchanged. (Rejected alternative: per-file
-  acceptance — cross-file consistency risk for split gate/helper changes.)
+- **N25b+c — vetoes silently discard the candidate's correct parts (High,
+  feature). [Mechanism corrected during implementation.]** Code investigation
+  during landing corrected this addendum's original amnesia claim: evidence
+  continuity already exists. When fidelity rejects a repair candidate, the
+  orchestrator's `appendRepairRejection` (`agent-harness.ts`) merges the fidelity
+  summary into the *original* episode failure — repairs 3–5 did receive the
+  exploration classification, summary, and Supabase stderr — and
+  `restorePreparationCandidate` restores the last *accepted* candidate (not the
+  screened source) while deliberately resetting the OpenCode session, since the
+  workspace was rewritten under the agent (the fresh session IDs on repairs 3–5
+  confirm this path fired). What was actually missing: nothing told the fresh
+  agent that its predecessor's whole candidate was reverted, that the vetoed
+  diff remains readable at `preparation-workspace-diff.json`, or that only the
+  files named in the rejection violated — so repair 5, fixated on three
+  accumulated `page.tsx` complaints, rebuilt a minimal compliant patch and
+  dropped `session.ts`, a file no veto ever named. Fix: `appendRepairRejection`
+  prepends one deduplicated hint stating exactly that. (Rejected alternative:
+  per-file acceptance — cross-file consistency risk for split gate/helper
+  changes.)
 - **N25d — requested-feature failures hide what routes showed (Medium, feature).**
   The exploration message says only "no browser evidence for requested features:
   transactions", and `browserObservations` is route→title pairs
@@ -1141,6 +1141,23 @@ the same benefit without weakening the gate.
 
 N24 remains recorded and not landed; this run adds no new evidence for it (no
 zero-output agent exits occurred).
+
+**Landed (2026-08-01):** `d2c54fd` (N25a — the presentation-path branch now emits
+per-condition messages: added presentation keeps the preserveUi veto, a missing or
+non-conditional gate reuses the adaptation branch's gate messages via a widened
+`readDemoAdaptationViolation` kind, and an unpreserved removal names the exact
+line; regression tests reproduce the run's attempt-3 and attempt-5 shapes),
+`c2d393e` (N25b+c — `appendRepairRejection` prepends one deduplicated hint telling
+the fresh repair agent the candidate was reverted, where the vetoed diff remains
+readable, and that only the files named in the rejection violated; merged hints
+are now Set-deduplicated so accumulated rejections stop repeating themselves), and
+`b143f4f` (N25d — when requested features lack browser evidence and all their
+tagged routes are chrome-only, the failure message names the routes and steers at
+the data path; content-bearing-route failures keep the existing message). Full
+gauntlet green except the pre-existing Remotion renderer smoke test, which failed
+environmentally during landing (delayRender 28s root-component timeout under
+machine load; a stash-control run at the last-green commit reproduced the failure,
+confirming it is unrelated — tracked as a spun-off hardening task).
 
 ## Open decisions to confirm before Phase 4/7
 
