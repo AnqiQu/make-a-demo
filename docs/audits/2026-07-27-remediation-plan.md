@@ -1159,6 +1159,71 @@ environmentally during landing (delayRender 28s root-component timeout under
 machine load; a stash-control run at the last-green commit reproduced the failure,
 confirming it is unrelated — tracked as a spun-off hardening task).
 
+## Addendum (2026-08-02, after the post-N25 matrix run)
+
+Matrix report `matrix-report-2026-08-02T06-00-03-667Z`: **homer passed** (441s);
+**midday failed honestly at app-exploration** (1770s,
+`terminal-2026-08-02T05-30-33-679Z`) with the budget exhausted after 5 repairs —
+but the run validates every N25 mechanism in production and sharpens the remaining
+blocker considerably.
+
+**N25 verified working.** The loop economics inverted: **four browser observations
+from five repairs** (previous run: two from five). One OpenCode session survived
+repairs 1–4 (a single fidelity veto all run, versus three); the veto message was
+the new per-condition kind — it named the exact unpreserved line — and the repair
+fixed it in one attempt; the N25d chrome-only route evidence appeared in every
+exploration failure and in the final matrix detail. Real product progress inside
+the run: **invoicing grounded for the first time** ($4,200/$3,200/$1,850 fixture
+tiles visibly rendered — no more `$NaN`), and the recurring SSR relative-URL class
+(4th occurrence, exploration attempt-1: `/api/demo-trpc/trackerProjects.get`
+fetched during SSR) was **self-corrected within the run** — repair 2 replaced it
+with a server-side fixture link resolving `getDemoResult(op.path, op.input)`
+directly, exactly the N23iii rule shape.
+
+**How the run still died** (all from `validation-attempts/` mirrors): repair 4
+built the plausibly winning fix — make `batchPrefetch` awaitable in
+`trpc/server.tsx` and `await` it in demo mode in the invoices and transactions
+pages, so dehydration carries settled fixture data instead of never-settling
+fire-and-forget promises. Fidelity vetoed that candidate (attempt-5) for exactly
+one unpreserved removed line — the **comment**
+`// Avoid unhandled promise rejections from fire-and-forget prefetches.` — in the
+very block the fix restructured. The N25b hint then did its job for 11 of 13
+files: the fresh repair 5 re-applied the whole candidate *except* the two
+`page.tsx` files — which no veto had named, and which carried the load-bearing
+`await`. Exploration 4 saw the same silent failure and the budget ran out.
+
+**The blocker's new shape — silent-empty data regions.** The final `/transactions`
+is past the skeleton stage: table headers and tabs render, the body is blank — the
+data query **resolves empty/mis-shaped with zero observable signal** (no page
+errors, no console errors beyond HMR noise, no failed or blocked data requests,
+fixture contains 2 well-shaped rows). Meanwhile the 2KB stderr tails that steer
+repairs were dominated by crashes in *non-requested* surfaces (tracker `row.id`,
+a Supabase throw from an ungated non-feature path), misdirecting repairs 2–4.
+
+**Recorded findings (N26, not landed):**
+
+- **N26a (High, bugfix) — non-directive comment removals should not veto.** Second
+  run-ending data point for comment strictness: the previous run's attempt-5 lost
+  one repair to `// Build query filters for both tabs`; this run's veto of the
+  winning candidate was for a removed comment alone. This reverses the N25
+  "considered and rejected" decision under new evidence, narrowly:
+  `readUnpreservedRemovedLine` should skip removed lines that are pure comments
+  *unless directive* (eslint/biome/prettier-ignore, `@ts-*`, pragma-style) —
+  behavior-bearing lines keep full preservation.
+- **N26b (Medium, feature) — enumerate the preserved files in the rejection
+  hint.** Prose ("re-apply the candidate's other changes") got 11/13; a concrete
+  list gets 13/13. The orchestrator holds the vetoed diff's `changedPaths` and the
+  violating paths appear in the fidelity summary; the hint should name the
+  non-violating files to re-apply.
+- **N26c (Medium, feature) — surface empty data containers as evidence.** When a
+  requested feature's route renders a data container with headers/controls but
+  zero populated body items, the failure message should say so — "empty data
+  table (7 column headers, 0 rows), no errors and no data requests observed; the
+  data query resolved empty or mis-shaped — verify the fixture shape against the
+  consuming component" — derivable framework-agnostically from the aria snapshot
+  already captured per route. Without it, the only steering signals are stderr
+  crashes from unrelated surfaces.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
