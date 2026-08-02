@@ -489,13 +489,17 @@ function readDemoAdaptationViolation(
  * Returns the first removed line whose content is not recoverable from the
  * additions. A gated adaptation must wrap original behavior, not delete it:
  * every removed non-blank line must survive verbatim or token-by-token (the
- * token fallback tolerates gate wrapping such as inline ternaries).
+ * token fallback tolerates gate wrapping such as inline ternaries). C-style
+ * comment lines are exempt unless they carry a tool directive: comments hold
+ * no product behavior, and two matrix runs lost a correct repair candidate to
+ * a dropped comment alone.
  */
 function readUnpreservedRemovedLine(patch: string): string | undefined {
   const additions = addedPatchText(patch);
   for (const removed of changedPatchLines(patch, "-")) {
     const line = removed.trim();
     if (line.length < 3 || /^[{}()[\]<>/*,;`'"\\|&-]*$/.test(line)) continue;
+    if (isNonDirectiveCommentLine(line)) continue;
     if (additions.includes(line)) continue;
     const tokens = line.match(/[A-Za-z0-9_$"'`./-]{3,}/g) ?? [];
     if (tokens.length === 0) continue;
@@ -503,6 +507,26 @@ function readUnpreservedRemovedLine(patch: string): string | undefined {
     return line.length > 80 ? `${line.slice(0, 80)}…` : line;
   }
   return undefined;
+}
+
+/**
+ * A trimmed removed line is an ignorable comment when it is a whole-line
+ * C-style comment (`//`, `/*`, JSDoc `*` continuation, or a JSX-wrapped
+ * block comment) that carries no tool directive. Directive comments such as
+ * eslint/biome/prettier suppressions or `@ts-*` markers change build or lint
+ * behavior, so removing them still counts as an unpreserved removal. Hash
+ * comments are deliberately not exempt: `#` also opens JavaScript private
+ * fields, and no run has been lost to a removed hash comment.
+ */
+function isNonDirectiveCommentLine(line: string): boolean {
+  return (
+    (/^\/\//.test(line) ||
+      /^\{?\/\*/.test(line) ||
+      /^\*(?:\s|\/|$)/.test(line)) &&
+    !/\b(?:eslint|biome-ignore|prettier-ignore|istanbul|@ts-|@vite-ignore|@jsx|webpack[A-Z])/.test(
+      line,
+    )
+  );
 }
 
 function readsDemoFlag(source: string, flag: string) {

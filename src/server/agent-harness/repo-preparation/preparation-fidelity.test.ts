@@ -393,6 +393,35 @@ describe("validatePreparationFidelity", () => {
     );
   });
 
+  it("allows a gated adaptation that drops a non-directive comment while preserving behavior", () => {
+    const serverPath = "apps/dashboard/src/trpc/server.tsx";
+    const report = validateDemoDiff(serverPath, [
+      "+const demoMode = process.env.MAKEADEMO_DEMO === 'true';",
+      "-// Avoid unhandled promise rejections from fire-and-forget prefetches.",
+      "-void queryClient.prefetchQuery(queryOptions).catch(() => {});",
+      "+const prefetched = demoMode",
+      "+  ? queryClient.prefetchQuery(queryOptions)",
+      "+  : void queryClient.prefetchQuery(queryOptions).catch(() => {});",
+    ]);
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("still requires preserving removed directive comments", () => {
+    const serverPath = "apps/dashboard/src/trpc/server.tsx";
+    const report = validateDemoDiff(serverPath, [
+      "+const demoMode = process.env.MAKEADEMO_DEMO === 'true';",
+      "-// eslint-disable-next-line no-floating-promises",
+      "-void queryClient.prefetchQuery(queryOptions).catch(() => {});",
+      "+const prefetched = demoMode",
+      "+  ? queryClient.prefetchQuery(queryOptions)",
+      "+  : void queryClient.prefetchQuery(queryOptions).catch(() => {});",
+    ]);
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain("eslint-disable-next-line");
+  });
+
   it("ignores demo gates that appear only inside comments", () => {
     const sessionPath = "src/auth/session.ts";
     const report = validateDemoDiff(sessionPath, [
@@ -931,7 +960,7 @@ describe("validatePreparationFidelity", () => {
       patch: [
         `diff --git a/${layoutPath} b/${layoutPath}`,
         '+import { isDemoMode } from "@/utils/demo-mode";',
-        "-          {/* Third-party beacons */}",
+        "-          <BeaconProvider />",
         "-          <Analytics />",
         "+          {!isDemoMode && <Analytics />}",
         "diff --git a/src/utils/demo-mode.ts b/src/utils/demo-mode.ts",
@@ -939,14 +968,13 @@ describe("validatePreparationFidelity", () => {
         '+export const isDemoMode = process.env.MAKEADEMO_DEMO === "true";',
       ].join("\n"),
       sourceFiles: {
-        [layoutPath]:
-          "          {/* Third-party beacons */}\n          <Analytics />\n",
+        [layoutPath]: "          <BeaconProvider />\n          <Analytics />\n",
       },
     });
 
     expect(report.status).toBe("failed");
     expect(report.logsSummary).toContain(
-      `${layoutPath} removes original presentation (\`{/* Third-party beacons */}\`) instead of preserving it behind the demo gate.`,
+      `${layoutPath} removes original presentation (\`<BeaconProvider />\`) instead of preserving it behind the demo gate.`,
     );
   });
 
