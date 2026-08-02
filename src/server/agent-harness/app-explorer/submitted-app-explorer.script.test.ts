@@ -161,6 +161,58 @@ describe("generated exploration script", () => {
     }
   }, 30_000);
 
+  it("reports a headers-only table as an empty data table and a populated one as none", async () => {
+    // A data query that resolves empty or mis-shaped renders a table shell
+    // with headers and no rows — silently, with no error and no request.
+    const emptyTablePage = `<!doctype html><html><head><title>Ledger App</title></head><body>
+<main>
+<table><thead><tr><th>Date</th><th>Description</th><th>Amount</th></tr></thead><tbody></tbody></table>
+<table><thead><tr><th>Customer</th></tr></thead><tbody><tr><td>Aperture Labs</td></tr></tbody></table>
+</main>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(emptyTablePage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-empty-table-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        routes: Array<{
+          emptyDataTables?: Array<{ columnHeaders: number }>;
+        }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      expect(result.routes[0]?.emptyDataTables).toEqual([{ columnHeaders: 3 }]);
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
   it("keeps stylesheet text out of harvested headings", async () => {
     const styledHeadingPage = `<!doctype html><html><head><title>Styled App</title></head><body>
 <div role="heading" aria-level="1"><style>.decor{color:red}</style>Quarterly report</div>

@@ -73,6 +73,14 @@ type ObservedScrollTarget = {
 type ObservedRoute = {
   buttons: string[];
   buttonLocatorEvidence?: Array<ObservedLocatorEvidence | null>;
+  /**
+   * Visible data tables/grids whose header cells rendered but whose body
+   * contains zero populated rows. A silently-empty table is the signature of
+   * a data query that resolved empty or mis-shaped — it produces no error,
+   * no network failure, and no skeleton, so this structural fact is the only
+   * browser evidence that distinguishes it from a broken transport.
+   */
+  emptyDataTables?: Array<{ columnHeaders: number }>;
   forms: string[];
   featureIds?: string[];
   headings: string[];
@@ -445,9 +453,18 @@ function createExplorationArtifacts(input: {
     appMapId,
     id: actionCatalogId,
   });
+  const emptyDataTablesByRoute = new Map(
+    input.observation.routes
+      .filter((route) => (route.emptyDataTables?.length ?? 0) > 0)
+      .map(
+        (route) =>
+          [route.path, route.emptyDataTables?.[0]?.columnHeaders ?? 0] as const,
+      ),
+  );
   const validationReport = createExplorationValidationReport({
     actionCatalog,
     appMap,
+    emptyDataTablesByRoute,
     explicitAuthenticationFeatureIds,
     featureInventory: input.featureInventory,
     networkAttempts,
@@ -872,6 +889,7 @@ function createLocatorCandidateFields(
 function createExplorationValidationReport(input: {
   actionCatalog: ActionCatalog;
   appMap: AppMap;
+  emptyDataTablesByRoute?: ReadonlyMap<string, number>;
   explicitAuthenticationFeatureIds: ReadonlySet<string>;
   featureInventory: PreparedDemoFeature[];
   networkAttempts: NetworkAttempt[];
@@ -883,6 +901,7 @@ function createExplorationValidationReport(input: {
     input.actionCatalog,
     input.explicitAuthenticationFeatureIds,
     input.unreachableRoutes,
+    input.emptyDataTablesByRoute ?? new Map(),
   );
   // Load-breaking runtime evidence outranks grounding counts: a route that
   // crashes before rendering cannot ground anything, and only the dependency
@@ -966,6 +985,7 @@ function readExplorationFailure(
   actionCatalog: ActionCatalog,
   explicitAuthenticationFeatureIds: ReadonlySet<string>,
   unreachableRoutes: UnreachableRoute[],
+  emptyDataTablesByRoute: ReadonlyMap<string, number>,
 ): { classification: string; message: string } | undefined {
   const unreachableForFeatures = (featureIds: ReadonlySet<string>) =>
     unreachableRoutes.filter((route) =>
@@ -1147,11 +1167,18 @@ function readExplorationFailure(
         ) {
           return "";
         }
+        const emptyTableColumns = routes
+          .map((route) => emptyDataTablesByRoute.get(route))
+          .find((columns) => columns !== undefined);
+        const emptyTableEvidence =
+          emptyTableColumns === undefined
+            ? ""
+            : ` An empty data table (${emptyTableColumns} column headers, zero data rows) rendered on these routes — the data query resolved empty or mis-shaped; align the fixture shape with the fields the consuming component reads.`;
         return ` Requested feature "${feature.requestedFeature}" routes ${routes
           .slice(0, 4)
           .join(
             ", ",
-          )} rendered only globally-repeated navigation chrome — no route-distinct headings, text, or data; repair the prepared app's data path for these routes.`;
+          )} rendered only globally-repeated navigation chrome — no route-distinct headings, text, or data; repair the prepared app's data path for these routes.${emptyTableEvidence}`;
       })
       .join("");
     return (
@@ -1726,8 +1753,16 @@ try {
               position: "bottom",
             }]
           : [];
+        const emptyDataTables = Array.from(document.querySelectorAll("table, [role=table], [role=grid]")).filter(visible).flatMap((table) => {
+          const columnHeaders = Array.from(table.querySelectorAll("th, [role=columnheader]")).filter(visible).length;
+          if (columnHeaders === 0) return [];
+          const populatedRows = Array.from(table.querySelectorAll("tbody tr, [role=row]")).filter((row) =>
+            row.querySelector("th, [role=columnheader]") == null && clean(row.innerText) !== "");
+          return populatedRows.length === 0 ? [{ columnHeaders }] : [];
+        }).slice(0, 4);
         return {
           buttons: texts("button, [role=button]", 16),
+          emptyDataTables,
           forms: Array.from(document.querySelectorAll("form")).filter(visible).map((element) => clean(element.getAttribute("aria-label") || element.getAttribute("name") || element.id || "form")).slice(0, 20),
           headings: texts("h1, h2, h3, [role=heading]"),
           inputLocators,

@@ -1205,6 +1205,51 @@ describe("exploreSubmittedApp", () => {
     });
   });
 
+  it("reports an empty data table on a requested feature's chrome-only routes", async () => {
+    const invoicing = preparedFeature({
+      description: "Demonstrate invoicing",
+      entryPaths: ["/invoices"],
+      id: "invoicing",
+      label: "Invoices",
+      requestedFeature: "invoicing",
+    });
+    const transactions = preparedFeature({
+      description: "Demonstrate transactions",
+      entryPaths: ["/transactions"],
+      id: "transactions",
+      label: "Transactions",
+      requestedFeature: "transactions",
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [invoicing, transactions],
+      routes: [
+        observedRoute({
+          featureIds: ["invoicing"],
+          headings: ["Invoices"],
+          path: "/invoices",
+          requestedPath: "/invoices",
+        }),
+        observedRoute({
+          buttons: ["Review"],
+          emptyDataTables: [{ columnHeaders: 7 }],
+          featureIds: ["transactions"],
+          path: "/transactions",
+          primaryNavigation: ["Categories", "Connect bank"],
+          requestedPath: "/transactions",
+          text: ["Categories", "Connect bank"],
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "requested feature not observable",
+      logsSummary: expect.stringContaining(
+        "An empty data table (7 column headers, zero data rows) rendered on these routes — the data query resolved empty or mis-shaped; align the fixture shape with the fields the consuming component reads.",
+      ),
+      status: "failed",
+    });
+  });
+
   it("grounds scrolling when the prepared page has scrollable content", async () => {
     const { result } = await exploreObservation({
       routes: [
