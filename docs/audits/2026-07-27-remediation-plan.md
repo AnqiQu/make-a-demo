@@ -1049,6 +1049,99 @@ valid required artifact", which misdirects diagnosis at the artifact contract;
 while bun, pnpm, and yarn are all version-pinned — pin it and record it in
 `tools-lock.json` so snapshot rebuilds are deterministic.
 
+## Addendum (2026-08-01, after the post-incident matrix rerun)
+
+The Daytona PTY incident cleared on its own, as the 23:57 self-heal predicted. Matrix
+report `matrix-report-2026-08-01T02-02-59-335Z`: **homer passed end-to-end** in 538s
+(`terminal-2026-08-01T01-34-09-109Z`) — the N22a collision gate did not deadlock —
+and **midday failed honestly at app-exploration** in 1192s
+(`terminal-2026-08-01T01-43-07-004Z`): "App Exploration found no browser evidence for
+requested features: transactions", repair budget exhausted after 5 attempts. This is
+the first run where the full N21/N22/N23 gauntlet was exercised, and every gate did
+its job: N23's requested features forced the failure instead of a scope-evaded hollow
+video; N21a refused to ground `/transactions*` routes that harvested only the
+six-string sidebar; N21c's stderr tail captured the true root cause verbatim; N21d
+persisted evidence for both exploration attempts.
+
+**Run anatomy** (all reconstructed from `validation-attempts/` mirrors and stdout
+tails; every claim below is verified against artifacts): prep → fidelity ✓ →
+preflight ✗ (install: `xlsx` tarball pinned to unreachable `cdn.sheetjs.com`) →
+repair 1 pins `node-xlsx@0.21.0` ✓ → preflight ✓ → **exploration 1 ✗** → repair 2 →
+fidelity ✗ → repair 3 → fidelity ✗ → repair 4 → fidelity ✗ → repair 5 → fidelity ✓ →
+preflight ✓ → **exploration 2 ✗** (identical failure) → budget exhausted. Five repair
+attempts bought exactly two browser observations.
+
+**Root cause in the prepared app** (visible in the N21c stderr tail of *both*
+exploration reports): the browser tRPC transport throws before any request is made —
+`getAccessToken` (`src/utils/session.ts`) constructs a Supabase browser client with
+unset env inside the tRPC `headers()` callback (`src/trpc/client.tsx:54`), so every
+non-hydrated query pends forever. `/transactions*` renders an eternal loading
+skeleton (real column headers, ~40 empty shimmer rows — confirmed in the persisted
+screenshot and aria tree); zero API network attempts were observed (only
+`openpanel.dev` analytics was blocked). `/invoices` rendered `$NaN` tiles and
+"No invoices" — the prep agent's `getDemoFixture` guesses response shapes by
+`JSON.stringify(queryKey).includes(...)`, and its `{count, amount}` summary shape
+does not match the UI's expectations.
+
+**The pipeline's own failure — the loop destroyed the correct fix.** Repair 2 ran in
+the *same* OpenCode session as preparation (full context, including the exploration
+stderr) and produced the right root-cause fix: a textbook demo-gated wrap of
+`getAccessToken` in `session.ts` (gate import + early `return null`, original
+behavior preserved). That fix was present in vetoed attempts 3, 4, and 5 — and absent
+from attempt 6, the one that finally passed fidelity and re-failed exploration
+identically. Three mechanisms compounded:
+
+- **N25a — misleading gated-wrap veto (Medium, bugfix).** Attempt 3's only `page.tsx`
+  change was two added `trpc.*.queryOptions()` prefetch lines — no presentation, no
+  removals — but the presentation-path branch (`preparation-fidelity.ts:168`)
+  collapses all three gated-wrap conditions into one message: "modifies original
+  product UI, styling, or brand assets instead of preserving them." The actually
+  failed condition was only the missing demo gate. The adaptation branch directly
+  above already emits per-condition messages; the gated-wrap branch should too
+  (missing gate → gate hint; unpreserved removal → name the line). Counterfactual:
+  an accurate message at attempt 3 means repair 3 gates two lines and *keeps*
+  `session.ts`.
+- **N25b — repair-episode evidence amnesia (High, feature).** A fidelity-failure
+  repair prompt carries only the fidelity report (whose stderr is empty). The
+  exploration failure that opened the episode — with the Supabase stderr naming file
+  and line — appeared in exactly one prompt (repair 2) and then vanished; repairs
+  3–5 saw only wrap-shape complaints and optimized for exactly that. Fix: the repair
+  loop should retain the episode's most recent failed report per stage and include
+  the still-unresolved downstream failure (classification, summary, stderr excerpts)
+  in every subsequent repair prompt until that gate passes again.
+- **N25c — full-reset rebuild loses non-violating work (High, feature).** A fidelity
+  veto restores the workspace from the screened source, deletes the manifest, and
+  discards the OpenCode session (`repairPreparation`,
+  `default-harness-dependencies.ts:979-986`); the fresh agent rebuilds from the
+  vetoed diff artifact. Nothing tells it which parts of the vetoed candidate were
+  fine, so after three beatings over `page.tsx` it minimized the diff and dropped
+  `session.ts` — a file no veto ever named. Fix (prompt-level, keeps reset
+  semantics): the fidelity-repair prompt should enumerate the violating files from
+  the report and state that all other files in the vetoed workspace diff passed this
+  gate and should be re-applied unchanged. (Rejected alternative: per-file
+  acceptance — cross-file consistency risk for split gate/helper changes.)
+- **N25d — requested-feature failures hide what routes showed (Medium, feature).**
+  The exploration message says only "no browser evidence for requested features:
+  transactions", and `browserObservations` is route→title pairs
+  ("/transactions: Transactions | Midday"). The observation data already proves the
+  routes rendered only navigation chrome; `readRouteDistinctContent` already
+  computes it. Name the requested feature's entry routes and what they showed
+  ("rendered only globally-repeated navigation chrome and structural placeholders")
+  in the failure message so the repair agent learns the data never rendered — the
+  same evidence a human gets from one glance at the screenshot.
+
+**Considered and rejected:** softening the removed-line preservation check for
+comment-only removals (attempt 5 was vetoed partly for dropping
+`// Build query filters for both tabs`) — the exact-line message converged the wrap
+in one attempt, and comment preservation guards directive pragmas; not worth the
+vandalism-surface widening. Also rejected: teaching fidelity to recognize
+"data-only" additions in presentation files as exempt — grading added lines by
+content reintroduces the pre-N20 heuristic treadmill; accurate messages (N25a) get
+the same benefit without weakening the gate.
+
+N24 remains recorded and not landed; this run adds no new evidence for it (no
+zero-output agent exits occurred).
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
