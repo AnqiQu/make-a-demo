@@ -1600,6 +1600,109 @@ describe("runAgentHarnessPipeline", () => {
     });
   });
 
+  it("points post-rejection repairs at the vetoed candidate diff without duplicating hints", async () => {
+    const approvedManifest = {
+      ...preparationManifest(),
+      id: "prep_approved",
+    };
+    const invalidDiff = {
+      changedFileSha256: {
+        "src/feature.ts": `sha256:${"f".repeat(64)}` as const,
+      },
+      changedPaths: ["/workspace/repo/src/feature.ts"],
+      patch:
+        "diff --git a/src/feature.ts b/src/feature.ts\n+export const replacement = true;",
+      patchSha256: `sha256:${"f".repeat(64)}` as const,
+      sourceCommitSha: "abc123def456",
+    };
+    const repairHintLists: string[][] = [];
+    let diffAttempt = 0;
+    let explorationAttempt = 0;
+
+    const result = await runAgentHarnessPipeline(
+      {
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        files: [
+          { path: "package.json", text: "{}" },
+          { path: "src/feature.ts", text: "export const feature = true" },
+        ],
+        repoStats: { fileCount: 2, sizeBytes: 200 },
+        repoUrl: "https://github.com/example/app",
+        runId: "run_rejected_repair_hint",
+      },
+      {
+        async capturePreparationWorkspaceDiff() {
+          diffAttempt += 1;
+          return diffAttempt === 2 || diffAttempt === 3
+            ? invalidDiff
+            : unchangedWorkspaceDiff();
+        },
+        async createWorkspace() {
+          return workspace();
+        },
+        async exploreApp() {
+          explorationAttempt += 1;
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport:
+              explorationAttempt === 1
+                ? {
+                    ...report("app-exploration", "failed"),
+                    failureClassification: "empty/unmeaningful app state",
+                  }
+                : report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: approvedManifest };
+        },
+        async repairPreparation({ failureReport }) {
+          repairHintLists.push([...failureReport.suggestedRepairHints]);
+          return { manifest: approvedManifest };
+        },
+        async resetCaptureRuntime() {
+          return report("capture-runtime-reset", "passed");
+        },
+        async restorePreparationCandidate() {},
+        async synthesizeRunPlan() {
+          return runPlan();
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return {
+            ...scriptCandidate(),
+            sourcePreparationManifestId: approvedManifest.id,
+          };
+        },
+      },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(repairHintLists).toHaveLength(3);
+    const vetoedCandidateHints = (hints: string[]) =>
+      hints.filter((hint) =>
+        hint.includes("/workspace/.makeademo/preparation-workspace-diff.json"),
+      );
+    expect(vetoedCandidateHints(repairHintLists[0] ?? [])).toHaveLength(0);
+    expect(vetoedCandidateHints(repairHintLists[1] ?? [])).toHaveLength(1);
+    expect(vetoedCandidateHints(repairHintLists[2] ?? [])).toHaveLength(1);
+    const thirdHints = repairHintLists[2] ?? [];
+    expect(new Set(thirdHints).size).toBe(thirdHints.length);
+  });
+
   it("retains the approved preparation baseline across downstream repair phases", async () => {
     const approvedManifest = {
       ...preparationManifest(),

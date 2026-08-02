@@ -1583,8 +1583,14 @@ function appendRepairRejection(
     ],
     logsSummary: `${originalFailure.logsSummary} Rejected repair: ${fidelityFailure.logsSummary}`,
     suggestedRepairHints: [
-      ...originalFailure.suggestedRepairHints,
-      ...fidelityFailure.suggestedRepairHints,
+      ...new Set([
+        ...originalFailure.suggestedRepairHints,
+        ...fidelityFailure.suggestedRepairHints,
+        // The rejection reverted the whole candidate, including its correct
+        // parts; without this pointer a fresh repair agent rebuilds only what
+        // the latest veto complained about and loses the rest.
+        `The rejected candidate was reverted; the workspace matches the last accepted state again. Its full diff remains readable at ${artifactPaths.preparationWorkspaceDiff}. Only the files named in the rejection violated fidelity: re-apply the candidate's other changes unchanged and fix the named violations.`,
+      ]),
     ],
   };
 }
