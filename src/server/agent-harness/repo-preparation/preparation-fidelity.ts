@@ -290,7 +290,7 @@ function isDependencyRepairInputPath(path: string): boolean {
   return name === "package.json" || dependencyConfigurationNames.has(name);
 }
 
-function isPackageManagerLockfilePath(path: string): boolean {
+export function isPackageManagerLockfilePath(path: string): boolean {
   return lockfileNames.has(path.split("/").at(-1) ?? path);
 }
 

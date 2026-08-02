@@ -1607,11 +1607,23 @@ describe("runAgentHarnessPipeline", () => {
     };
     const invalidDiff = {
       changedFileSha256: {
+        "bun.lock": `sha256:${"a".repeat(64)}` as const,
+        "src/demo/fixtures.ts": `sha256:${"d".repeat(64)}` as const,
         "src/feature.ts": `sha256:${"f".repeat(64)}` as const,
       },
-      changedPaths: ["/workspace/repo/src/feature.ts"],
-      patch:
-        "diff --git a/src/feature.ts b/src/feature.ts\n+export const replacement = true;",
+      changedPaths: [
+        "/workspace/repo/bun.lock",
+        "/workspace/repo/src/demo/fixtures.ts",
+        "/workspace/repo/src/feature.ts",
+      ],
+      patch: [
+        "diff --git a/bun.lock b/bun.lock",
+        "+generated lock",
+        "diff --git a/src/demo/fixtures.ts b/src/demo/fixtures.ts",
+        "+export const fixtures = [];",
+        "diff --git a/src/feature.ts b/src/feature.ts",
+        "+export const replacement = true;",
+      ].join("\n"),
       patchSha256: `sha256:${"f".repeat(64)}` as const,
       sourceCommitSha: "abc123def456",
     };
@@ -1624,9 +1636,10 @@ describe("runAgentHarnessPipeline", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         files: [
           { path: "package.json", text: "{}" },
+          { path: "bun.lock", text: "" },
           { path: "src/feature.ts", text: "export const feature = true" },
         ],
-        repoStats: { fileCount: 2, sizeBytes: 200 },
+        repoStats: { fileCount: 3, sizeBytes: 200 },
         repoUrl: "https://github.com/example/app",
         runId: "run_rejected_repair_hint",
       },
@@ -1699,6 +1712,10 @@ describe("runAgentHarnessPipeline", () => {
     expect(vetoedCandidateHints(repairHintLists[0] ?? [])).toHaveLength(0);
     expect(vetoedCandidateHints(repairHintLists[1] ?? [])).toHaveLength(1);
     expect(vetoedCandidateHints(repairHintLists[2] ?? [])).toHaveLength(1);
+    const rejectionHint = vetoedCandidateHints(repairHintLists[1] ?? [])[0];
+    expect(rejectionHint).toContain("src/demo/fixtures.ts");
+    expect(rejectionHint).not.toContain("src/feature.ts");
+    expect(rejectionHint).not.toContain("bun.lock");
     const thirdHints = repairHintLists[2] ?? [];
     expect(new Set(thirdHints).size).toBe(thirdHints.length);
   });

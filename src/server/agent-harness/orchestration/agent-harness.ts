@@ -9,6 +9,7 @@ import {
   readRepairBudgetDecision,
 } from "../repair/repair-router";
 import {
+  isPackageManagerLockfilePath,
   readDependencyRepairDelta,
   validatePreparationFidelity,
 } from "../repo-preparation/preparation-fidelity";
@@ -1496,6 +1497,7 @@ async function ensureValidPreparation(input: {
           failure = appendRepairRejection(
             activeRepairFailure,
             fidelityValidation,
+            workspaceDiff.changedPaths,
           );
           activeRepairFailure = undefined;
         } else {
@@ -1572,7 +1574,30 @@ async function ensureValidPreparation(input: {
 function appendRepairRejection(
   originalFailure: ValidationReport,
   fidelityFailure: ValidationReport,
+  vetoedChangedPaths: readonly string[],
 ): ValidationReport {
+  // The rejection reverted the whole candidate, including its correct parts;
+  // without this pointer a fresh repair agent rebuilds only what the latest
+  // veto complained about and loses the rest. Prose alone recovered 11 of 13
+  // files in the 2026-08-02 midday run — the concrete list closes the gap.
+  // Lockfiles are excluded: the backend regenerates them and repairs must not
+  // touch them.
+  const preservedFiles = vetoedChangedPaths
+    .map((path) => path.replace(/^\/workspace\/repo\//, ""))
+    .filter(
+      (path) =>
+        !isPackageManagerLockfilePath(path) &&
+        !fidelityFailure.logsSummary.includes(path),
+    );
+  const preservedList =
+    preservedFiles.length === 0
+      ? ""
+      : ` Files to re-apply unchanged: ${preservedFiles.slice(0, 24).join(", ")}${
+          preservedFiles.length > 24
+            ? ` (and ${preservedFiles.length - 24} more in the diff)`
+            : ""
+        }.`;
+  const vetoedCandidateHint = `The rejected candidate was reverted; the workspace matches the last accepted state again. Its full diff remains readable at ${artifactPaths.preparationWorkspaceDiff}. Only the files named in the rejection violated fidelity: fix those and re-apply the candidate's other changes unchanged.${preservedList}`;
   return {
     ...originalFailure,
     artifactReferences: [
@@ -1584,12 +1609,13 @@ function appendRepairRejection(
     logsSummary: `${originalFailure.logsSummary} Rejected repair: ${fidelityFailure.logsSummary}`,
     suggestedRepairHints: [
       ...new Set([
-        ...originalFailure.suggestedRepairHints,
+        // A prior rejection's hint describes a stale candidate; replace it so
+        // the file list always matches the diff artifact's current content.
+        ...originalFailure.suggestedRepairHints.filter(
+          (hint) => !hint.includes(artifactPaths.preparationWorkspaceDiff),
+        ),
         ...fidelityFailure.suggestedRepairHints,
-        // The rejection reverted the whole candidate, including its correct
-        // parts; without this pointer a fresh repair agent rebuilds only what
-        // the latest veto complained about and loses the rest.
-        `The rejected candidate was reverted; the workspace matches the last accepted state again. Its full diff remains readable at ${artifactPaths.preparationWorkspaceDiff}. Only the files named in the rejection violated fidelity: re-apply the candidate's other changes unchanged and fix the named violations.`,
+        vetoedCandidateHint,
       ]),
     ],
   };
