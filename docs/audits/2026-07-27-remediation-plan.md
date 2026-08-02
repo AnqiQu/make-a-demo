@@ -1224,6 +1224,26 @@ a Supabase throw from an ungated non-feature path), misdirecting repairs 2–4.
   already captured per route. Without it, the only steering signals are stderr
   crashes from unrelated surfaces.
 
+**Landed (2026-08-02):** `4595e12` (N26a — `readUnpreservedRemovedLine` exempts
+whole-line C-style comments unless they carry a tool directive
+(eslint/biome/prettier suppressions, `@ts-*`, istanbul, webpack magic comments);
+hash comments stay strict because `#` also opens JavaScript private fields;
+regression tests reproduce this run's veto shape and pin the directive
+protection), `8aae52e` (N26b — `appendRepairRejection` now enumerates the vetoed
+candidate's non-violating, non-lockfile files in the rejection hint — capped at
+24 — and replaces any stale prior rejection hint so the list always matches the
+diff artifact's current content), and `5f8e331` (N26c — the generated explorer
+script reports visible tables/grids whose headers rendered with zero populated
+body rows as `emptyDataTables`, collected during the same in-page harvest, and
+the requested-feature failure message appends "An empty data table (N column
+headers, zero data rows) rendered on these routes — the data query resolved
+empty or mis-shaped; align the fixture shape with the fields the consuming
+component reads"; exercised by a real-chromium script test that distinguishes a
+headers-only table from a populated one). Implementation deviation from the
+recorded sketch: the evidence rides the observation protocol's route objects and
+a verdict-time map — not aria-snapshot parsing — because the harvest already
+runs in-page where the structural facts are one query away.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
