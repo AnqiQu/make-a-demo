@@ -895,6 +895,61 @@ describe("validatePreparationFidelity", () => {
     expect(report.logsSummary).toContain(layoutPath);
   });
 
+  it("names the missing demo gate when an ungated presentation-path patch adds no presentation", () => {
+    const pagePath = "apps/dashboard/src/app/transactions/page.tsx";
+    const report = validateDiff({
+      createdFiles: ["src/utils/demo-mode.ts"],
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [pagePath],
+      patch: [
+        `diff --git a/${pagePath} b/${pagePath}`,
+        "+    trpc.bankAccounts.get.queryOptions({}),",
+        "+    trpc.transactionCategories.get.queryOptions(),",
+        "diff --git a/src/utils/demo-mode.ts b/src/utils/demo-mode.ts",
+        "new file mode 100644",
+        '+export const isDemoMode = process.env.MAKEADEMO_DEMO === "true";',
+      ].join("\n"),
+      sourceFiles: {
+        [pagePath]:
+          "  batchPrefetch([\n    trpc.tags.get.queryOptions(),\n  ]);\n",
+      },
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(
+      `${pagePath} does not conditionally use the repository's active MakeADemo demo gate`,
+    );
+    expect(report.logsSummary).not.toContain("modifies original product UI");
+  });
+
+  it("names the dropped line when a demo-gated presentation wrap removes original content", () => {
+    const layoutPath = "apps/dashboard/src/app/layout.tsx";
+    const report = validateDiff({
+      createdFiles: ["src/utils/demo-mode.ts"],
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [layoutPath],
+      patch: [
+        `diff --git a/${layoutPath} b/${layoutPath}`,
+        '+import { isDemoMode } from "@/utils/demo-mode";',
+        "-          {/* Third-party beacons */}",
+        "-          <Analytics />",
+        "+          {!isDemoMode && <Analytics />}",
+        "diff --git a/src/utils/demo-mode.ts b/src/utils/demo-mode.ts",
+        "new file mode 100644",
+        '+export const isDemoMode = process.env.MAKEADEMO_DEMO === "true";',
+      ].join("\n"),
+      sourceFiles: {
+        [layoutPath]:
+          "          {/* Third-party beacons */}\n          <Analytics />\n",
+      },
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(
+      `${layoutPath} removes original presentation (\`{/* Third-party beacons */}\`) instead of preserving it behind the demo gate.`,
+    );
+  });
+
   it("rejects an ungated re-arrangement of original markup", () => {
     const layoutPath = "apps/dashboard/src/app/layout.tsx";
     const report = validateDiff({

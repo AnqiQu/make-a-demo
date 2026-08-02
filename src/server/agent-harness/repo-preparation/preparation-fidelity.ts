@@ -161,15 +161,30 @@ export function validatePreparationFidelity(input: {
       // A demo-gated wrap of existing markup preserves the product rather
       // than restyling it: sandboxed demos must be able to gate off analytics
       // beacons, chat widgets, and similar integrations that live in layouts.
-      const gatedWrap =
-        !addsPresentation &&
-        readUnpreservedRemovedLine(patch) === undefined &&
-        hasConditionalDemoGate(patch, demoGate, originalSource);
-      if (!onlyLocalizesExternalAssets(patch) && !gatedWrap) {
-        violations.push({
-          hint: repairHints.preserveUi,
-          message: `${path} modifies original product UI, styling, or brand assets instead of preserving them.`,
-        });
+      // Each failed wrap condition gets its own message; a collapsed
+      // "modifies UI" veto misdirects repairs that only lack the gate.
+      if (!onlyLocalizesExternalAssets(patch)) {
+        const gateViolation = readDemoAdaptationViolation(
+          demoGate,
+          path,
+          patch,
+          "presentation",
+          originalSource,
+        );
+        const unpreserved = readUnpreservedRemovedLine(patch);
+        if (addsPresentation) {
+          violations.push({
+            hint: repairHints.preserveUi,
+            message: `${path} modifies original product UI, styling, or brand assets instead of preserving them.`,
+          });
+        } else if (gateViolation !== undefined) {
+          violations.push({ hint: repairHints.gate, message: gateViolation });
+        } else if (unpreserved !== undefined) {
+          violations.push({
+            hint: repairHints.preserveBehavior,
+            message: `${path} removes original presentation (\`${unpreserved}\`) instead of preserving it behind the demo gate.`,
+          });
+        }
       }
     } else if (isExecutableSourcePath(path) && !demoSeam) {
       violations.push({
@@ -458,7 +473,7 @@ function readDemoAdaptationViolation(
   demoGate: DemoGateEvidence,
   path: string,
   patch: string,
-  kind: "authentication" | "integration",
+  kind: "authentication" | "integration" | "presentation",
   originalSource: string,
 ): string | undefined {
   if (demoGate.flags.length === 0) {
@@ -532,7 +547,7 @@ function normalizedWords(source: string) {
 
 function missingDemoGateViolation(
   path: string,
-  kind: "authentication" | "integration",
+  kind: "authentication" | "integration" | "presentation",
 ) {
   return `${path} changes ${kind} behavior without an active MakeADemo demo flag recorded in envUsed.`;
 }
