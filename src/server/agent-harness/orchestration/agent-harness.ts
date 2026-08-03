@@ -14,7 +14,7 @@ import {
   validatePreparationFidelity,
 } from "../repo-preparation/preparation-fidelity";
 import type { PreparationWorkspaceDiff } from "../repo-preparation/preparation-workspace-diff";
-import { assertPreparationRuntimeTarget } from "../repo-preparation/prepared-feature-inventory";
+import { assertPreparedFeatureInventory } from "../repo-preparation/prepared-feature-inventory";
 import { profileRepo } from "../repo-profiler/repo-profiler";
 import type { SecretQuarantineManifest } from "../repo-security/secret-quarantine";
 import { screenStaticRepoSecurity } from "../repo-security/static-repo-security";
@@ -412,9 +412,11 @@ export async function runAgentHarnessPipeline(
     );
     recordOpenCodeSessionId(preparation.opencodeSessionId);
     const preparedManifest = readPreparationManifest(preparation.manifest);
-    assertPreparationRuntimeTarget({
+    assertPreparedFeatureInventory({
+      demoBrief: input.demoBrief,
       preparationManifest: preparedManifest,
       repoProfile,
+      repoSourcePaths: new Set(input.files.map((file) => file.path)),
       runPlan,
     });
     let preparationManifest = await writeArtifact(
@@ -1391,11 +1393,20 @@ async function ensureValidPreparation(input: {
         input.preparationRepairAttemptsByPhase[phase] = phaseRepairAttempts + 1;
         input.recordOpenCodeSessionId(repair.opencodeSessionId);
         const repairedManifest = readPreparationManifest(repair.manifest);
-        assertPreparationRuntimeTarget({
-          preparationManifest: repairedManifest,
-          repoProfile: input.repoProfile,
-          runPlan: input.runPlan,
-        });
+        // A dependency repair's manifest is discarded below in favor of the
+        // pre-repair manifest, so only a manifest the pipeline will adopt is
+        // held to the feature-inventory contract.
+        if (!repairingDependencies) {
+          assertPreparedFeatureInventory({
+            demoBrief: input.input.demoBrief,
+            preparationManifest: repairedManifest,
+            repoProfile: input.repoProfile,
+            repoSourcePaths: new Set(
+              input.input.files.map((file) => file.path),
+            ),
+            runPlan: input.runPlan,
+          });
+        }
         preparationManifest = await writeArtifact(
           input.dependencies,
           artifactPaths.preparationManifest,

@@ -245,6 +245,7 @@ describe("runAgentHarnessPipeline", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         files: [
           { path: "package.json", text: "{}" },
+          { path: "src/page.tsx", text: "export default 1" },
           { path: "bun.lock", text: "" },
         ],
         repoStats: { fileCount: 2, sizeBytes: 200 },
@@ -311,6 +312,7 @@ describe("runAgentHarnessPipeline", () => {
           demoBrief: { keyProductFeatures: ["dashboard"] },
           files: [
             { path: "package.json", text: "{}" },
+            { path: "src/page.tsx", text: "export default 1" },
             { path: "bun.lock", text: "" },
           ],
           repoStats: { fileCount: 2, sizeBytes: 200 },
@@ -378,6 +380,146 @@ describe("runAgentHarnessPipeline", () => {
       repoUrl: "https://github.com/example/app",
       runId: "run_003",
     });
+  });
+
+  it("rejects a prepared manifest violating the feature inventory even when dependencies skip validation", async () => {
+    await expect(
+      runAgentHarnessPipeline(
+        {
+          demoBrief: { keyProductFeatures: ["dashboard"] },
+          files: [
+            { path: "package.json", text: "{}" },
+            { path: "src/page.tsx", text: "export default 1" },
+            { path: "bun.lock", text: "" },
+          ],
+          repoStats: { fileCount: 2, sizeBytes: 200 },
+          repoUrl: "https://github.com/example/app",
+          runId: "run_inventory_backstop",
+        },
+        {
+          async capturePreparationWorkspaceDiff() {
+            return preparationWorkspaceDiff();
+          },
+          async createWorkspace() {
+            return workspace();
+          },
+          async exploreApp() {
+            throw new Error("App Exploration should not run.");
+          },
+          async planFlow() {
+            throw new Error("Flow Planning should not run.");
+          },
+          async prepareRepo() {
+            const manifest = preparationManifest();
+            const feature = manifest.productContext.featureInventory[0];
+            if (feature === undefined) {
+              throw new Error("Expected dashboard fixture");
+            }
+            feature.sourcePaths = ["package.json"];
+            return { manifest };
+          },
+          async resetCaptureRuntime() {
+            return report("capture-runtime-reset", "passed");
+          },
+          async synthesizeRunPlan() {
+            return runPlan();
+          },
+          async validateCapturePath() {
+            throw new Error("Capture Path Validation should not run.");
+          },
+          async validatePreparation() {
+            throw new Error("Preparation Preflight should not run.");
+          },
+          async validateScriptContract() {
+            throw new Error("Static Script Contract should not run.");
+          },
+          async writeScript() {
+            throw new Error("Script Writing should not run.");
+          },
+        },
+      ),
+    ).rejects.toThrow(
+      /must cite an original route, page, component, or browser UI module/,
+    );
+  });
+
+  it("rejects a runtime-repaired manifest that drops a requested feature", async () => {
+    let preflightAttempts = 0;
+    await expect(
+      runAgentHarnessPipeline(
+        {
+          demoBrief: { keyProductFeatures: ["dashboard"] },
+          files: [
+            { path: "package.json", text: "{}" },
+            { path: "src/page.tsx", text: "export default 1" },
+            { path: "bun.lock", text: "" },
+          ],
+          repoStats: { fileCount: 3, sizeBytes: 300 },
+          repoUrl: "https://github.com/example/app",
+          runId: "run_repair_inventory_backstop",
+        },
+        {
+          async capturePreparationWorkspaceDiff() {
+            return preparationWorkspaceDiff();
+          },
+          async createWorkspace() {
+            return workspace();
+          },
+          async exploreApp() {
+            throw new Error("App Exploration should not run.");
+          },
+          async planFlow() {
+            throw new Error("Flow Planning should not run.");
+          },
+          async prepareRepo() {
+            return { manifest: preparationManifest() };
+          },
+          async repairPreparation() {
+            const manifest = preparationManifest();
+            const feature = manifest.productContext.featureInventory[0];
+            if (feature === undefined) {
+              throw new Error("Expected dashboard fixture");
+            }
+            const { requestedFeature: _dropped, ...unrequestedFeature } =
+              feature;
+            return {
+              manifest: {
+                ...manifest,
+                productContext: {
+                  ...manifest.productContext,
+                  featureInventory: [unrequestedFeature],
+                },
+              },
+            };
+          },
+          async resetCaptureRuntime() {
+            return report("capture-runtime-reset", "passed");
+          },
+          async synthesizeRunPlan() {
+            return runPlan();
+          },
+          async validateCapturePath() {
+            throw new Error("Capture Path Validation should not run.");
+          },
+          async validatePreparation() {
+            preflightAttempts += 1;
+            if (preflightAttempts === 1) {
+              return {
+                ...report("preparation-preflight", "failed"),
+                logsSummary: "App start failed before readiness.",
+              };
+            }
+            return report("preparation-preflight", "passed");
+          },
+          async validateScriptContract() {
+            throw new Error("Static Script Contract should not run.");
+          },
+          async writeScript() {
+            throw new Error("Script Writing should not run.");
+          },
+        },
+      ),
+    ).rejects.toThrow(/must prepare every requested demo feature exactly once/);
   });
 
   it.each([
@@ -553,6 +695,7 @@ describe("runAgentHarnessPipeline", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         files: [
           { path: "package.json", text: "{}" },
+          { path: "src/page.tsx", text: "export default 1" },
           { path: "bun.lock", text: "" },
         ],
         repoStats: { fileCount: 2, sizeBytes: 200 },
@@ -654,6 +797,7 @@ describe("runAgentHarnessPipeline", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         files: [
           { path: "package.json", text: "{}" },
+          { path: "src/page.tsx", text: "export default 1" },
           { path: "bun.lock", text: "" },
         ],
         repoStats: { fileCount: 2, sizeBytes: 200 },
@@ -770,6 +914,7 @@ describe("runAgentHarnessPipeline", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         files: [
           { path: "package.json", text: "{}" },
+          { path: "src/page.tsx", text: "export default 1" },
           { path: "bun.lock", text: "" },
         ],
         repoStats: { fileCount: 2, sizeBytes: 200 },
@@ -868,6 +1013,7 @@ describe("runAgentHarnessPipeline", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         files: [
           { path: "package.json", text: "{}" },
+          { path: "src/page.tsx", text: "export default 1" },
           { path: "bun.lock", text: "" },
         ],
         repoStats: { fileCount: 2, sizeBytes: 200 },
@@ -939,6 +1085,7 @@ describe("runAgentHarnessPipeline", () => {
           demoBrief: { keyProductFeatures: ["dashboard"] },
           files: [
             { path: "package.json", text: "{}" },
+            { path: "src/page.tsx", text: "export default 1" },
             { path: "bun.lock", text: "" },
           ],
           repoStats: { fileCount: 2, sizeBytes: 200 },
@@ -1007,6 +1154,7 @@ describe("runAgentHarnessPipeline", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         files: [
           { path: "package.json", text: "{}" },
+          { path: "src/page.tsx", text: "export default 1" },
           { path: "bun.lock", text: "" },
         ],
         repoStats: { fileCount: 2, sizeBytes: 200 },
@@ -1312,6 +1460,7 @@ describe("runAgentHarnessPipeline", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         files: [
           { path: "package.json", text: "{}" },
+          { path: "src/page.tsx", text: "export default 1" },
           { path: "src/App.tsx", text: "export function App() {}" },
         ],
         repoStats: { fileCount: 2, sizeBytes: 200 },
@@ -1404,6 +1553,7 @@ describe("runAgentHarnessPipeline", () => {
           demoBrief: { keyProductFeatures: ["dashboard"] },
           files: [
             { path: "package.json", text: "{}" },
+            { path: "src/page.tsx", text: "export default 1" },
             { path: "src/App.tsx", text: "export function App() {}" },
           ],
           repoStats: { fileCount: 2, sizeBytes: 200 },
@@ -1490,6 +1640,7 @@ describe("runAgentHarnessPipeline", () => {
         files: [
           { path: "package.json", text: "{}" },
           { path: "bun.lock", text: "" },
+          { path: "src/page.tsx", text: "export default 1" },
           { path: "src/service/export.ts", text: "export const value = 1" },
         ],
         repoStats: { fileCount: 3, sizeBytes: 300 },
@@ -1637,6 +1788,7 @@ describe("runAgentHarnessPipeline", () => {
         files: [
           { path: "package.json", text: "{}" },
           { path: "bun.lock", text: "" },
+          { path: "src/page.tsx", text: "export default 1" },
           { path: "src/feature.ts", text: "export const feature = true" },
         ],
         repoStats: { fileCount: 3, sizeBytes: 200 },
@@ -1745,6 +1897,7 @@ describe("runAgentHarnessPipeline", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         files: [
           { path: "package.json", text: "{}" },
+          { path: "src/page.tsx", text: "export default 1" },
           { path: "src/feature.ts", text: "export const feature = true" },
         ],
         repoStats: { fileCount: 2, sizeBytes: 200 },
@@ -1857,6 +2010,7 @@ describe("runAgentHarnessPipeline", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         files: [
           { path: "package.json", text: "{}" },
+          { path: "src/page.tsx", text: "export default 1" },
           { path: "bun.lock", text: "" },
         ],
         repoStats: { fileCount: 2, sizeBytes: 200 },
@@ -1948,6 +2102,7 @@ describe("runAgentHarnessPipeline", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         files: [
           { path: "package.json", text: "{}" },
+          { path: "src/page.tsx", text: "export default 1" },
           { path: "bun.lock", text: "" },
         ],
         repoStats: { fileCount: 2, sizeBytes: 200 },
@@ -2018,7 +2173,10 @@ describe("runAgentHarnessPipeline", () => {
       runAgentHarnessPipeline(
         {
           demoBrief: { keyProductFeatures: ["dashboard"] },
-          files: [{ path: "package.json", text: "{}" }],
+          files: [
+            { path: "package.json", text: "{}" },
+            { path: "src/page.tsx", text: "export default 1" },
+          ],
           repoStats: { fileCount: 1, sizeBytes: 100 },
           repoUrl: "https://github.com/example/app",
           runId: "run_noisy_repeated_failure",
@@ -2083,7 +2241,10 @@ describe("runAgentHarnessPipeline", () => {
       runAgentHarnessPipeline(
         {
           demoBrief: { keyProductFeatures: ["dashboard"] },
-          files: [{ path: "package.json", text: "{}" }],
+          files: [
+            { path: "package.json", text: "{}" },
+            { path: "src/page.tsx", text: "export default 1" },
+          ],
           repoStats: { fileCount: 1, sizeBytes: 100 },
           repoUrl: "https://github.com/example/app",
           runId: "run_repeated_failure_budget",
@@ -2151,6 +2312,7 @@ describe("runAgentHarnessPipeline", () => {
           files: [
             { path: "package.json", text: "{}" },
             { path: "bun.lock", text: "" },
+            { path: "src/page.tsx", text: "export default 1" },
             { path: "src/service/export.ts", text: "export const value = 1" },
           ],
           repoStats: { fileCount: 3, sizeBytes: 300 },
@@ -2226,6 +2388,7 @@ describe("runAgentHarnessPipeline", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         files: [
           { path: "package.json", text: "{}" },
+          { path: "src/page.tsx", text: "export default 1" },
           { path: "bun.lock", text: "" },
         ],
         repoStats: { fileCount: 2, sizeBytes: 200 },
@@ -2301,6 +2464,7 @@ describe("runAgentHarnessPipeline", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         files: [
           { path: "package.json", text: "{}" },
+          { path: "src/page.tsx", text: "export default 1" },
           { path: "bun.lock", text: "" },
         ],
         repoStats: { fileCount: 2, sizeBytes: 200 },
@@ -2421,6 +2585,7 @@ describe("runAgentHarnessPipeline", () => {
           demoBrief: { keyProductFeatures: ["dashboard"] },
           files: [
             { path: "package.json", text: "{}" },
+            { path: "src/page.tsx", text: "export default 1" },
             { path: "bun.lock", text: "" },
           ],
           repoStats: { fileCount: 2, sizeBytes: 200 },
@@ -2522,6 +2687,7 @@ describe("runAgentHarnessPipeline", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         files: [
           { path: "package.json", text: "{}" },
+          { path: "src/page.tsx", text: "export default 1" },
           { path: "bun.lock", text: "" },
         ],
         repoStats: { fileCount: 2, sizeBytes: 200 },
@@ -2603,6 +2769,7 @@ describe("runAgentHarnessPipeline", () => {
         demoBrief: { keyProductFeatures: ["dashboard"] },
         files: [
           { path: "package.json", text: "{}" },
+          { path: "src/page.tsx", text: "export default 1" },
           { path: "bun.lock", text: "" },
         ],
         repoStats: { fileCount: 2, sizeBytes: 200 },
@@ -2843,7 +3010,7 @@ function preparationManifest() {
           id: "dashboard",
           label: "Dashboard",
           requestedFeature: "dashboard",
-          sourcePaths: ["package.json"],
+          sourcePaths: ["src/page.tsx"],
         },
       ],
       name: "Demo App",
