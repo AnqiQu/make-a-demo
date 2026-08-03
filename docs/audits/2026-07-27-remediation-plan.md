@@ -1348,6 +1348,74 @@ fires late-but-true after sleep (the sandbox really did consume that wall
 clock); only the inactivity claim — silence that was never measured — is
 re-armed.
 
+## Addendum (2026-08-03, after the post-N27 matrix run)
+
+Matrix report `matrix-report-2026-08-03T19-37-40-317Z`: **both entries failed**,
+on two unrelated, previously-seen classes. Neither implicates N27 (no timeout
+kills, no `host.clock.drift` events; the host stayed awake throughout).
+
+**Midday (`terminal-2026-08-03T19-34-54-876Z`, 165s) — N24 recurrence #2, no new
+finding.** Three runtime-target-selection commands in a fresh sandbox exited 1
+in ~3–4s each with the exact recorded N24 fingerprint: PTY bootstrap echo
+(`stty -echo` visibly echoed, bracketed-paste toggles, `>` continuation
+prompts), zero OpenCode output. The run died before any pipeline logic, and the
+failure was again billed as an artifact failure ("did not produce valid
+required artifact") rather than infrastructure. This is the third appearance of
+the signature (2026-07-31 self-healed; 2026-08-01 both-repo incident; today) —
+N24's two items (classify zero-output agent exits as infrastructure; pin the
+opencode install) are recorded, unlanded, and now recurring.
+
+**Homer (`terminal-2026-08-03T19-24-46-308Z`, 609s) — flow-spec write-denial
+class, new findings (N28).** The run was healthy through exploration (prep + 2
+quick repairs, exploration passed on attempt 2). Flow planning then ran two
+exit-0 commands and the harness threw `Flow Planning harness configuration
+failure: required artifact write was denied for
+/workspace/.makeademo/flow-spec.json.` The persisted 4KB output tails show
+attempt 1 ending in a **creation diff** of flow-spec content (all `+` lines)
+and attempt 2 ending in a **modification diff** (context + edits merging
+`fill-interaction-1-1` into a feature) — so flow-spec content was written and
+revised by the agent, while a denial line naming the artifact appeared
+somewhere in attempt 2's full output (not in the tails; the full output is not
+persisted). Same sandbox, same permission table, homer passed flow planning at
+16:52 the same day — the denial is nondeterministic in the model's phrasing,
+not a fixed configuration break.
+
+Mechanism: `createStageEditPermissions` registers **only
+workingDirectory-relative** glob keys (`../.makeademo/flow-spec.json` allow,
+`../.makeademo/**` deny, `*` deny). Whether a legal artifact write is permitted
+therefore depends on how the model spells the path in the tool call; an
+absolute-form `/workspace/.makeademo/flow-spec.json` edit matches no allow rule
+even though `external_directory` explicitly allows that tree. When a denied
+canonical-path write makes the agent route around (or fail), the loop's
+`throwIfRequiredArtifactWriteWasDenied` fires and its error carries neither the
+per-attempt `artifactError` nor the denial line — the 2026-07-31 N22 incident's
+"suppressed the real error" complaint, surviving N22b because N22b only
+discarded denials about *other* paths.
+
+**Recorded findings (N28, not landed):**
+
+- **N28a (High, bugfix) — stage edit permissions must accept both spellings of
+  each artifact path.** Register the absolute artifact path alongside the
+  relative key (and the absolute `.makeademo` directory deny alongside the
+  relative one) in `createStageEditPermissions`. Removes the whole
+  nondeterministic-denial class for every artifact stage, not just flow
+  planning.
+- **N28b (Medium, bugfix) — the denial throw must not discard evidence.** Run
+  the denial check only when the artifact was actually unreadable (a readable
+  artifact that failed validation proves the denial did not cause the failure),
+  and include the last `artifactError` plus the matched denial line in the
+  thrown message so the terminal error names both the obstruction and the
+  underlying state.
+- **N28c (Low, observability) — persist flow-planning attempts like preparation
+  attempts.** The flow-planning loop keeps `artifactError` only in local state;
+  nothing mirrors per-attempt validation errors to the run directory, which is
+  why today's root cause ends at inference. Reuse the existing
+  `persistAgentArtifactAttempt` shape.
+
+Recommendation: land N24 (recurring infrastructure misclassification) and N28
+before the next paid run; both failures today were spent on classes already in
+the ledger.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
