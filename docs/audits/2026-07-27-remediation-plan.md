@@ -1520,6 +1520,75 @@ omission). Follow-up `424c9a5` made `assertPreparationRuntimeTarget` internal
 to the inventory module — the orchestrator's single enforcement seam is now
 `assertPreparedFeatureInventory`. Phase 3 (3.1–3.10) is complete.
 
+## Addendum (2026-08-03, Phase 4 landed)
+
+All ten WS4 items are implemented and committed on `anqi-dev`; the gauntlet is
+green (lint, typecheck, knip, **768 tests**). Every item was driven by a failing
+behavior test first, and four of them turned up real defects the audit had only
+inferred.
+
+**Landed:** `aa324f1` (4.1 — the screen and profiler now use the shared secret
+predicates: credentialed `.npmrc`, `*.tfvars`, and env-shaped content under
+non-env names are rejected instead of passing unseen, and quarantine membership
+is the evidence for text-stripped files); `ac327a4` + `449a3e6` (4.3 — a
+`scanned: false` flag replaces silence when a file is too large to read, an
+unscanned `package.json` is a rejection and other unscanned files a warning;
+package manifests get a 1 MiB cap; vendored/build trees keep name-based
+quarantine but skip content inspection; a 256 MiB cumulative scan budget and a
+5-minute clone timeout with process-group kill bound the walk; destructive-script
+regexes are anchored (`rm -fr /` now caught, `mkfsdocs.js` no longer a false
+positive) and any `..` symlink component is refused); `a4f451a` + `c213316`
+(4.4 — the install gate appends the manager's script-suppression flag inside the
+open window, so submitted-repo lifecycle scripts never execute with network
+access; yarn reconciliation is workspace-scoped and picks `--mode=update-lockfile`
+or `--ignore-scripts` by yarn variant); `d91a368` + `0d3186f` (4.5 — the reseal
+is retried once and a persistent failure rides along as `resealError` instead of
+replacing the install result; a successful install with an unresealed window
+fails closed; the provider only swallows a restricted-policy close when the open
+was rejected by that same policy, proving the sandbox stayed blocked);
+`f11aba4` + `11331fa` + `429c434` + `90e7f5c` (4.6 — per-command nonce on the PTY
+exit sentinel, matched last-first, so command output cannot forge an exit code;
+per-process nonce on the runtime network marker, so an app cannot fabricate
+blocked-attempt evidence that would drive controller-side fetches; Browser Action
+markers naming an undeclared Scene now throw like step and Scene markers instead
+of being silently dropped, closing a path that hid failed actions; the failure
+screenshot is downloaded from the backend-owned path rather than the one the
+script reported); `e9f8ba7` (4.7 — the browser replay policy verifies every
+cached body against its manifest `sha256`/`sizeBytes` before fulfilling, memoized
+per path, mirroring the Node guard, and fulfillments carry
+`x-content-type-options: nosniff`; the real-browser replay test exercises it);
+`6995b83` + `518b9bc` (4.8 — local paths and observed routes are resolved and
+compared against the app origin instead of shape-tested, closing `/\evil.com`;
+`assert-url` is grounded against its catalog route like `goto`, so it cannot
+satisfy the visible-assertion gate against an unobserved route); `f3ccd8c` +
+`91288ed` (4.9 — the destination policy applies to whatever URL any fetcher
+reached, including injected ones, with a standard-port restriction; the
+`node:https` mock can now emit redirects and four real cases are covered
+(private, http downgrade, raw IP, over-length chain); a malformed response fails
+its own URL instead of aborting the whole hydration pass, while a fetcher
+contract `TypeError` still propagates; trusted assets and fonts are looked up as
+own properties, fixing a real crash on `assetId: "constructor"`); `8969db3` +
+`2ba9851` (4.10 — the agent sandbox gets a 12-hour `autoDeleteInterval` backstop
+so a dead controller cannot leak a forever-running sandbox, a failing
+compensating delete no longer replaces the root-cause error, and a 409
+state-change conflict during deletion is retried once).
+
+**Decisions taken (defaults, reversible):** lifecycle-script suppression is
+unconditional, with the network-closed rebuild pass still deferred until a
+fixture needs it (per the open decision below); clone timeout 5 min; content
+scan budget 256 MiB; package-manifest read cap 1 MiB; agent-sandbox auto-delete
+720 min.
+
+**Not done, recorded honestly:** the manifest carries no admitted
+`resourceType`, so replay still keys on URL alone — `nosniff` plus the
+hydration-time content-type compatibility check cover the concrete
+reinterpretation attack, but per-entry resourceType enforcement needs a manifest
+field and is left for a later change. `AgentHarnessWorkspaceExecuteOptions.onStderr`
+is documented rather than deleted: PTY-backed workspaces have no separate error
+channel and merge both streams into `onStdout`, so callers must not read an
+empty `onStderr` as "no error output". Capture-protocol markers other than the
+exit sentinel and the runtime network marker remain un-nonced.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
