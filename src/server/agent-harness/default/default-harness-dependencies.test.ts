@@ -2223,6 +2223,52 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
   });
 
+  it("fails closed when the dependency network window cannot be resealed", async () => {
+    let windowOpened = false;
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async setSubmittedCodeNetworkAccess(enabled) {
+        if (enabled) {
+          windowOpened = true;
+          return;
+        }
+        if (windowOpened) {
+          throw new Error("Daytona rejected the network settings update");
+        }
+      },
+      async startSubmittedCodeApp() {},
+      async stopSubmittedCodeApp() {},
+      async syncSubmittedCodeWorkspace() {},
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.validatePreparation({
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).resolves.toMatchObject({
+      failureClassification: "harness/internal failure",
+      logsSummary: expect.stringContaining(
+        "Daytona rejected the network settings update",
+      ),
+      status: "failed",
+    });
+  });
+
   it("reconciles an npm lockfile safely before retrying a clean install", async () => {
     const commands: string[] = [];
     const promotedFiles: string[][] = [];

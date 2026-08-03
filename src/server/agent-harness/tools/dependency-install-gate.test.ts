@@ -117,6 +117,52 @@ describe("dependency install gate", () => {
     expect(events).toEqual(["opened", "ran", "closed"]);
   });
 
+  it("retries a failed network reseal once and keeps the install result", async () => {
+    let closes = 0;
+
+    const result = await runDependencyInstallThroughGate({
+      command: "npm ci --no-audit",
+      closeNetwork: async () => {
+        closes += 1;
+        if (closes === 1) {
+          throw new Error("502 Bad Gateway");
+        }
+      },
+      openNetwork: async () => {},
+      runCommand: async () => ({ exitCode: 0, stderr: "", stdout: "done" }),
+    });
+
+    expect(closes).toBe(2);
+    expect(result).toEqual({
+      exitCode: 0,
+      status: "succeeded",
+      stderr: "",
+      stdout: "done",
+    });
+  });
+
+  it("reports a persistent reseal failure without displacing the install result", async () => {
+    const result = await runDependencyInstallThroughGate({
+      command: "npm ci --no-audit",
+      closeNetwork: async () => {
+        throw new Error("network settings update rejected");
+      },
+      openNetwork: async () => {},
+      runCommand: async () => ({
+        exitCode: 1,
+        stderr: "missing sqlite3 from lock file",
+        stdout: "",
+      }),
+    });
+
+    expect(result).toMatchObject({
+      exitCode: 1,
+      resealError: expect.stringContaining("network settings update rejected"),
+      status: "failed",
+      stderr: "missing sqlite3 from lock file",
+    });
+  });
+
   it("retries once inside the open window when the install fails with a network signature", async () => {
     let runs = 0;
 

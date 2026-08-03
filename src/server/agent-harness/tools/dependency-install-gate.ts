@@ -63,7 +63,9 @@ export function evaluateDependencyInstallCommand(
  * Runs an allowlisted install command inside the open network window. Every
  * command handed to `runCommand` carries the package manager's
  * lifecycle-script suppression flag, so submitted-repo install scripts never
- * execute while the sandbox has network access.
+ * execute while the sandbox has network access. A reseal failure never
+ * displaces the install result: the close is retried once and a persistent
+ * failure is attached as `resealError` so callers can fail closed.
  */
 export async function runDependencyInstallThroughGate(input: {
   closeNetwork: () => Promise<void>;
@@ -71,7 +73,10 @@ export async function runDependencyInstallThroughGate(input: {
   openNetwork: () => Promise<void>;
   runCommand: (command: string) => Promise<DependencyInstallCommandResult>;
 }): Promise<
-  | ({ status: "failed" | "succeeded" } & DependencyInstallCommandResult)
+  | ({
+      resealError?: string;
+      status: "failed" | "succeeded";
+    } & DependencyInstallCommandResult)
   | { reason: string; status: "denied" }
 > {
   const decision = evaluateDependencyInstallCommand(input.command);
@@ -81,17 +86,38 @@ export async function runDependencyInstallThroughGate(input: {
 
   const command = withLifecycleScriptSuppression(input.command);
   await input.openNetwork();
+  let result: DependencyInstallCommandResult;
   try {
-    let result = await input.runCommand(command);
+    result = await input.runCommand(command);
     if (result.exitCode !== 0 && hasNetworkInstallFailureSignature(result)) {
       result = await input.runCommand(command);
     }
-    return {
-      ...result,
-      status: result.exitCode === 0 ? "succeeded" : "failed",
-    };
-  } finally {
-    await input.closeNetwork();
+  } catch (error) {
+    await resealNetwork(input.closeNetwork);
+    throw error;
+  }
+
+  const resealError = await resealNetwork(input.closeNetwork);
+  return {
+    ...result,
+    status: result.exitCode === 0 ? "succeeded" : "failed",
+    ...(resealError === undefined ? {} : { resealError }),
+  };
+}
+
+async function resealNetwork(
+  closeNetwork: () => Promise<void>,
+): Promise<string | undefined> {
+  try {
+    await closeNetwork();
+    return undefined;
+  } catch {
+    try {
+      await closeNetwork();
+      return undefined;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
   }
 }
 

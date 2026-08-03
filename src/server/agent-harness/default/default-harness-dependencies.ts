@@ -2103,6 +2103,14 @@ async function validateSubmittedCodeRuntime(input: {
         stage,
       });
     }
+    if (result.status === "failed" && result.resealError !== undefined) {
+      // The install failure stays primary; the reseal failure rides along as
+      // evidence and the next validation attempt reseals during reset.
+      result = {
+        ...result,
+        stderr: `${result.stderr}\nSecondary: the dependency network window could not be resealed after the failed install: ${result.resealError}`,
+      };
+    }
     if (result.status === "failed") {
       const unreachable = readUnreachableDependencyHost(result);
       if (unreachable !== undefined) {
@@ -2129,6 +2137,17 @@ async function validateSubmittedCodeRuntime(input: {
         stage,
         stderr: result.stderr,
         stdout: result.stdout,
+      });
+    }
+    if (result.resealError !== undefined) {
+      // Runtime Network Lockdown cannot be trusted while the install window
+      // may still be open, so a successful install fails closed here.
+      return failedPreparationValidation({
+        attemptedCommand: installCommand,
+        classification: "harness/internal failure",
+        logsSummary: `Dependency install succeeded but the network window could not be resealed: ${result.resealError}`,
+        manifest,
+        stage,
       });
     }
   }
