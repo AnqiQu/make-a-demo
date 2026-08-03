@@ -749,12 +749,13 @@ export async function createDefaultAgentHarnessDependencies(
           }
         } else {
           artifactError = flowSpecResult.error;
+          throwIfRequiredArtifactWriteWasDenied({
+            artifactError,
+            path: artifactPaths.flowSpec,
+            result,
+            stage: "Flow Planning",
+          });
         }
-        throwIfRequiredArtifactWriteWasDenied({
-          path: artifactPaths.flowSpec,
-          result,
-          stage: "Flow Planning",
-        });
         if (attempt === retryPolicy.agentArtifactAttempts) {
           throw new Error(
             formatOpenCodeArtifactContractError({
@@ -942,6 +943,7 @@ export async function createDefaultAgentHarnessDependencies(
         }
         readError = formatPreparationManifestReadError(persistedManifestResult);
         throwIfRequiredArtifactWriteWasDenied({
+          artifactError: readError,
           path: artifactPaths.preparationManifest,
           result,
           stage: "Repo Preparation",
@@ -1110,6 +1112,7 @@ export async function createDefaultAgentHarnessDependencies(
         }
         artifactError = manifestResult.error;
         throwIfRequiredArtifactWriteWasDenied({
+          artifactError,
           path: artifactPaths.preparationManifest,
           result,
           stage: "Repo Preparation Repair",
@@ -1204,6 +1207,7 @@ export async function createDefaultAgentHarnessDependencies(
         }
         artifactError = demoScriptResult.error;
         throwIfRequiredArtifactWriteWasDenied({
+          artifactError,
           path: DEMO_SCRIPT_OUTPUT_PATH,
           result,
           stage: "Script Repair",
@@ -1326,12 +1330,13 @@ export async function createDefaultAgentHarnessDependencies(
           }
         } else {
           artifactError = selectionResult.error;
+          throwIfRequiredArtifactWriteWasDenied({
+            artifactError,
+            path: artifactPaths.runtimeTargetSelection,
+            result,
+            stage: "Runtime Target Selection",
+          });
         }
-        throwIfRequiredArtifactWriteWasDenied({
-          path: artifactPaths.runtimeTargetSelection,
-          result,
-          stage: "Runtime Target Selection",
-        });
         if (attempt === retryPolicy.agentArtifactAttempts) {
           throw new Error(
             formatOpenCodeArtifactContractError({
@@ -1551,6 +1556,7 @@ export async function createDefaultAgentHarnessDependencies(
         }
         artifactError = demoScriptResult.error;
         throwIfRequiredArtifactWriteWasDenied({
+          artifactError,
           path: DEMO_SCRIPT_OUTPUT_PATH,
           result,
           stage:
@@ -3542,7 +3548,12 @@ function formatOpenCodeArtifactContractError(input: {
   ].join("\n");
 }
 
+// Callers must invoke this only when the required artifact was NOT readable:
+// a readable artifact that merely failed validation proves the denial did not
+// cause the failure, and throwing would suppress the repairable error
+// (2026-08-03 homer run).
 function throwIfRequiredArtifactWriteWasDenied(input: {
+  artifactError: string;
   path: string;
   result: Pick<OpenCodeHarnessRunResult, "stderr" | "stdout">;
   stage: string;
@@ -3554,16 +3565,16 @@ function throwIfRequiredArtifactWriteWasDenied(input: {
   // so the denial line itself names the file it concerns. A denial about some
   // other path is agent noise a retry can route around — reporting it as a
   // harness configuration failure would suppress the real validation error.
-  const artifactWriteDenied = `${input.result.stderr}\n${input.result.stdout}`
+  const deniedLine = `${input.result.stderr}\n${input.result.stdout}`
     .split("\n")
-    .some(
+    .find(
       (line) =>
         (line.includes(input.path) || line.includes(artifactName)) &&
         denialPattern.test(line),
     );
-  if (artifactWriteDenied) {
+  if (deniedLine !== undefined) {
     throw new Error(
-      `${input.stage} harness configuration failure: required artifact write was denied for ${input.path}.`,
+      `${input.stage} harness configuration failure: required artifact write was denied for ${input.path}. Denied call: ${redactSecretText(deniedLine.trim().slice(0, 240))} Last artifact error: ${input.artifactError}`,
     );
   }
 }

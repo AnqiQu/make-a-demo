@@ -467,7 +467,33 @@ describe("createDefaultAgentHarnessDependencies", () => {
         candidates: [null],
         openCodeStdout: deniedArtifactWrite,
       }),
-    ).rejects.toThrow(/required artifact write was denied/);
+    ).rejects.toThrow(
+      /required artifact write was denied[\s\S]*blocked by a permission rule[\s\S]*Last artifact error/,
+    );
+  });
+
+  it("keeps retrying past a denial line when the flow-spec itself was readable", async () => {
+    // 2026-08-03 homer: the agent's canonical-path write was denied once but
+    // the artifact still landed (and failed validation); the denial line must
+    // not convert a repairable validation failure into a terminal
+    // configuration failure.
+    const invalid = {
+      ...flowSpec(),
+      features: flowSpec().features.map((feature) => ({
+        ...feature,
+        referencedActionIds: ["invented-action"],
+      })),
+    };
+    const denialAboutTheArtifact =
+      "Error: edit of /workspace/.makeademo/flow-spec.json was blocked by a permission rule";
+
+    const { attempts, result } = await runFlowPlanningScenario({
+      candidates: [invalid, flowSpec()],
+      openCodeStdout: denialAboutTheArtifact,
+    });
+
+    expect(result).toEqual(flowSpec());
+    expect(attempts).toBe(2);
   });
 
   it("repairs FlowSpecs that assert only navigation chrome when route-distinct asserts exist", async () => {
@@ -4757,15 +4783,19 @@ async function runFlowPlanningScenario(input: {
     async execute(command) {
       commands.push(command);
       if (command === "cat '/workspace/.makeademo/flow-spec.json'") {
-        return {
-          exitCode: 0,
-          stderr: "",
-          stdout: JSON.stringify(
-            input.candidates[
-              Math.min(Math.max(0, attempts - 1), input.candidates.length - 1)
-            ],
-          ),
-        };
+        const candidate =
+          input.candidates[
+            Math.min(Math.max(0, attempts - 1), input.candidates.length - 1)
+          ];
+        // A null candidate simulates a write that never landed: the artifact
+        // file is absent, not present-with-null-content.
+        return candidate == null
+          ? {
+              exitCode: 1,
+              stderr: "cat: can't open flow-spec.json\n",
+              stdout: "",
+            }
+          : { exitCode: 0, stderr: "", stdout: JSON.stringify(candidate) };
       }
       return { exitCode: 0, stderr: "", stdout: "" };
     },
