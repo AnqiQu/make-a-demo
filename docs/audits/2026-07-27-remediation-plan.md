@@ -1500,6 +1500,26 @@ defect — this run validates the N24/N27/N28 stack in production. Proceed to th
 next phase (Phase 3 tail 3.8/3.9, then Phase 4 security 4.1–4.10) and queue
 N29a with the smaller fixes.
 
+## Phase 3 tail landed (2026-08-03)
+
+3.9 and the script-violation half of 3.8 had already landed in `204568f8`
+(script-boundary violations route to script repair as `"script modified app
+source"`; root browser candidates own nothing exclusively in sibling
+attribution, with the regression test "does not let a root browser candidate
+claim selected-app evidence"). The remaining 3.8 enforcement landed today:
+`d8e97e6` (the orchestrator itself runs `assertPreparedFeatureInventory` on
+every manifest it adopts — after preparation and after each runtime repair —
+so a dependency implementation that skips validation can no longer hand the
+pipeline an unvetted inventory; dependency-repair manifests stay exempt
+because the loop discards them in favor of the pre-repair manifest) and
+`414ef14` (`captureWorkspaceDiff` and `capturePreparationWorkspaceDiff` are
+required members of `AgentHarnessPipelineDependencies` with a fail-fast
+construction guard before any stage runs; the fidelity stage and the
+script-writing read-only boundary can no longer be silently skipped by
+omission). Follow-up `424c9a5` made `assertPreparationRuntimeTarget` internal
+to the inventory module — the orchestrator's single enforcement seam is now
+`assertPreparedFeatureInventory`. Phase 3 (3.1–3.10) is complete.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
