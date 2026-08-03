@@ -40,6 +40,17 @@ export type ExternalResourceFailureReason =
 
 class ExternalResourcePolicyError extends Error {}
 
+/** Marks a fetcher-thrown TypeError so hydration can rethrow the original. */
+class ExternalResourceFetcherContractError extends Error {
+  override readonly cause: TypeError;
+
+  constructor(cause: TypeError) {
+    super(cause.message);
+    this.name = "ExternalResourceFetcherContractError";
+    this.cause = cause;
+  }
+}
+
 const maximumResourceBytes = 128 * 1024 * 1024;
 const maximumCacheBytes = 512 * 1024 * 1024;
 const maximumCacheEntries = 256;
@@ -75,6 +86,9 @@ function isCredentialFreeResourceUrl(value: string): boolean {
       url.protocol === "https:" &&
       url.username.length === 0 &&
       url.password.length === 0 &&
+      // A non-standard port points at an internal service rather than a public
+      // asset host, so presentation resources are limited to the default port.
+      (url.port === "" || url.port === "443") &&
       isIP(url.hostname.replace(/^\[|\]$/g, "")) === 0 &&
       [...url.searchParams.keys()].every(
         (key) => !credentialQueryParameter.test(key),
@@ -82,6 +96,35 @@ function isCredentialFreeResourceUrl(value: string): boolean {
     );
   } catch {
     return false;
+  }
+}
+
+/**
+ * Applies the destination policy to whatever URL a fetcher actually reached.
+ * Callers may inject their own fetcher, so the address check cannot live only
+ * inside the built-in request path: a fetcher that follows a redirect to a
+ * private address must still be denied here.
+ */
+async function assertPublicResourceDestination(
+  requestedUrl: string,
+  finalUrl: string,
+): Promise<void> {
+  if (!isCredentialFreeResourceUrl(finalUrl)) {
+    throw new ExternalResourcePolicyError(
+      `External resource ${requestedUrl} redirected to an unsafe destination.`,
+    );
+  }
+  const finalHostname = new URL(finalUrl).hostname;
+  if (finalHostname === new URL(requestedUrl).hostname) {
+    // The requested host already passed the pre-fetch address policy; only a
+    // redirect to a different host needs to be resolved again here.
+    return;
+  }
+  const addresses = await lookup(finalHostname, { all: true, verbatim: true });
+  if (addresses.some((candidate) => !isPublicIp(candidate.address))) {
+    throw new ExternalResourcePolicyError(
+      `External resource ${requestedUrl} redirected to a non-public address.`,
+    );
   }
 }
 
@@ -152,7 +195,14 @@ export async function hydrateExternalResourceCache(input: {
       if (url === undefined) return;
       try {
         const response = await withTimeout(
-          (signal) => fetchResource(url, signal),
+          (signal) =>
+            fetchResource(url, signal).catch((error: unknown) => {
+              // A TypeError raised by the fetcher itself is a controller
+              // contract break, not something this response can recover from.
+              throw error instanceof TypeError
+                ? new ExternalResourceFetcherContractError(error)
+                : error;
+            }),
           input.requestTimeoutMs ?? externalResourceRequestTimeoutMs,
           url,
         );
@@ -161,13 +211,9 @@ export async function hydrateExternalResourceCache(input: {
             `External resource ${url} returned HTTP ${response.status}.`,
           );
         }
-        const contentType = normalizeContentType(response.contentType);
         const responseUrl = response.finalUrl ?? url;
-        if (!isCredentialFreeResourceUrl(responseUrl)) {
-          throw new ExternalResourcePolicyError(
-            `External resource ${url} redirected to an unsafe destination.`,
-          );
-        }
+        await assertPublicResourceDestination(url, responseUrl);
+        const contentType = normalizeContentType(response.contentType);
         assertCompatibleContentType(
           attemptsByUrl.get(url)?.resourceType,
           contentType,
@@ -199,7 +245,11 @@ export async function hydrateExternalResourceCache(input: {
           url,
         });
       } catch (error) {
-        if (error instanceof TypeError) throw error;
+        if (error instanceof ExternalResourceFetcherContractError) {
+          throw error.cause;
+        }
+        // One hostile or malformed response must not abort the whole pass and
+        // discard every resource already hydrated; it fails on its own.
         await input.onFailure?.({
           error,
           reason:

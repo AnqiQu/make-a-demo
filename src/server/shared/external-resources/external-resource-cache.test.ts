@@ -13,6 +13,8 @@ import { readExternalResourceManifest } from "./external-resource-manifest.schem
 
 const externalResourceRequestMock = vi.hoisted(() => ({
   address: { address: "93.184.216.34", family: 4 },
+  // Location headers the fake server returns, one per request in order.
+  locations: [] as Array<string | undefined>,
   lookupAll: true,
   lookupFamily: undefined as number | undefined,
   lookupResult: undefined as
@@ -65,10 +67,14 @@ vi.mock("node:https", async () => {
                 }
                 externalResourceRequestMock.lookupResult = result;
                 externalResourceRequestMock.lookupFamily = family;
+                const location = externalResourceRequestMock.locations.shift();
                 const response = Object.assign(new EventEmitter(), {
-                  headers: { "content-type": "image/png" },
+                  headers:
+                    location === undefined
+                      ? { "content-type": "image/png" }
+                      : { location },
                   resume() {},
-                  statusCode: 200,
+                  statusCode: location === undefined ? 200 : 302,
                 });
                 onResponse(response);
                 queueMicrotask(() => response.emit("end"));
@@ -113,6 +119,7 @@ describe("hydrateExternalResourceCache", () => {
   });
 
   beforeEach(() => {
+    externalResourceRequestMock.locations = [];
     externalResourceRequestMock.lookupAll = true;
     externalResourceRequestMock.lookupFamily = undefined;
     externalResourceRequestMock.lookupResult = undefined;
@@ -205,6 +212,78 @@ describe("hydrateExternalResourceCache", () => {
     expect(manifest.entries).toMatchObject([
       { responseUrl: "https://cdn.example.com/v2/logo.svg" },
     ]);
+  });
+
+  it("denies a redirect that lands on a private address even through an injected fetcher", async () => {
+    const directory = await createDirectory();
+    const failures: string[] = [];
+
+    const manifest = await hydrateExternalResourceCache({
+      attempts: [resourceAttempt("https://assets.example.com/logo.svg")],
+      directory,
+      fetchResource: async () => ({
+        ...response("logo", "image/svg+xml"),
+        finalUrl: "https://localhost/internal/logo.svg",
+      }),
+      onFailure: async ({ reason }) => {
+        failures.push(reason);
+      },
+    });
+
+    expect(manifest.entries).toEqual([]);
+    expect(failures).toEqual(["policy-denied"]);
+  });
+
+  it("never requests a resource served from a non-standard port", async () => {
+    const directory = await createDirectory();
+    const requestedUrls: string[] = [];
+
+    const manifest = await hydrateExternalResourceCache({
+      attempts: [
+        resourceAttempt("https://assets.example.com:6379/logo.svg"),
+        resourceAttempt("https://assets.example.com:443/allowed.svg"),
+      ],
+      directory,
+      fetchResource: async (url) => {
+        requestedUrls.push(url);
+        return response("logo", "image/svg+xml");
+      },
+    });
+
+    expect(requestedUrls).toEqual([
+      "https://assets.example.com:443/allowed.svg",
+    ]);
+    expect(manifest.entries.map((entry) => entry.url)).toEqual([
+      "https://assets.example.com:443/allowed.svg",
+    ]);
+  });
+
+  it("keeps hydrating other resources when one response is malformed", async () => {
+    const directory = await createDirectory();
+    const failures: string[] = [];
+
+    const manifest = await hydrateExternalResourceCache({
+      attempts: [
+        resourceAttempt("https://assets.example.com/broken.svg"),
+        resourceAttempt("https://assets.example.com/good.svg"),
+      ],
+      directory,
+      fetchResource: async (url) =>
+        url.includes("broken")
+          ? ({
+              ...response("logo", "image/svg+xml"),
+              contentType: 42 as unknown as string,
+            } as never)
+          : response("logo", "image/svg+xml"),
+      onFailure: async ({ reason }) => {
+        failures.push(reason);
+      },
+    });
+
+    expect(manifest.entries.map((entry) => entry.url)).toEqual([
+      "https://assets.example.com/good.svg",
+    ]);
+    expect(failures).toEqual(["retrieval-failed"]);
   });
 
   it("never downloads executable browser scripts", async () => {
@@ -341,6 +420,31 @@ describe("hydrateExternalResourceCache", () => {
     await expect(
       fetchExternalResource("https://93.184.216.34/product.png"),
     ).rejects.toThrow("named public HTTPS destination");
+  });
+
+  it("refuses redirects that leave the public HTTPS surface", async () => {
+    for (const [location, expected] of [
+      ["https://localhost/internal.png", /public HTTPS destination/],
+      ["http://assets.example.com/plain.png", /named public HTTPS destination/],
+      ["https://93.184.216.34/product.png", /named public HTTPS destination/],
+    ] as const) {
+      externalResourceRequestMock.locations = [location];
+      await expect(
+        fetchExternalResource("https://assets.example.com/product.png"),
+      ).rejects.toThrow(expected);
+      expect(externalResourceRequestMock.locations).toEqual([]);
+    }
+  });
+
+  it("refuses a redirect chain longer than the controller allows", async () => {
+    externalResourceRequestMock.locations = Array.from(
+      { length: 6 },
+      (_value, index) => `https://assets.example.com/hop-${index}.png`,
+    );
+
+    await expect(
+      fetchExternalResource("https://assets.example.com/product.png"),
+    ).rejects.toThrow(/exceeded the redirect/i);
   });
 
   it("pins Bun HTTPS requests with an all-address DNS result", async () => {
