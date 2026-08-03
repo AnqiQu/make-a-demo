@@ -13,6 +13,7 @@ import {
 import { basename, extname, join, resolve } from "node:path";
 import {
   containsPrivateKeyMaterial,
+  isCredentialRegistryConfig,
   isEnvironmentFileName,
   isSecretInspectionPath,
 } from "../repo-security/secret-predicates";
@@ -30,7 +31,13 @@ export type RepoSourceArchive = {
 
 export type RepoSnapshot = {
   commitSha: string;
-  files: Array<{ path: string; symlinkTarget?: string; text?: string }>;
+  files: Array<{
+    path: string;
+    /** False when the file was too large for text-based screening. */
+    scanned?: boolean;
+    symlinkTarget?: string;
+    text?: string;
+  }>;
   repoStats: {
     fileCount: number;
     sizeBytes: number;
@@ -65,6 +72,8 @@ export interface RepoSnapshotGit {
     checkoutPath: string;
     credential?: RepoCloneCredential;
     repoUrl: string;
+    /** Kill the clone after this long; defaults to five minutes. */
+    timeoutMs?: number;
   }): Promise<void>;
   readHead(checkoutPath: string): Promise<string>;
 }
@@ -75,12 +84,32 @@ export interface GithubInstallationTokenProvider {
 }
 
 export type RepoSnapshotDependencies = {
+  /** Total bytes of file content the walk may read; defaults to 256 MiB. */
+  contentScanBudgetBytes?: number;
   git?: RepoSnapshotGit;
   installationTokenProvider?: GithubInstallationTokenProvider;
 };
 
 const maxReadableFileBytes = 128 * 1024;
+// Package manifests decide screening rejections, so they get a raised cap
+// instead of silently arriving unscanned.
+const maxReadablePackageManifestBytes = 1024 * 1024;
+const defaultContentScanBudgetBytes = 256 * 1024 * 1024;
+const defaultCloneTimeoutMs = 300_000;
 const ignoredDirectoryNames = new Set([".git"]);
+// Vendored and build-output trees keep name-based secret detection but skip
+// content inspection: their records stay in the walk so quarantine can still
+// exclude committed secrets by filename, without unbounded read work.
+const contentInspectionExcludedDirectoryNames = new Set([
+  ".cache",
+  ".next",
+  ".turbo",
+  "build",
+  "coverage",
+  "dist",
+  "node_modules",
+  "out",
+]);
 const privateKeyScanTailLength = 128;
 const privateKeySentinel = "-----BEGIN PRIVATE KEY-----";
 const readableFileNames = new Set([
@@ -158,7 +187,10 @@ export async function readGithubRepoSnapshot(
     });
     const commitSha = readCommitSha(await git.readHead(checkoutPath));
     await input.log("repo.clone.succeeded", { commitSha });
-    const repoFiles = await readRepoFiles(checkoutPath);
+    const repoFiles = await readRepoFiles(
+      checkoutPath,
+      dependencies.contentScanBudgetBytes ?? defaultContentScanBudgetBytes,
+    );
     const quarantine = quarantineRepoSecrets(repoFiles.files);
     await git.archiveRevision({
       archivePath,
@@ -288,10 +320,14 @@ export const defaultRepoSnapshotGit: RepoSnapshotGit = {
   async clone(input) {
     await runCommand(
       "git",
-      ["clone", "--depth", "1", input.repoUrl, input.checkoutPath],
-      input.credential === undefined
-        ? undefined
-        : { env: createGitCredentialEnvironment(input.credential) },
+      ["clone", "--depth", "1", "--no-tags", input.repoUrl, input.checkoutPath],
+      {
+        env:
+          input.credential === undefined
+            ? { GIT_TERMINAL_PROMPT: "0" }
+            : createGitCredentialEnvironment(input.credential),
+        timeoutMs: input.timeoutMs ?? defaultCloneTimeoutMs,
+      },
     );
   },
   async readHead(checkoutPath) {
@@ -300,19 +336,33 @@ export const defaultRepoSnapshotGit: RepoSnapshotGit = {
   },
 };
 
-async function readRepoFiles(root: string): Promise<{
-  files: Array<{ path: string; symlinkTarget?: string; text?: string }>;
+async function readRepoFiles(
+  root: string,
+  contentScanBudgetBytes: number,
+): Promise<{
+  files: Array<{
+    path: string;
+    scanned?: boolean;
+    symlinkTarget?: string;
+    text?: string;
+  }>;
   repoStats: { fileCount: number; sizeBytes: number };
 }> {
   const files: Array<{
     path: string;
+    scanned?: boolean;
     symlinkTarget?: string;
     text?: string;
   }> = [];
   let fileCount = 0;
   let sizeBytes = 0;
+  let remainingContentScanBytes = contentScanBudgetBytes;
 
-  async function visit(directory: string, relativeDirectory = "") {
+  async function visit(
+    directory: string,
+    relativeDirectory = "",
+    contentExcluded = false,
+  ) {
     const entries = await readdir(directory, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.isDirectory()) {
@@ -320,6 +370,8 @@ async function readRepoFiles(root: string): Promise<{
           await visit(
             join(directory, entry.name),
             join(relativeDirectory, entry.name),
+            contentExcluded ||
+              contentInspectionExcludedDirectoryNames.has(entry.name),
           );
         }
         continue;
@@ -345,16 +397,25 @@ async function readRepoFiles(root: string): Promise<{
       const fileStat = await stat(absolutePath);
       fileCount += 1;
       sizeBytes += fileStat.size;
-      const text = await readFileTextIfUseful(
+      if (contentExcluded && !isSecretNamedPath(relativePath)) {
+        files.push({ path: relativePath });
+        continue;
+      }
+      if (fileStat.size > remainingContentScanBytes) {
+        files.push({ path: relativePath, scanned: false });
+        continue;
+      }
+      remainingContentScanBytes -= fileStat.size;
+      const { scanned, text } = await readFileTextIfUseful(
         absolutePath,
         relativePath,
         fileStat.size,
       );
-      files.push(
-        text === undefined
-          ? { path: relativePath }
-          : { path: relativePath, text },
-      );
+      files.push({
+        path: relativePath,
+        ...(text === undefined ? {} : { text }),
+        ...(scanned ? {} : { scanned: false }),
+      });
     }
   }
 
@@ -362,20 +423,44 @@ async function readRepoFiles(root: string): Promise<{
   return { files, repoStats: { fileCount, sizeBytes } };
 }
 
+/**
+ * Filenames whose secret handling must survive content-inspection exclusion:
+ * quarantine still needs their text for environment-key hints and
+ * credential-content checks. `isCredentialRegistryConfig` with undefined text
+ * is the name-only registry-config test.
+ */
+function isSecretNamedPath(relativePath: string): boolean {
+  return (
+    isEnvironmentFileName(relativePath) ||
+    isSecretInspectionPath(relativePath) ||
+    isCredentialRegistryConfig(relativePath, undefined)
+  );
+}
+
 async function readFileTextIfUseful(
   path: string,
   relativePath: string,
   sizeBytes: number,
-): Promise<string | undefined> {
-  if (sizeBytes <= maxReadableFileBytes) {
+): Promise<{ scanned: boolean; text?: string }> {
+  const readableBytes = isPackageManifestPath(relativePath)
+    ? maxReadablePackageManifestBytes
+    : maxReadableFileBytes;
+  if (sizeBytes <= readableBytes) {
     const text = await readFile(path, "utf8");
     return isUsefulTextPath(relativePath) || containsPrivateKeyMaterial(text)
-      ? text
-      : undefined;
+      ? { scanned: true, text }
+      : { scanned: true };
   }
-  return (await fileContainsPrivateKeyMaterial(path))
-    ? privateKeySentinel
-    : undefined;
+  if (await fileContainsPrivateKeyMaterial(path)) {
+    return { scanned: true, text: privateKeySentinel };
+  }
+  // The private-key stream ran, but text-based screening was skipped, so a
+  // path the screen would have read must not pass silently.
+  return { scanned: !isUsefulTextPath(relativePath) };
+}
+
+function isPackageManifestPath(relativePath: string): boolean {
+  return basename(relativePath) === "package.json";
 }
 
 function isUsefulTextPath(relativePath: string): boolean {
@@ -451,21 +536,46 @@ async function sha256File(path: string): Promise<string> {
 function runCommand(
   command: string,
   args: string[],
-  options?: { env: Record<string, string> },
+  options?: { env?: Record<string, string>; timeoutMs?: number },
 ) {
   return new Promise<{ stderr: string; stdout: string }>((resolve, reject) => {
+    // Detached so a timeout can kill the whole process group: git spawns
+    // helpers (git-remote-http) that would otherwise survive and hold pipes.
     const child = spawn(command, args, {
+      detached: true,
       ...(options?.env === undefined
         ? {}
         : { env: { ...process.env, ...options.env } }),
       stdio: ["ignore", "pipe", "pipe"],
     });
+    let timedOut = false;
+    const timer =
+      options?.timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            timedOut = true;
+            try {
+              if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
+            } catch {
+              child.kill("SIGKILL");
+            }
+            reject(
+              new Error(
+                `${command} ${args.join(" ")} timed out after ${options.timeoutMs}ms.`,
+              ),
+            );
+          }, options.timeoutMs);
     const stdout: string[] = [];
     const stderr: string[] = [];
     child.stdout.on("data", (chunk) => stdout.push(String(chunk)));
     child.stderr.on("data", (chunk) => stderr.push(String(chunk)));
-    child.on("error", reject);
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
     child.on("close", (exitCode) => {
+      clearTimeout(timer);
+      if (timedOut) return;
       const result = { stderr: stderr.join(""), stdout: stdout.join("") };
       if (exitCode !== 0) {
         reject(

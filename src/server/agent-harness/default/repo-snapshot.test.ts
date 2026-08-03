@@ -9,6 +9,7 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { type AddressInfo, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
@@ -88,6 +89,181 @@ describe("readGithubRepoSnapshot", () => {
     expect(
       snapshot.files.find(({ path }) => path === "package-link.json"),
     ).toEqual({ path: "package-link.json", symlinkTarget: "package.json" });
+  });
+
+  it("kills a repository clone that hangs past its timeout", async () => {
+    const server = createServer(() => {
+      // Accept the connection and never respond, so the clone hangs.
+    });
+    await new Promise<void>((resolvePort) =>
+      server.listen(0, "127.0.0.1", resolvePort),
+    );
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const startedAt = Date.now();
+      await expect(
+        defaultRepoSnapshotGit.clone({
+          checkoutPath: join(
+            tmpdir(),
+            `makeademo-hanging-clone-${crypto.randomUUID()}`,
+          ),
+          repoUrl: `http://127.0.0.1:${port}/acme/hanging.git`,
+          timeoutMs: 750,
+        }),
+      ).rejects.toThrow(/timed out/);
+      expect(Date.now() - startedAt).toBeLessThan(10_000);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("reads oversized package manifests and marks unreadable text files as unscanned", async () => {
+    const runDirectory = join(
+      tmpdir(),
+      `makeademo-unscanned-snapshot-${crypto.randomUUID()}`,
+    );
+    await mkdir(runDirectory, { recursive: true });
+    const oversizedScripts = JSON.stringify({
+      description: "x".repeat(256 * 1024),
+      scripts: { clean: "rm -rf /" },
+    });
+    const snapshot = await readGithubRepoSnapshot(
+      {
+        log: async () => undefined,
+        repoUrl: "https://github.com/acme/oversized-app",
+        runDirectory,
+      },
+      {
+        git: {
+          async archiveRevision(input) {
+            await writeFile(input.archivePath, "oversized archive");
+          },
+          async clone(input) {
+            await mkdir(input.checkoutPath, { recursive: true });
+            await writeFile(
+              join(input.checkoutPath, "package.json"),
+              oversizedScripts,
+            );
+            await writeFile(
+              join(input.checkoutPath, "NOTES.md"),
+              `# notes\n${"y".repeat(256 * 1024)}`,
+            );
+          },
+          async readHead() {
+            return "abc123def456";
+          },
+        },
+      },
+    );
+
+    const packageJson = snapshot.files.find(
+      ({ path }) => path === "package.json",
+    );
+    expect(packageJson?.text).toContain("rm -rf /");
+    const notes = snapshot.files.find(({ path }) => path === "NOTES.md");
+    expect(notes).toEqual({ path: "NOTES.md", scanned: false });
+  });
+
+  it("keeps name-based quarantine in vendored directories while skipping their content inspection", async () => {
+    const runDirectory = join(
+      tmpdir(),
+      `makeademo-vendored-snapshot-${crypto.randomUUID()}`,
+    );
+    await mkdir(runDirectory, { recursive: true });
+    const snapshot = await readGithubRepoSnapshot(
+      {
+        log: async () => undefined,
+        repoUrl: "https://github.com/acme/vendored-app",
+        runDirectory,
+      },
+      {
+        git: {
+          async archiveRevision(input) {
+            await writeFile(input.archivePath, "vendored archive");
+          },
+          async clone(input) {
+            await mkdir(join(input.checkoutPath, "node_modules/pkg"), {
+              recursive: true,
+            });
+            await mkdir(join(input.checkoutPath, "dist"), { recursive: true });
+            await writeFile(join(input.checkoutPath, "package.json"), "{}");
+            await writeFile(
+              join(input.checkoutPath, "dist/.env.production"),
+              "API_URL=https://prod.example\nSECRET_TOKEN=abc123\n",
+            );
+            await writeFile(
+              join(input.checkoutPath, "node_modules/pkg/config.txt"),
+              "API_KEY=sk_live_123\nDB_PASSWORD=hunter2\nSESSION_SECRET=s3cret\n",
+            );
+            await writeFile(
+              join(input.checkoutPath, "node_modules/pkg/index.js"),
+              "module.exports = 1;\n",
+            );
+          },
+          async readHead() {
+            return "abc123def456";
+          },
+        },
+      },
+    );
+
+    const quarantined = snapshot.secretQuarantineManifest.entries.map(
+      (entry) => entry.path,
+    );
+    expect(quarantined).toContain("dist/.env.production");
+    expect(
+      snapshot.secretQuarantineManifest.entries.find(
+        (entry) => entry.path === "dist/.env.production",
+      )?.environmentKeys,
+    ).toEqual(["API_URL", "SECRET_TOKEN"]);
+    expect(quarantined).not.toContain("node_modules/pkg/config.txt");
+    expect(
+      snapshot.files.find(({ path }) => path === "node_modules/pkg/index.js"),
+    ).toEqual({ path: "node_modules/pkg/index.js" });
+  });
+
+  it("stops reading file contents once the cumulative scan budget is spent", async () => {
+    const runDirectory = join(
+      tmpdir(),
+      `makeademo-budget-snapshot-${crypto.randomUUID()}`,
+    );
+    await mkdir(runDirectory, { recursive: true });
+    const snapshot = await readGithubRepoSnapshot(
+      {
+        log: async () => undefined,
+        repoUrl: "https://github.com/acme/budget-app",
+        runDirectory,
+      },
+      {
+        contentScanBudgetBytes: 10,
+        git: {
+          async archiveRevision(input) {
+            await writeFile(input.archivePath, "budget archive");
+          },
+          async clone(input) {
+            await mkdir(input.checkoutPath, { recursive: true });
+            await writeFile(
+              join(input.checkoutPath, "alpha.ts"),
+              `export const alpha = "${"a".repeat(100)}";\n`,
+            );
+            await writeFile(
+              join(input.checkoutPath, "beta.ts"),
+              `export const beta = "${"b".repeat(100)}";\n`,
+            );
+          },
+          async readHead() {
+            return "abc123def456";
+          },
+        },
+      },
+    );
+
+    expect(snapshot.files).toEqual(
+      expect.arrayContaining([
+        { path: "alpha.ts", scanned: false },
+        { path: "beta.ts", scanned: false },
+      ]),
+    );
   });
 
   it("quarantines environment files and private keys from the execution archive without rejecting public certificates", async () => {
