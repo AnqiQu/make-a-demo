@@ -117,7 +117,7 @@ export function assertPreparedFeatureInventory(input: {
 }
 
 /** Rejects preparation output that switches away from a locked browser app. */
-export function assertPreparationRuntimeTarget(input: {
+function assertPreparationRuntimeTarget(input: {
   preparationManifest: PreparationManifest;
   repoProfile?: RepoProfile;
   runPlan?: RunPlan;
