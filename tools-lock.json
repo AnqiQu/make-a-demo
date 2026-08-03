@@ -13,6 +13,13 @@
       "sourceType": "github-release-latest",
       "repository": "daytonaio/daytona",
       "releaseChannel": "latest"
+    },
+    "opencode": {
+      "command": "opencode",
+      "sourceType": "install-script",
+      "url": "https://opencode.ai/install",
+      "version": "1.17.19",
+      "lockedBy": "infra/daytona/opencode.Dockerfile"
     }
   }
 }

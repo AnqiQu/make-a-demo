@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import {
   assertSandboxMeetsCapacityFloor,
   readSandboxCapacityEvidence,
@@ -60,6 +61,29 @@ try {
     },
   );
   assertCommandSucceeded("parent Git/CA trust", parentGitTrust);
+
+  console.log(
+    `Verifying the OpenCode agent runner launches in ${handle.id}...`,
+  );
+  const openCodeVersion = await handle.workspace.execute("opencode --version", {
+    onStderr: (chunk) => process.stderr.write(chunk),
+    onStdout: (chunk) => process.stdout.write(chunk),
+  });
+  assertCommandSucceeded("opencode launch", openCodeVersion);
+  const toolsLock = JSON.parse(await readFile("tools-lock.json", "utf8")) as {
+    tools?: { opencode?: { version?: string } };
+  };
+  const pinnedOpenCodeVersion = toolsLock.tools?.opencode?.version;
+  if (
+    pinnedOpenCodeVersion !== undefined &&
+    !openCodeVersion.stdout.includes(pinnedOpenCodeVersion)
+  ) {
+    // Warn, don't fail: a pre-pin snapshot is still known-good; the drift
+    // matters when deciding whether a rebuild reproduced the tested image.
+    console.warn(
+      `WARNING: snapshot opencode version (${openCodeVersion.stdout.trim()}) differs from the tools-lock pin ${pinnedOpenCodeVersion}.`,
+    );
+  }
 
   console.log(
     `Verifying preloaded submitted-code runtime image in ${handle.id}...`,

@@ -24,7 +24,9 @@ RUN curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14" \
 RUN npm install -g --force pnpm@10.12.1 yarn@1.22.22 \
   && npm cache clean --force
 
-RUN OPENCODE_INSTALL_DIR=/usr/local/bin curl -fsSL https://opencode.ai/install | bash \
+# Pinned so snapshot rebuilds are deterministic (N24b); keep in sync with
+# tools-lock.json.
+RUN OPENCODE_INSTALL_DIR=/usr/local/bin curl -fsSL https://opencode.ai/install | VERSION=1.17.19 bash \
   && ln -sf /root/.opencode/bin/opencode /usr/local/bin/opencode
 
 WORKDIR /workspace
