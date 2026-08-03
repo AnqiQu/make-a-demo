@@ -69,6 +69,29 @@ describe("profileRepo", () => {
     ]);
   });
 
+  it("reads env hint keys from every env-family example file with the shared extractor", () => {
+    const profile = profileRepo({
+      files: [
+        {
+          path: "config/prod.env.example",
+          text: "export DATABASE_URL=postgres://localhost/db\nStripe_Key=sk_test_123\nAPI_KEY=value",
+        },
+        {
+          path: "package.json",
+          text: JSON.stringify({ scripts: { dev: "vite" } }),
+        },
+        { path: "bun.lock", text: "" },
+      ],
+      repoUrl: "https://github.com/example/env-family",
+    });
+
+    expect(profile.requiredEnvHints).toEqual([
+      "API_KEY",
+      "DATABASE_URL",
+      "Stripe_Key",
+    ]);
+  });
+
   it("records the root package name so scoped installs can include root dependencies", () => {
     const profile = profileRepo({
       files: [

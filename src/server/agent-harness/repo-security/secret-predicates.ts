@@ -86,6 +86,28 @@ export function containsPrivateKeyMaterial(text: string | undefined): boolean {
 }
 
 /**
+ * Extracts the assignment key names from env-style file content — the safe
+ * half of a quarantined or example env file that later stages may keep as
+ * preparation hints. Values are never returned.
+ */
+export function readEnvironmentAssignmentKeys(
+  text: string | undefined,
+): string[] {
+  if (text === undefined) return [];
+  return [
+    ...new Set(
+      text
+        .split("\n")
+        .map(
+          (line) =>
+            /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line)?.[1],
+        )
+        .filter((key): key is string => key !== undefined),
+    ),
+  ].sort();
+}
+
+/**
  * Content fallback for env files under non-env names: every non-comment line
  * is an UPPER_SNAKE assignment with a non-placeholder value, at least three of
  * them. Build files with targets or prose never satisfy the all-lines rule.

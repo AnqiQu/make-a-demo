@@ -68,6 +68,64 @@ describe("screenStaticRepoSecurity", () => {
     );
   });
 
+  it("screens registry credentials and env-shaped content with the quarantine's own predicates", () => {
+    const quarantinedResult = screenStaticRepoSecurity({
+      files: [
+        { path: ".npmrc" },
+        { path: "config/secrets.txt" },
+        { path: "package.json", text: "{}" },
+        { path: "bun.lock", text: "" },
+      ],
+      repoStats: { fileCount: 4, sizeBytes: 400 },
+      secretQuarantineManifest: {
+        entries: [
+          { kind: "environment-file", path: ".npmrc" },
+          {
+            environmentKeys: ["API_KEY", "DB_PASSWORD", "SESSION_SECRET"],
+            kind: "environment-file",
+            path: "config/secrets.txt",
+          },
+        ],
+        version: "2026-07-15",
+      },
+    });
+
+    expect(quarantinedResult).toMatchObject({
+      rejections: [],
+      status: "passed",
+    });
+    expect(quarantinedResult.warnings).toContain(
+      "repo secret file .npmrc was quarantined before agent or runtime execution",
+    );
+    expect(quarantinedResult.warnings).toContain(
+      "repo secret file config/secrets.txt was quarantined before agent or runtime execution",
+    );
+
+    const unquarantinedResult = screenStaticRepoSecurity({
+      files: [
+        {
+          path: ".npmrc",
+          text: "//registry.npmjs.org/:_authToken=npm_token_abc123",
+        },
+        {
+          path: "config/secrets.txt",
+          text: "API_KEY=sk_live_123\nDB_PASSWORD=hunter2\nSESSION_SECRET=abc123",
+        },
+        { path: "package.json", text: "{}" },
+        { path: "bun.lock", text: "" },
+      ],
+      repoStats: { fileCount: 4, sizeBytes: 400 },
+    });
+
+    expect(unquarantinedResult.status).toBe("rejected");
+    expect(unquarantinedResult.rejections).toContain(
+      "repo contains committed secret file .npmrc",
+    );
+    expect(unquarantinedResult.rejections).toContain(
+      "repo contains committed secret file config/secrets.txt",
+    );
+  });
+
   it("only treats real environment filenames as secrets and matches template suffixes case-insensitively", () => {
     const result = screenStaticRepoSecurity({
       files: [

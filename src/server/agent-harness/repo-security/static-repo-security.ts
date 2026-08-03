@@ -1,8 +1,10 @@
 import { posix } from "node:path";
 import {
   containsPrivateKeyMaterial,
+  isCredentialRegistryConfig,
   isEnvironmentSecretFileName,
   isPrivateKeyFileName,
+  looksLikeEnvironmentAssignments,
 } from "./secret-predicates";
 import type { SecretQuarantineManifest } from "./secret-quarantine";
 
@@ -123,20 +125,23 @@ function inspectFileSecurity(
   ) {
     rejections.push(`repo symlink ${file.path} escapes the repository`);
   }
-  const containsSecretMaterial =
+  // Quarantine membership is itself the evidence: quarantined files arrive
+  // text-stripped, so content predicates cannot re-derive their secretness.
+  if (quarantinedPaths.has(file.path)) {
+    warnings.push(
+      `repo secret file ${file.path} was quarantined before agent or runtime execution`,
+    );
+  } else if (
     isCommittedSecretFile(filename) ||
+    isCredentialRegistryConfig(filename, file.text) ||
+    looksLikeEnvironmentAssignments(file.text)
+  ) {
+    rejections.push(`repo contains committed secret file ${file.path}`);
+  } else if (
     isPrivateKeyPath(filename) ||
-    containsPrivateKeyMaterial(file.text);
-  if (containsSecretMaterial) {
-    if (quarantinedPaths.has(file.path)) {
-      warnings.push(
-        `repo secret file ${file.path} was quarantined before agent or runtime execution`,
-      );
-    } else if (isCommittedSecretFile(filename)) {
-      rejections.push(`repo contains committed secret file ${file.path}`);
-    } else {
-      rejections.push(`repo contains private key material in ${file.path}`);
-    }
+    containsPrivateKeyMaterial(file.text)
+  ) {
+    rejections.push(`repo contains private key material in ${file.path}`);
   }
 
   if (

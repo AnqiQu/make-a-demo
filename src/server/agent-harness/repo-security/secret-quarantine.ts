@@ -4,6 +4,7 @@ import {
   isEnvironmentSecretFileName,
   isPrivateKeyFileName,
   looksLikeEnvironmentAssignments,
+  readEnvironmentAssignmentKeys,
 } from "./secret-predicates";
 
 const secretQuarantineManifestVersion = "2026-07-15" as const;
@@ -37,7 +38,7 @@ export function quarantineRepoSecrets(files: RepoFile[]): {
       isCredentialRegistryConfig(path, file.text) ||
       looksLikeEnvironmentAssignments(file.text)
     ) {
-      const environmentKeys = readEnvironmentKeys(file.text);
+      const environmentKeys = readEnvironmentAssignmentKeys(file.text);
       return [
         {
           ...(environmentKeys.length === 0 ? {} : { environmentKeys }),
@@ -65,21 +66,6 @@ export function quarantineRepoSecrets(files: RepoFile[]): {
       version: secretQuarantineManifestVersion,
     },
   };
-}
-
-function readEnvironmentKeys(text: string | undefined): string[] {
-  if (text === undefined) return [];
-  return [
-    ...new Set(
-      text
-        .split("\n")
-        .map(
-          (line) =>
-            /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line)?.[1],
-        )
-        .filter((key): key is string => key !== undefined),
-    ),
-  ].sort();
 }
 
 function normalizePath(path: string): string {

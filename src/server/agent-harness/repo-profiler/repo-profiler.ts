@@ -1,5 +1,8 @@
 import { posix } from "node:path";
-import { isEnvironmentFileName } from "../repo-security/secret-predicates";
+import {
+  isEnvironmentFileName,
+  readEnvironmentAssignmentKeys,
+} from "../repo-security/secret-predicates";
 import {
   type PackageManager,
   type RepoProfile,
@@ -624,14 +627,11 @@ function readCandidateAppDirs(files: RepoProfileFile[]): string[] {
 function readEnvKeys(files: RepoProfileFile[]): string[] {
   const keys = new Set<string>();
   for (const file of files) {
-    if (!/^\.env(?:\..+)?$/.test(posix.basename(file.path))) {
+    if (!isEnvironmentFileName(file.path)) {
       continue;
     }
-    for (const line of (file.text ?? "").split("\n")) {
-      const match = /^([A-Z0-9_]+)\s*=/.exec(line.trim());
-      if (match?.[1] !== undefined) {
-        keys.add(match[1]);
-      }
+    for (const key of readEnvironmentAssignmentKeys(file.text)) {
+      keys.add(key);
     }
   }
   return [...keys].sort();
