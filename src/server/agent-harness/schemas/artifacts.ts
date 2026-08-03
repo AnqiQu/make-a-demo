@@ -1160,7 +1160,7 @@ function readRoutes(value: unknown): AppMapRoute[] {
       headings: readStringArray(record, "headings", path),
       inputs: readStringArray(record, "inputs", path),
       links: readStringArray(record, "links", path),
-      path: readNonEmptyString(record, "path", path),
+      path: readLocalRoute(record, "path", path),
       ...(record.primaryNavigation === undefined
         ? {}
         : {
@@ -1278,7 +1278,7 @@ function readAction(value: unknown, index: number): ActionCatalogAction {
       ? {}
       : { preferredLocatorCandidateId }),
     risks: readStringArray(record, "risks", path),
-    route: readNonEmptyString(record, "route", path),
+    route: readLocalRoute(record, "route", path),
     ...(record.scrollPosition === undefined
       ? {}
       : {
@@ -1330,7 +1330,7 @@ function readLocatorCandidates(
             }),
         verification: {
           matchCount: 1 as const,
-          route: readNonEmptyString(verification, "route", verificationPath),
+          route: readLocalRoute(verification, "route", verificationPath),
           ...(verification.targetHref === undefined
             ? {}
             : {
@@ -1548,6 +1548,32 @@ function readNonEmptyString(
     throw new Error(`${path} must be a non-empty string`);
   }
   return value;
+}
+
+/**
+ * Reads an observed app route. Routes become synthesized navigation, so they
+ * must resolve back to the app's own origin; a bare string would let an
+ * off-origin or authority-bearing value reach the compiled capture script.
+ */
+function readLocalRoute(
+  record: Record<string, unknown>,
+  key: string,
+  parentPath?: string,
+): string {
+  const path = parentPath ? `${parentPath}.${key}` : key;
+  const route = readNonEmptyString(record, key, parentPath);
+  const probeOrigin = "http://makeademo.invalid";
+  try {
+    if (
+      !/^[/#?]/.test(route) ||
+      new URL(route, `${probeOrigin}/`).origin !== probeOrigin
+    ) {
+      throw new Error(`${path} must be a local app route`);
+    }
+  } catch {
+    throw new Error(`${path} must be a local app route`);
+  }
+  return route;
 }
 
 function readRepoRelativePath(

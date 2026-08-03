@@ -81,6 +81,36 @@ describe("Browser Action Plan", () => {
     );
   });
 
+  it("rejects every path that resolves off the app's own origin", () => {
+    for (const path of [
+      "https://example.com",
+      "//evil.com",
+      "/\\evil.com",
+      "/\t/evil.com",
+      "\\\\evil.com",
+      "/\\/evil.com",
+    ]) {
+      expect(() =>
+        readBrowserActions(
+          [{ id: "leave-app", path, type: "goto" }],
+          "actions",
+        ),
+      ).toThrow("actions[0].path must be a local app path");
+      expect(() =>
+        readBrowserActions(
+          [{ id: "assert-away", path, type: "assert-url" }],
+          "actions",
+        ),
+      ).toThrow("actions[0].path must be a local app path");
+    }
+
+    for (const path of ["/dashboard", "/a/b?c=1#d", "#section", "?tab=two"]) {
+      expect(() =>
+        readBrowserActions([{ id: "stay", path, type: "goto" }], "actions"),
+      ).not.toThrow();
+    }
+  });
+
   it("rejects unsafe navigation and unknown action properties", () => {
     expect(() =>
       readBrowserActions(

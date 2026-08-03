@@ -532,9 +532,23 @@ function readActionType(value: unknown, path: string): BrowserActionType {
   return type as BrowserActionType;
 }
 
+/**
+ * Accepts only paths that resolve back to the app's own origin. A shape test
+ * alone is not enough: WHATWG URL parsing treats backslashes and control
+ * characters as authority separators, so `/\evil.com` reads as a local path
+ * and still navigates off-origin once resolved against the base URL.
+ */
 function readLocalPath(value: unknown, path: string): string {
   const route = readString(value, path);
   if (!localAppPathPattern.test(route)) {
+    throw new Error(`${path} must be a local app path`);
+  }
+  const probeOrigin = "http://makeademo.invalid";
+  try {
+    if (new URL(route, `${probeOrigin}/`).origin !== probeOrigin) {
+      throw new Error(`${path} must be a local app path`);
+    }
+  } catch {
     throw new Error(`${path} must be a local app path`);
   }
   return route;
