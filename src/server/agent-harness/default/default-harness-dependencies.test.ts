@@ -472,6 +472,36 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
   });
 
+  it("persists each failed flow-planning attempt with its validation error", async () => {
+    // 2026-08-03 homer: root-causing the run ended at inference because no
+    // per-attempt flow-planning error survives to the run directory.
+    const invalid = {
+      ...flowSpec(),
+      features: flowSpec().features.map((feature) => ({
+        ...feature,
+        referencedActionIds: ["invented-action"],
+      })),
+    };
+
+    const { artifactJson } = await runFlowPlanningScenario({
+      candidates: [invalid, flowSpec()],
+    });
+
+    const attemptWrites = artifactJson.filter(({ path }) =>
+      path.includes("agent-artifact-attempts/flow-planning/"),
+    );
+    expect(attemptWrites).toHaveLength(1);
+    expect(attemptWrites[0]?.path).toContain("attempt-1.json");
+    expect(attemptWrites[0]?.value).toMatchObject({
+      attempt: 1,
+      route: "flow-planning",
+      status: "failed",
+    });
+    expect((attemptWrites[0]?.value as { error?: string }).error).toContain(
+      "invented-action",
+    );
+  });
+
   it("keeps retrying past a denial line when the flow-spec itself was readable", async () => {
     // 2026-08-03 homer: the agent's canonical-path write was denied once but
     // the artifact still landed (and failed validation); the denial line must
@@ -4770,6 +4800,7 @@ async function runFlowPlanningScenario(input: {
   preparationManifest?: PreparationManifest;
 }) {
   let attempts = 0;
+  const artifactJson: Array<{ path: string; value: unknown }> = [];
   const commands: string[] = [];
   const models: string[] = [];
   const prompts: string[] = [];
@@ -4801,7 +4832,11 @@ async function runFlowPlanningScenario(input: {
     },
   };
   const harness = await createDefaultAgentHarnessDependencies({
-    artifactStore: { async writeJson() {} },
+    artifactStore: {
+      async writeJson(path, value) {
+        artifactJson.push({ path, value });
+      },
+    },
     ...(input.env === undefined ? {} : { env: input.env }),
     openCodeRunner: {
       async run(runInput) {
@@ -4834,7 +4869,15 @@ async function runFlowPlanningScenario(input: {
     preparationManifest: input.preparationManifest ?? preparationManifest(),
     repoProfile: repoProfile(),
   });
-  return { attempts, commands, models, prompts, result, textFiles };
+  return {
+    artifactJson,
+    attempts,
+    commands,
+    models,
+    prompts,
+    result,
+    textFiles,
+  };
 }
 
 function secretMountedDaytonaWorkspace(): AgentHarnessWorkspace {

@@ -749,6 +749,18 @@ export async function createDefaultAgentHarnessDependencies(
           }
         } else {
           artifactError = flowSpecResult.error;
+        }
+        await options.artifactStore.writeJson(
+          `${artifactPaths.agentArtifactAttempts}/flow-planning/attempt-${attempt}.json`,
+          {
+            attempt,
+            error: artifactError,
+            ...(opencodeSessionId === undefined ? {} : { opencodeSessionId }),
+            route: "flow-planning",
+            status: "failed",
+          },
+        );
+        if (!flowSpecResult.ok) {
           throwIfRequiredArtifactWriteWasDenied({
             artifactError,
             path: artifactPaths.flowSpec,
