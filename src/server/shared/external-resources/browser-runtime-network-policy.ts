@@ -19,6 +19,8 @@ export function createBrowserRuntimeNetworkPolicySource(input: {
       contentType: entry.contentType,
       headers: entry.headers,
       path: `${replayRoot}/${entry.relativePath}`,
+      sha256: entry.sha256,
+      sizeBytes: entry.sizeBytes,
       status: entry.status,
     };
     return entry.responseUrl === undefined
@@ -35,6 +37,27 @@ export function createBrowserRuntimeNetworkPolicySource(input: {
 
   return `const makeADemoAllowedRuntimeOrigin = new URL(baseUrl).origin;
 const makeADemoExternalResourceReplay = new Map(${JSON.stringify(replayEntries)});
+const makeADemoVerifiedBodies = new Map();
+
+/**
+ * Reads a cached body and proves it still matches the manifest before any
+ * replay. Submitted code shares the sandbox with the replay root, so bytes
+ * verified at upload time are not bytes trusted at request time.
+ */
+async function makeADemoReadVerifiedReplayBody(replay) {
+  const cached = makeADemoVerifiedBodies.get(replay.path);
+  if (cached !== undefined) return cached;
+  let body;
+  try {
+    body = await makeADemoReadReplayFile(replay.path);
+  } catch {
+    return undefined;
+  }
+  const digest = "sha256:" + makeADemoCreateHash("sha256").update(body).digest("hex");
+  if (body.byteLength !== replay.sizeBytes || digest !== replay.sha256) return undefined;
+  makeADemoVerifiedBodies.set(replay.path, body);
+  return body;
+}
 
 await context.route("**/*", async (route) => {
   const request = route.request();
@@ -64,38 +87,41 @@ await context.route("**/*", async (route) => {
       });
       return;
     }
-    const requestedRange = headers.range;
-    if (requestedRange && replay.status === 200) {
-      const body = await makeADemoReadReplayFile(replay.path);
-      const range = readMakeADemoByteRange(requestedRange, body.byteLength);
-      if (range === undefined) {
+    const body = await makeADemoReadVerifiedReplayBody(replay);
+    if (body !== undefined) {
+      const requestedRange = headers.range;
+      if (requestedRange && replay.status === 200) {
+        const range = readMakeADemoByteRange(requestedRange, body.byteLength);
+        if (range === undefined) {
+          await route.fulfill({
+            headers: { ...replay.headers, "accept-ranges": "bytes", "content-range": "bytes */" + body.byteLength, "x-content-type-options": "nosniff" },
+            status: 416,
+          });
+          return;
+        }
+        const partialBody = body.subarray(range.start, range.end + 1);
         await route.fulfill({
-          headers: { ...replay.headers, "accept-ranges": "bytes", "content-range": "bytes */" + body.byteLength },
-          status: 416,
+          body: partialBody,
+          contentType: replay.contentType,
+          headers: {
+            ...replay.headers,
+            "accept-ranges": "bytes",
+            "content-length": String(partialBody.byteLength),
+            "content-range": "bytes " + range.start + "-" + range.end + "/" + body.byteLength,
+            "x-content-type-options": "nosniff",
+          },
+          status: 206,
         });
         return;
       }
-      const partialBody = body.subarray(range.start, range.end + 1);
       await route.fulfill({
-        body: partialBody,
+        body,
         contentType: replay.contentType,
-        headers: {
-          ...replay.headers,
-          "accept-ranges": "bytes",
-          "content-length": String(partialBody.byteLength),
-          "content-range": "bytes " + range.start + "-" + range.end + "/" + body.byteLength,
-        },
-        status: 206,
+        headers: { ...replay.headers, "x-content-type-options": "nosniff" },
+        status: replay.status,
       });
       return;
     }
-    await route.fulfill({
-      contentType: replay.contentType,
-      headers: replay.headers,
-      path: replay.path,
-      status: replay.status,
-    });
-    return;
   }
   let initiatorRoute;
   try { initiatorRoute = request.frame().url(); } catch {}

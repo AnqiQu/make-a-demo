@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -68,15 +69,83 @@ describe("createBrowserRuntimeNetworkPolicySource", () => {
     expect(result.blockedNetworkAttempts).toHaveLength(7);
   });
 
+  it("refuses to replay bytes that no longer match the manifest digest", async () => {
+    const replayRoot = await mkdtemp(join(tmpdir(), "makeademo-replay-"));
+    directories.push(replayRoot);
+    const body = Buffer.from("original-logo");
+    const digest = createHash("sha256").update(body).digest("hex");
+    await mkdir(join(replayRoot, "resources"));
+    await writeFile(join(replayRoot, "resources", digest), "tampered-logo");
+    const { handle, result } = await policyHarness({
+      manifest: {
+        entries: [
+          {
+            contentType: "image/png",
+            headers: {},
+            relativePath: `resources/${digest}`,
+            sha256: `sha256:${digest}`,
+            sizeBytes: body.byteLength,
+            status: 200,
+            url: "https://assets.example.com/logo.png",
+          },
+        ],
+        version: "2026-07-15",
+      },
+      mode: "exploration",
+      replayRoot,
+    });
+
+    const tampered = fakeRoute("https://assets.example.com/logo.png");
+    await handle(tampered);
+
+    expect(tampered.fulfilled).toBeUndefined();
+    expect(tampered.aborted).toBe(true);
+    expect(result.blockedNetworkAttempts).toHaveLength(1);
+  });
+
+  it("marks replayed responses no-sniff so a cached type cannot be reinterpreted", async () => {
+    const replayRoot = await mkdtemp(join(tmpdir(), "makeademo-replay-"));
+    directories.push(replayRoot);
+    const body = Buffer.from("original-logo");
+    const digest = createHash("sha256").update(body).digest("hex");
+    await mkdir(join(replayRoot, "resources"));
+    await writeFile(join(replayRoot, "resources", digest), body);
+    const { handle } = await policyHarness({
+      manifest: {
+        entries: [
+          {
+            contentType: "image/png",
+            headers: {},
+            relativePath: `resources/${digest}`,
+            sha256: `sha256:${digest}`,
+            sizeBytes: body.byteLength,
+            status: 200,
+            url: "https://assets.example.com/logo.png",
+          },
+        ],
+        version: "2026-07-15",
+      },
+      mode: "exploration",
+      replayRoot,
+    });
+
+    const replayed = fakeRoute("https://assets.example.com/logo.png");
+    await handle(replayed);
+
+    expect(replayed.fulfilled).toMatchObject({
+      contentType: "image/png",
+      headers: { "x-content-type-options": "nosniff" },
+      status: 200,
+    });
+  });
+
   it("replays cached media byte ranges locally", async () => {
     const replayRoot = await mkdtemp(join(tmpdir(), "makeademo-replay-"));
     directories.push(replayRoot);
-    const digest = "0".repeat(64);
+    const mediaBody = Buffer.from("0123456789");
+    const digest = createHash("sha256").update(mediaBody).digest("hex");
     await mkdir(join(replayRoot, "resources"));
-    await writeFile(
-      join(replayRoot, "resources", digest),
-      Buffer.from("0123456789"),
-    );
+    await writeFile(join(replayRoot, "resources", digest), mediaBody);
     const { handle, result } = await policyHarness({
       manifest: {
         entries: [
@@ -116,7 +185,12 @@ describe("createBrowserRuntimeNetworkPolicySource", () => {
   });
 
   it("replays a cached redirect and final response entirely locally", async () => {
-    const digest = "0".repeat(64);
+    const replayRoot = await mkdtemp(join(tmpdir(), "makeademo-replay-"));
+    directories.push(replayRoot);
+    const themeBody = Buffer.from("body{color:red}");
+    const digest = createHash("sha256").update(themeBody).digest("hex");
+    await mkdir(join(replayRoot, "resources"));
+    await writeFile(join(replayRoot, "resources", digest), themeBody);
     const { handle, result } = await policyHarness({
       manifest: {
         entries: [
@@ -126,7 +200,7 @@ describe("createBrowserRuntimeNetworkPolicySource", () => {
             relativePath: `resources/${digest}`,
             responseUrl: "https://cdn.example.com/v2/theme.css",
             sha256: `sha256:${digest}`,
-            sizeBytes: 10,
+            sizeBytes: themeBody.byteLength,
             status: 200,
             url: "https://assets.example.com/theme.css",
           },
@@ -134,6 +208,7 @@ describe("createBrowserRuntimeNetworkPolicySource", () => {
         version: "2026-07-15",
       },
       mode: "exploration",
+      replayRoot,
     });
 
     const original = fakeRoute("https://assets.example.com/theme.css");
@@ -219,9 +294,16 @@ async function policyHarness(
     "baseUrl",
     "result",
     "makeADemoReadReplayFile",
+    "makeADemoCreateHash",
     createBrowserRuntimeNetworkPolicySource(input),
   );
-  await installPolicy(context, "http://127.0.0.1:3000", result, readFile);
+  await installPolicy(
+    context,
+    "http://127.0.0.1:3000",
+    result,
+    readFile,
+    createHash,
+  );
   if (routeHandler === undefined) throw new Error("Policy route was not set.");
   return { handle: routeHandler, result };
 }

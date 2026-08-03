@@ -59,6 +59,7 @@ function wrapActionBody(
   const sceneHoldMsById = JSON.stringify(input.sceneHoldMsById ?? {});
 
   return `import { chromium, expect } from "@playwright/test";
+import { createHash as makeADemoCreateHash } from "node:crypto";
 import { readFile as makeADemoReadReplayFile } from "node:fs/promises";
 import { setup, scene, step } from "./makeademo-capture-sdk.js";
 
@@ -104,6 +105,7 @@ function prepareValidationPlaywrightScript(
   const launchOptions = input.headed ? "{ headless: false }" : "";
 
   return `import { chromium, expect } from "@playwright/test";
+import { createHash as makeADemoCreateHash } from "node:crypto";
 import { readFile as makeADemoReadReplayFile } from "node:fs/promises";
 import { setup, scene, step } from "./makeademo-capture-sdk.js";
 

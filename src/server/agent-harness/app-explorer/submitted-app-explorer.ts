@@ -1512,6 +1512,7 @@ function createExplorerScript(
   );
   return `
 import { chromium } from "@playwright/test";
+import { createHash as makeADemoCreateHash } from "node:crypto";
 import { mkdir, readFile as makeADemoReadReplayFile, writeFile } from "node:fs/promises";
 
 const baseUrl = ${JSON.stringify(baseUrl)};

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -243,8 +244,7 @@ describe("prepareStylizedPlaywrightScript", () => {
                 contentType: "image/png",
                 headers: {},
                 relativePath: "resources/image",
-                sha256:
-                  "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                sha256: `sha256:${createHash("sha256").update(png).digest("hex")}`,
                 sizeBytes: png.byteLength,
                 status: 200,
                 url: "https://assets.example.com/product.png",
