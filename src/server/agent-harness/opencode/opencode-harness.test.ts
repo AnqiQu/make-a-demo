@@ -251,6 +251,8 @@ describe("OpenCode harness seam", () => {
       "**": "allow",
       "../.makeademo/**": "deny",
       "../.makeademo/preparation-manifest.json": "allow",
+      "/workspace/.makeademo/**": "deny",
+      "/workspace/.makeademo/preparation-manifest.json": "allow",
       "/workspace/repo/**": "allow",
     });
     expect(Object.keys(config.permission.edit)).toEqual([
@@ -258,8 +260,45 @@ describe("OpenCode harness seam", () => {
       "**",
       "/workspace/repo/**",
       "../.makeademo/**",
+      "/workspace/.makeademo/**",
       "../.makeademo/preparation-manifest.json",
+      "/workspace/.makeademo/preparation-manifest.json",
     ]);
+  });
+
+  it("authorizes artifact writes addressed absolutely as well as relatively", async () => {
+    // 2026-08-03 homer run: whether a legal flow-spec write survived depended
+    // on how the model spelled the path, because the table registered only
+    // workingDirectory-relative globs. Both spellings must resolve identically.
+    let configContent = "{}";
+    await new DefaultOpenCodeHarnessRunner().run({
+      availableTools: ["read", "write"],
+      configDir: "/tmp/makeademo/opencode",
+      model: "openai/gpt-5",
+      prompt: "Write the FlowSpec.",
+      stage: "flow-planning",
+      timeoutMs: 1000,
+      workingDirectory: "/workspace/repo",
+      workspace: {
+        async destroy() {},
+        async execute(_command, options) {
+          configContent = options?.env?.OPENCODE_CONFIG_CONTENT ?? "{}";
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+      },
+    });
+
+    const config = JSON.parse(configContent) as {
+      permission: { edit: Record<string, string> };
+    };
+    expect(config.permission.edit["../.makeademo/flow-spec.json"]).toBe(
+      "allow",
+    );
+    expect(config.permission.edit["/workspace/.makeademo/flow-spec.json"]).toBe(
+      "allow",
+    );
+    expect(config.permission.edit["../.makeademo/**"]).toBe("deny");
+    expect(config.permission.edit["/workspace/.makeademo/**"]).toBe("deny");
   });
 
   it("authorizes every stage artifact using OpenCode worktree-relative paths", async () => {

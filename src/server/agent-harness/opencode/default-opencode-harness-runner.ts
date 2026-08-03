@@ -112,12 +112,13 @@ function createStageEditPermissions(
   workingDirectory: string,
 ) {
   const artifactPaths = readStageArtifactPaths(stage);
-  const artifactDirectoryPattern = `${path.relative(
-    workingDirectory,
-    "/workspace/.makeademo",
-  )}/**`;
+  const artifactDirectory = "/workspace/.makeademo";
   const canMutateRepo =
     stage === "repo-preparation" || stage === "repo-preparation-repair";
+  // Every artifact rule is registered under both its workingDirectory-relative
+  // and absolute spelling: OpenCode matches globs against the path as the
+  // model wrote it, so a single-spelling table made legal writes fail
+  // nondeterministically (2026-08-03 homer flow-spec denial).
   return Object.fromEntries([
     ["*", "deny"],
     ...(canMutateRepo
@@ -126,10 +127,11 @@ function createStageEditPermissions(
           ["/workspace/repo/**", "allow"],
         ]
       : []),
-    [artifactDirectoryPattern, "deny"],
-    ...artifactPaths.map((artifactPath) => [
-      path.relative(workingDirectory, artifactPath),
-      "allow",
+    [`${path.relative(workingDirectory, artifactDirectory)}/**`, "deny"],
+    [`${artifactDirectory}/**`, "deny"],
+    ...artifactPaths.flatMap((artifactPath) => [
+      [path.relative(workingDirectory, artifactPath), "allow"],
+      [artifactPath, "allow"],
     ]),
   ]);
 }
