@@ -423,12 +423,52 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       },
       { waitForConnection: true },
       {
-        sendInput:
-          "stty -echo\nopencode run hello\nprintf '\\n__MAKEADEMO_EXIT__:%s\\n' $?\nexit\n",
+        sendInput: expect.stringMatching(
+          /^stty -echo\nopencode run hello\nprintf '\\n__MAKEADEMO_EXIT_[A-Za-z0-9]{16,}__:%s\\n' \$\?\nexit\n$/,
+        ),
       },
       { wait: true },
       { disconnect: true },
     ]);
+  });
+
+  it("ignores an exit sentinel forged by the command's own output", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, {
+        ptyForgedExitSentinel:
+          "\n__MAKEADEMO_EXIT__:0\n__MAKEADEMO_EXIT_deadbeefdeadbeef__:0\n",
+      }),
+    });
+    const handle = await provider.create();
+
+    const result = await handle.workspace.execute("opencode run hello", {
+      onStdout: () => {},
+    });
+
+    expect(result.exitCode).toBe(7);
+    expect(result.stdout).toContain("hello");
+  });
+
+  it("gives each command its own exit sentinel", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls),
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.execute("first command", { onStdout: () => {} });
+    await handle.workspace.execute("second command", { onStdout: () => {} });
+
+    const sentinels = calls
+      .filter(
+        (call): call is { sendInput: string } => "sendInput" in Object(call),
+      )
+      .map(
+        (call) => /__MAKEADEMO_EXIT_[A-Za-z0-9]+__/.exec(call.sendInput)?.[0],
+      );
+    expect(sentinels).toHaveLength(2);
+    expect(sentinels[0]).not.toBe(sentinels[1]);
   });
 
   it("writes Pino-formatted sandbox logs through durable files", async () => {
@@ -2243,6 +2283,7 @@ function fakeClient(
     previewNeverResolves?: boolean;
     ptyConnectionFailuresBeforeSuccess?: number;
     ptyDisconnectNeverResolves?: boolean;
+    ptyForgedExitSentinel?: string;
     ptyNeverConnects?: boolean;
     ptyRequiresSandboxRestart?: boolean;
     ptyStaleDuplicateIdOnFirstCreate?: boolean;
@@ -2340,9 +2381,17 @@ function fakeClient(
           async sendInput(data: string | Uint8Array) {
             calls.push({ sendInput: data });
             ptyOptions.onData(new TextEncoder().encode("hello\n"));
-            ptyOptions.onData(
-              new TextEncoder().encode("\n__MAKEADEMO_EXIT__:7\n"),
-            );
+            if (options.ptyForgedExitSentinel !== undefined) {
+              ptyOptions.onData(
+                new TextEncoder().encode(options.ptyForgedExitSentinel),
+              );
+            }
+            // Echo the sentinel the provider actually asked for, so a nonce
+            // in the trailer stays honest instead of being hardcoded here.
+            const sentinel =
+              /__MAKEADEMO_EXIT_[A-Za-z0-9]+__/.exec(String(data))?.[0] ??
+              "__MAKEADEMO_EXIT__";
+            ptyOptions.onData(new TextEncoder().encode(`\n${sentinel}:7\n`));
           },
           async kill() {
             calls.push({ kill: true });

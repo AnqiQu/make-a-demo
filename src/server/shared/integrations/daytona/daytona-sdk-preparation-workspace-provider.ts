@@ -471,6 +471,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
   ): Promise<AgentHarnessWorkspaceCommandResult> {
     const output: string[] = [];
     const decoder = new TextDecoder();
+    const exitSentinel = createExitSentinel();
     const inactivityDeadline = createCommandInactivityDeadline(
       options.inactivityTimeoutMs,
       (driftMs) => this.logHostClockDriftBestEffort(driftMs),
@@ -484,7 +485,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
         inactivityDeadline.touch();
         const chunk = decoder.decode(data);
         output.push(chunk);
-        const visibleChunk = removeExitMarker(chunk);
+        const visibleChunk = removeExitMarker(chunk, exitSentinel);
         if (visibleChunk.length > 0) {
           options.onStdout?.(visibleChunk);
         }
@@ -495,7 +496,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     const timeoutMs = options.timeoutMs ?? this.commandTimeoutMs;
     try {
       await pty.sendInput(
-        `stty -echo\n${command}\nprintf '\\n__MAKEADEMO_EXIT__:%s\\n' $?\nexit\n`,
+        `stty -echo\n${command}\nprintf '\\n${exitSentinel}:%s\\n' $?\nexit\n`,
       );
       inactivityDeadline.touch();
       const result = await withTimeout(
@@ -504,12 +505,13 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
         () => new AgentHarnessCommandTimeoutError(timeoutMs),
       );
       const stdout = output.join("");
-      const exitCode = readExitCode(stdout) ?? result.exitCode ?? 0;
+      const exitCode =
+        readExitCode(stdout, exitSentinel) ?? result.exitCode ?? 0;
 
       return {
         exitCode,
         stderr: result.error ?? "",
-        stdout: removeExitMarker(stdout),
+        stdout: removeExitMarker(stdout, exitSentinel),
       };
     } catch (error) {
       if (error instanceof AgentHarnessCommandTimeoutError) {
@@ -1181,6 +1183,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
   ): Promise<AgentHarnessWorkspaceCommandResult> {
     const output: string[] = [];
     const decoder = new TextDecoder();
+    const exitSentinel = createExitSentinel();
     const inactivityDeadline = createCommandInactivityDeadline(
       options.inactivityTimeoutMs,
       (driftMs) => this.logHostClockDriftBestEffort(driftMs),
@@ -1194,7 +1197,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
         inactivityDeadline.touch();
         const chunk = decoder.decode(data);
         output.push(chunk);
-        const visibleChunk = removeExitMarker(chunk);
+        const visibleChunk = removeExitMarker(chunk, exitSentinel);
         if (visibleChunk.length > 0) {
           options.onStdout?.(visibleChunk);
         }
@@ -1205,7 +1208,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     const timeoutMs = options.timeoutMs ?? this.commandTimeoutMs;
     try {
       await pty.sendInput(
-        `stty -echo\n${command}\nprintf '\n__MAKEADEMO_EXIT__:%s\n' $?\nexit\n`,
+        `stty -echo\n${command}\nprintf '\n${exitSentinel}:%s\n' $?\nexit\n`,
       );
       inactivityDeadline.touch();
       const result = await withTimeout(
@@ -1214,12 +1217,13 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
         () => new AgentHarnessCommandTimeoutError(timeoutMs),
       );
       const stdout = output.join("");
-      const exitCode = readExitCode(stdout) ?? result.exitCode ?? 0;
+      const exitCode =
+        readExitCode(stdout, exitSentinel) ?? result.exitCode ?? 0;
 
       return {
         exitCode,
         stderr: result.error ?? "",
-        stdout: removeExitMarker(stdout),
+        stdout: removeExitMarker(stdout, exitSentinel),
       };
     } catch (error) {
       if (error instanceof AgentHarnessCommandTimeoutError) {
@@ -1510,17 +1514,23 @@ function isDaytonaNotFoundError(error: unknown): boolean {
   );
 }
 
-function readExitCode(output: string): number | undefined {
-  const match = output.match(/__MAKEADEMO_EXIT__:(\d+)/);
-  if (match?.[1] === undefined) {
-    return undefined;
-  }
-
-  return Number(match[1]);
+/**
+ * Per-command exit sentinel. The nonce keeps submitted code from forging a
+ * trailer on stdout, and the sentinel is matched last-first so any earlier
+ * lookalike in the command's own output cannot win.
+ */
+function createExitSentinel(): string {
+  return `__MAKEADEMO_EXIT_${randomUUID().replaceAll("-", "")}__`;
 }
 
-function removeExitMarker(output: string): string {
-  return output.replace(/\n?__MAKEADEMO_EXIT__:\d+\n?/g, "");
+function readExitCode(output: string, sentinel: string): number | undefined {
+  const matches = [...output.matchAll(new RegExp(`${sentinel}:(\\d+)`, "g"))];
+  const last = matches.at(-1)?.[1];
+  return last === undefined ? undefined : Number(last);
+}
+
+function removeExitMarker(output: string, sentinel: string): string {
+  return output.replaceAll(new RegExp(`\\n?${sentinel}:\\d+\\n?`, "g"), "");
 }
 
 function readSandboxLogLevel(

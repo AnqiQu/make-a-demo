@@ -1735,7 +1735,7 @@ function appendTail(current: string, chunk: string, maxLength: number): string {
 // (optionally carrying the echoed command), a bare continuation prompt, or
 // the command exit marker.
 const ptyBootstrapLinePattern =
-  /^(?:[^@\s]+@[^\n#]*#.*|>\s*|__MAKEADEMO_EXIT__:\d+)$/;
+  /^(?:[^@\s]+@[^\n#]*#.*|>\s*|__MAKEADEMO_EXIT(?:_[A-Za-z0-9]+)?__:\d+)$/;
 
 function hasOnlyPtyBootstrapOutput(result: {
   stderr: string;

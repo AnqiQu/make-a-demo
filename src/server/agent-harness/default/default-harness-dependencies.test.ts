@@ -5163,6 +5163,7 @@ function ptyBootstrapNoise(): string {
     "\u001b[?2004l\r\u001b[?2004hroot@14ae8c70-2520:/workspace# ",
     "\u001b[?2004h> \u001b[?2004l",
     "\u001b[?2004h> \u001b[?2004l",
+    "__MAKEADEMO_EXIT_9f2c1d0a4b6e8f31__:1",
   ].join("\r\n");
 }
 
