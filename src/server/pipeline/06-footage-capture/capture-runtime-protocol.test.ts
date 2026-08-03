@@ -133,6 +133,39 @@ describe("Capture Runtime Protocol", () => {
     ).toThrow("nested step markers");
   });
 
+  it("rejects a Browser Action marker attributed to an undeclared Scene", () => {
+    const protocol = readCaptureRuntimeProtocol({
+      stderr: "",
+      stdout: [
+        '[makeademo:validation] script started {"baseUrl":"http://127.0.0.1:3000"}',
+        sceneMarker(10, "started", "scene-one"),
+        actionMarker(
+          12,
+          "started",
+          "scene-one",
+          "expect.toBeVisible(locator(main))",
+        ),
+        actionMarker(
+          14,
+          "succeeded",
+          "scene-one",
+          "expect.toBeVisible(locator(main))",
+        ),
+        actionMarker(16, "failed", "scene-typo", "click(locator(#submit))"),
+        sceneMarker(20, "succeeded", "scene-one"),
+        '[makeademo:validation] script succeeded {"title":"Demo"}',
+      ].join("\n"),
+    });
+
+    expect(() =>
+      readSuccessfulCaptureProtocol({
+        expectedStepIdsByScene: {},
+        protocol,
+        sceneIds: ["scene-one"],
+      }),
+    ).toThrow(/undeclared Scene scene-typo/);
+  });
+
   it("requires the compiled action IDs declared for each browser Scene", () => {
     const protocol = readCaptureRuntimeProtocol({
       stderr: "",

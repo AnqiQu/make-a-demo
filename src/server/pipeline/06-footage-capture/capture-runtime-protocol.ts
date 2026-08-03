@@ -284,8 +284,12 @@ export function readSuccessfulCaptureProtocol(input: {
 
     if (marker.kind === "action") {
       const isSetupAction = marker.sceneId === "setup";
+      // Dropping these would let a failed action hide behind a mistyped or
+      // fabricated Scene id, exactly as step and Scene markers already refuse.
       if (!isSetupAction && !declaredSceneIds.has(marker.sceneId)) {
-        continue;
+        throw violation(
+          `Capture script emitted a Browser Action marker for undeclared Scene ${marker.sceneId}.`,
+        );
       }
       if (
         (isSetupAction && activeScene !== undefined) ||
