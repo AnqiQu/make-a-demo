@@ -1416,6 +1416,32 @@ Recommendation: land N24 (recurring infrastructure misclassification) and N28
 before the next paid run; both failures today were spent on classes already in
 the ledger.
 
+**Landed (2026-08-03):** `a1438f1` (N28a — `createStageEditPermissions`
+registers every artifact allow rule and the `.makeademo` directory deny under
+both the workingDirectory-relative and absolute spelling, for every stage;
+prep's repo-mutation allows unchanged), `427a799` (N28b — the flow-planning and
+runtime-target-selection loops run `throwIfRequiredArtifactWriteWasDenied` only
+when the artifact was actually unreadable — a readable artifact that failed
+validation keeps its repairable error — and the thrown message now carries the
+matched denial line, redacted and bounded to 240 chars, plus the last artifact
+error; the four read-failure-only call sites gained the same evidence),
+`f889d70` (N28c — the flow-planning loop mirrors each failed attempt to
+`agent-artifact-attempts/flow-planning/attempt-N.json` with its validation
+error, written before the denial throw so the evidence survives it),
+`d2008ee` (N24a — a nonzero agent exit whose output is only PTY bootstrap
+noise — ANSI escapes, `root@…#` prompt echo, bare `>` continuations — gets one
+spaced relaunch (30s default, `agentLaunchRetryDelayMs` option) and then
+surfaces as `AgentHarnessAgentLaunchError`, a new
+`isAgentHarnessInfrastructureError` member, instead of burning artifact
+attempts; timeout results keep their own semantics; nonzero exits with real
+output stay on the artifact path), and `29878ea` (N24b — the agent image
+installs opencode pinned to 1.17.19 — the workstation-verified version —
+recorded in `tools-lock.json`, and `verify-daytona-image.mts` now hard-fails if
+`opencode --version` cannot run in the snapshot and warns when its version
+drifts from the pin). Note: the pin takes effect on the next snapshot rebuild;
+the current frozen snapshot is unchanged, which is why the verifier warns
+rather than fails on version drift.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
