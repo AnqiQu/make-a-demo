@@ -1471,6 +1471,49 @@ describe("createDefaultAgentHarnessDependencies", () => {
     ).rejects.toBe(timeout);
   });
 
+  it("tells the retry after a timed-out repair that the workspace may hold unfinished edits", async () => {
+    // 2026-08-03 incident: the retry after a killed repair rubber-stamped the
+    // dead attempt's half-finished workspace edits in 57s and lost the budget
+    // to a fidelity veto. The retry prompt must disclose the inherited state.
+    const workspace = repairableRepoPreparationWorkspace();
+    workspace.writePreparationManifest();
+    const prompts: string[] = [];
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(input) {
+          prompts.push(input.prompt);
+          if (prompts.length === 1) {
+            throw new AgentHarnessCommandTimeoutError(300_000, "inactivity");
+          }
+          return { exitCode: 0, stderr: "", stdout: "repaired" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const repaired = await harness.dependencies.repairPreparation?.({
+      demoBrief: { keyProductFeatures: ["dashboard"] },
+      failureReport: {
+        ...validationReport("app-exploration", "failed"),
+        failureClassification: "requested feature not observable",
+      },
+      normalizedSupportingDocuments: undefined,
+      preparationManifest: preparationManifest(),
+      repoProfile: repoProfile(),
+      repoSourcePaths: ["package.json", "src/App.tsx"],
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(repaired?.manifest).toBeDefined();
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).not.toContain("unfinished edits");
+    expect(prompts[1]).toContain("killed mid-work");
+    expect(prompts[1]).toContain("unfinished edits");
+  });
+
   it("preserves the initial timeout when its repair cannot restart the sandbox", async () => {
     const workspace = repairableRepoPreparationWorkspace();
     const timeout = new AgentHarnessCommandTimeoutError(300_000, "inactivity");

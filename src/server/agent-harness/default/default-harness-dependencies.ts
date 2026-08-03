@@ -1095,9 +1095,11 @@ export async function createDefaultAgentHarnessDependencies(
           }
           timeoutRetryUsed = true;
           opencodeSessionId = undefined;
-          artifactError = manifestResult.ok
-            ? result.timeoutError.message
-            : manifestResult.error;
+          artifactError = `${
+            manifestResult.ok
+              ? result.timeoutError.message
+              : manifestResult.error
+          } The previous repair attempt was killed mid-work; the workspace may contain its unfinished edits — review them against the failure report before submitting.`;
           continue;
         }
         if (manifestResult.ok) {
