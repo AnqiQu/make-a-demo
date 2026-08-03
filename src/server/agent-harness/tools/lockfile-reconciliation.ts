@@ -1,3 +1,5 @@
+import { readYarnInstallVariant } from "./dependency-install-gate";
+
 export type LockfileReconciliationInput = {
   installCommand: string;
   stderr: string;
@@ -33,7 +35,13 @@ export function createLockfileReconciliationCommand(
     case "bun":
       return scoped("bun install --lockfile-only --ignore-scripts");
     case "yarn":
-      return `${install.corepack}yarn install --ignore-scripts`;
+      return scoped(
+        `${install.corepack}yarn install ${
+          readYarnInstallVariant(installCommand) === "berry"
+            ? "--mode=update-lockfile"
+            : "--ignore-scripts"
+        }`,
+      );
   }
 }
 

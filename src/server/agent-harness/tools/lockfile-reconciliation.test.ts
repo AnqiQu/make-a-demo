@@ -37,7 +37,7 @@ describe("lockfile reconciliation", () => {
         stderr: "YN0028: The lockfile would have been modified",
         stdout: "",
       }),
-    ).toBe("yarn install --ignore-scripts");
+    ).toBe("yarn install --mode=update-lockfile");
     expect(
       planLockfileReconciliation({
         installCommand: "npm ci --no-audit",
@@ -45,6 +45,23 @@ describe("lockfile reconciliation", () => {
         stdout: "",
       }),
     ).toBeUndefined();
+  });
+
+  it("keeps yarn workspace scope and picks the flag the yarn variant accepts", () => {
+    expect(
+      planLockfileReconciliation({
+        installCommand: "corepack yarn install --immutable --filter=@acme/web",
+        stderr: "YN0028: The lockfile would have been modified",
+        stdout: "",
+      }),
+    ).toBe("corepack yarn install --mode=update-lockfile --filter=@acme/web");
+    expect(
+      planLockfileReconciliation({
+        installCommand: "yarn install --frozen-lockfile",
+        stderr: "error Lockfile would have been modified by this install",
+        stdout: "",
+      }),
+    ).toBe("yarn install --ignore-scripts");
   });
 
   it("does not rewrite a lockfile when dependency transport failed", () => {
