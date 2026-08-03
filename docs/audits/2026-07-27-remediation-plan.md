@@ -1330,6 +1330,24 @@ zero rows). If transactions gets fixed and invoicing's table stays empty, the
 run could pass with a hollow invoicing surface — N26c evidence only attaches to
 failing features. Revisit only if a hollow-invoicing video actually occurs.
 
+**Landed (2026-08-03):** `574b422` (N27a — `createCommandInactivityDeadline`
+tracks when each window was armed; a firing more than 30s past its window is a
+frozen-timer artifact, so it logs `host.clock.drift` naming the gap through the
+sandbox audit log and re-arms a full fresh window instead of killing — only an
+on-time expiry may kill; verified by a provider-seam test that jumps the wall
+clock 40 minutes mid-command and asserts the command survives the drifted
+firing, one drift event is logged, and the re-armed window still kills on
+time), `60b562b` (N27c — the repair loop's timeout-retry steering now appends
+"the previous repair attempt was killed mid-work; the workspace may contain its
+unfinished edits — review them against the failure report before submitting"),
+and `5bdee52` (N27b — the matrix runner spawns `caffeinate -i -w <pid>` on
+darwin, scoped to the run's lifetime, and `batteryPowerWarning` warns at start
+when `pmset -g batt` reports battery power — the one case no assertion can
+survive). Both timers stay honest by design: the overall command deadline still
+fires late-but-true after sleep (the sandbox really did consume that wall
+clock); only the inactivity claim — silence that was never measured — is
+re-armed.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
