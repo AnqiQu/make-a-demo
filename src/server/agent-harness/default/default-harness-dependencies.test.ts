@@ -11,6 +11,7 @@ import {
   AgentHarnessCommandTimeoutError,
   AgentHarnessSandboxUnavailableError,
   type AgentHarnessWorkspace,
+  isAgentHarnessInfrastructureError,
 } from "../daytona/workspace.interface";
 import type { OpenCodeHarnessRunner } from "../opencode/opencode-harness";
 import type {
@@ -1525,6 +1526,113 @@ describe("createDefaultAgentHarnessDependencies", () => {
         workspace,
       }),
     ).rejects.toBe(timeout);
+  });
+
+  it("classifies a zero-output agent exit as infrastructure after one spaced relaunch", async () => {
+    // 2026-08-01/03 Daytona PTY incidents: opencode exits 1 in ~4s emitting
+    // only PTY bootstrap echo. That must surface as an infrastructure failure
+    // after one relaunch, not burn artifact attempts as "did not produce
+    // valid required artifact".
+    const workspace = repairableRepoPreparationWorkspace();
+    let runs = 0;
+    const harness = await createDefaultAgentHarnessDependencies({
+      agentLaunchRetryDelayMs: 1,
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run() {
+          runs += 1;
+          return { exitCode: 1, stderr: "", stdout: ptyBootstrapNoise() };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const error: unknown = await harness.dependencies
+      .prepareRepo({
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        normalizedSupportingDocuments: undefined,
+        repoProfile: repoProfile(),
+        repoSourcePaths: ["package.json", "src/App.tsx"],
+        runPlan: runPlan(),
+        workspace,
+      })
+      .then(() => undefined)
+      .catch((thrown: unknown) => thrown);
+
+    expect(isAgentHarnessInfrastructureError(error)).toBe(true);
+    expect(String(error)).toMatch(/no OpenCode output/);
+    expect(runs).toBe(2);
+  });
+
+  it("recovers when the relaunch after a zero-output exit succeeds", async () => {
+    const workspace = repairableRepoPreparationWorkspace();
+    let runs = 0;
+    const harness = await createDefaultAgentHarnessDependencies({
+      agentLaunchRetryDelayMs: 1,
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run() {
+          runs += 1;
+          if (runs === 1) {
+            return { exitCode: 1, stderr: "", stdout: ptyBootstrapNoise() };
+          }
+          workspace.writePreparationManifest();
+          return { exitCode: 0, stderr: "", stdout: "prepared" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.prepareRepo({
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        normalizedSupportingDocuments: undefined,
+        repoProfile: repoProfile(),
+        repoSourcePaths: ["package.json", "src/App.tsx"],
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).resolves.toMatchObject({ manifest: expect.anything() });
+    expect(runs).toBe(2);
+  });
+
+  it("keeps nonzero exits that produced real output on the artifact path", async () => {
+    const workspace = repairableRepoPreparationWorkspace();
+    let runs = 0;
+    const harness = await createDefaultAgentHarnessDependencies({
+      agentLaunchRetryDelayMs: 1,
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run() {
+          runs += 1;
+          return {
+            exitCode: 1,
+            stderr: "Error: model not found",
+            stdout: ptyBootstrapNoise(),
+          };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const error: unknown = await harness.dependencies
+      .prepareRepo({
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        normalizedSupportingDocuments: undefined,
+        repoProfile: repoProfile(),
+        repoSourcePaths: ["package.json", "src/App.tsx"],
+        runPlan: runPlan(),
+        workspace,
+      })
+      .then(() => undefined)
+      .catch((thrown: unknown) => thrown);
+
+    expect(isAgentHarnessInfrastructureError(error)).toBe(false);
+    expect(String(error)).not.toMatch(/no OpenCode output/);
+    expect(runs).toBe(3);
   });
 
   it("tells the retry after a timed-out repair that the workspace may hold unfinished edits", async () => {
@@ -4957,6 +5065,18 @@ function repoSourceArchive(): Promise<RepoSourceArchive> {
     };
   })();
   return testRepoSourceArchive;
+}
+
+// The verbatim shape of the 2026-08-01/03 incidents: bracketed-paste toggles,
+// a visibly-echoed session bootstrap, and bare continuation prompts — not one
+// byte of OpenCode's own output.
+function ptyBootstrapNoise(): string {
+  return [
+    "\u001b[?2004hroot@14ae8c70-2520:/workspace# stty -echo",
+    "\u001b[?2004l\r\u001b[?2004hroot@14ae8c70-2520:/workspace# ",
+    "\u001b[?2004h> \u001b[?2004l",
+    "\u001b[?2004h> \u001b[?2004l",
+  ].join("\r\n");
 }
 
 function repairableRepoPreparationWorkspace(): AgentHarnessWorkspace & {

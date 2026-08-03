@@ -23,6 +23,26 @@ export class AgentHarnessCommandTimeoutError extends Error {
   }
 }
 
+/**
+ * Signals that an OpenCode agent command exited nonzero without emitting any
+ * output of its own — only PTY bootstrap echo. The agent runtime never spoke,
+ * so the failure belongs to the sandbox/PTY/runner infrastructure seam and
+ * must never be reported as an artifact-contract problem.
+ */
+export class AgentHarnessAgentLaunchError extends Error {
+  readonly attempts: number;
+  readonly exitCode: number;
+
+  constructor(input: { attempts: number; exitCode: number; stage: string }) {
+    super(
+      `${input.stage} agent runner exited ${input.exitCode} with no OpenCode output in ${input.attempts} launch attempt(s) — agent-runtime infrastructure failure.`,
+    );
+    this.name = "AgentHarnessAgentLaunchError";
+    this.attempts = input.attempts;
+    this.exitCode = input.exitCode;
+  }
+}
+
 /** Signals that a Daytona sandbox stayed unavailable after one bounded restart. */
 export class AgentHarnessSandboxUnavailableError extends Error {
   readonly sandboxId: string;
@@ -42,10 +62,12 @@ export class AgentHarnessSandboxUnavailableError extends Error {
 export function isAgentHarnessInfrastructureError(
   error: unknown,
 ): error is
+  | AgentHarnessAgentLaunchError
   | AgentHarnessArtifactTransferError
   | AgentHarnessCommandTimeoutError
   | AgentHarnessSandboxUnavailableError {
   return (
+    error instanceof AgentHarnessAgentLaunchError ||
     error instanceof AgentHarnessArtifactTransferError ||
     error instanceof AgentHarnessCommandTimeoutError ||
     error instanceof AgentHarnessSandboxUnavailableError

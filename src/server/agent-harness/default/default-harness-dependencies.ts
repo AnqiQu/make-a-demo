@@ -36,6 +36,7 @@ import {
 import { downloadSubmittedCodeArchive } from "../daytona/submitted-code-artifact-archive";
 import { uploadSubmittedCodeExternalResourceCache } from "../daytona/submitted-code-external-resource-cache";
 import {
+  AgentHarnessAgentLaunchError,
   AgentHarnessCommandTimeoutError,
   type AgentHarnessSubmittedCodeAppStartInput,
   type AgentHarnessSubmittedCodeAppStatus,
@@ -128,6 +129,8 @@ import {
 } from "./retry-policy";
 
 export type DefaultHarnessDependenciesOptions = {
+  /** Spacing before the single relaunch after a zero-output agent exit; default 30s. */
+  agentLaunchRetryDelayMs?: number;
   artifactStore: NonNullable<AgentHarnessPipelineDependencies["artifactStore"]>;
   env?: Record<string, string | undefined>;
   externalResourceFetcher?: ExternalResourceFetcher;
@@ -238,15 +241,33 @@ export async function createDefaultAgentHarnessDependencies(
   const trustedStaticImageAssetIds = Object.keys(
     options.staticImageAssets ?? {},
   ).sort();
-  const runOpenCode = (input: OpenCodeHarnessRunInput) =>
-    runLoggedOpenCode({
-      input: {
-        inactivityTimeoutMs: openCodeInactivityTimeoutMs,
-        ...input,
-      },
-      logger: options.logger,
-      openCodeRunner,
-    });
+  const agentLaunchRetryDelayMs = options.agentLaunchRetryDelayMs ?? 30_000;
+  const runOpenCode = async (input: OpenCodeHarnessRunInput) => {
+    const runOnce = () =>
+      runLoggedOpenCode({
+        input: {
+          inactivityTimeoutMs: openCodeInactivityTimeoutMs,
+          ...input,
+        },
+        logger: options.logger,
+        openCodeRunner,
+      });
+    let result = await runOnce();
+    if (isAgentLaunchFailure(result)) {
+      // The 2026-08-01/03 Daytona PTY incidents sometimes cleared on their
+      // own; give the runner one spaced relaunch before declaring the seam.
+      await wait(agentLaunchRetryDelayMs);
+      result = await runOnce();
+      if (isAgentLaunchFailure(result)) {
+        throw new AgentHarnessAgentLaunchError({
+          attempts: 2,
+          exitCode: result.exitCode,
+          stage: input.stage,
+        });
+      }
+    }
+    return result;
+  };
   const ensureRepoMaterialized = async (
     repoProfile: RepoProfile,
     workspace: AgentHarnessWorkspace,
@@ -1708,6 +1729,38 @@ async function runLoggedOpenCode(input: {
 
 function appendTail(current: string, chunk: string, maxLength: number): string {
   return `${current}${chunk}`.slice(-maxLength);
+}
+
+// A PTY line that is shell bootstrap rather than OpenCode output: a prompt
+// (optionally carrying the echoed command), a bare continuation prompt, or
+// the command exit marker.
+const ptyBootstrapLinePattern =
+  /^(?:[^@\s]+@[^\n#]*#.*|>\s*|__MAKEADEMO_EXIT__:\d+)$/;
+
+function hasOnlyPtyBootstrapOutput(result: {
+  stderr: string;
+  stdout: string;
+}): boolean {
+  return (
+    `${result.stderr}\n${result.stdout}`
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping terminal ANSI escapes requires matching the ESC byte
+      .replaceAll(/\u001b\[[0-9;?]*[A-Za-z]/g, "")
+      .split(/\r\n|\n|\r/)
+      .every((line) => {
+        const trimmed = line.trim();
+        return trimmed.length === 0 || ptyBootstrapLinePattern.test(trimmed);
+      })
+  );
+}
+
+// Timeouts keep their own kill semantics; only a plain nonzero exit that
+// never emitted OpenCode output is a launch failure.
+function isAgentLaunchFailure(result: OpenCodeHarnessRunResult): boolean {
+  return (
+    result.exitCode !== 0 &&
+    result.timeoutError === undefined &&
+    hasOnlyPtyBootstrapOutput(result)
+  );
 }
 
 function isAgentHarnessCommandTimeout(error: unknown): error is Error {
