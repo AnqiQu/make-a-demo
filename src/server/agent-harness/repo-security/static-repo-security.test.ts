@@ -126,6 +126,66 @@ describe("screenStaticRepoSecurity", () => {
     );
   });
 
+  it("anchors destructive-script detection to root deletion and real mkfs invocations", () => {
+    const legitimate = screenStaticRepoSecurity({
+      files: [
+        {
+          path: "package.json",
+          text: JSON.stringify({
+            scripts: {
+              clean: "rm -rf /tmp/makeademo-cache && rm -rf ./dist",
+              docs: "node scripts/mkfsdocs.js",
+            },
+          }),
+        },
+        { path: "bun.lock", text: "" },
+      ],
+      repoStats: { fileCount: 2, sizeBytes: 200 },
+    });
+
+    expect(legitimate).toMatchObject({ rejections: [], status: "passed" });
+
+    const destructive = screenStaticRepoSecurity({
+      files: [
+        {
+          path: "package.json",
+          text: JSON.stringify({
+            scripts: { format: "mkfs.ext4 /dev/sda1", nuke: "rm -fr /" },
+          }),
+        },
+        { path: "bun.lock", text: "" },
+      ],
+      repoStats: { fileCount: 2, sizeBytes: 200 },
+    });
+
+    expect(destructive.status).toBe("rejected");
+    expect(destructive.rejections).toEqual(
+      expect.arrayContaining([
+        "package script format contains a destructive command",
+        "package script nuke contains a destructive command",
+      ]),
+    );
+  });
+
+  it("rejects an unscanned package manifest and surfaces other unscanned files", () => {
+    const result = screenStaticRepoSecurity({
+      files: [
+        { path: "package.json", scanned: false },
+        { path: "docs/NOTES.md", scanned: false },
+        { path: "bun.lock", text: "" },
+      ],
+      repoStats: { fileCount: 3, sizeBytes: 3_000_000 },
+    });
+
+    expect(result.status).toBe("rejected");
+    expect(result.rejections).toContain(
+      "package.json is too large to screen for destructive scripts",
+    );
+    expect(result.warnings).toContain(
+      "repo file docs/NOTES.md was too large to screen for secrets",
+    );
+  });
+
   it("only treats real environment filenames as secrets and matches template suffixes case-insensitively", () => {
     const result = screenStaticRepoSecurity({
       files: [
@@ -235,14 +295,16 @@ describe("screenStaticRepoSecurity", () => {
         { path: "src/current.ts", symlinkTarget: "./versions/current.ts" },
         { path: "src/environment", symlinkTarget: "/proc/self/environ" },
         { path: "src/parent", symlinkTarget: "../../outside" },
+        { path: "src/nested/sibling", symlinkTarget: "../lib/util.ts" },
       ],
-      repoStats: { fileCount: 5, sizeBytes: 500 },
+      repoStats: { fileCount: 6, sizeBytes: 600 },
     });
 
     expect(result.rejections).toEqual(
       expect.arrayContaining([
         "repo symlink src/environment escapes the repository",
         "repo symlink src/parent escapes the repository",
+        "repo symlink src/nested/sibling escapes the repository",
       ]),
     );
     expect(result.rejections).not.toContain(

@@ -10,6 +10,8 @@ import type { SecretQuarantineManifest } from "./secret-quarantine";
 
 type StaticRepoSecurityFile = {
   path: string;
+  /** False when the snapshot could not read the file for text screening. */
+  scanned?: boolean;
   symlinkTarget?: string;
   text?: string;
 };
@@ -85,6 +87,18 @@ export function screenStaticRepoSecurity(
         rejections,
         warnings,
       );
+    } else if (packageJson.scanned === false) {
+      rejections.push(
+        `${packageJson.path} is too large to screen for destructive scripts`,
+      );
+    }
+  }
+
+  for (const file of files) {
+    if (file.scanned === false && !file.path.endsWith("package.json")) {
+      warnings.push(
+        `repo file ${file.path} was too large to screen for secrets`,
+      );
     }
   }
 
@@ -154,6 +168,11 @@ function inspectFileSecurity(
 
 function symlinkEscapesRepo(path: string, target: string): boolean {
   if (posix.isAbsolute(target)) return true;
+  // Any `..` component is rejected outright: normalization cannot prove an
+  // upward hop stays inside the repo once other symlinks are in the chain.
+  if (target.split(/[\\/]/).some((component) => component === "..")) {
+    return true;
+  }
   const resolvedTarget = posix.normalize(
     posix.join(posix.dirname(path), target),
   );
@@ -213,8 +232,8 @@ function inspectScripts(
     }
 
     if (
-      /rm\s+-rf\s+\//.test(command) ||
-      /mkfs|forkbomb|crypto.?miner/i.test(command)
+      /rm\s+-(?:rf|fr)\s+\/(?:\s|$)/.test(command) ||
+      /\bmkfs\.\w+|forkbomb|crypto.?miner/i.test(command)
     ) {
       const location =
         packageJsonPath === "package.json" ? "" : ` in ${packageJsonPath}`;
