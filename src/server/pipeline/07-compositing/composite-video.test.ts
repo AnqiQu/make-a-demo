@@ -165,6 +165,55 @@ describe("compositeVideoFromScript", () => {
     ).resolves.toBeTruthy();
   });
 
+  it("rejects a static-image Scene whose asset id names an inherited object property", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "makeademo-composite-test-"),
+    );
+    const captureManifestPath = join(workspace, "capture-manifest.json");
+    await writeFile(
+      captureManifestPath,
+      JSON.stringify(
+        makeCaptureManifest({
+          manifestPath: captureManifestPath,
+          runDirectory: workspace,
+          scenes: [],
+        }),
+      ),
+    );
+
+    await expect(
+      compositeVideoFromScript({
+        captureManifestPath,
+        outputRoot: join(workspace, "renders"),
+        renderer: {
+          async renderVideo(input) {
+            await writeFile(input.outputPath, "rendered mp4");
+          },
+        },
+        runId: "prototype-asset",
+        scriptPackage: {
+          demoPlaywrightScript:
+            "await scene('prototype', async ({ page, expect }) => { await expect(page.locator('main')).toBeVisible(); });",
+          format: "16:9",
+          presentation: { textOverlays: [], transitions: [] },
+          scenes: [
+            {
+              alt: "Prototype pollution probe",
+              assetId: "constructor",
+              durationSeconds: 1,
+              id: "prototype",
+              type: "static-image",
+            },
+          ],
+          scriptId: "script-001",
+          title: "Generated Demo",
+          version: 1,
+        },
+        staticImageAssets: {},
+      }),
+    ).rejects.toThrow(/unknown trusted asset constructor/);
+  });
+
   it("stages Demo Script scenes using captured clip durations and presentation metadata", async () => {
     const workspace = await mkdtemp(
       join(tmpdir(), "makeademo-composite-test-"),

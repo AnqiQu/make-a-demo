@@ -498,7 +498,11 @@ async function stageScenes(input: {
       }
 
       if (scene.type === "static-image") {
-        const asset = input.staticImageAssets[scene.assetId];
+        // Own-property only: a valid asset id like "constructor" would
+        // otherwise resolve to an inherited Object member and pass the guard.
+        const asset = Object.hasOwn(input.staticImageAssets, scene.assetId)
+          ? input.staticImageAssets[scene.assetId]
+          : undefined;
         if (!asset) {
           throw new Error(
             `static-image Scene ${scene.id} references unknown trusted asset ${scene.assetId}`,
@@ -754,7 +758,7 @@ function readPositiveNumber(
 function isApprovedFontFamily(
   fontFamily: string,
 ): fontFamily is ApprovedFontFamily {
-  return fontFamily in fontAssetFiles;
+  return Object.hasOwn(fontAssetFiles, fontFamily);
 }
 
 function secondsToFrames(seconds: number) {
