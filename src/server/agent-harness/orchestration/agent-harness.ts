@@ -76,10 +76,22 @@ type AgentHarnessArtifactStore = {
 
 export type AgentHarnessPipelineDependencies = {
   artifactStore?: AgentHarnessArtifactStore;
-  captureWorkspaceDiff?: (input: {
+  /**
+   * Fingerprints every workspace path Script Writing may have touched. The
+   * pipeline refuses to run without it: the script-writing read-only boundary
+   * is enforced from its result, and a missing capture would silently skip
+   * that enforcement.
+   */
+  captureWorkspaceDiff: (input: {
     workspace: AgentHarnessWorkspace;
   }) => Promise<string[]>;
-  capturePreparationWorkspaceDiff?: (input: {
+  /**
+   * Captures the preparation workspace's diff against screened sources. The
+   * pipeline refuses to run without it: preparation-fidelity validation runs
+   * on its result, and a missing capture would silently skip the entire
+   * fidelity stage.
+   */
+  capturePreparationWorkspaceDiff: (input: {
     workspace: AgentHarnessWorkspace;
   }) => Promise<PreparationWorkspaceDiff>;
   createWorkspace(input: {
@@ -261,6 +273,16 @@ export async function runAgentHarnessPipeline(
   dependencies: AgentHarnessPipelineDependencies,
   options: AgentHarnessPipelineOptions = {},
 ): Promise<AgentHarnessPipelineResult> {
+  for (const requiredCapture of [
+    "capturePreparationWorkspaceDiff",
+    "captureWorkspaceDiff",
+  ] as const) {
+    if (typeof dependencies[requiredCapture] !== "function") {
+      throw new Error(
+        `Agent harness dependencies must provide ${requiredCapture}; workspace-diff enforcement is not optional.`,
+      );
+    }
+  }
   const stageStatuses: Record<
     string,
     | PipelineRunManifest["finalStatus"]
@@ -282,22 +304,18 @@ export async function runAgentHarnessPipeline(
   let preparationWorkspaceDiffCaptureAttempted = false;
   let preparationWorkspaceMutated = false;
   let workspace: AgentHarnessWorkspace | undefined;
-  const capturePreparationWorkspaceDiff = async (): Promise<
-    PreparationWorkspaceDiff | undefined
-  > => {
-    preparationWorkspaceDiffCaptureAttempted = true;
-    if (dependencies.capturePreparationWorkspaceDiff === undefined) {
-      return undefined;
-    }
-    preparationWorkspaceDiff = await writeArtifact(
-      dependencies,
-      artifactPaths.preparationWorkspaceDiff,
-      await dependencies.capturePreparationWorkspaceDiff({
-        workspace: requireWorkspace(workspace),
-      }),
-    );
-    return preparationWorkspaceDiff;
-  };
+  const capturePreparationWorkspaceDiff =
+    async (): Promise<PreparationWorkspaceDiff> => {
+      preparationWorkspaceDiffCaptureAttempted = true;
+      preparationWorkspaceDiff = await writeArtifact(
+        dependencies,
+        artifactPaths.preparationWorkspaceDiff,
+        await dependencies.capturePreparationWorkspaceDiff({
+          workspace: requireWorkspace(workspace),
+        }),
+      );
+      return preparationWorkspaceDiff;
+    };
 
   const security = runStage(
     "static-repo-security-screen",
@@ -613,14 +631,11 @@ export async function runAgentHarnessPipeline(
       for (;;) {
         const staticRepairAttempts =
           scriptRepairAttemptsByPhase["static-script-contract-validation"] ?? 0;
-        const boundaryViolations =
-          dependencies.captureWorkspaceDiff === undefined
-            ? []
-            : readDisallowedScriptWritingChanges(
-                await dependencies.captureWorkspaceDiff({
-                  workspace: requireWorkspace(workspace),
-                }),
-              );
+        const boundaryViolations = readDisallowedScriptWritingChanges(
+          await dependencies.captureWorkspaceDiff({
+            workspace: requireWorkspace(workspace),
+          }),
+        );
         const staticContractValidation = await runValidationStage(
           "static-script-contract-validation",
           dependencies,
@@ -1304,9 +1319,7 @@ type PreparationRepairBudget = {
 
 async function ensureValidPreparation(input: {
   acceptedPreparation?: AcceptedPreparationCandidate;
-  capturePreparationWorkspaceDiff: () => Promise<
-    PreparationWorkspaceDiff | undefined
-  >;
+  capturePreparationWorkspaceDiff: () => Promise<PreparationWorkspaceDiff>;
   dependencies: AgentHarnessPipelineDependencies;
   initialFailure?: ValidationReport;
   input: AgentHarnessPipelineInput;
@@ -1434,103 +1447,101 @@ async function ensureValidPreparation(input: {
     reconcileLockfile = false;
     const workspaceDiff = await input.capturePreparationWorkspaceDiff();
     lastWorkspaceDiff = workspaceDiff;
-    if (workspaceDiff !== undefined) {
-      const fidelityAttempt =
-        (input.validationAttemptCounts["preparation-fidelity"] ?? 0) + 1;
-      await writeArtifact(
-        input.dependencies,
-        validationAttemptArtifactPath(
-          "preparation-fidelity",
-          fidelityAttempt,
-          "-workspace-diff",
-        ),
-        {
-          ...workspaceDiff,
-          ...(acceptedPreparation === undefined
-            ? {}
-            : {
-                acceptedBaselinePatchSha256:
-                  acceptedPreparation.workspaceDiff.patchSha256,
-              }),
-          repair:
-            repairBaseline === undefined
-              ? "none"
-              : dependencyRepair
-                ? "dependency"
-                : "runtime",
-        },
-      );
-      const repairDelta =
-        repairBaseline === undefined
-          ? undefined
-          : readDependencyRepairDelta(repairBaseline, workspaceDiff);
-      const unchangedDependencyRepair =
-        dependencyRepair && repairDelta?.changedPaths.length === 0;
-      reconcileLockfile = repairDelta?.dependencyInputsChanged ?? false;
-      const fidelityValidation = await runValidationStage(
+    const fidelityAttempt =
+      (input.validationAttemptCounts["preparation-fidelity"] ?? 0) + 1;
+    await writeArtifact(
+      input.dependencies,
+      validationAttemptArtifactPath(
         "preparation-fidelity",
-        input.dependencies,
-        artifactPaths.preparationFidelity,
-        input.validationReports,
-        input.stageStatuses,
-        input.stageTimings,
-        async () =>
-          validatePreparationFidelity({
-            ...(repairBaseline === undefined
-              ? {}
-              : { dependencyRepair, repairBaseline }),
-            preparationManifest,
-            repoSourceFiles: new Map(
-              input.input.files.map((file) => [file.path, file.text] as const),
-            ),
-            workspaceDiff,
-          }),
-        input.validationAttemptCounts,
-        input.preparationRepairAttemptsByPhase["preparation-fidelity"] ?? 0,
-      );
-      dependencyRepair = false;
-      repairBaseline = undefined;
-      if (fidelityValidation.status === "failed") {
-        reconcileLockfile = false;
-        if (
-          acceptedPreparation !== undefined &&
-          activeRepairFailure !== undefined &&
-          input.dependencies.restorePreparationCandidate !== undefined
-        ) {
-          await input.dependencies.restorePreparationCandidate({
-            preparationManifest: acceptedPreparation.manifest,
-            repoProfile: input.repoProfile,
-            workspace: input.workspace,
-            workspaceDiff: acceptedPreparation.workspaceDiff,
-          });
-          preparationManifest = acceptedPreparation.manifest;
-          lastWorkspaceDiff = acceptedPreparation.workspaceDiff;
-          failure = appendRepairRejection(
-            activeRepairFailure,
-            fidelityValidation,
-            workspaceDiff.changedPaths,
-          );
-          activeRepairFailure = undefined;
-        } else {
-          failure = fidelityValidation;
-        }
-        continue;
-      }
-      if (unchangedDependencyRepair && activeRepairFailure !== undefined) {
-        failure = {
-          ...activeRepairFailure,
-          logsSummary: `${activeRepairFailure.logsSummary} Rejected repair: no package manifest or recognized package-manager configuration changed.`,
-          suggestedRepairHints: [
-            ...activeRepairFailure.suggestedRepairHints,
-            "Change the dependency metadata responsible for the reported install failure; do not rewrite the manifest or executable source.",
-          ],
-        };
+        fidelityAttempt,
+        "-workspace-diff",
+      ),
+      {
+        ...workspaceDiff,
+        ...(acceptedPreparation === undefined
+          ? {}
+          : {
+              acceptedBaselinePatchSha256:
+                acceptedPreparation.workspaceDiff.patchSha256,
+            }),
+        repair:
+          repairBaseline === undefined
+            ? "none"
+            : dependencyRepair
+              ? "dependency"
+              : "runtime",
+      },
+    );
+    const repairDelta =
+      repairBaseline === undefined
+        ? undefined
+        : readDependencyRepairDelta(repairBaseline, workspaceDiff);
+    const unchangedDependencyRepair =
+      dependencyRepair && repairDelta?.changedPaths.length === 0;
+    reconcileLockfile = repairDelta?.dependencyInputsChanged ?? false;
+    const fidelityValidation = await runValidationStage(
+      "preparation-fidelity",
+      input.dependencies,
+      artifactPaths.preparationFidelity,
+      input.validationReports,
+      input.stageStatuses,
+      input.stageTimings,
+      async () =>
+        validatePreparationFidelity({
+          ...(repairBaseline === undefined
+            ? {}
+            : { dependencyRepair, repairBaseline }),
+          preparationManifest,
+          repoSourceFiles: new Map(
+            input.input.files.map((file) => [file.path, file.text] as const),
+          ),
+          workspaceDiff,
+        }),
+      input.validationAttemptCounts,
+      input.preparationRepairAttemptsByPhase["preparation-fidelity"] ?? 0,
+    );
+    dependencyRepair = false;
+    repairBaseline = undefined;
+    if (fidelityValidation.status === "failed") {
+      reconcileLockfile = false;
+      if (
+        acceptedPreparation !== undefined &&
+        activeRepairFailure !== undefined &&
+        input.dependencies.restorePreparationCandidate !== undefined
+      ) {
+        await input.dependencies.restorePreparationCandidate({
+          preparationManifest: acceptedPreparation.manifest,
+          repoProfile: input.repoProfile,
+          workspace: input.workspace,
+          workspaceDiff: acceptedPreparation.workspaceDiff,
+        });
+        preparationManifest = acceptedPreparation.manifest;
+        lastWorkspaceDiff = acceptedPreparation.workspaceDiff;
+        failure = appendRepairRejection(
+          activeRepairFailure,
+          fidelityValidation,
+          workspaceDiff.changedPaths,
+        );
         activeRepairFailure = undefined;
-        continue;
+      } else {
+        failure = fidelityValidation;
       }
-      acceptedPreparation = { manifest: preparationManifest, workspaceDiff };
-      activeRepairFailure = undefined;
+      continue;
     }
+    if (unchangedDependencyRepair && activeRepairFailure !== undefined) {
+      failure = {
+        ...activeRepairFailure,
+        logsSummary: `${activeRepairFailure.logsSummary} Rejected repair: no package manifest or recognized package-manager configuration changed.`,
+        suggestedRepairHints: [
+          ...activeRepairFailure.suggestedRepairHints,
+          "Change the dependency metadata responsible for the reported install failure; do not rewrite the manifest or executable source.",
+        ],
+      };
+      activeRepairFailure = undefined;
+      continue;
+    }
+    acceptedPreparation = { manifest: preparationManifest, workspaceDiff };
+    activeRepairFailure = undefined;
 
     const preparationValidation = await runValidationStage(
       "preparation-preflight",
@@ -1555,20 +1566,18 @@ async function ensureValidPreparation(input: {
       preparationValidation.failureClassification === "install failure"
     ) {
       const postValidationDiff = await input.capturePreparationWorkspaceDiff();
-      if (postValidationDiff !== undefined) {
-        lastWorkspaceDiff = postValidationDiff;
-        if (
-          acceptedPreparation !== undefined &&
-          readDependencyRepairDelta(
-            acceptedPreparation.workspaceDiff,
-            postValidationDiff,
-          ).onlyLockfiles
-        ) {
-          acceptedPreparation = {
-            manifest: preparationManifest,
-            workspaceDiff: postValidationDiff,
-          };
-        }
+      lastWorkspaceDiff = postValidationDiff;
+      if (
+        acceptedPreparation !== undefined &&
+        readDependencyRepairDelta(
+          acceptedPreparation.workspaceDiff,
+          postValidationDiff,
+        ).onlyLockfiles
+      ) {
+        acceptedPreparation = {
+          manifest: preparationManifest,
+          workspaceDiff: postValidationDiff,
+        };
       }
     }
     if (preparationValidation.status === "passed") {

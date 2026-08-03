@@ -5,9 +5,77 @@ import {
   AgentHarnessSandboxUnavailableError,
 } from "../daytona/workspace.interface";
 import { DEMO_SCRIPT_OUTPUT_PATH } from "../schemas/artifacts";
-import { runAgentHarnessPipeline } from "./agent-harness";
+import {
+  type AgentHarnessPipelineDependencies,
+  runAgentHarnessPipeline,
+} from "./agent-harness";
 
 describe("runAgentHarnessPipeline", () => {
+  it("refuses a dependency set that omits workspace-diff capture before any stage runs", async () => {
+    let workspaceCreations = 0;
+    const dependencies = {
+      async createWorkspace() {
+        workspaceCreations += 1;
+        return workspace();
+      },
+      async exploreApp() {
+        throw new Error("App Exploration must not run.");
+      },
+      async planFlow() {
+        throw new Error("Flow Planning must not run.");
+      },
+      async prepareRepo() {
+        throw new Error("Repo Preparation must not run.");
+      },
+      async resetCaptureRuntime() {
+        return report("capture-runtime-reset", "passed");
+      },
+      async synthesizeRunPlan() {
+        return runPlan();
+      },
+      async validateCapturePath() {
+        throw new Error("Capture Path Validation must not run.");
+      },
+      async validatePreparation() {
+        throw new Error("Preparation Preflight must not run.");
+      },
+      async validateScriptContract() {
+        throw new Error("Static Script Contract must not run.");
+      },
+      async writeScript() {
+        throw new Error("Script Writing must not run.");
+      },
+    };
+    const pipelineInput = {
+      demoBrief: { keyProductFeatures: ["dashboard"] },
+      files: [
+        { path: "package.json", text: "{}" },
+        { path: "src/page.tsx", text: "export default 1" },
+      ],
+      repoStats: { fileCount: 2, sizeBytes: 200 },
+      repoUrl: "https://github.com/example/app",
+      runId: "run_missing_diff_capture",
+    };
+
+    await expect(
+      runAgentHarnessPipeline(pipelineInput, {
+        ...dependencies,
+        async captureWorkspaceDiff() {
+          return [];
+        },
+      } as unknown as AgentHarnessPipelineDependencies),
+    ).rejects.toThrow(/capturePreparationWorkspaceDiff/);
+    await expect(
+      runAgentHarnessPipeline(pipelineInput, {
+        ...dependencies,
+        async capturePreparationWorkspaceDiff() {
+          return preparationWorkspaceDiff();
+        },
+      } as unknown as AgentHarnessPipelineDependencies),
+    ).rejects.toThrow(/captureWorkspaceDiff/);
+    expect(workspaceCreations).toBe(0);
+  });
+
   it("stops before planning or workspace creation when static security rejects the repository", async () => {
     const downstreamCalls: string[] = [];
 
@@ -23,6 +91,12 @@ describe("runAgentHarnessPipeline", () => {
         runId: "run_security_rejected",
       },
       {
+        async capturePreparationWorkspaceDiff() {
+          return preparationWorkspaceDiff();
+        },
+        async captureWorkspaceDiff() {
+          return [];
+        },
         artifactStore: {
           async writeJson() {
             return undefined;
@@ -105,6 +179,9 @@ describe("runAgentHarnessPipeline", () => {
         runId: "run_001",
       },
       {
+        async captureWorkspaceDiff() {
+          return [];
+        },
         artifactStore: {
           async writeJson(path, value) {
             artifacts[path] = value;
@@ -253,6 +330,9 @@ describe("runAgentHarnessPipeline", () => {
         runId: "run_002",
       },
       {
+        async capturePreparationWorkspaceDiff() {
+          return preparationWorkspaceDiff();
+        },
         async captureWorkspaceDiff() {
           diffChecks += 1;
           return diffChecks === 1 ? ["/workspace/src/App.tsx"] : [];
@@ -320,6 +400,12 @@ describe("runAgentHarnessPipeline", () => {
           runId: "run_003",
         },
         {
+          async capturePreparationWorkspaceDiff() {
+            return preparationWorkspaceDiff();
+          },
+          async captureWorkspaceDiff() {
+            return [];
+          },
           artifactStore: {
             async writeJson(path, value) {
               artifacts[path] = value;
@@ -400,6 +486,9 @@ describe("runAgentHarnessPipeline", () => {
           async capturePreparationWorkspaceDiff() {
             return preparationWorkspaceDiff();
           },
+          async captureWorkspaceDiff() {
+            return [];
+          },
           async createWorkspace() {
             return workspace();
           },
@@ -461,6 +550,9 @@ describe("runAgentHarnessPipeline", () => {
         {
           async capturePreparationWorkspaceDiff() {
             return preparationWorkspaceDiff();
+          },
+          async captureWorkspaceDiff() {
+            return [];
           },
           async createWorkspace() {
             return workspace();
@@ -625,6 +717,12 @@ describe("runAgentHarnessPipeline", () => {
           runId: "run_teardown_failure",
         },
         {
+          async capturePreparationWorkspaceDiff() {
+            return preparationWorkspaceDiff();
+          },
+          async captureWorkspaceDiff() {
+            return [];
+          },
           artifactStore: {
             async writeJson(path, value) {
               artifacts[path] = value;
@@ -703,6 +801,12 @@ describe("runAgentHarnessPipeline", () => {
         runId: "run_repair",
       },
       {
+        async capturePreparationWorkspaceDiff() {
+          return preparationWorkspaceDiff();
+        },
+        async captureWorkspaceDiff() {
+          return [];
+        },
         async createWorkspace() {
           return workspace();
         },
@@ -805,6 +909,12 @@ describe("runAgentHarnessPipeline", () => {
         runId: "run_navigation_derived",
       },
       {
+        async capturePreparationWorkspaceDiff() {
+          return preparationWorkspaceDiff();
+        },
+        async captureWorkspaceDiff() {
+          return [];
+        },
         async createWorkspace() {
           return workspace();
         },
@@ -922,6 +1032,12 @@ describe("runAgentHarnessPipeline", () => {
         runId: "run_flow_lock_escape",
       },
       {
+        async capturePreparationWorkspaceDiff() {
+          return preparationWorkspaceDiff();
+        },
+        async captureWorkspaceDiff() {
+          return [];
+        },
         async createWorkspace() {
           return workspace();
         },
@@ -1021,6 +1137,12 @@ describe("runAgentHarnessPipeline", () => {
         runId: "run_transient",
       },
       {
+        async capturePreparationWorkspaceDiff() {
+          return preparationWorkspaceDiff();
+        },
+        async captureWorkspaceDiff() {
+          return [];
+        },
         async createWorkspace() {
           return workspace();
         },
@@ -1093,6 +1215,12 @@ describe("runAgentHarnessPipeline", () => {
           runId: "run_transient_exhausted",
         },
         {
+          async capturePreparationWorkspaceDiff() {
+            return preparationWorkspaceDiff();
+          },
+          async captureWorkspaceDiff() {
+            return [];
+          },
           async createWorkspace() {
             return workspace();
           },
@@ -1162,6 +1290,12 @@ describe("runAgentHarnessPipeline", () => {
         runId: "run_preparation_repair",
       },
       {
+        async capturePreparationWorkspaceDiff() {
+          return preparationWorkspaceDiff();
+        },
+        async captureWorkspaceDiff() {
+          return [];
+        },
         artifactStore: {
           async writeJson(path) {
             artifactWrites.push(path);
@@ -1282,6 +1416,9 @@ describe("runAgentHarnessPipeline", () => {
         runId: "run_workspace_scope_recovery",
       },
       {
+        async captureWorkspaceDiff() {
+          return [];
+        },
         async capturePreparationWorkspaceDiff() {
           return unchangedWorkspaceDiff();
         },
@@ -1389,6 +1526,9 @@ describe("runAgentHarnessPipeline", () => {
           runId: "run_expansion_budget",
         },
         {
+          async captureWorkspaceDiff() {
+            return [];
+          },
           async capturePreparationWorkspaceDiff() {
             return unchangedWorkspaceDiff();
           },
@@ -1468,6 +1608,9 @@ describe("runAgentHarnessPipeline", () => {
         runId: "run_fidelity_repair",
       },
       {
+        async captureWorkspaceDiff() {
+          return [];
+        },
         async capturePreparationWorkspaceDiff() {
           diffAttempts += 1;
           return diffAttempts === 1
@@ -1648,6 +1791,9 @@ describe("runAgentHarnessPipeline", () => {
         runId: "run_transactional_install_repair",
       },
       {
+        async captureWorkspaceDiff() {
+          return [];
+        },
         artifactStore: {
           async writeJson(path, value) {
             artifacts[path] = value;
@@ -1796,6 +1942,9 @@ describe("runAgentHarnessPipeline", () => {
         runId: "run_rejected_repair_hint",
       },
       {
+        async captureWorkspaceDiff() {
+          return [];
+        },
         async capturePreparationWorkspaceDiff() {
           diffAttempt += 1;
           return diffAttempt === 2 || diffAttempt === 3
@@ -1905,6 +2054,9 @@ describe("runAgentHarnessPipeline", () => {
         runId: "run_downstream_preparation_baseline",
       },
       {
+        async captureWorkspaceDiff() {
+          return [];
+        },
         async capturePreparationWorkspaceDiff() {
           diffAttempt += 1;
           return diffAttempt === 2 ? invalidDiff : unchangedWorkspaceDiff();
@@ -2018,6 +2170,9 @@ describe("runAgentHarnessPipeline", () => {
         runId: "run_generated_lockfile_baseline",
       },
       {
+        async captureWorkspaceDiff() {
+          return [];
+        },
         async capturePreparationWorkspaceDiff() {
           diffCaptures += 1;
           if (state === "promoted") return promotedLockDiff;
@@ -2110,6 +2265,9 @@ describe("runAgentHarnessPipeline", () => {
         runId: "run_runtime_dependency_repair",
       },
       {
+        async captureWorkspaceDiff() {
+          return [];
+        },
         async capturePreparationWorkspaceDiff() {
           return repaired ? dependencyDiff : unchangedWorkspaceDiff();
         },
@@ -2182,6 +2340,9 @@ describe("runAgentHarnessPipeline", () => {
           runId: "run_noisy_repeated_failure",
         },
         {
+          async captureWorkspaceDiff() {
+            return [];
+          },
           async capturePreparationWorkspaceDiff() {
             return unchangedWorkspaceDiff();
           },
@@ -2250,6 +2411,9 @@ describe("runAgentHarnessPipeline", () => {
           runId: "run_repeated_failure_budget",
         },
         {
+          async captureWorkspaceDiff() {
+            return [];
+          },
           async capturePreparationWorkspaceDiff() {
             return unchangedWorkspaceDiff();
           },
@@ -2396,6 +2560,9 @@ describe("runAgentHarnessPipeline", () => {
         runId: "run_repair_mutation",
       },
       {
+        async capturePreparationWorkspaceDiff() {
+          return preparationWorkspaceDiff();
+        },
         async captureWorkspaceDiff() {
           diffChecks += 1;
           return diffChecks === 2 ? ["/workspace/repo/src/App.tsx"] : [];
@@ -2472,6 +2639,12 @@ describe("runAgentHarnessPipeline", () => {
         runId: "run_exploration_repair",
       },
       {
+        async capturePreparationWorkspaceDiff() {
+          return preparationWorkspaceDiff();
+        },
+        async captureWorkspaceDiff() {
+          return [];
+        },
         async createWorkspace() {
           return workspace();
         },
@@ -2593,6 +2766,9 @@ describe("runAgentHarnessPipeline", () => {
           runId: "run_phase_repair_budgets",
         },
         {
+          async captureWorkspaceDiff() {
+            return [];
+          },
           async capturePreparationWorkspaceDiff() {
             diffCaptures += 1;
             return preparationWorkspaceDiff();
@@ -2695,6 +2871,12 @@ describe("runAgentHarnessPipeline", () => {
         runId: "run_phase_script_repair_budgets",
       },
       {
+        async capturePreparationWorkspaceDiff() {
+          return preparationWorkspaceDiff();
+        },
+        async captureWorkspaceDiff() {
+          return [];
+        },
         async createWorkspace() {
           return workspace();
         },
@@ -2777,6 +2959,12 @@ describe("runAgentHarnessPipeline", () => {
         runId: "run_capture_preparation_repair",
       },
       {
+        async capturePreparationWorkspaceDiff() {
+          return preparationWorkspaceDiff();
+        },
+        async captureWorkspaceDiff() {
+          return [];
+        },
         async createWorkspace() {
           return workspace();
         },
@@ -2891,6 +3079,12 @@ function failingPreparationDependencies(
       async writeJson(path: string, value: unknown) {
         artifacts[path] = value;
       },
+    },
+    async capturePreparationWorkspaceDiff() {
+      return preparationWorkspaceDiff();
+    },
+    async captureWorkspaceDiff() {
+      return [];
     },
     async createWorkspace() {
       return workspace();

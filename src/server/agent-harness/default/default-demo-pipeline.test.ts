@@ -200,6 +200,12 @@ describe("runDefaultDemoPipeline", () => {
           return {
             dependencies: {
               artifactStore,
+              async capturePreparationWorkspaceDiff() {
+                throw new Error("fake harness runner should own stages");
+              },
+              async captureWorkspaceDiff() {
+                throw new Error("fake harness runner should own stages");
+              },
               async createWorkspace() {
                 calls.push("harness.createWorkspace");
                 return workspaceHandle.workspace;
