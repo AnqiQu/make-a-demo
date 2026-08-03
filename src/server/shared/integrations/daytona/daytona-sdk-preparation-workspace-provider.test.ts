@@ -971,6 +971,32 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ).toHaveLength(2);
   });
 
+  it("does not swallow a reseal failure when the install window actually opened", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls, {
+        networkCloseError: new Error(
+          "Network access is restricted and cannot be overridden at the sandbox level.",
+        ),
+      }),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.setSubmittedCodeNetworkAccess?.(true),
+    ).resolves.toBeUndefined();
+    await expect(
+      handle.workspace.setSubmittedCodeNetworkAccess?.(false),
+    ).rejects.toThrow(/cannot be overridden/);
+
+    const transitions = await handle.workspace.collectNetworkStateLog?.();
+    expect(transitions?.map((transition) => transition.state)).toEqual([
+      "runtime-locked",
+      "dependency-install-open",
+    ]);
+  });
+
   it("uploads submitted-code artifacts only to the submitted-code sandbox", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -1795,6 +1821,7 @@ function fakeLinkedClient(
     failParentArchive?: boolean;
     failSubmittedRestore?: boolean;
     missingSubmittedSandboxOnDelete?: boolean;
+    networkCloseError?: Error;
     networkError?: Error;
     remoteCleanupNeverResolves?: boolean;
     submittedDeleteFailuresBeforeSuccess?: number;
@@ -2072,6 +2099,7 @@ function fakeLinkedSandbox(
     executeCommandNeverResolves?: boolean;
     failParentArchive?: boolean;
     failSubmittedRestore?: boolean;
+    networkCloseError?: Error;
     networkError?: Error;
     remoteCleanupNeverResolves?: boolean;
     submittedUploadFailuresBeforeSuccess?: number;
@@ -2191,6 +2219,12 @@ function fakeLinkedSandbox(
     async updateNetworkSettings(settings: unknown) {
       calls.push({ updateNetworkSettings: { sandbox: id, settings } });
       if (options.networkError !== undefined) throw options.networkError;
+      if (
+        options.networkCloseError !== undefined &&
+        (settings as { networkBlockAll?: boolean }).networkBlockAll === true
+      ) {
+        throw options.networkCloseError;
+      }
     },
   };
 }

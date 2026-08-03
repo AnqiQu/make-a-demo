@@ -353,6 +353,8 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
   private readonly activePtys = new Set<ManagedPty>();
   private activeSubmittedCodeApp: ManagedSubmittedCodeApp | undefined;
   private readonly networkStateTransitions: AgentHarnessNetworkStateTransition[];
+  /** True after org policy rejected a network open, proving the sandbox stayed blocked. */
+  private networkOverrideRestricted = false;
   private readonly sandboxLogger: PipelineEventLogger;
   readonly submittedCodeSandboxId?: string;
 
@@ -922,9 +924,20 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
   ): Promise<void> {
     try {
       await sandbox.updateNetworkSettings({ networkBlockAll: !enabled });
+      this.networkOverrideRestricted = false;
     } catch (error) {
       if (isRestrictedNetworkPolicyError(error)) {
-        return;
+        if (enabled) {
+          // Org policy keeps the sandbox blocked, so the window never opens
+          // and installs simply run without network — fail-closed.
+          this.networkOverrideRestricted = true;
+          return;
+        }
+        if (this.networkOverrideRestricted) {
+          // The open was rejected by the same policy, so the sandbox stayed
+          // blocked and this close is already satisfied.
+          return;
+        }
       }
 
       throw error;
