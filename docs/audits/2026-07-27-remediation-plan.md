@@ -1442,6 +1442,64 @@ drifts from the pin). Note: the pin takes effect on the next snapshot rebuild;
 the current frozen snapshot is unchanged, which is why the verifier warns
 rather than fails on version drift.
 
+## Addendum (2026-08-03, after the post-N24/N28 matrix run)
+
+Matrix report `matrix-report-2026-08-03T21-29-57-760Z`: **homer passed
+end-to-end** (554s, final video); **midday failed at app-exploration** after
+exhausting the 5-attempt repo-preparation-repair global budget (3,448s).
+
+**The pipeline itself ran clean — every landed mechanism behaved as designed.**
+Runtime-target-selection succeeded on its first launch (no N24 fingerprint
+anywhere; the relaunch path was never needed). Zero `host.clock.drift` events,
+zero timeout kills, zero write denials — homer's flow planning passed under the
+new both-spellings table without incident. Prep and all five repair candidates
+passed fidelity; exploration evidence persisted every cycle (N21d); the N26c
+empty-data-table steering fired verbatim on every failed attempt.
+
+**Midday (`terminal-2026-08-03T20-32-30-256Z`) — serial convergence exhausted
+the budget; the evidence channel is one error wide (N29).** All five
+exploration failures were the same honest verdict: `/transactions` rendered
+only chrome plus an empty data table (8 column headers, zero data rows). The
+repair agent was **not** thrashing: the five persisted candidates show one
+architecture (public demo-mode gate + same-origin tRPC fixture endpoint +
+fixture data) being monotonically refined, and each attempt fixed exactly the
+one server error its evidence showed — only for the next run to reveal the next
+obstacle in the chain. The stderr digests walk the app's data path one link at
+a time: attempt 1 a server-side Supabase client env crash (digest 4200400139),
+attempt 2 the SSR relative-URL parse failure (2615169990), attempt 3 an
+undefined-property crash in the tracker DataTable (341061012), attempt 4 a
+**browser** Supabase `createClient` crash inside `TransactionsUploadZone` —
+`NEXT_PUBLIC_SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` unset —
+killing the transactions data subtree (2567509194). Attempt 5's repair, which
+even aligned fixtures with "the existing infinite-query page shape" (precisely
+the N26c steering), did not clear that last obstacle: the final report carries
+the same digest 2567509194.
+
+Mechanism: the N21c stderr evidence is a single 2KB tail, and each attempt's
+evidence contained exactly one error digest. The repair loop therefore reveals
+a deep integration chain one obstacle per paid cycle; Midday's data pages
+traverse proxy → authenticated layout → server prefetch → browser tRPC client →
+browser Supabase client, and five cycles was one short of walking it.
+
+**Recorded finding (N29, not landed):**
+
+- **N29a (Medium, feature) — failed-exploration stderr evidence should carry
+  all distinct server errors, not one 2KB tail.** Dedupe the managed app's
+  stderr by error identity (stack head, or digest line where present — both
+  framework-agnostic string signals) and attach up to ~5 bounded excerpts, one
+  per distinct error. Turns serial one-error-per-cycle convergence into a
+  single repair that sees the whole remaining chain.
+
+(Watch item, no number: repair prompts carry only the latest failure, not a
+one-line history of obstacles already cleared. If N29a alone proves
+insufficient, that history is the next lever.)
+
+Recommendation (user-proposed, agreed): midday's remaining failure is
+prep-agent convergence bandwidth on a hard production monorepo, not a pipeline
+defect — this run validates the N24/N27/N28 stack in production. Proceed to the
+next phase (Phase 3 tail 3.8/3.9, then Phase 4 security 4.1–4.10) and queue
+N29a with the smaller fixes.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
