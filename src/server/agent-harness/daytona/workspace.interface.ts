@@ -115,6 +115,12 @@ export type AgentHarnessWorkspaceExecuteOptions = {
   env?: Record<string, string>;
   /** Maximum silence between streamed output chunks; omitted for no idle limit. */
   inactivityTimeoutMs?: number;
+  /**
+   * Receives streamed stderr only from implementations with a separate error
+   * channel. PTY-backed implementations merge both streams at the terminal, so
+   * they deliver everything through `onStdout`; callers must not treat an
+   * empty `onStderr` as proof that the command produced no error output.
+   */
   onStderr?: (chunk: string) => void;
   onStdout?: (chunk: string) => void;
   timeoutMs?: number;

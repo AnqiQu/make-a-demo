@@ -35,11 +35,70 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     expect(handle.id).toBe("sandbox_123");
     expect(calls[0]).toEqual({
       create: {
+        autoDeleteInterval: 720,
         autoStopInterval: 0,
         disk: 3,
         snapshot: "makeademo-opencode",
       },
     });
+  });
+
+  it("keeps the original failure when the compensating parent delete also fails", async () => {
+    const calls: unknown[] = [];
+    const parentSandbox = fakeLinkedSandbox(calls, "parent_sandbox", "ok");
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: {
+        async create(input: unknown) {
+          calls.push({ create: input });
+          if (
+            typeof input === "object" &&
+            input !== null &&
+            "linkedSandbox" in input
+          ) {
+            throw new Error("submitted-code snapshot unavailable");
+          }
+          return parentSandbox;
+        },
+        async delete(input: { id?: string; name?: string }) {
+          calls.push({ delete: input.id ?? input.name });
+          throw new Error("delete rejected while sandbox state changes");
+        },
+      } as never,
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+
+    await expect(provider.create()).rejects.toThrow(
+      "submitted-code snapshot unavailable",
+    );
+    expect(calls.filter((call) => "delete" in Object(call))).toHaveLength(1);
+  });
+
+  it("treats a sandbox-state conflict during deletion as a retryable outcome", async () => {
+    const calls: unknown[] = [];
+    let deletes = 0;
+    const parentSandbox = fakeLinkedSandbox(calls, "sandbox_123", "ok");
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: {
+        async create(input: unknown) {
+          calls.push({ create: input });
+          return parentSandbox;
+        },
+        async delete(input: { id?: string; name?: string }) {
+          deletes += 1;
+          calls.push({ delete: input.id ?? input.name });
+          if (deletes === 1) {
+            throw Object.assign(new Error("sandbox state change in progress"), {
+              statusCode: 409,
+            });
+          }
+        },
+      } as never,
+    });
+    const handle = await provider.create();
+
+    await handle.destroy();
+
+    expect(deletes).toBe(2);
   });
 
   it("uses a bounded Daytona sandbox create timeout", async () => {
@@ -61,7 +120,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     await provider.create();
 
     expect(calls[0]).toEqual({
-      create: { autoStopInterval: 0, disk: 3 },
+      create: { autoDeleteInterval: 720, autoStopInterval: 0, disk: 3 },
       options: { timeout: 180 },
     });
   });
@@ -93,11 +152,11 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     expect(handle.id).toBe("sandbox_123");
     expect(calls.slice(0, 2)).toEqual([
       {
-        create: { autoStopInterval: 0, disk: 3 },
+        create: { autoDeleteInterval: 720, autoStopInterval: 0, disk: 3 },
         options: { timeout: 180 },
       },
       {
-        create: { autoStopInterval: 0, disk: 3 },
+        create: { autoDeleteInterval: 720, autoStopInterval: 0, disk: 3 },
         options: { timeout: 180 },
       },
     ]);
@@ -114,6 +173,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
 
     expect(calls[0]).toEqual({
       create: {
+        autoDeleteInterval: 720,
         autoStopInterval: 0,
         disk: 3,
         secrets: { OPENAI_API_KEY: "makeademo-openai" },
@@ -964,6 +1024,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     expect(calls.slice(0, 2)).toEqual([
       {
         create: {
+          autoDeleteInterval: 720,
           autoStopInterval: 0,
           disk: 3,
           snapshot: "makeademo-opencode",
@@ -971,6 +1032,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       },
       {
         create: {
+          autoDeleteInterval: 720,
           autoStopInterval: 0,
           autoDeleteInterval: 0,
           ephemeral: true,
@@ -1216,6 +1278,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     expect(calls.slice(0, 2)).toEqual([
       {
         create: {
+          autoDeleteInterval: 720,
           autoStopInterval: 0,
           disk: 3,
           secrets: { OPENAI_API_KEY: "makeademo-openai" },
@@ -1223,6 +1286,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       },
       {
         create: {
+          autoDeleteInterval: 720,
           autoStopInterval: 0,
           autoDeleteInterval: 0,
           ephemeral: true,

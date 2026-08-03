@@ -152,6 +152,11 @@ const defaultManagedProcessControlTimeoutMs = 30_000;
 const defaultArtifactTransferTimeoutSeconds = 60;
 const defaultSandboxCreateTimeoutSeconds = 300;
 const sandboxCreateConnectionRetryLimit = 2;
+/**
+ * Server-side reaper for agent sandboxes, sized well past the longest observed
+ * run so it never cuts a live pipeline short; destroy() remains the normal path.
+ */
+const agentSandboxAutoDeleteMinutes = 720;
 const ptyStartupRetryLimit = 2;
 const artifactTransferRetryLimit = 2;
 const makeADemoArtifactDirectory = "/tmp/makeademo";
@@ -241,6 +246,9 @@ export class DaytonaSdkPreparationWorkspaceProvider
     const createOptions = { timeout: this.sandboxCreateTimeoutSeconds };
     const sandbox = await this.createSandboxWithConnectionRetry(
       {
+        // Server-side backstop: if the controller dies before destroy(), the
+        // agent sandbox still gets reaped instead of running indefinitely.
+        autoDeleteInterval: agentSandboxAutoDeleteMinutes,
         autoStopInterval: 0,
         disk: this.diskGB,
         ...(this.secrets === undefined ? {} : { secrets: this.secrets }),
@@ -270,7 +278,9 @@ export class DaytonaSdkPreparationWorkspaceProvider
               createOptions,
             );
     } catch (error) {
-      await this.client.delete(sandbox);
+      // The linked-create failure is the root cause; a failing compensating
+      // delete must not replace it. The auto-delete backstop reaps the parent.
+      await this.deleteSandboxBestEffort(sandbox);
       throw error;
     }
 
@@ -285,6 +295,30 @@ export class DaytonaSdkPreparationWorkspaceProvider
       sandbox,
       ...(submittedCodeSandbox === undefined ? {} : { submittedCodeSandbox }),
     });
+  }
+
+  private async deleteSandboxBestEffort(
+    sandbox: DaytonaSdkSandbox,
+  ): Promise<void> {
+    const [result] = await Promise.allSettled([this.client.delete(sandbox)]);
+    if (result?.status === "rejected") {
+      await this.writeProviderLogBestEffort({
+        event: "sandbox.compensating-delete.failed",
+        message: `Compensating delete failed for sandbox ${sandbox.id ?? sandbox.name}; the auto-delete backstop must reap it.`,
+      });
+    }
+  }
+
+  private async writeProviderLogBestEffort(
+    entry: AgentHarnessWorkspaceLogEntry,
+  ): Promise<void> {
+    for (const sink of this.sandboxLogSinks) {
+      try {
+        sink.write(`${JSON.stringify(entry)}\n`);
+      } catch {
+        // Diagnostics must never mask the failure being reported.
+      }
+    }
   }
 
   private async createSandboxWithConnectionRetry(
@@ -408,7 +442,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       !this.submittedCodeSandboxDeleted
     ) {
       try {
-        await this.client.delete(this.submittedCodeSandbox);
+        await this.deleteSandboxThroughStateConflict(this.submittedCodeSandbox);
         this.submittedCodeSandboxDeleted = true;
       } catch (error) {
         if (isDaytonaNotFoundError(error)) {
@@ -420,7 +454,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     }
     if (!this.agentSandboxDeleted) {
       try {
-        await this.client.delete(this.sandbox);
+        await this.deleteSandboxThroughStateConflict(this.sandbox);
         this.agentSandboxDeleted = true;
       } catch (error) {
         if (isDaytonaNotFoundError(error)) {
@@ -435,6 +469,22 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     }
     if (failures.length > 1) {
       throw new AggregateError(failures, "Failed to delete Daytona sandboxes.");
+    }
+  }
+
+  /**
+   * Deletes a sandbox, retrying once past a state-change conflict. Daytona
+   * reports 409 while a sandbox is still settling, which is transient rather
+   * than a reason to leave the sandbox running.
+   */
+  private async deleteSandboxThroughStateConflict(
+    sandbox: DaytonaSdkSandbox,
+  ): Promise<void> {
+    try {
+      await this.client.delete(sandbox);
+    } catch (error) {
+      if (!isDaytonaStateConflictError(error)) throw error;
+      await this.client.delete(sandbox);
     }
   }
 
@@ -1496,6 +1546,23 @@ function formatErrorDiagnostic(error: unknown): string {
   return error instanceof Error
     ? `${error.name}: ${error.message}`
     : String(error);
+}
+
+/** Identifies a Daytona conflict raised while a sandbox state change settles. */
+function isDaytonaStateConflictError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as {
+    errorCode?: unknown;
+    message?: unknown;
+    statusCode?: unknown;
+  };
+  return (
+    candidate.statusCode === 409 ||
+    candidate.errorCode === "Conflict" ||
+    /state change in progress|state is changing/i.test(
+      String(candidate.message ?? ""),
+    )
+  );
 }
 
 function isDaytonaNotFoundError(error: unknown): boolean {
