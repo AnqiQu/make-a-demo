@@ -1244,6 +1244,92 @@ recorded sketch: the evidence rides the observation protocol's route objects and
 a verdict-time map — not aria-snapshot parsing — because the harvest already
 runs in-page where the structural facts are one query away.
 
+## Addendum (2026-08-03, after the post-N26 matrix run — host-sleep incident)
+
+Matrix report `matrix-report-2026-08-03T18-08-33-158Z`: **homer passed** (449s);
+**midday failed** (`terminal-2026-08-03T16-59-47-195Z`, 68m49s) with the raw
+infrastructure error `Daytona command produced no output for 300000ms.` after
+three repair commands died on inactivity kills. Forensics prove the kills were
+**not** sandbox, OpenCode, or pipeline failures: **the workstation lid was closed
+eleven minutes into the run and the machine slept through the rest of it.** The
+`pmset -g log` sleep ledger matches the pipeline log to the second:
+
+- 17:11:33Z — `Entering Sleep state due to 'Clamshell Sleep'` (battery, 47%).
+  Repair 4's `lastOutputAt` is 17:11:33.198Z, four seconds after its command
+  started. The sandbox agent kept working; the local orchestrator stopped
+  receiving PTY data and its timers froze.
+- 17:52:06Z — first `DarkWake` (74s). Repair 4's inactivity kill fires at
+  17:52:06.668Z (`durationMs` 2,437,206 — a "5-minute" watchdog firing 40m37s
+  in; the 15-minute overall command deadline also never fired, confirming
+  frozen local timers rather than any real silence measurement).
+- Inside that 74-second wake window: repair 5 starts with a fresh session, finds
+  the workspace full of repair 4's killed-mid-edit partial work, submits it in
+  57s → fidelity attempt 5 correctly vetoes it (three ungated presentation /
+  integration adaptations plus one out-of-seam edit, all named by the N25a
+  per-condition messages) → restore re-applies the accepted candidate
+  (17:53:04Z) and the N26b rejection hint is appended.
+- 17:54:09Z — back to Clamshell Sleep, one second before repair 6's output
+  stops (17:54:10Z). Its kill fires at 18:00:25Z — during a 5-second
+  maintenance DarkWake. Repair 7 launches inside that same 5-second window,
+  gets six seconds of output, sleeps, and is killed at the next DarkWake
+  (18:08:31Z) — the second consecutive timeout inside one `repairPreparation`
+  call, so the harness surfaces the timeout as an infrastructure error (by
+  design: no fallback artifact, raw error) and the run ends. The failure path
+  persisted all logs inside that 99-second wake. Lid opened 18:10:15Z.
+
+**What the awake portion of the run verified (all three N26 landings, in
+production, before 17:11:33Z):**
+
+- **N26a passed its gate.** Four consecutive fidelity passes (prep + repairs
+  1–3), zero comment vetoes — the first Midday run since the veto class appeared
+  with none. The one veto of the run (attempt 5) was a true positive on
+  rubber-stamped partial work.
+- **N25d + N26c fired verbatim.** Exploration attempt 1 failed with: requested
+  feature "transactions" routes `/transactions` rendered only
+  globally-repeated navigation chrome … **"An empty data table (8 column
+  headers, zero data rows) rendered on these routes — the data query resolved
+  empty or mis-shaped; align the fixture shape with the fields the consuming
+  component reads."** The observation carries `emptyDataTables` for
+  `/transactions` and all three `?step=` siblings. Repair 4 was launched with
+  exactly this steering — then the lid closed on it.
+- **N26b exercised end-to-end.** The attempt-5 veto ran the restore +
+  `appendRepairRejection` path (SHA-verified re-apply logged 17:53:04Z) with
+  the preserved-files enumeration.
+- Requested-feature progress held: **invoicing grounded again** (only
+  `transactions` missing), and the preflight `cdn.sheetjs.com`/xlsx class was
+  classified `external network required` and cleared in three fast repairs.
+
+**Recorded findings (N27, not landed):**
+
+- **N27a (Medium, bugfix) — command watchdogs must be sleep-aware.** The
+  inactivity deadline and the overall command deadline both measure local timer
+  time, which silently diverges from wall clock across host sleep; on wake they
+  kill healthy remote agents and bill the kill to the product repair budget
+  (this run: three kills, two of them launching into 5-second DarkWake
+  windows). Minimal shape: a small drift monitor at the Daytona provider seam
+  (heartbeat comparing expected vs. actual elapsed); when observed drift
+  exceeds a threshold, re-arm the inactivity window once instead of killing and
+  emit a loud `host.clock.drift` event naming the gap. This also cleanly
+  distinguishes future N24-class genuine agent stalls from sleeping-observer
+  artifacts in the logs.
+- **N27b (Low, infra) — the matrix runner should hold a sleep assertion.** On
+  darwin, wrap the run with `caffeinate -i -w <pid>` and warn at start when on
+  battery. Idle sleep is preventable; clamshell-on-battery is not — the warning
+  plus N27a's drift event make the failure mode diagnosable in seconds instead
+  of a forensic session.
+- **N27c (Low, feature) — disclose the dirty workspace after a killed repair.**
+  Repair 5 inherited repair 4's killed-mid-edit workspace with no warning and
+  submitted it unreviewed in 57 seconds; fidelity caught it, but one sentence in
+  the timeout-retry steering ("the previous attempt was killed mid-work; the
+  workspace may contain unfinished edits — review them against the failure
+  report before submitting") converts a rubber-stamp into a review.
+
+Watch item (no N-number): `/invoices` grounded via a route-distinct greeting
+heading ("Good …") while its own data table is also empty (9 column headers,
+zero rows). If transactions gets fixed and invoicing's table stays empty, the
+run could pass with a hollow invoicing surface — N26c evidence only attaches to
+failing features. Revisit only if a hollow-invoicing video actually occurs.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
