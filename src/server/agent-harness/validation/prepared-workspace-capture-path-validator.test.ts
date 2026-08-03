@@ -1,6 +1,6 @@
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentHarnessWorkspaceHandle } from "../daytona/workspace.interface";
 import { validatePreparedWorkspaceCapturePath } from "./prepared-workspace-capture-path-validator";
@@ -243,6 +243,62 @@ describe("validatePreparedWorkspaceCapturePath", () => {
     await expect(
       readFile(result.screenshotArtifactId as string, "utf8"),
     ).resolves.toBe("png");
+  });
+
+  it("downloads the backend-owned screenshot path, not the one the script reported", async () => {
+    const localRunDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-capture-validation-test-"),
+    );
+    const requestedSources: string[] = [];
+    const workspace: AgentHarnessWorkspaceHandle = {
+      async destroy() {},
+      id: "agent_sandbox",
+      workspace: {
+        async destroy() {},
+        async execute() {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async executeSubmittedCode(command) {
+          if (command.includes("bun ")) {
+            return {
+              exitCode: 1,
+              stderr: "",
+              stdout: [
+                '[makeademo:validation] script started {"baseUrl":"http://127.0.0.1:3000"}',
+                '[makeademo:scene] {"elapsedMs":1,"event":"started","sceneId":"scene-main"}',
+                '[makeademo:action] {"elapsedMs":3,"event":"started","label":"locator.click(getByRole(link))","sceneId":"scene-main"}',
+                '[makeademo:action] {"elapsedMs":10003,"event":"failed","label":"locator.click(getByRole(link))","message":"locator click timed out","sceneId":"scene-main"}',
+                '[makeademo:scene] {"elapsedMs":10005,"event":"failed","message":"locator click timed out","sceneId":"scene-main"}',
+                '[makeademo:validation] script failed {"message":"locator click timed out","screenshotPath":"/workspace/repo/.env","url":"http://127.0.0.1:3000/"}',
+              ].join("\n"),
+            };
+          }
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async downloadSubmittedCodeFiles(files) {
+          requestedSources.push(...files.map((file) => file.sourcePath));
+          await Promise.all(
+            files.map((file) => writeFile(file.destinationPath, "png")),
+          );
+        },
+        async uploadSubmittedCodeFiles() {},
+      },
+    };
+
+    await validatePreparedWorkspaceCapturePath({
+      baseUrl: "http://127.0.0.1:3000",
+      demoPlaywrightScript: [
+        "import { setup, scene } from './makeademo-capture-sdk';",
+        "await scene('scene-main', async ({ page, expect }) => { await expect(page.locator('main')).toBeVisible(); });",
+      ].join("\n"),
+      localRunDirectory,
+      sceneIds: ["scene-main"],
+      workspace,
+    });
+
+    expect(requestedSources).toEqual([
+      `/workspace/.makeademo/capture-path-validation-runs/${basename(localRunDirectory)}/makeademo-validation-failure.png`,
+    ]);
   });
 
   it("reports an off-camera setup navigation timeout instead of a protocol failure", async () => {

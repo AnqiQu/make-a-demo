@@ -139,6 +139,7 @@ export async function validatePreparedWorkspaceCapturePath(input: {
   const screenshotArtifactId = await downloadFailureScreenshotBestEffort({
     failure: validationFailure,
     input,
+    remoteScreenshotPath: `${remoteRunDirectory}/makeademo-validation-failure.png`,
   });
   const logs = [result.stdout, result.stderr].filter(
     (output) => output.trim().length > 0,
@@ -390,6 +391,11 @@ async function emitValidationEventBestEffort(
   ]);
 }
 
+/**
+ * Fetches the failure screenshot from the path the backend gave the generated
+ * script. The reported `screenshotPath` only signals that a screenshot exists:
+ * trusting its value would let submitted code name any sandbox file here.
+ */
 async function downloadFailureScreenshotBestEffort(input: {
   failure: { message?: string; screenshotPath?: string } | undefined;
   input: {
@@ -397,15 +403,19 @@ async function downloadFailureScreenshotBestEffort(input: {
     onEvent?: (entry: Record<string, unknown>) => Promise<void>;
     workspace: AgentHarnessWorkspaceHandle;
   };
+  remoteScreenshotPath: string;
 }): Promise<string | undefined> {
-  const remotePath = input.failure?.screenshotPath;
   const downloadSubmittedCodeFiles =
     input.input.workspace.workspace.downloadSubmittedCodeFiles?.bind(
       input.input.workspace.workspace,
     );
-  if (remotePath === undefined || downloadSubmittedCodeFiles === undefined) {
+  if (
+    input.failure?.screenshotPath === undefined ||
+    downloadSubmittedCodeFiles === undefined
+  ) {
     return undefined;
   }
+  const remotePath = input.remoteScreenshotPath;
   const localPath = join(
     input.input.localRunDirectory,
     "makeademo-validation-failure.png",
