@@ -831,7 +831,12 @@ function assertActionMatchesCatalog(
       `Browser action ${action.id} type ${action.type} does not match ActionCatalog kind ${sourceAction.kind}`,
     );
   }
-  if (action.type === "goto" && action.path !== sourceAction.route) {
+  // assert-url counts as a visible assertion at capture time, so an ungrounded
+  // one could satisfy the visible-outcome gate against a route never observed.
+  if (
+    (action.type === "goto" || action.type === "assert-url") &&
+    action.path !== sourceAction.route
+  ) {
     throw new Error(
       `Browser action ${action.id} targets ${action.path} but its observed ActionCatalog route is ${sourceAction.route}`,
     );

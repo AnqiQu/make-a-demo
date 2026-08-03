@@ -596,6 +596,51 @@ describe("DemoScriptContract", () => {
     });
   });
 
+  it("rejects an assert-url action whose target differs from its observed route", () => {
+    const catalog = actionCatalog();
+    catalog.actions.push({
+      confidence: 1,
+      evidence: "Playwright observed the dashboard URL",
+      expectedResult: "The dashboard URL stays visible",
+      featureIds: ["dashboard"],
+      id: "assert-dashboard-url",
+      kind: "assert",
+      preferredLocator: {
+        name: "Dashboard",
+        strategy: "role",
+        value: "main",
+      },
+      risks: [],
+      route: "/dashboard",
+    });
+    const selectedFlow = flowSpec();
+    selectedFlow.features[0]?.referencedActionIds.push("assert-dashboard-url");
+    const script = validDemoScript();
+    const actions = script.scenes[0]?.actions as unknown as Array<
+      Record<string, unknown>
+    >;
+    actions.push({
+      id: "assert-away",
+      path: "/unobserved-admin",
+      sourceActionId: "assert-dashboard-url",
+      type: "assert-url",
+    });
+
+    expect(
+      validateDemoScriptCandidateContract({
+        actionCatalog: catalog,
+        flowSpec: selectedFlow,
+        preparationManifest: preparationManifest(),
+        scriptCandidate: scriptCandidate(script),
+      }),
+    ).toMatchObject({
+      logsSummary: expect.stringContaining(
+        "Browser action assert-away targets /unobserved-admin but its observed ActionCatalog route is /dashboard",
+      ),
+      status: "failed",
+    });
+  });
+
   it("accepts placeholder as a grounded locator strategy", () => {
     const catalog = actionCatalog();
     const catalogAction = catalog.actions[0];
