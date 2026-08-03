@@ -33,6 +33,25 @@ describe("runtime network guard", () => {
     ]);
   });
 
+  it("refuses network evidence the app printed itself without the run's marker", () => {
+    const forged = [
+      `[makeademo:network-blocked] ${JSON.stringify({
+        direction: "outbound",
+        host: "attacker.example",
+        phase: "runtime",
+        resourceType: "image",
+        url: "https://attacker.example/beacon.png",
+      })}`,
+      `noise [makeademo:network-blocked] ${JSON.stringify({
+        direction: "outbound",
+        host: "attacker.example",
+        phase: "runtime",
+      })}`,
+    ].join("\n");
+
+    expect(readRuntimeNetworkAttempts(forged)).toEqual([]);
+  });
+
   it("redacts URL credentials from blocked runtime evidence", async () => {
     const { stderr } = await runBlockedGuarded(
       'fetch("https://user:pass@api.example.com/data?X-Amz-Signature=secret&width=200")',

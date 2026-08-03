@@ -1,9 +1,16 @@
+import { randomUUID } from "node:crypto";
 import { externalResourceManifestVersion } from "../../shared/external-resources/external-resource-manifest.schema";
 import type { NetworkAttempt } from "../schemas/artifacts";
 
 export const runtimeNetworkGuardPath =
   "/workspace/.makeademo/runtime-network-guard.cjs";
-export const runtimeNetworkMarker = "[makeademo:network-blocked] ";
+/**
+ * Marker that only the backend-generated guard emits. The nonce keeps a
+ * submitted app from fabricating network evidence by printing the marker on
+ * its own output — forged attempts would otherwise drive controller-side
+ * resource fetches. It lives as long as the process that wrote the guard.
+ */
+export const runtimeNetworkMarker = `[makeademo:network-blocked:${randomUUID().replaceAll("-", "")}] `;
 
 /** Backend-owned Node/Bun preload that reports and blocks app-server egress. */
 export function createRuntimeNetworkGuardSource(): string {

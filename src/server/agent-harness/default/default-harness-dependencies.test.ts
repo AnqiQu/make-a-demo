@@ -26,6 +26,7 @@ import type {
   ValidationReport,
 } from "../schemas/artifacts";
 import { createPreparationManifestTemplate } from "../schemas/preparation-manifest-template";
+import { runtimeNetworkMarker } from "../validation/runtime-network-guard";
 import { createDefaultAgentHarnessDependencies } from "./default-harness-dependencies";
 import type { RepoSourceArchive } from "./repo-snapshot";
 
@@ -2558,7 +2559,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
           return buildRuns === 1
             ? {
                 exitCode: 1,
-                stderr: `[makeademo:network-blocked] {"direction":"outbound","hasCredentials":false,"host":"fonts.example.com","method":"GET","phase":"runtime","resourceType":"font","url":"${assetUrl}"}`,
+                stderr: `${runtimeNetworkMarker}{"direction":"outbound","hasCredentials":false,"host":"fonts.example.com","method":"GET","phase":"runtime","resourceType":"font","url":"${assetUrl}"}`,
                 stdout: "",
               }
             : { exitCode: 0, stderr: "", stdout: "built" };
@@ -3375,8 +3376,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
       async readSubmittedCodeAppStatus() {
         return {
           running: true,
-          stderr:
-            '[makeademo:network-blocked] {"direction":"outbound","host":"api.example.com","phase":"runtime","url":"https://api.example.com/data"}',
+          stderr: `${runtimeNetworkMarker}{"direction":"outbound","host":"api.example.com","phase":"runtime","url":"https://api.example.com/data"}`,
           stdout: "",
         };
       },
@@ -3435,7 +3435,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
           running: true,
           stderr:
             starts === 1
-              ? '[makeademo:network-blocked] {"direction":"outbound","hasCredentials":false,"host":"assets.example.com","method":"GET","phase":"runtime","resourceType":"fetch","url":"https://assets.example.com/logo.svg"}'
+              ? `${runtimeNetworkMarker}{"direction":"outbound","hasCredentials":false,"host":"assets.example.com","method":"GET","phase":"runtime","resourceType":"fetch","url":"https://assets.example.com/logo.svg"}`
               : "",
           stdout: "",
         };
@@ -3517,7 +3517,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
           running: true,
           stderr:
             starts === 1
-              ? '[makeademo:network-blocked] {"direction":"outbound","hasCredentials":false,"host":"assets.example.com","method":"GET","phase":"runtime","resourceType":"fetch","url":"https://assets.example.com/logo.svg"}'
+              ? `${runtimeNetworkMarker}{"direction":"outbound","hasCredentials":false,"host":"assets.example.com","method":"GET","phase":"runtime","resourceType":"fetch","url":"https://assets.example.com/logo.svg"}`
               : "",
           stdout: "",
         };
@@ -3587,7 +3587,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
           running: true,
           stderr:
             explorationRuns === 1 && starts === 1
-              ? '[makeademo:network-blocked] {"direction":"outbound","hasCredentials":false,"host":"assets.example.com","method":"GET","phase":"runtime","resourceType":"fetch","url":"https://assets.example.com/logo.svg"}'
+              ? `${runtimeNetworkMarker}{"direction":"outbound","hasCredentials":false,"host":"assets.example.com","method":"GET","phase":"runtime","resourceType":"fetch","url":"https://assets.example.com/logo.svg"}`
               : "",
           stdout: "",
         };
