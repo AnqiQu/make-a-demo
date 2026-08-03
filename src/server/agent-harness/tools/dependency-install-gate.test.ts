@@ -34,6 +34,63 @@ describe("dependency install gate", () => {
     }
   });
 
+  it("appends the package manager's script-suppression flag inside the install window", async () => {
+    for (const [command, expected] of [
+      [
+        "bun install --frozen-lockfile",
+        "bun install --frozen-lockfile --ignore-scripts",
+      ],
+      ["npm ci --no-audit", "npm ci --no-audit --ignore-scripts"],
+      [
+        "corepack pnpm install --frozen-lockfile",
+        "corepack pnpm install --frozen-lockfile --ignore-scripts",
+      ],
+      [
+        "yarn install --immutable",
+        "yarn install --immutable --mode=skip-builds",
+      ],
+      [
+        "yarn install --frozen-lockfile",
+        "yarn install --frozen-lockfile --ignore-scripts",
+      ],
+    ] as const) {
+      const ran: string[] = [];
+      const result = await runDependencyInstallThroughGate({
+        command,
+        closeNetwork: async () => {},
+        openNetwork: async () => {},
+        runCommand: async (executed) => {
+          ran.push(executed);
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+      });
+
+      expect(result).toMatchObject({ status: "succeeded" });
+      expect(ran).toEqual([expected]);
+    }
+  });
+
+  it("does not duplicate a suppression flag the install command already carries", async () => {
+    for (const command of [
+      "bun install --frozen-lockfile --ignore-scripts",
+      "yarn install --immutable --mode=skip-builds",
+      "yarn install --mode=update-lockfile",
+    ]) {
+      const ran: string[] = [];
+      await runDependencyInstallThroughGate({
+        command,
+        closeNetwork: async () => {},
+        openNetwork: async () => {},
+        runCommand: async (executed) => {
+          ran.push(executed);
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+      });
+
+      expect(ran).toEqual([command]);
+    }
+  });
+
   it("reseals dependency network when the install command fails", async () => {
     const events: string[] = [];
 

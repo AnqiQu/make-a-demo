@@ -2008,12 +2008,14 @@ async function validateSubmittedCodeRuntime(input: {
         closeNetwork: () => setSubmittedCodeNetwork(input.workspace, false),
         command,
         openNetwork: () => setSubmittedCodeNetwork(input.workspace, true),
-        runCommand: () =>
+        // The gate may append a lifecycle-script suppression flag, so the
+        // executed string must be the gate's command, not the closure's.
+        runCommand: (gateCommand) =>
           executeSubmitted(
             input.workspace,
             commandInAppDirectory(
               runtimeTarget?.install.cwd ?? manifest.appDir,
-              command,
+              gateCommand,
             ),
             { timeoutMs: dependencyInstallTimeoutMs },
           ),

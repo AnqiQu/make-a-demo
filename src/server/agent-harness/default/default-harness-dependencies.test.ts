@@ -2182,6 +2182,47 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(submittedNetworkRequests).toEqual([false]);
   });
 
+  it("suppresses lifecycle scripts on the install command that reaches the sandbox", async () => {
+    const commands: string[] = [];
+    const workspace: AgentHarnessWorkspace = {
+      async destroy() {},
+      async execute() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async setSubmittedCodeNetworkAccess() {},
+      async startSubmittedCodeApp() {},
+      async stopSubmittedCodeApp() {},
+      async syncSubmittedCodeWorkspace() {},
+    };
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.validatePreparation({
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).resolves.toMatchObject({ status: "passed" });
+
+    expect(commands).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          "bun install --frozen-lockfile --ignore-scripts",
+        ),
+      ]),
+    );
+  });
+
   it("reconciles an npm lockfile safely before retrying a clean install", async () => {
     const commands: string[] = [];
     const promotedFiles: string[][] = [];

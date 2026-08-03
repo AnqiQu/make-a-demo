@@ -22,6 +22,7 @@ const allowedInstallFlags = new Set([
   "--legacy-peer-deps",
   "--lockfile-only",
   "--mode=skip-builds",
+  "--mode=update-lockfile",
   "--no-audit",
   "--no-bin-links",
   "--no-frozen-lockfile",
@@ -58,6 +59,12 @@ export function evaluateDependencyInstallCommand(
   return { status: "allowed" };
 }
 
+/**
+ * Runs an allowlisted install command inside the open network window. Every
+ * command handed to `runCommand` carries the package manager's
+ * lifecycle-script suppression flag, so submitted-repo install scripts never
+ * execute while the sandbox has network access.
+ */
 export async function runDependencyInstallThroughGate(input: {
   closeNetwork: () => Promise<void>;
   command: string;
@@ -72,11 +79,12 @@ export async function runDependencyInstallThroughGate(input: {
     return decision;
   }
 
+  const command = withLifecycleScriptSuppression(input.command);
   await input.openNetwork();
   try {
-    let result = await input.runCommand(input.command);
+    let result = await input.runCommand(command);
     if (result.exitCode !== 0 && hasNetworkInstallFailureSignature(result)) {
-      result = await input.runCommand(input.command);
+      result = await input.runCommand(command);
     }
     return {
       ...result,
@@ -99,6 +107,49 @@ export function hasNetworkInstallFailureSignature(
   return /(?:ConnectionClosed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|network timeout|ERR_SOCKET_TIMEOUT|503 Service Unavailable|502 Bad Gateway|504 Gateway Timeout)/i.test(
     `${result.stderr}\n${result.stdout}`,
   );
+}
+
+const classicYarnOnlyFlags = new Set([
+  "--check-files",
+  "--frozen-lockfile",
+  "--ignore-engines",
+  "--ignore-optional",
+  "--ignore-platform",
+  "--no-bin-links",
+  "--no-lockfile",
+  "--pure-lockfile",
+]);
+
+/**
+ * Yarn Berry rejects `--ignore-scripts` and classic yarn rejects `--mode=...`,
+ * so the yarn variant is read from version-specific flags already on the
+ * command; a bare `yarn install` follows the run planner's Berry convention.
+ */
+export function readYarnInstallVariant(command: string): "berry" | "classic" {
+  return command
+    .trim()
+    .split(/\s+/)
+    .some((token) => classicYarnOnlyFlags.has(token))
+    ? "classic"
+    : "berry";
+}
+
+function withLifecycleScriptSuppression(command: string): string {
+  const tokens = command.trim().split(/\s+/);
+  const packageManager = tokens[tokens[0] === "corepack" ? 1 : 0];
+  if (
+    tokens.some(
+      (token) => token === "--ignore-scripts" || token.startsWith("--mode="),
+    )
+  ) {
+    return command;
+  }
+
+  const flag =
+    packageManager === "yarn" && readYarnInstallVariant(command) === "berry"
+      ? "--mode=skip-builds"
+      : "--ignore-scripts";
+  return `${command.trim()} ${flag}`;
 }
 
 function isAllowedDependencyInstallCommand(command: string): boolean {
