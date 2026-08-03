@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  batteryPowerWarning,
   matrixRepoEnvVar,
   renderMatrixReport,
   resolveMatrixEntries,
@@ -145,5 +146,23 @@ describe("renderMatrixReport", () => {
     expect(report).toContain("failed");
     expect(report).toContain("exploration failed");
     expect(report).toContain("skipped");
+  });
+});
+
+describe("batteryPowerWarning", () => {
+  it("warns that a closed lid kills the run when drawing from battery", () => {
+    const warning = batteryPowerWarning(
+      "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1)\t47%; discharging present: true\n",
+    );
+
+    expect(warning).toContain("battery");
+    expect(warning).toContain("lid");
+  });
+
+  it("stays quiet on AC power or unreadable power state", () => {
+    expect(
+      batteryPowerWarning("Now drawing from 'AC Power'\n"),
+    ).toBeUndefined();
+    expect(batteryPowerWarning("")).toBeUndefined();
   });
 });

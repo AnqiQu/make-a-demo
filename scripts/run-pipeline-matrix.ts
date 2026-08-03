@@ -7,8 +7,10 @@
 //
 // Fixture entries need a GitHub mirror before they can run (the pipeline only accepts
 // https://github.com/owner/repo URLs); see tests/fixtures/repos/README.md.
+import { execFile, spawn } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import {
   type DefaultDemoPipelineInput,
   type DefaultDemoPipelineResult,
@@ -127,6 +129,42 @@ export async function runPipelineMatrix(
   return results;
 }
 
+/**
+ * Warns when `pmset -g batt` reports battery power: closing the lid then
+ * sleeps the host, freezing the local orchestrator while paid sandbox agents
+ * keep working — on wake the stale watchdogs kill them (N27, 2026-08-03 run).
+ * Returns undefined on AC power or when the power state is unreadable.
+ */
+export function batteryPowerWarning(pmsetStdout: string): string | undefined {
+  if (!pmsetStdout.includes("Battery Power")) {
+    return undefined;
+  }
+  return (
+    "running on battery — closing the lid sleeps this orchestrator and kills " +
+    "in-flight sandbox agents; plug in or keep the lid open for the whole run"
+  );
+}
+
+// caffeinate prevents idle sleep for this process's lifetime (it cannot
+// prevent clamshell sleep on battery — hence the warning above).
+async function guardAgainstHostSleep(log: (message: string) => void) {
+  if (process.platform !== "darwin") {
+    return;
+  }
+  spawn("caffeinate", ["-i", "-w", String(process.pid)], { stdio: "ignore" })
+    .once("error", () => log("caffeinate unavailable — idle sleep not held"))
+    .unref();
+  try {
+    const { stdout } = await promisify(execFile)("pmset", ["-g", "batt"]);
+    const warning = batteryPowerWarning(stdout);
+    if (warning !== undefined) {
+      log(warning);
+    }
+  } catch {
+    // Power-state introspection is diagnostic only; never block the run.
+  }
+}
+
 export function renderMatrixReport(results: MatrixEntryResult[]): string {
   const lines = [
     "| Entry | Status | Duration | Detail |",
@@ -170,10 +208,11 @@ async function main(): Promise<void> {
     );
   }
 
+  const log = (message: string) =>
+    process.stdout.write(`[matrix] ${message}\n`);
+  await guardAgainstHostSleep(log);
   const entries = resolveMatrixEntries(configured, process.env);
-  const results = await runPipelineMatrix(entries, {
-    log: (message) => process.stdout.write(`[matrix] ${message}\n`),
-  });
+  const results = await runPipelineMatrix(entries, { log });
 
   const report = renderMatrixReport(results);
   const reportPath = join(
