@@ -471,6 +471,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     const decoder = new TextDecoder();
     const inactivityDeadline = createCommandInactivityDeadline(
       options.inactivityTimeoutMs,
+      (driftMs) => this.logHostClockDriftBestEffort(driftMs),
     );
     const pty = await this.createConnectedPty(this.sandbox, {
       cols: 120,
@@ -1150,6 +1151,16 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     }
   }
 
+  private logHostClockDriftBestEffort(driftMs: number): void {
+    void this.writeSandboxLog({
+      driftMs,
+      event: "host.clock.drift",
+      message: `Host clock drifted ${driftMs}ms past the command inactivity window (host asleep?); re-armed the watchdog instead of killing the command.`,
+    }).catch(() => {
+      // The drift diagnostic must never replace or break the guarded command.
+    });
+  }
+
   private async executeStreamingInSandbox(
     sandbox: DaytonaSdkSandbox,
     command: string,
@@ -1159,6 +1170,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     const decoder = new TextDecoder();
     const inactivityDeadline = createCommandInactivityDeadline(
       options.inactivityTimeoutMs,
+      (driftMs) => this.logHostClockDriftBestEffort(driftMs),
     );
     const pty = await this.createConnectedPty(sandbox, {
       cols: 120,
@@ -1368,7 +1380,14 @@ function withTimeout<T>(
   ]);
 }
 
-function createCommandInactivityDeadline(timeoutMs: number | undefined): {
+// A timer firing this far past its window means local timers were frozen (host
+// asleep) while the sandbox kept working — the silence was never measured.
+const inactivityDriftToleranceMs = 30_000;
+
+function createCommandInactivityDeadline(
+  timeoutMs: number | undefined,
+  onDrift?: (driftMs: number) => void,
+): {
   dispose(): void;
   expired: Promise<never>;
   touch(): void;
@@ -1384,6 +1403,19 @@ function createCommandInactivityDeadline(timeoutMs: number | undefined): {
       timer = undefined;
     }
   };
+  const arm = (windowMs: number) => {
+    dispose();
+    const armedAtMs = Date.now();
+    timer = setTimeout(() => {
+      const driftMs = Date.now() - armedAtMs - windowMs;
+      if (driftMs > inactivityDriftToleranceMs) {
+        onDrift?.(driftMs);
+        arm(windowMs);
+        return;
+      }
+      expire?.(new AgentHarnessCommandTimeoutError(windowMs, "inactivity"));
+    }, windowMs);
+  };
 
   return {
     dispose,
@@ -1392,14 +1424,7 @@ function createCommandInactivityDeadline(timeoutMs: number | undefined): {
       if (timeoutMs === undefined) {
         return;
       }
-      dispose();
-      timer = setTimeout(
-        () =>
-          expire?.(
-            new AgentHarnessCommandTimeoutError(timeoutMs, "inactivity"),
-          ),
-        timeoutMs,
-      );
+      arm(timeoutMs);
     },
   };
 }

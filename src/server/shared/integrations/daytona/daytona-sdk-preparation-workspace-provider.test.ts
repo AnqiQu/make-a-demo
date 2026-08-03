@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   DaytonaSdkPreparationWorkspaceProvider,
@@ -618,6 +618,52 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ).rejects.toThrow("Daytona command did not finish within 1ms.");
     expect(calls).toContainEqual({ kill: true });
     expect(calls).toContainEqual({ disconnect: true });
+  });
+
+  it("re-arms a late-firing inactivity deadline instead of killing the command", async () => {
+    // A deadline firing far past its window measured silence the sleeping host
+    // never observed (2026-08-03 incident: lid-closed laptop, healthy sandbox
+    // agents killed on DarkWakes). The drifted firing must log and re-arm; only
+    // an on-time expiry may kill.
+    vi.useFakeTimers({ now: 0, toFake: ["Date"] });
+    try {
+      const calls: unknown[] = [];
+      const provider = new DaytonaSdkPreparationWorkspaceProvider({
+        client: fakeClient(calls, { ptyWaitsForDisconnect: true }),
+        commandTimeoutMs: 10_000,
+      });
+      const handle = await provider.create();
+
+      const execution = handle.workspace.execute("opencode run stalled", {
+        inactivityTimeoutMs: 200,
+        onStdout: () => {},
+      });
+      let settled = false;
+      execution.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      vi.setSystemTime(40 * 60_000);
+      // Land between the drifted firing (~200ms) and the re-armed one (~400ms).
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(settled).toBe(false);
+      const driftLogs = calls
+        .map((call) => (call as { executeCommand?: string }).executeCommand)
+        .filter((command) => command?.includes("host.clock.drift"));
+      expect(driftLogs).toHaveLength(1);
+
+      await expect(execution).rejects.toThrow(
+        "Daytona command produced no output for 200ms.",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("disconnects a streaming command that stops producing output", async () => {
