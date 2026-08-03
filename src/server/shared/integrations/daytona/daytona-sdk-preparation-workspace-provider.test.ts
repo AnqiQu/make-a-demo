@@ -1032,7 +1032,6 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       },
       {
         create: {
-          autoDeleteInterval: 720,
           autoStopInterval: 0,
           autoDeleteInterval: 0,
           ephemeral: true,
@@ -1286,7 +1285,6 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       },
       {
         create: {
-          autoDeleteInterval: 720,
           autoStopInterval: 0,
           autoDeleteInterval: 0,
           ephemeral: true,
