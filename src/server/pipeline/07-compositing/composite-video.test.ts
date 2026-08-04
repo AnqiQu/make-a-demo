@@ -4,7 +4,11 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { CaptureManifest } from "../06-footage-capture/capture-scenes";
 import { createDemoScriptDigest } from "../06-footage-capture/demo-script-identity";
-import { parseDemoScript } from "../06-footage-capture/demo-script.schema";
+import {
+  approvedFontFamilies,
+  approvedMusicTrackIds,
+  parseDemoScript,
+} from "../06-footage-capture/demo-script.schema";
 import type { DemoScript } from "../06-footage-capture/demo-script.schema";
 import type { FinalVideoEmailNotifier } from "../final-output/final-video-email-notifier.interface";
 import {
@@ -340,6 +344,139 @@ describe("compositeVideoFromScript", () => {
     expect(JSON.parse(await readFile(manifest.manifestPath, "utf8"))).toEqual(
       manifest,
     );
+  });
+
+  it("stages a real font asset for every schema-approved font family", async () => {
+    const workspace = await mkdtemp(
+      join(tmpdir(), "makeademo-composite-test-"),
+    );
+    const captureManifestPath = join(workspace, "capture-manifest.json");
+    await writeFile(
+      captureManifestPath,
+      JSON.stringify(
+        makeCaptureManifest({
+          manifestPath: captureManifestPath,
+          runDirectory: workspace,
+          scenes: [],
+        }),
+      ),
+    );
+
+    let renderPlan: CompositingRenderPlan | undefined;
+    await compositeVideoFromScript({
+      captureManifestPath,
+      outputRoot: join(workspace, "renders"),
+      renderer: {
+        async renderVideo(input) {
+          renderPlan = input;
+          await writeFile(input.outputPath, "rendered mp4");
+        },
+      },
+      runId: "approved-fonts",
+      scriptPackage: {
+        format: "16:9",
+        presentation: {
+          music: { enabled: false },
+          textOverlays: [],
+          transitions: [],
+        },
+        scenes: approvedFontFamilies.map((font, index) => ({
+          backgroundColor: "#101828",
+          durationSeconds: 1,
+          id: `text-${index}`,
+          text: {
+            color: "#ffffff",
+            content: `Set in ${font}`,
+            font,
+            position: "center",
+            size: "large",
+          },
+          type: "full-screen-text",
+        })),
+        scriptId: "script-001",
+        title: "Approved Fonts",
+        version: 1,
+      } satisfies DemoScript,
+    });
+
+    for (const font of approvedFontFamilies) {
+      const asset = renderPlan?.fontAssets[font];
+      expect(asset, `font asset staged for ${font}`).toBeDefined();
+      await expect(
+        stat(join(renderPlan?.publicDir ?? "", asset?.publicPath ?? "")),
+      ).resolves.toBeTruthy();
+    }
+  });
+
+  it("stages a real music asset for every schema-approved music track", async () => {
+    for (const trackId of approvedMusicTrackIds) {
+      const workspace = await mkdtemp(
+        join(tmpdir(), "makeademo-composite-test-"),
+      );
+      const captureManifestPath = join(workspace, "capture-manifest.json");
+      await writeFile(
+        captureManifestPath,
+        JSON.stringify(
+          makeCaptureManifest({
+            manifestPath: captureManifestPath,
+            runDirectory: workspace,
+            scenes: [],
+          }),
+        ),
+      );
+
+      let renderPlan: CompositingRenderPlan | undefined;
+      await compositeVideoFromScript({
+        captureManifestPath,
+        outputRoot: join(workspace, "renders"),
+        renderer: {
+          async renderVideo(input) {
+            renderPlan = input;
+            await writeFile(input.outputPath, "rendered mp4");
+          },
+        },
+        runId: `approved-music-${trackId}`,
+        scriptPackage: {
+          format: "16:9",
+          presentation: {
+            music: { enabled: true, trackId },
+            textOverlays: [],
+            transitions: [],
+          },
+          scenes: [
+            {
+              backgroundColor: "#101828",
+              durationSeconds: 1,
+              id: "title-card",
+              text: {
+                color: "#ffffff",
+                content: "Music check",
+                font: "Inter",
+                position: "center",
+                size: "large",
+              },
+              type: "full-screen-text",
+            },
+          ],
+          scriptId: "script-001",
+          title: "Approved Music",
+          version: 1,
+        } satisfies DemoScript,
+      });
+
+      expect(
+        renderPlan?.music,
+        `music asset staged for ${trackId}`,
+      ).toBeDefined();
+      await expect(
+        stat(
+          join(
+            renderPlan?.publicDir ?? "",
+            renderPlan?.music?.publicPath ?? "",
+          ),
+        ),
+      ).resolves.toBeTruthy();
+    }
   });
 
   it("does not publish a rendered Draft Composite without an explicit accepted review", async () => {
