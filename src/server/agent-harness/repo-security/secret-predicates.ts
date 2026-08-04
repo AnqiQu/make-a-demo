@@ -130,3 +130,13 @@ export function looksLikeEnvironmentAssignments(
   );
   return placeholders.length < assignments.length;
 }
+
+/**
+ * Normalizes a repository-relative path for security screening: forward
+ * slashes only, no leading "./". The quarantine, the static screen, and the
+ * profiler must all use this key so a file cannot be quarantined under one
+ * spelling and re-admitted under another.
+ */
+export function normalizeRepoPath(path: string): string {
+  return path.replaceAll("\\", "/").replace(/^\.\//, "");
+}

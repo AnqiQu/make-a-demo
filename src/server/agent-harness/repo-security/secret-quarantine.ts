@@ -4,6 +4,7 @@ import {
   isEnvironmentSecretFileName,
   isPrivateKeyFileName,
   looksLikeEnvironmentAssignments,
+  normalizeRepoPath,
   readEnvironmentAssignmentKeys,
 } from "./secret-predicates";
 
@@ -32,7 +33,7 @@ export function quarantineRepoSecrets(files: RepoFile[]): {
   manifest: SecretQuarantineManifest;
 } {
   const entries = files.flatMap((file): SecretQuarantineEntry[] => {
-    const path = normalizePath(file.path);
+    const path = normalizeRepoPath(file.path);
     if (
       isEnvironmentSecretFileName(path) ||
       isCredentialRegistryConfig(path, file.text) ||
@@ -56,7 +57,7 @@ export function quarantineRepoSecrets(files: RepoFile[]): {
   return {
     excludedPaths: [...quarantinedPaths].sort(),
     files: files.map((file) => {
-      const path = normalizePath(file.path);
+      const path = normalizeRepoPath(file.path);
       return quarantinedPaths.has(path) ? { path } : { ...file, path };
     }),
     manifest: {
@@ -66,8 +67,4 @@ export function quarantineRepoSecrets(files: RepoFile[]): {
       version: secretQuarantineManifestVersion,
     },
   };
-}
-
-function normalizePath(path: string): string {
-  return path.replaceAll("\\", "/").replace(/^\.\//, "");
 }

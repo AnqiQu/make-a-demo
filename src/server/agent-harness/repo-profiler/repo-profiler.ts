@@ -1,6 +1,7 @@
 import { posix } from "node:path";
 import {
   isEnvironmentFileName,
+  normalizeRepoPath,
   readEnvironmentAssignmentKeys,
 } from "../repo-security/secret-predicates";
 import {
@@ -70,7 +71,7 @@ const externalServicePackages = [
 export function profileRepo(input: RepoProfileInput): RepoProfile {
   const files = input.files.map((file) => ({
     ...file,
-    path: normalizePath(file.path),
+    path: normalizeRepoPath(file.path),
   }));
   const paths = new Set(files.map((file) => file.path));
   const packages = readPackages(files);
@@ -761,8 +762,4 @@ function optionalString<K extends string>(
   return value === undefined || value.trim().length === 0
     ? {}
     : ({ [key]: value } as Partial<Record<K, string>>);
-}
-
-function normalizePath(path: string): string {
-  return path.replace(/^\.\//, "");
 }

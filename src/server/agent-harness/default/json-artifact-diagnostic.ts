@@ -52,6 +52,19 @@ export function diagnoseJsonSyntax(
 }
 
 /**
+ * Matches field names that must be treated as secrets wherever keys are
+ * inspected for redaction. Extend this pattern rather than copying the
+ * alternation so every redaction site agrees on what counts as a secret.
+ */
+export const secretFieldNamePattern =
+  /api[_-]?key|authorization|password|secret|token/i;
+
+const secretJsonFieldPattern = new RegExp(
+  `"[^"\\n]*(?:${secretFieldNamePattern.source})[^"\\n]*"\\s*:`,
+  "i",
+);
+
+/**
  * Redacts bearer tokens and truncates at the first secret-named JSON field so
  * excerpts of agent or app output can be safely fed back into prompts and
  * durable logs. Redaction must run on every excerpt that leaves this process.
@@ -61,10 +74,7 @@ export function redactSecretText(value: string): string {
     /\bBearer\s+[A-Za-z0-9._~+/=-]+/gi,
     "Bearer [Redacted]",
   );
-  const secretKey =
-    /"[^"\n]*(?:api[_-]?key|authorization|password|secret|token)[^"\n]*"\s*:/i.exec(
-      bearerRedacted,
-    );
+  const secretKey = secretJsonFieldPattern.exec(bearerRedacted);
   if (secretKey?.index === undefined) {
     return bearerRedacted;
   }

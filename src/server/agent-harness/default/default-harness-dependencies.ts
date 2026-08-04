@@ -124,6 +124,7 @@ import {
   diagnoseJsonSyntax,
   fingerprintArtifactText,
   redactSecretText,
+  secretFieldNamePattern,
 } from "./json-artifact-diagnostic";
 import {
   type RepoSourceArchive,
@@ -3293,7 +3294,7 @@ function redactArtifactCandidate(value: unknown): unknown {
   return Object.fromEntries(
     Object.entries(value).map(([key, entry]) => [
       key,
-      /(api[_-]?key|authorization|password|secret|token)/i.test(key)
+      secretFieldNamePattern.test(key)
         ? "[Redacted]"
         : redactArtifactCandidate(entry),
     ]),

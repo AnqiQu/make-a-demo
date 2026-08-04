@@ -5,6 +5,7 @@ import {
   isEnvironmentSecretFileName,
   isPrivateKeyFileName,
   looksLikeEnvironmentAssignments,
+  normalizeRepoPath,
 } from "./secret-predicates";
 import type { SecretQuarantineManifest } from "./secret-quarantine";
 
@@ -56,12 +57,12 @@ export function screenStaticRepoSecurity(
 ): StaticRepoSecurityResult {
   const files = input.files.map((file) => ({
     ...file,
-    path: normalizePath(file.path),
+    path: normalizeRepoPath(file.path),
   }));
   const paths = new Set(files.map((file) => file.path));
   const quarantinedPaths = new Set(
     input.secretQuarantineManifest?.entries.map((entry) =>
-      normalizePath(entry.path),
+      normalizeRepoPath(entry.path),
     ) ?? [],
   );
   const rejections: string[] = [];
@@ -146,13 +147,13 @@ function inspectFileSecurity(
       `repo secret file ${file.path} was quarantined before agent or runtime execution`,
     );
   } else if (
-    isCommittedSecretFile(filename) ||
+    isEnvironmentSecretFileName(filename) ||
     isCredentialRegistryConfig(filename, file.text) ||
     looksLikeEnvironmentAssignments(file.text)
   ) {
     rejections.push(`repo contains committed secret file ${file.path}`);
   } else if (
-    isPrivateKeyPath(filename) ||
+    isPrivateKeyFileName(filename) ||
     containsPrivateKeyMaterial(file.text)
   ) {
     rejections.push(`repo contains private key material in ${file.path}`);
@@ -177,14 +178,6 @@ function symlinkEscapesRepo(path: string, target: string): boolean {
     posix.join(posix.dirname(path), target),
   );
   return resolvedTarget === ".." || resolvedTarget.startsWith("../");
-}
-
-function isCommittedSecretFile(filename: string): boolean {
-  return isEnvironmentSecretFileName(filename);
-}
-
-function isPrivateKeyPath(filename: string): boolean {
-  return isPrivateKeyFileName(filename);
 }
 
 function inspectPackageJson(
@@ -270,8 +263,4 @@ function inspectDependencies(dependencies: unknown, warnings: string[]): void {
       warnings.push(`external service package ${name} may require local mocks`);
     }
   }
-}
-
-function normalizePath(path: string): string {
-  return path.replace(/^\.\//, "");
 }
