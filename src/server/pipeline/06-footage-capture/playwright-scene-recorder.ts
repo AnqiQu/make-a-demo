@@ -137,6 +137,12 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
       });
     }
 
+    // A retried capture must never inherit a prior attempt's scratch: a stale
+    // Playwright video would make the single-take lookup ambiguous.
+    await executeSubmittedCode(
+      workspace,
+      `rm -rf ${shellQuote(remoteRunDirectory)}`,
+    );
     await executeSubmittedCode(
       workspace,
       `mkdir -p ${shellQuote(remoteSceneWorkspace)} ${shellQuote(remoteVideoScratchDirectory)} ${shellQuote(remoteRawScenesDirectory)}`,
@@ -182,7 +188,9 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
       throw new Error(
         formatSceneFailure("continuous-take", {
           ...result,
-          timedOut: result.exitCode === 124,
+          // 124 is timeout's own exit; 137 is its SIGKILL escalation after
+          // the grace period (also the OOM-kill signature).
+          timedOut: result.exitCode === 124 || result.exitCode === 137,
         }),
       );
     }

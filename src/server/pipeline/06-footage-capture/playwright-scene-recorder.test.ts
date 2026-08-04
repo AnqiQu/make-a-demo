@@ -77,6 +77,85 @@ describe("PreparedWorkspacePlaywrightSceneRecorder", () => {
     }
   }, 20_000);
 
+  it("classifies a SIGKILLed capture as a timeout alongside exit 124", async () => {
+    const runDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-recorder-test-"),
+    );
+    const recorder = new PreparedWorkspacePlaywrightSceneRecorder({
+      preparationWorkspace: fakeCaptureWorkspace({
+        bunResult: { exitCode: 137, stderr: "", stdout: "" },
+      }),
+    });
+
+    try {
+      await expect(
+        recorder.recordScenes({
+          baseUrl: "data:text/html,<main>MakeADemo</main>",
+          demoPlaywrightScript: validDemoScript("scene-timeout"),
+          runDirectory,
+          scenes: [
+            sceneDescription("scene-timeout", [
+              { id: "open", path: "/", type: "goto" },
+              {
+                id: "show",
+                locator: { strategy: "css", value: "main" },
+                type: "assert-visible",
+              },
+            ]),
+          ],
+          sectionId: "demo-script",
+        }),
+      ).rejects.toThrow("timed out");
+    } finally {
+      await rm(runDirectory, { force: true, recursive: true });
+    }
+  }, 20_000);
+
+  it("clears the remote capture scratch before recording so retries start clean", async () => {
+    const runDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-recorder-test-"),
+    );
+    const submittedCommands: string[] = [];
+    const recorder = new PreparedWorkspacePlaywrightSceneRecorder({
+      preparationWorkspace: fakeCaptureWorkspace({
+        bunResult: { exitCode: 1, stderr: "boom", stdout: "" },
+        submittedCommands,
+      }),
+    });
+
+    try {
+      await expect(
+        recorder.recordScenes({
+          baseUrl: "data:text/html,<main>MakeADemo</main>",
+          demoPlaywrightScript: validDemoScript("scene-clean"),
+          runDirectory,
+          scenes: [
+            sceneDescription("scene-clean", [
+              { id: "open", path: "/", type: "goto" },
+              {
+                id: "show",
+                locator: { strategy: "css", value: "main" },
+                type: "assert-visible",
+              },
+            ]),
+          ],
+          sectionId: "demo-script",
+        }),
+      ).rejects.toThrow();
+
+      const cleanupIndex = submittedCommands.findIndex((command) =>
+        command.startsWith("rm -rf "),
+      );
+      const captureIndex = submittedCommands.findIndex((command) =>
+        command.includes("bun "),
+      );
+      expect(cleanupIndex).toBeGreaterThanOrEqual(0);
+      expect(cleanupIndex).toBeLessThan(captureIndex);
+    } finally {
+      await rm(runDirectory, { force: true, recursive: true });
+    }
+  }, 20_000);
+
   it("clamps pre-roll at the start of the continuous take", async () => {
     const runDirectory = await mkdtemp(
       join(tmpdir(), "makeademo-recorder-test-"),

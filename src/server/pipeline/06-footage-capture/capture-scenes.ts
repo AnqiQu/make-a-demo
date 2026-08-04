@@ -189,16 +189,31 @@ async function readScriptPackage(input: CaptureScenesFromScriptInput) {
   return parseDemoScript(JSON.parse(await readFile(input.scriptPath, "utf8")));
 }
 
+/**
+ * Every capture attempt gets its own directory: a retried run id is suffixed
+ * instead of reused, so a failed attempt's evidence is never overwritten and
+ * a second capture in the same run always starts clean.
+ */
 async function createRunDirectory(tempRoot: string, runId: string) {
   await mkdir(tempRoot, { recursive: true });
 
-  if (runId.length > 0) {
-    const runDirectory = join(tempRoot, runId);
-    await mkdir(runDirectory, { recursive: false });
-    return runDirectory;
+  if (runId.length === 0) {
+    return mkdtemp(join(tempRoot, "capture-"));
   }
-
-  return mkdtemp(join(tempRoot, "capture-"));
+  for (let attempt = 1; ; attempt += 1) {
+    const runDirectory = join(
+      tempRoot,
+      attempt === 1 ? runId : `${runId}-attempt-${attempt}`,
+    );
+    try {
+      await mkdir(runDirectory, { recursive: false });
+      return runDirectory;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw error;
+      }
+    }
+  }
 }
 
 function createRunId() {

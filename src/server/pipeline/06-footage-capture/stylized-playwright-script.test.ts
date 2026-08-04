@@ -113,6 +113,25 @@ describe("prepareStylizedPlaywrightScript", () => {
     }
   });
 
+  it("reports a browser teardown failure without replacing the script's own error", () => {
+    for (const mode of ["validation", "recording"] as const) {
+      const prepared = prepareStylizedPlaywrightScript(
+        "await page.goto(baseUrl);",
+        {
+          baseUrl: "http://127.0.0.1:3000",
+          headed: false,
+          mode,
+          ...(mode === "recording"
+            ? { videoDirectory: ".demo-capture-runs/run/playwright-videos" }
+            : {}),
+        },
+      );
+
+      expect(prepared).toContain("[makeademo:context-close-failed]");
+      expect(prepared).not.toMatch(/finally \{\n\s*await context\.close\(\);/);
+    }
+  });
+
   it("blocks Service Workers in validation and recording browser contexts", () => {
     for (const mode of ["validation", "recording"] as const) {
       const prepared = prepareStylizedPlaywrightScript(

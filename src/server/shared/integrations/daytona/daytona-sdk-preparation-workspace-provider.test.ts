@@ -315,6 +315,18 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ]);
   });
 
+  it("treats a missing Daytona exit code as a failed command", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { executeCommandOmitsExitCode: true }),
+    });
+    const handle = await provider.create();
+
+    const result = await handle.workspace.execute("opencode run hello");
+
+    expect(result.exitCode).toBe(1);
+  });
+
   it("passes the configured command timeout to parent Daytona commands", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -2212,6 +2224,7 @@ function fakeClient(
     downloadError?: string;
     executeCommandFails?: boolean;
     executeCommandNeverResolves?: boolean;
+    executeCommandOmitsExitCode?: boolean;
     failFirstSubmittedCodeInitialization?: boolean;
     failSubmittedCodeNetworkDisable?: boolean;
     missingSubmittedCodeImage?: boolean;
@@ -2377,6 +2390,9 @@ function fakeClient(
         }
         if (options.executeCommandNeverResolves === true) {
           await new Promise(() => {});
+        }
+        if (options.executeCommandOmitsExitCode === true) {
+          return { result: "ok" };
         }
         if (
           options.failSubmittedCodeNetworkDisable === true &&

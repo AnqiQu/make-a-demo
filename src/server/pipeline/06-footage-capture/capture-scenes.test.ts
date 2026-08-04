@@ -603,6 +603,57 @@ describe("captureScenesFromScript", () => {
     ).resolves.toContain("raw-scenes");
   });
 
+  it("captures again in the same run after a failed attempt", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
+    const tempRoot = join(workspace, "runs");
+    let attempt = 0;
+    const recorder: SceneRecorder = {
+      async recordScenes(input) {
+        attempt += 1;
+        if (attempt === 1) {
+          throw new Error("first attempt exploded");
+        }
+        return input.scenes.map((scene) => ({
+          durationSeconds: 4,
+          markerEndMs: 2_000,
+          markerStartMs: 1_000,
+          sceneId: scene.id,
+          sectionId: input.sectionId,
+          videoPath: join(
+            input.runDirectory,
+            "scene-clips",
+            `${scene.id}.webm`,
+          ),
+        }));
+      },
+    };
+
+    await expect(
+      captureScenesFromScript({
+        baseUrl: "http://localhost:3000",
+        recorder,
+        runId: "capture-retry",
+        scriptPackage: validDemoScript(),
+        tempRoot,
+      }),
+    ).rejects.toThrow("first attempt exploded");
+
+    const manifest = await captureScenesFromScript({
+      baseUrl: "http://localhost:3000",
+      recorder,
+      runId: "capture-retry",
+      scriptPackage: validDemoScript(),
+      tempRoot,
+    });
+
+    expect(manifest.scenes).toHaveLength(1);
+    // The failed attempt's evidence stays untouched in its own directory.
+    await expect(readdir(join(tempRoot, "capture-retry"))).resolves.toContain(
+      "raw-scenes",
+    );
+    expect(manifest.runDirectory).not.toBe(join(tempRoot, "capture-retry"));
+  });
+
   it("rejects malformed Demo Scripts before recording starts", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
     const scriptPath = join(workspace, "script.json");

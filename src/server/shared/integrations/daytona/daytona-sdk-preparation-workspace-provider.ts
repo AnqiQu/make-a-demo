@@ -497,7 +497,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     );
 
     return {
-      exitCode: response.exitCode ?? 0,
+      exitCode: response.exitCode ?? 1,
       stderr: response.stderr ?? "",
       stdout: response.stdout ?? response.result ?? "",
     };
@@ -559,7 +559,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
         throw retryError;
       }
     }
-    if ((response.exitCode ?? 0) !== 0) {
+    if ((response.exitCode ?? 1) !== 0) {
       throw new Error("Failed to collect Daytona sandbox audit log.");
     }
 
@@ -593,7 +593,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       `Daytona sandbox log write did not finish within ${this.logWriteTimeoutMs}ms.`,
     );
 
-    if ((response.exitCode ?? 0) !== 0) {
+    if ((response.exitCode ?? 1) !== 0) {
       throw new Error("Failed to write Daytona sandbox audit log.");
     }
   }
@@ -627,7 +627,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     );
 
     return {
-      exitCode: response.exitCode ?? 0,
+      exitCode: response.exitCode ?? 1,
       stderr: response.stderr ?? "",
       stdout: response.stdout ?? response.result ?? "",
     };
@@ -792,7 +792,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
         this.commandTimeoutMs,
         `Daytona prepared workspace archive did not finish within ${this.commandTimeoutMs}ms.`,
       );
-      if ((archiveResult.exitCode ?? 0) !== 0) {
+      if ((archiveResult.exitCode ?? 1) !== 0) {
         throw new Error(
           formatCommandFailure(
             "Failed to archive prepared Daytona workspace",

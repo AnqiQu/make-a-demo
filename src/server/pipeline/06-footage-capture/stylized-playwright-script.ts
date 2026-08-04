@@ -60,8 +60,7 @@ globalThis.__makeademoCaptureSdk = { context: makeADemoCaptureContext, sceneHold
 try {
 ${indentScriptBody(script)}
 } finally {
-  await context.close();
-  await browser.close();
+${browserTeardownSource()}
 }
 void expect;
 void setup;
@@ -122,14 +121,27 @@ ${indentScriptBody(script)}
   }));
   throw error;
 } finally {
-  await context.close();
-  await browser.close();
+${browserTeardownSource()}
 }
 void expect;
 void setup;
 void scene;
 void step;
 `;
+}
+
+/**
+ * Teardown failures are evidence, not verdicts: they go to stderr for the
+ * capture logs but never replace the script body's own error.
+ */
+function browserTeardownSource() {
+  return `  try {
+    await context.close();
+    await browser.close();
+  } catch (makeADemoCloseError) {
+    // Generated protocol: parent capture reads stderr for teardown evidence.
+    console.error("[makeademo:context-close-failed]", makeADemoCloseError instanceof Error ? makeADemoCloseError.message : String(makeADemoCloseError));
+  }`;
 }
 
 function runtimeNetworkLockdownSource(
