@@ -1737,6 +1737,35 @@ consistent with evidence ownership).
 install scoped, start on the right port), then one new real-world monorepo
 end-to-end per the Phase 5 gate.
 
+## Addendum (2026-08-04, after the post-Phase-5 matrix run)
+
+Runs: `terminal-2026-08-04T18-56-43-407Z` (homer, **passed**, 530s) +
+`terminal-2026-08-04T19-05-33-041Z` (midday, failed at exploration, 1274s).
+
+**Phase 5 validated in production.** Homer's second consecutive tier-3 full
+pass, now on Phase 5 code. Midday exercised the whole WS5 stack and every
+piece behaved: model target selection locked `apps/dashboard` as `product`;
+the scoped install resolved the complete internal closure (31 `--filter`
+workspaces + the root filter) and executed; start resolved to the
+workspace-local `bun run dev` on port 3001 from the selected script body; no
+build for a dev server; no OOM at 8 GiB; no network or infra events.
+
+**Midday's failure is the standing frontier, not a Phase 5 issue.** Both
+requested features rendered chrome plus an empty data table (N26c evidence
+verbatim). The 5-attempt repair budget went to serial convergence through
+preparation-fidelity vetoes: each attempt removed integration behavior
+(`useSuspenseInfiniteQuery`, `trpc.user.me.queryOptions`,
+`trpc.tags.get.queryOptions`) or modified product UI
+(`invoices-open/overdue/paid.tsx`) instead of gating it, was vetoed with the
+N25a per-condition message, fixed those files, then tripped on a new set.
+Fidelity correctly batched all violations within each attempt; the bottleneck
+is one-lesson-per-paid-attempt bandwidth, which is exactly the N29a class
+(recorded 2026-08-03, queued). No new N item.
+
+**Recommendation:** proceed to Phase 6. The WS5 gate's remaining half — one
+new real-world repo end-to-end — can ride the next matrix run now that
+excalidraw/cyberchef are in the matrix (`6cc4dba`).
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
