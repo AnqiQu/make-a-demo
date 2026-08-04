@@ -298,6 +298,48 @@ async function readWorkspaceCapacityEvidence(
   }
 }
 
+/**
+ * Shared shape of every repairable exploration failure report: identical
+ * artifact, stage, excerpt, and status plumbing, with only the classification,
+ * summary, hints, and observed browser evidence varying per failure kind.
+ */
+function explorationFailure(input: {
+  baseUrl: string;
+  classification: string;
+  consoleErrors?: string[];
+  diagnostics: { stderrExcerpts: string[]; stdoutExcerpts: string[] };
+  hints: string[];
+  networkAttempts?: NetworkAttempt[];
+  observation?: BrowserExplorationProtocol;
+  pageErrors?: string[];
+  summary: string;
+}): Extract<SubmittedAppExplorationResult, { kind: "repairable-failure" }> {
+  return {
+    kind: "repairable-failure",
+    ...(input.observation === undefined
+      ? {}
+      : { observation: input.observation }),
+    validationReport: readValidationReport({
+      artifactReferences: [explorerPath],
+      blockedNetworkAttempts: input.networkAttempts ?? [],
+      browserObservations: [],
+      consoleErrors: input.consoleErrors ?? [],
+      failureClassification: input.classification,
+      logsSummary: input.summary,
+      networkAttempts: input.networkAttempts ?? [],
+      pageErrors: input.pageErrors ?? [],
+      retryCount: 0,
+      screenshots: [],
+      stage: "app-exploration",
+      status: "failed",
+      stderrExcerpts: input.diagnostics.stderrExcerpts,
+      stdoutExcerpts: input.diagnostics.stdoutExcerpts,
+      suggestedRepairHints: input.hints,
+      urlChecked: input.baseUrl,
+    }),
+  };
+}
+
 function createSandboxCapacityFailure(input: {
   appStatus: AgentHarnessSubmittedCodeAppStatus;
   baseUrl: string;
@@ -308,29 +350,15 @@ function createSandboxCapacityFailure(input: {
     input.evidence.memoryMaxBytes === undefined
       ? ""
       : ` under a ${Math.round(input.evidence.memoryMaxBytes / (1024 * 1024))} MiB memory ceiling`;
-  return {
-    kind: "repairable-failure",
-    validationReport: readValidationReport({
-      artifactReferences: [explorerPath],
-      blockedNetworkAttempts: [],
-      browserObservations: [],
-      consoleErrors: [],
-      failureClassification: "sandbox capacity exceeded",
-      logsSummary: `The sandbox killed the prepared app: the cgroup reports ${input.evidence.oomKills} OOM kill(s)${memoryCeiling}. The app needs more resources than the submitted-code sandbox provides.${diagnostics.output ? ` App output: ${diagnostics.output}` : ""}`,
-      networkAttempts: [],
-      pageErrors: [],
-      retryCount: 0,
-      screenshots: [],
-      stage: "app-exploration",
-      status: "failed",
-      stderrExcerpts: diagnostics.stderrExcerpts,
-      stdoutExcerpts: diagnostics.stdoutExcerpts,
-      suggestedRepairHints: [
-        "Rebuild the MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT snapshot with a larger sandbox class (more memory and cpu); no repository change can add sandbox capacity.",
-      ],
-      urlChecked: input.baseUrl,
-    }),
-  };
+  return explorationFailure({
+    baseUrl: input.baseUrl,
+    classification: "sandbox capacity exceeded",
+    diagnostics,
+    hints: [
+      "Rebuild the MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT snapshot with a larger sandbox class (more memory and cpu); no repository change can add sandbox capacity.",
+    ],
+    summary: `The sandbox killed the prepared app: the cgroup reports ${input.evidence.oomKills} OOM kill(s)${memoryCeiling}. The app needs more resources than the submitted-code sandbox provides.${diagnostics.output ? ` App output: ${diagnostics.output}` : ""}`,
+  });
 }
 
 function createExitedAppExplorationFailure(input: {
@@ -339,29 +367,15 @@ function createExitedAppExplorationFailure(input: {
   timeoutError: AgentHarnessCommandTimeoutError;
 }): Extract<SubmittedAppExplorationResult, { kind: "repairable-failure" }> {
   const diagnostics = createAppStatusDiagnostics(input.appStatus);
-  return {
-    kind: "repairable-failure",
-    validationReport: readValidationReport({
-      artifactReferences: [explorerPath],
-      blockedNetworkAttempts: [],
-      browserObservations: [],
-      consoleErrors: [],
-      failureClassification: "start failure",
-      logsSummary: `The prepared app exited${input.appStatus.exitCode === undefined ? "" : ` with code ${input.appStatus.exitCode}`} while App Exploration was running: ${diagnostics.output || input.timeoutError.message}`,
-      networkAttempts: [],
-      pageErrors: [],
-      retryCount: 0,
-      screenshots: [],
-      stage: "app-exploration",
-      status: "failed",
-      stderrExcerpts: diagnostics.stderrExcerpts,
-      stdoutExcerpts: diagnostics.stdoutExcerpts,
-      suggestedRepairHints: [
-        "Repair the app crash or reduce its runtime resource usage, then rerun browser exploration.",
-      ],
-      urlChecked: input.baseUrl,
-    }),
-  };
+  return explorationFailure({
+    baseUrl: input.baseUrl,
+    classification: "start failure",
+    diagnostics,
+    hints: [
+      "Repair the app crash or reduce its runtime resource usage, then rerun browser exploration.",
+    ],
+    summary: `The prepared app exited${input.appStatus.exitCode === undefined ? "" : ` with code ${input.appStatus.exitCode}`} while App Exploration was running: ${diagnostics.output || input.timeoutError.message}`,
+  });
 }
 
 function createExplorationArtifacts(input: {
@@ -381,90 +395,110 @@ function createExplorationArtifacts(input: {
       )
       .map(({ id }) => id),
   );
-  const routes = input.observation.routes.map((route) => ({
-    buttons: route.buttons,
-    ...(route.featureIds === undefined ? {} : { featureIds: route.featureIds }),
-    forms: route.forms,
-    headings: route.headings,
-    inputs: route.inputs,
-    links: route.links.map((link) => link.href),
-    path: route.path,
-    primaryNavigation: route.primaryNavigation,
-    ...(route.requestedPath === undefined
-      ? {}
-      : { requestedPath: route.requestedPath }),
-    screenshots: [route.screenshot],
-    snapshotPath: route.snapshot,
-    stableLocatorCandidates: createRouteLocatorCandidates(route),
-    text: route.text,
-    title: route.title,
-  }));
-  const loginOrAuthWalls = input.observation.routes
-    .filter(isAuthWall)
-    .map((route) => route.path);
+  const distinctContentByRoute = readRouteDistinctContent(
+    input.observation.routes,
+  );
+  // One traversal accumulates every route-derived AppMap field; the observed
+  // per-route order is what keeps the deduplicated aggregates stable.
+  const routes: Array<Record<string, unknown>> = [];
+  const loginOrAuthWalls: string[] = [];
+  const accessibilitySnapshots: string[] = [];
+  const buttons: string[] = [];
+  const candidateFlows: string[] = [];
+  const forms: string[] = [];
+  const inputs: string[] = [];
+  const links: string[] = [];
+  const primaryNavigation: string[] = [];
+  const routeTitles: Record<string, string> = {};
+  const screenshots: string[] = [];
+  const stableLocatorCandidates: string[] = [];
+  const emptyDataTablesByRoute = new Map<string, number>();
+  for (const route of input.observation.routes) {
+    const routeLocatorCandidates = createRouteLocatorCandidates(route);
+    const linkHrefs = route.links.map((link) => link.href);
+    routes.push({
+      buttons: route.buttons,
+      ...(route.featureIds === undefined
+        ? {}
+        : { featureIds: route.featureIds }),
+      forms: route.forms,
+      headings: route.headings,
+      inputs: route.inputs,
+      links: linkHrefs,
+      path: route.path,
+      primaryNavigation: route.primaryNavigation,
+      ...(route.requestedPath === undefined
+        ? {}
+        : { requestedPath: route.requestedPath }),
+      screenshots: [route.screenshot],
+      snapshotPath: route.snapshot,
+      stableLocatorCandidates: routeLocatorCandidates,
+      text: route.text,
+      title: route.title,
+    });
+    if (isAuthWall(route)) {
+      loginOrAuthWalls.push(route.path);
+    }
+    accessibilitySnapshots.push(route.snapshot);
+    buttons.push(...route.buttons);
+    candidateFlows.push(
+      ...route.buttons,
+      ...route.forms,
+      ...route.inputs,
+      ...route.links
+        .filter((link) => link.sameOrigin !== false)
+        .map((link) => link.name),
+    );
+    forms.push(...route.forms);
+    inputs.push(...route.inputs);
+    links.push(...linkHrefs);
+    primaryNavigation.push(...route.primaryNavigation);
+    routeTitles[route.path] = route.title;
+    screenshots.push(route.screenshot);
+    stableLocatorCandidates.push(...routeLocatorCandidates);
+    if ((route.emptyDataTables?.length ?? 0) > 0) {
+      emptyDataTablesByRoute.set(
+        route.path,
+        route.emptyDataTables?.[0]?.columnHeaders ?? 0,
+      );
+    }
+  }
   const appMap = readAppMap({
-    accessibilitySnapshots: input.observation.routes.map(
-      (route) => route.snapshot,
-    ),
+    accessibilitySnapshots,
     actionCatalogId,
     appStateAssumptions: [],
     baseUrl: input.baseUrl,
     blockedNetworkAttempts: networkAttempts,
-    buttons: unique(input.observation.routes.flatMap((route) => route.buttons)),
-    candidateFlows: unique(
-      input.observation.routes.flatMap((route) => [
-        ...route.buttons,
-        ...route.forms,
-        ...route.inputs,
-        ...route.links
-          .filter((link) => link.sameOrigin !== false)
-          .map((link) => link.name),
-      ]),
-    ),
+    buttons: unique(buttons),
+    candidateFlows: unique(candidateFlows),
     consoleErrors: unique(input.observation.consoleErrors),
     discoveredRoutes: routes,
-    forms: unique(input.observation.routes.flatMap((route) => route.forms)),
+    forms: unique(forms),
     id: appMapId,
-    inputs: unique(input.observation.routes.flatMap((route) => route.inputs)),
-    links: unique(
-      input.observation.routes.flatMap((route) =>
-        route.links.map((link) => link.href),
-      ),
-    ),
+    inputs: unique(inputs),
+    links: unique(links),
     loginOrAuthWalls,
     networkAttempts,
     pageErrors: unique(input.observation.pageErrors),
-    primaryNavigation: unique(
-      input.observation.routes.flatMap((route) => route.primaryNavigation),
-    ),
-    routeTitles: Object.fromEntries(
-      input.observation.routes.map((route) => [route.path, route.title]),
-    ),
-    screenshots: input.observation.routes.map((route) => route.screenshot),
-    stableLocatorCandidates: unique(
-      input.observation.routes.flatMap(createRouteLocatorCandidates),
-    ),
+    primaryNavigation: unique(primaryNavigation),
+    routeTitles,
+    screenshots,
+    stableLocatorCandidates: unique(stableLocatorCandidates),
   });
   const actionCatalog = readActionCatalog({
     actions: createActions(
       input.observation.routes,
       input.featureInventory,
       explicitAuthenticationFeatureIds,
+      distinctContentByRoute,
     ),
     appMapId,
     id: actionCatalogId,
   });
-  const emptyDataTablesByRoute = new Map(
-    input.observation.routes
-      .filter((route) => (route.emptyDataTables?.length ?? 0) > 0)
-      .map(
-        (route) =>
-          [route.path, route.emptyDataTables?.[0]?.columnHeaders ?? 0] as const,
-      ),
-  );
   const validationReport = createExplorationValidationReport({
     actionCatalog,
     appMap,
+    distinctContentByRoute,
     emptyDataTablesByRoute,
     explicitAuthenticationFeatureIds,
     featureInventory: input.featureInventory,
@@ -489,45 +523,34 @@ function createRepairableExplorationFailure(input: {
   const networkAttempts = readObservedNetworkAttempts(input.observation);
   const appExited = input.appStatus?.running === false;
   const diagnostics = createAppStatusDiagnostics(input.appStatus);
-  return {
-    kind: "repairable-failure",
+  return explorationFailure({
+    baseUrl: input.baseUrl,
+    classification: appExited
+      ? "app route crashes"
+      : "app route not discoverable",
+    consoleErrors: unique(input.observation.consoleErrors),
+    diagnostics,
+    hints: appExited
+      ? [
+          "Repair the app crash or reduce its runtime resource usage, then rerun browser exploration.",
+        ]
+      : [
+          "Repair the prepared app start command, base URL, route crash, or initial app state, then rerun browser exploration.",
+        ],
+    networkAttempts,
     observation: input.observation,
-    validationReport: readValidationReport({
-      artifactReferences: [explorerPath],
-      blockedNetworkAttempts: networkAttempts,
-      browserObservations: [],
-      consoleErrors: unique(input.observation.consoleErrors),
-      failureClassification: appExited
-        ? "app route crashes"
-        : "app route not discoverable",
-      logsSummary: appExited
-        ? `The prepared app exited${input.appStatus?.exitCode === undefined ? "" : ` with code ${input.appStatus.exitCode}`} while Playwright was exploring it${diagnostics.output ? `: ${diagnostics.output}` : "."}`
-        : `Playwright completed exploration but did not discover a browser route to ground Flow Planning.${
-            input.observation.fatalError === undefined
-              ? ""
-              : ` Explorer error: ${input.observation.fatalError}`
-          }${(input.observation.unreachableRoutes ?? [])
-            .slice(0, 3)
-            .map((route) => ` Unreachable ${route.url}: ${route.error}`)
-            .join(" |")}`,
-      networkAttempts,
-      pageErrors: unique(input.observation.pageErrors),
-      retryCount: 0,
-      screenshots: [],
-      stage: "app-exploration",
-      status: "failed",
-      stderrExcerpts: diagnostics.stderrExcerpts,
-      stdoutExcerpts: diagnostics.stdoutExcerpts,
-      suggestedRepairHints: appExited
-        ? [
-            "Repair the app crash or reduce its runtime resource usage, then rerun browser exploration.",
-          ]
-        : [
-            "Repair the prepared app start command, base URL, route crash, or initial app state, then rerun browser exploration.",
-          ],
-      urlChecked: input.baseUrl,
-    }),
-  };
+    pageErrors: unique(input.observation.pageErrors),
+    summary: appExited
+      ? `The prepared app exited${input.appStatus?.exitCode === undefined ? "" : ` with code ${input.appStatus.exitCode}`} while Playwright was exploring it${diagnostics.output ? `: ${diagnostics.output}` : "."}`
+      : `Playwright completed exploration but did not discover a browser route to ground Flow Planning.${
+          input.observation.fatalError === undefined
+            ? ""
+            : ` Explorer error: ${input.observation.fatalError}`
+        }${(input.observation.unreachableRoutes ?? [])
+          .slice(0, 3)
+          .map((route) => ` Unreachable ${route.url}: ${route.error}`)
+          .join(" |")}`,
+  });
 }
 
 function createAppStatusDiagnostics(
@@ -614,9 +637,9 @@ function createActions(
   routes: ObservedRoute[],
   featureInventory: PreparedDemoFeature[],
   explicitAuthenticationFeatureIds: ReadonlySet<string>,
+  distinctContentByRoute: ReadonlyMap<string, string[]>,
 ) {
   const actions: Array<Record<string, unknown>> = [];
-  const distinctContentByRoute = readRouteDistinctContent(routes);
   routes.forEach((route, routeIndex) => {
     const matchFeatureIds = (evidence: string) =>
       matchActionFeatureIds(
@@ -890,6 +913,7 @@ function createLocatorCandidateFields(
 function createExplorationValidationReport(input: {
   actionCatalog: ActionCatalog;
   appMap: AppMap;
+  distinctContentByRoute: ReadonlyMap<string, string[]>;
   emptyDataTablesByRoute?: ReadonlyMap<string, number>;
   explicitAuthenticationFeatureIds: ReadonlySet<string>;
   featureInventory: PreparedDemoFeature[];
@@ -903,6 +927,7 @@ function createExplorationValidationReport(input: {
     input.explicitAuthenticationFeatureIds,
     input.unreachableRoutes,
     input.emptyDataTablesByRoute ?? new Map(),
+    input.distinctContentByRoute,
   );
   // Load-breaking runtime evidence outranks grounding counts: a route that
   // crashes before rendering cannot ground anything, and only the dependency
@@ -987,16 +1012,38 @@ function readExplorationFailure(
   explicitAuthenticationFeatureIds: ReadonlySet<string>,
   unreachableRoutes: UnreachableRoute[],
   emptyDataTablesByRoute: ReadonlyMap<string, number>,
+  distinctContentByRoute: ReadonlyMap<string, string[]>,
 ): { classification: string; message: string } | undefined {
-  const unreachableForFeatures = (featureIds: ReadonlySet<string>) =>
-    unreachableRoutes.filter((route) =>
+  const unreachableFailure = (features: PreparedDemoFeature[]) => {
+    const featureIds = new Set(features.map(({ id }) => id));
+    const unreachable = unreachableRoutes.filter((route) =>
       (route.featureIds ?? []).some((featureId) => featureIds.has(featureId)),
     );
-  const formatUnreachable = (routes: UnreachableRoute[]) =>
-    `Feature entry routes failed to load: ${routes
-      .slice(0, 2)
-      .map((route) => `${route.url}: ${route.error}`)
-      .join(" | ")}.`;
+    if (unreachable.length === 0) return undefined;
+    return {
+      classification: "app route not discoverable",
+      message: `Feature entry routes failed to load: ${unreachable
+        .slice(0, 2)
+        .map((route) => `${route.url}: ${route.error}`)
+        .join(" | ")}.`,
+    };
+  };
+  const chromeOnlyExplanation = (tail: string) =>
+    `rendered only globally-repeated navigation chrome — no route-distinct headings, text, or data${tail}`;
+  const actionsByFeatureId = new Map<
+    string,
+    Array<ActionCatalog["actions"][number]>
+  >();
+  for (const action of actionCatalog.actions) {
+    for (const featureId of action.featureIds ?? []) {
+      const tagged = actionsByFeatureId.get(featureId);
+      if (tagged === undefined) {
+        actionsByFeatureId.set(featureId, [action]);
+      } else {
+        tagged.push(action);
+      }
+    }
+  }
   const featuresById = new Map(
     featureInventory.map((feature) => [feature.id, feature]),
   );
@@ -1039,9 +1086,6 @@ function readExplorationFailure(
       message: `Explored ${appMap.discoveredRoutes.length} route(s) that served their document shell but rendered no visible content — no headings, text, links, or controls appeared within the content wait. The prepared runtime's data fixtures or demo gating are blocking rendering; repair the prepared app so its routes render their content.`,
     };
   }
-  const distinctContentByRoute = readRouteDistinctContent(
-    appMap.discoveredRoutes,
-  );
   const contentRoutePaths = new Set(
     [...distinctContentByRoute]
       .filter(([, content]) => content.length > 0)
@@ -1055,20 +1099,20 @@ function readExplorationFailure(
       ? undefined
       : {
           classification: "empty/unmeaningful app state",
-          message: `Explored ${appMap.discoveredRoutes.length} route(s) but every route rendered only globally-repeated navigation chrome — no route-distinct headings, text, or data appeared within the content wait. Feature entry routes affected: ${[
-            ...new Set(features.flatMap((feature) => feature.entryPaths)),
-          ]
-            .slice(0, 4)
-            .join(
-              ", ",
-            )}. The prepared runtime's data fixtures or demo gating are not rendering content; repair the prepared app's data path.`,
+          message: `Explored ${appMap.discoveredRoutes.length} route(s) but every route ${chromeOnlyExplanation(
+            ` appeared within the content wait. Feature entry routes affected: ${[
+              ...new Set(features.flatMap((feature) => feature.entryPaths)),
+            ]
+              .slice(0, 4)
+              .join(
+                ", ",
+              )}. The prepared runtime's data fixtures or demo gating are not rendering content; repair the prepared app's data path.`,
+          )}`,
         };
   const groundedFeatureIds = new Set(
     featureInventory
       .filter((feature) => {
-        const actions = actionCatalog.actions.filter((action) =>
-          action.featureIds?.includes(feature.id),
-        );
+        const actions = actionsByFeatureId.get(feature.id) ?? [];
         // A browser-exercised interaction proves the feature. Without one,
         // verified assert evidence counts only when its visible text matches
         // the feature, so read-only pages can ground while a wrong entry
@@ -1093,9 +1137,7 @@ function readExplorationFailure(
   // repair, so it must fail here, where preparation repair can merge or
   // reselect the features.
   const forcedEvidenceKey = (featureId: string): string | undefined => {
-    const tagged = actionCatalog.actions.filter((action) =>
-      action.featureIds?.includes(featureId),
-    );
+    const tagged = actionsByFeatureId.get(featureId) ?? [];
     const asserts = unique(
       tagged.filter((action) => action.kind === "assert").map(({ id }) => id),
     );
@@ -1141,14 +1183,9 @@ function readExplorationFailure(
     };
   }
   if (missingRequestedFeatures.length > 0) {
-    const unreachable = unreachableForFeatures(
-      new Set(missingRequestedFeatures.map(({ id }) => id)),
-    );
-    if (unreachable.length > 0) {
-      return {
-        classification: "app route not discoverable",
-        message: formatUnreachable(unreachable),
-      };
+    const unreachable = unreachableFailure(missingRequestedFeatures);
+    if (unreachable !== undefined) {
+      return unreachable;
     }
     // Naming what the feature's routes actually showed turns "no evidence"
     // into actionable steering: a chrome-only route means the data path is
@@ -1156,9 +1193,9 @@ function readExplorationFailure(
     const chromeOnlyRouteEvidence = missingRequestedFeatures
       .map((feature) => {
         const taggedRoutes = unique(
-          actionCatalog.actions
-            .filter((action) => action.featureIds?.includes(feature.id))
-            .map((action) => action.route),
+          (actionsByFeatureId.get(feature.id) ?? []).map(
+            (action) => action.route,
+          ),
         );
         const routes =
           taggedRoutes.length > 0 ? taggedRoutes : feature.entryPaths;
@@ -1177,9 +1214,9 @@ function readExplorationFailure(
             : ` An empty data table (${emptyTableColumns} column headers, zero data rows) rendered on these routes — the data query resolved empty or mis-shaped; align the fixture shape with the fields the consuming component reads.`;
         return ` Requested feature "${feature.requestedFeature}" routes ${routes
           .slice(0, 4)
-          .join(
-            ", ",
-          )} rendered only globally-repeated navigation chrome — no route-distinct headings, text, or data; repair the prepared app's data path for these routes.${emptyTableEvidence}`;
+          .join(", ")} ${chromeOnlyExplanation(
+          `; repair the prepared app's data path for these routes.${emptyTableEvidence}`,
+        )}`;
       })
       .join("");
     return (
@@ -1217,14 +1254,9 @@ function readExplorationFailure(
           message: indistinguishableMessage(collisionGroups[0] ?? []),
         };
       }
-      const unreachable = unreachableForFeatures(
-        new Set(ungroundedFeatures.map(({ id }) => id)),
-      );
-      if (unreachable.length > 0) {
-        return {
-          classification: "app route not discoverable",
-          message: formatUnreachable(unreachable),
-        };
+      const unreachable = unreachableFailure(ungroundedFeatures);
+      if (unreachable !== undefined) {
+        return unreachable;
       }
       return (
         hollowFailure(ungroundedFeatures) ?? {
@@ -1471,31 +1503,17 @@ function createCrashedExplorerFailure(input: {
   const excerpt = (input.result.stderr || input.result.stdout)
     .trim()
     .slice(0, 2000);
-  return {
-    kind: "repairable-failure",
-    validationReport: readValidationReport({
-      artifactReferences: [explorerPath],
-      blockedNetworkAttempts: [],
-      browserObservations: [],
-      consoleErrors: [],
-      failureClassification: appExited ? "app route crashes" : "runtime crash",
-      logsSummary: `Browser exploration exited with code ${input.result.exitCode} without emitting its result protocol${excerpt ? `: ${excerpt}` : "."}`,
-      networkAttempts: [],
-      pageErrors: [],
-      retryCount: 0,
-      screenshots: [],
-      stage: "app-exploration",
-      status: "failed",
-      stderrExcerpts: diagnostics.stderrExcerpts,
-      stdoutExcerpts: diagnostics.stdoutExcerpts,
-      suggestedRepairHints: [
-        appExited
-          ? "Repair the app crash or reduce its runtime resource usage, then rerun browser exploration."
-          : "Repair the prepared app runtime so the browser explorer can load it, then rerun browser exploration.",
-      ],
-      urlChecked: input.baseUrl,
-    }),
-  };
+  return explorationFailure({
+    baseUrl: input.baseUrl,
+    classification: appExited ? "app route crashes" : "runtime crash",
+    diagnostics,
+    hints: [
+      appExited
+        ? "Repair the app crash or reduce its runtime resource usage, then rerun browser exploration."
+        : "Repair the prepared app runtime so the browser explorer can load it, then rerun browser exploration.",
+    ],
+    summary: `Browser exploration exited with code ${input.result.exitCode} without emitting its result protocol${excerpt ? `: ${excerpt}` : "."}`,
+  });
 }
 
 function unique(values: string[]): string[] {
