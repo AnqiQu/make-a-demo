@@ -193,7 +193,6 @@ export interface AgentHarnessWorkspace {
    */
   promoteSubmittedCodeFiles?(paths: string[]): Promise<void>;
   setSubmittedCodeNetworkAccess?(enabled: boolean): Promise<void>;
-  getPreviewUrl?(port: number): Promise<string>;
   writeSandboxLog?(entry: AgentHarnessWorkspaceLogEntry): Promise<void>;
   /**
    * Writes exact UTF-8 text into the agent sandbox without exposing it to the
@@ -201,7 +200,6 @@ export interface AgentHarnessWorkspace {
    */
   writeTextFile?(path: string, contents: string): Promise<void>;
   uploadFiles?(files: AgentHarnessWorkspaceUploadFile[]): Promise<void>;
-  downloadFiles?(files: AgentHarnessWorkspaceDownloadFile[]): Promise<void>;
   /**
    * Uploads runtime inputs only to the submitted-code trust boundary.
    * Implementations must not copy these files into an agent sandbox.
@@ -217,7 +215,6 @@ export interface AgentHarnessWorkspace {
   ): Promise<void>;
   collectSandboxLogs?(): Promise<string[]>;
   collectNetworkStateLog?(): Promise<AgentHarnessNetworkStateTransition[]>;
-  cancelActiveCommands?(): Promise<void>;
 }
 
 export type AgentHarnessWorkspaceHandle = {

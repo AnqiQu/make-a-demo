@@ -205,52 +205,6 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
   });
 
-  it("downloads captured workspace artifacts with Daytona fs.downloadFiles", async () => {
-    const calls: unknown[] = [];
-    const provider = new DaytonaSdkPreparationWorkspaceProvider({
-      client: fakeClient(calls),
-    });
-    const handle = await provider.create();
-
-    await handle.workspace.downloadFiles?.([
-      {
-        destinationPath: "/tmp/capture/scene.webm",
-        sourcePath: "/workspace/.makeademo/capture/scene.webm",
-      },
-    ]);
-
-    expect(calls[1]).toEqual({
-      downloadFiles: {
-        files: [
-          {
-            destination: "/tmp/capture/scene.webm",
-            source: "/workspace/.makeademo/capture/scene.webm",
-          },
-        ],
-        timeoutSec: 0,
-      },
-    });
-  });
-
-  it("fails when Daytona cannot download a captured workspace artifact", async () => {
-    const calls: unknown[] = [];
-    const provider = new DaytonaSdkPreparationWorkspaceProvider({
-      client: fakeClient(calls, { downloadError: "missing file" }),
-    });
-    const handle = await provider.create();
-
-    await expect(
-      handle.workspace.downloadFiles?.([
-        {
-          destinationPath: "/tmp/capture/scene.webm",
-          sourcePath: "/workspace/.makeademo/capture/scene.webm",
-        },
-      ]),
-    ).rejects.toThrow(
-      "Failed to download Daytona sandbox file /workspace/.makeademo/capture/scene.webm: missing file",
-    );
-  });
-
   it("uploads workspace artifacts to the Daytona workspace", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -416,39 +370,6 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     );
     expect(calls).toEqual(
       expect.arrayContaining([{ executeCommand: "npm ci" }]),
-    );
-  });
-
-  it("resolves signed preview URLs for browser validation", async () => {
-    const calls: unknown[] = [];
-    const provider = new DaytonaSdkPreparationWorkspaceProvider({
-      client: fakeClient(calls),
-    });
-    const handle = await provider.create();
-
-    await expect(handle.workspace.getPreviewUrl?.(4173)).resolves.toBe(
-      "https://preview.example.test:4173",
-    );
-    expect(calls[1]).toEqual({
-      getSignedPreviewUrl: { port: 4173, ttl: 3600 },
-    });
-  });
-
-  it("fails fast when Daytona does not return a preview URL", async () => {
-    const calls: unknown[] = [];
-    const provider = new DaytonaSdkPreparationWorkspaceProvider({
-      client: fakeClient(calls, { previewNeverResolves: true }),
-      previewUrlTimeoutMs: 1,
-    });
-    const handle = await provider.create();
-
-    await expect(handle.workspace.getPreviewUrl?.(4173)).rejects.toThrow(
-      "Daytona preview URL creation did not finish within 1ms.",
-    );
-    expect(calls).toEqual(
-      expect.arrayContaining([
-        { getSignedPreviewUrl: { port: 4173, ttl: 3600 } },
-      ]),
     );
   });
 
@@ -1310,19 +1231,10 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         sourcePath: "/tmp/repo/package.json",
       },
     ]);
-    await handle.workspace.downloadFiles?.([
-      {
-        destinationPath: "/tmp/capture.webm",
-        sourcePath: "/workspace/.makeademo/capture.webm",
-      },
-    ]);
     const result = await handle.workspace.executeSubmittedCode?.("npm test");
     await handle.workspace.setSubmittedCodeNetworkAccess?.(true);
     const networkTransitions =
       await handle.workspace.collectNetworkStateLog?.();
-    await expect(handle.workspace.getPreviewUrl?.(3000)).resolves.toBe(
-      "https://child-preview.example.test:3000",
-    );
 
     expect(result).toEqual({ exitCode: 0, stderr: "", stdout: "child ok" });
     expect(networkTransitions?.map((transition) => transition.state)).toEqual([
@@ -1354,31 +1266,12 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
           },
         },
         {
-          downloadFiles: {
-            files: [
-              {
-                destination: "/tmp/capture.webm",
-                source: "/workspace/.makeademo/capture.webm",
-              },
-            ],
-            sandbox: "submitted_sandbox",
-            timeoutSec: 0,
-          },
-        },
-        {
           executeCommand: { command: "npm test", sandbox: "submitted_sandbox" },
         },
         {
           updateNetworkSettings: {
             sandbox: "submitted_sandbox",
             settings: { networkBlockAll: false },
-          },
-        },
-        {
-          getSignedPreviewUrl: {
-            port: 3000,
-            sandbox: "submitted_sandbox",
-            ttl: 3600,
           },
         },
       ]),
@@ -2014,9 +1907,6 @@ function fakeCommandTimeoutSandbox(calls: unknown[], id: string) {
       async uploadFiles() {},
     },
     id,
-    async getSignedPreviewUrl(port: number) {
-      return { url: `https://${id}.example.test:${port}` };
-    },
     process: {
       async createPty() {
         throw new Error("Streaming is not exercised by command timeout tests.");
@@ -2136,9 +2026,6 @@ function fakeLocalShellSandbox(
       },
     },
     id,
-    async getSignedPreviewUrl(port: number) {
-      return { url: `https://local-shell.example.test:${port}` };
-    },
     process: {
       async createPty() {
         throw new Error("Streaming is not exercised by local shell tests.");
@@ -2240,12 +2127,6 @@ function fakeLinkedSandbox(
       },
     },
     id,
-    async getSignedPreviewUrl(port: number, ttl?: number) {
-      calls.push({ getSignedPreviewUrl: { port, sandbox: id, ttl } });
-      return {
-        url: `https://${id === "submitted_sandbox" ? "child" : "parent"}-preview.example.test:${port}`,
-      };
-    },
     process: {
       async createPty() {
         throw new Error("Streaming is not exercised by linked sandbox tests.");
@@ -2342,7 +2223,6 @@ function fakeClient(
     failSubmittedCodeNetworkDisable?: boolean;
     missingSubmittedCodeImage?: boolean;
     networkError?: Error;
-    previewNeverResolves?: boolean;
     ptyConnectionFailuresBeforeSuccess?: number;
     ptyDisconnectNeverResolves?: boolean;
     ptyForgedExitSentinel?: string;
@@ -2384,13 +2264,6 @@ function fakeClient(
       },
     },
     id: "sandbox_123",
-    async getSignedPreviewUrl(port: number, ttl?: number) {
-      calls.push({ getSignedPreviewUrl: { port, ttl } });
-      if (options.previewNeverResolves === true) {
-        await new Promise(() => {});
-      }
-      return { url: `https://preview.example.test:${port}` };
-    },
     process: {
       async createPty(ptyOptions: {
         id: string;

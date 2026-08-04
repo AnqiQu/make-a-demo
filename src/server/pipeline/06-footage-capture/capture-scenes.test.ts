@@ -297,11 +297,6 @@ describe("captureScenesFromScript", () => {
       async destroy() {},
       id: "daytona_workspace",
       workspace: createFakeAgentHarnessWorkspace({
-        async downloadFiles() {
-          throw new Error(
-            "generic artifact download must not cross trust boundaries",
-          );
-        },
         async downloadSubmittedCodeFiles(files) {
           downloadedSources.push(...files.map((file) => file.sourcePath));
           expect(files).toHaveLength(1);
@@ -362,9 +357,6 @@ describe("captureScenesFromScript", () => {
             };
           }
           return { exitCode: 0, stderr: "", stdout: "" };
-        },
-        async getPreviewUrl() {
-          return "https://preview.example.test/";
         },
         async uploadFiles() {
           throw new Error(

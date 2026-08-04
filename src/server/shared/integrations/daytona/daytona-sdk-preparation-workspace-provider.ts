@@ -49,10 +49,6 @@ type DaytonaSdkSandbox = {
       timeoutSec?: number,
     ): Promise<void>;
   };
-  getSignedPreviewUrl(
-    port: number,
-    expiresInSeconds?: number,
-  ): Promise<{ url?: string }>;
   id?: string;
   name?: string;
   refreshData?(): Promise<void>;
@@ -133,7 +129,6 @@ export type DaytonaSdkPreparationWorkspaceProviderOptions = {
   commandTimeoutMs?: number;
   diskGB?: number;
   logWriteTimeoutMs?: number;
-  previewUrlTimeoutMs?: number;
   ptyConnectionTimeoutMs?: number;
   sandboxCreateTimeoutSeconds?: number;
   sandboxLogSinks?: PipelineLogSink[];
@@ -145,7 +140,6 @@ export type DaytonaSdkPreparationWorkspaceProviderOptions = {
 const defaultSandboxDiskGB = 3;
 const defaultCommandTimeoutMs = 10 * 60_000;
 const defaultLogWriteTimeoutMs = 5_000;
-const defaultPreviewUrlTimeoutMs = 30_000;
 const defaultPtyConnectionTimeoutMs = 30_000;
 const defaultPtyDisconnectTimeoutMs = 5_000;
 const defaultManagedProcessControlTimeoutMs = 30_000;
@@ -176,7 +170,6 @@ export async function createDaytonaSdkPreparationWorkspaceHandle(input: {
   client?: DaytonaSdkClient;
   commandTimeoutMs?: number;
   logWriteTimeoutMs?: number;
-  previewUrlTimeoutMs?: number;
   sandboxId: string;
   sandboxLogSinks?: PipelineLogSink[];
   ptyConnectionTimeoutMs?: number;
@@ -196,8 +189,6 @@ export async function createDaytonaSdkPreparationWorkspaceHandle(input: {
     commandTimeoutMs: input.commandTimeoutMs ?? defaultCommandTimeoutMs,
     id: input.sandboxId,
     logWriteTimeoutMs: input.logWriteTimeoutMs ?? defaultLogWriteTimeoutMs,
-    previewUrlTimeoutMs:
-      input.previewUrlTimeoutMs ?? defaultPreviewUrlTimeoutMs,
     ptyConnectionTimeoutMs:
       input.ptyConnectionTimeoutMs ?? defaultPtyConnectionTimeoutMs,
     sandboxLogSinks: input.sandboxLogSinks ?? [],
@@ -212,7 +203,6 @@ export class DaytonaSdkPreparationWorkspaceProvider
   private readonly commandTimeoutMs: number;
   private readonly diskGB: number;
   private readonly logWriteTimeoutMs: number;
-  private readonly previewUrlTimeoutMs: number;
   private readonly ptyConnectionTimeoutMs: number;
   private readonly sandboxCreateTimeoutSeconds: number;
   private readonly sandboxLogSinks: PipelineLogSink[];
@@ -233,8 +223,6 @@ export class DaytonaSdkPreparationWorkspaceProvider
     this.diskGB = options.diskGB ?? defaultSandboxDiskGB;
     this.logWriteTimeoutMs =
       options.logWriteTimeoutMs ?? defaultLogWriteTimeoutMs;
-    this.previewUrlTimeoutMs =
-      options.previewUrlTimeoutMs ?? defaultPreviewUrlTimeoutMs;
     this.ptyConnectionTimeoutMs =
       options.ptyConnectionTimeoutMs ?? defaultPtyConnectionTimeoutMs;
     this.sandboxCreateTimeoutSeconds =
@@ -289,7 +277,6 @@ export class DaytonaSdkPreparationWorkspaceProvider
       commandTimeoutMs: this.commandTimeoutMs,
       id,
       logWriteTimeoutMs: this.logWriteTimeoutMs,
-      previewUrlTimeoutMs: this.previewUrlTimeoutMs,
       ptyConnectionTimeoutMs: this.ptyConnectionTimeoutMs,
       sandboxLogSinks: this.sandboxLogSinks,
       sandbox,
@@ -355,7 +342,6 @@ function createPreparationWorkspaceHandle(input: {
   commandTimeoutMs: number;
   id: string;
   logWriteTimeoutMs: number;
-  previewUrlTimeoutMs: number;
   ptyConnectionTimeoutMs: number;
   sandboxLogSinks?: PipelineLogSink[];
   sandbox: DaytonaSdkSandbox;
@@ -368,7 +354,6 @@ function createPreparationWorkspaceHandle(input: {
     input.id,
     input.commandTimeoutMs,
     input.logWriteTimeoutMs,
-    input.previewUrlTimeoutMs,
     input.ptyConnectionTimeoutMs,
     input.sandboxLogSinks ?? [],
   );
@@ -399,7 +384,6 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     private readonly workspaceId: string,
     private readonly commandTimeoutMs: number,
     private readonly logWriteTimeoutMs: number,
-    private readonly previewUrlTimeoutMs: number,
     private readonly ptyConnectionTimeoutMs: number,
     sandboxLogSinks: PipelineLogSink[],
   ) {
@@ -575,7 +559,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     }
   }
 
-  async cancelActiveCommands(): Promise<void> {
+  private async cancelActiveCommands(): Promise<void> {
     await Promise.allSettled([
       this.stopSubmittedCodeApp(),
       ...[...this.activePtys].map(async (pty) => {
@@ -996,20 +980,6 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     }
   }
 
-  async getPreviewUrl(port: number): Promise<string> {
-    const previewSandbox = this.submittedCodeSandbox ?? this.sandbox;
-    const preview = await withTimeout(
-      previewSandbox.getSignedPreviewUrl(port, 60 * 60),
-      this.previewUrlTimeoutMs,
-      `Daytona preview URL creation did not finish within ${this.previewUrlTimeoutMs}ms.`,
-    );
-    if (preview.url === undefined || preview.url.trim().length === 0) {
-      throw new Error("Daytona did not return a preview URL.");
-    }
-
-    return preview.url;
-  }
-
   async uploadFiles(files: AgentHarnessWorkspaceUploadFile[]): Promise<void> {
     const uploadedFiles = files.map((file) => ({
       destination: file.destinationPath,
@@ -1069,25 +1039,6 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       } catch {
         // The sandbox is ephemeral and promotion already removed this path on success.
       }
-    }
-  }
-
-  async downloadFiles(
-    files: AgentHarnessWorkspaceDownloadFile[],
-  ): Promise<void> {
-    const artifactSandbox = this.submittedCodeSandbox ?? this.sandbox;
-    const results = await artifactSandbox.fs.downloadFiles(
-      files.map((file) => ({
-        destination: file.destinationPath,
-        source: file.sourcePath,
-      })),
-      0,
-    );
-    const failed = results.find((result) => result.error !== undefined);
-    if (failed !== undefined) {
-      throw new Error(
-        `Failed to download Daytona sandbox file ${failed.source}: ${failed.error}`,
-      );
     }
   }
 

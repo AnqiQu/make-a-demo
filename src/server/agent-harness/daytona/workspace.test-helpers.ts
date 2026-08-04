@@ -13,15 +13,12 @@ export function createFakeAgentHarnessWorkspace(
   overrides: Partial<AgentHarnessWorkspace> = {},
 ): AgentHarnessWorkspace {
   return {
-    cancelActiveCommands: async () => {},
     collectNetworkStateLog: async () => [],
     collectSandboxLogs: async () => [],
     destroy: async () => {},
-    downloadFiles: async () => {},
     downloadSubmittedCodeFiles: async () => {},
     execute: async () => ({ exitCode: 0, stderr: "", stdout: "" }),
     executeSubmittedCode: async () => ({ exitCode: 0, stderr: "", stdout: "" }),
-    getPreviewUrl: async (port: number) => `http://127.0.0.1:${port}`,
     promoteSubmittedCodeFiles: async () => {},
     readSubmittedCodeAppStatus:
       async (): Promise<AgentHarnessSubmittedCodeAppStatus> => ({
