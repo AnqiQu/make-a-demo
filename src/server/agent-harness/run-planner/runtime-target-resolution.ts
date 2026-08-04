@@ -35,6 +35,12 @@ export type ResolvedRuntimeTarget = {
   targetId: string;
 };
 
+/** Why no runtime target could be resolved, with the viable directories. */
+export type UnresolvedRuntimeTarget = {
+  candidateIds: string[];
+  reason: string;
+};
+
 /** Returns a static command configuration problem without executing the repo. */
 export function findRuntimeConfigurationIssue(input: {
   preparationManifest: PreparationManifest;
@@ -88,10 +94,18 @@ export function resolvePreparationRuntime(input: {
 }): {
   preparationManifest: PreparationManifest;
   runtimeTarget: ResolvedRuntimeTarget | undefined;
+  unresolved?: UnresolvedRuntimeTarget;
 } {
-  const runtimeTarget = resolveRuntimeTarget(input);
+  const outcome = resolveRuntimeTargetOutcome(input);
+  const runtimeTarget = outcome.target;
   if (runtimeTarget === undefined) {
-    return { preparationManifest: input.preparationManifest, runtimeTarget };
+    return {
+      preparationManifest: input.preparationManifest,
+      runtimeTarget,
+      ...(outcome.unresolved === undefined
+        ? {}
+        : { unresolved: outcome.unresolved }),
+    };
   }
   const { buildCommandUsed: _agentBuildCommand, ...manifest } =
     input.preparationManifest;
@@ -181,9 +195,20 @@ export function resolveRuntimeTarget(input: {
   repoProfile: RepoProfile;
   runPlan?: RunPlan;
 }): ResolvedRuntimeTarget | undefined {
-  const workspacePackage = findPreparedWorkspacePackage(input);
+  return resolveRuntimeTargetOutcome(input).target;
+}
+
+function resolveRuntimeTargetOutcome(input: {
+  preparationManifest: PreparationManifest;
+  repoProfile: RepoProfile;
+  runPlan?: RunPlan;
+}): { target?: ResolvedRuntimeTarget; unresolved?: UnresolvedRuntimeTarget } {
+  const found = findPreparedWorkspacePackage(input);
+  const workspacePackage = found.workspacePackage;
   if (workspacePackage === undefined) {
-    return undefined;
+    return found.unresolved === undefined
+      ? {}
+      : { unresolved: found.unresolved };
   }
   const packageManager =
     workspacePackage.packageManager ?? input.repoProfile.packageManager;
@@ -210,7 +235,12 @@ export function resolveRuntimeTarget(input: {
     packageManager,
   );
   if (start === undefined) {
-    return undefined;
+    return {
+      unresolved: {
+        candidateIds: [workspacePackage.dir],
+        reason: `Workspace ${workspacePackage.dir} declares no runnable browser start script.`,
+      },
+    };
   }
   const selectedScriptBody = workspacePackage.scripts[start.scriptName] ?? "";
   const port =
@@ -221,26 +251,28 @@ export function resolveRuntimeTarget(input: {
     input.preparationManifest.ports[0] ??
     3000;
   return {
-    baseUrl: `http://127.0.0.1:${port}`,
-    build:
-      (isDevServerScriptBody(selectedScriptBody) ??
-      ["dev", "develop"].includes(start.scriptName))
-        ? undefined
-        : findBuildCommand(
-            input.repoProfile,
-            workspacePackage,
-            preferPackageLocalCommands,
-            packageManager,
-          ),
-    install: {
-      command: installCommand,
-      cwd:
-        workspacePackage.installDir ??
-        findInstallDirectory(input.repoProfile, workspacePackage.dir),
+    target: {
+      baseUrl: `http://127.0.0.1:${port}`,
+      build:
+        (isDevServerScriptBody(selectedScriptBody) ??
+        ["dev", "develop"].includes(start.scriptName))
+          ? undefined
+          : findBuildCommand(
+              input.repoProfile,
+              workspacePackage,
+              preferPackageLocalCommands,
+              packageManager,
+            ),
+      install: {
+        command: installCommand,
+        cwd:
+          workspacePackage.installDir ??
+          findInstallDirectory(input.repoProfile, workspacePackage.dir),
+      },
+      ports: [port],
+      start: { command: start.command, cwd: start.cwd },
+      targetId: workspacePackage.dir,
     },
-    ports: [port],
-    start: { command: start.command, cwd: start.cwd },
-    targetId: workspacePackage.dir,
   };
 }
 
@@ -369,7 +401,13 @@ function findPreparedWorkspacePackage(input: {
   preparationManifest: PreparationManifest;
   repoProfile: RepoProfile;
   runPlan?: RunPlan;
-}): RepoWorkspacePackage | undefined {
+}): {
+  unresolved?: UnresolvedRuntimeTarget;
+  workspacePackage?: RepoWorkspacePackage;
+} {
+  const candidateIds = (input.repoProfile.browserRuntimeCandidates ?? []).map(
+    ({ dir }) => dir,
+  );
   const lockedTargetId =
     input.runPlan?.targetSelection?.targetId ??
     (input.repoProfile.browserRuntimeCandidates?.some(
@@ -378,14 +416,21 @@ function findPreparedWorkspacePackage(input: {
       ? input.runPlan?.appDir
       : undefined);
   if (lockedTargetId !== undefined) {
-    return (
+    const workspacePackage =
       input.repoProfile.workspacePackages?.find(
         ({ dir }) => dir === lockedTargetId,
       ) ??
       input.repoProfile.browserRuntimeCandidates?.find(
         ({ dir }) => dir === lockedTargetId,
-      )
-    );
+      );
+    return workspacePackage === undefined
+      ? {
+          unresolved: {
+            candidateIds,
+            reason: `Locked runtime target ${lockedTargetId} is not a profiled workspace.`,
+          },
+        }
+      : { workspacePackage };
   }
   const selected = new Set<RepoWorkspacePackage>();
   for (const feature of input.preparationManifest.productContext
@@ -405,7 +450,25 @@ function findPreparedWorkspacePackage(input: {
       }
     }
   }
-  return selected.size === 1 ? [...selected][0] : undefined;
+  const [selectedPackage] = selected;
+  if (selected.size === 1 && selectedPackage !== undefined) {
+    return { workspacePackage: selectedPackage };
+  }
+  if (selected.size === 0) {
+    return {
+      unresolved: {
+        candidateIds,
+        reason: "No prepared feature source path maps to a runnable workspace.",
+      },
+    };
+  }
+  const spannedDirs = [...selected].map(({ dir }) => dir).sort();
+  return {
+    unresolved: {
+      candidateIds: spannedDirs,
+      reason: `Prepared feature source paths span multiple runnable workspaces: ${spannedDirs.join(", ")}.`,
+    },
+  };
 }
 
 function findStartCommand(

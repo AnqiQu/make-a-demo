@@ -672,6 +672,40 @@ describe("resolveRuntimeTarget", () => {
     });
   });
 
+  it("explains an unresolved target instead of staying silent", () => {
+    const preparationManifest = manifest("apps/web/src/page.tsx");
+    preparationManifest.productContext.featureInventory[0]?.sourcePaths.push(
+      "apps/admin/src/page.tsx",
+    );
+
+    const resolution = resolvePreparationRuntime({
+      preparationManifest,
+      repoProfile: profile({
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "@acme/web",
+            ports: [],
+            scripts: { dev: "vite" },
+          },
+          {
+            dir: "apps/admin",
+            name: "@acme/admin",
+            ports: [],
+            scripts: { dev: "vite" },
+          },
+        ],
+      }),
+    });
+
+    expect(resolution.runtimeTarget).toBeUndefined();
+    expect(resolution.unresolved).toEqual({
+      candidateIds: ["apps/admin", "apps/web"],
+      reason:
+        "Prepared feature source paths span multiple runnable workspaces: apps/admin, apps/web.",
+    });
+  });
+
   it("rejects command-level working directories before runtime execution", () => {
     const preparationManifest = manifest("src/page.tsx");
     preparationManifest.appDir = "apps/web";

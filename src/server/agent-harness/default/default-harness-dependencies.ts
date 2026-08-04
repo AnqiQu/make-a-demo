@@ -1930,7 +1930,30 @@ async function materializeScreenedRepo(input: {
   }
 }
 
-async function validateSubmittedCodeRuntime(input: {
+async function validateSubmittedCodeRuntime(
+  input: SubmittedCodeRuntimeValidationInput,
+): Promise<ValidationReport> {
+  const resolution = resolvePreparationRuntime({
+    preparationManifest: input.preparationManifest,
+    repoProfile: input.repoProfile,
+    runPlan: input.runPlan,
+  });
+  const report = await validateResolvedSubmittedCodeRuntime(input, resolution);
+  if (report.status !== "failed" || resolution.unresolved === undefined) {
+    return report;
+  }
+  // An unresolved target means the run executed the agent's own commands; a
+  // repair must know why the backend could not pin the workspace itself.
+  return {
+    ...report,
+    suggestedRepairHints: [
+      ...report.suggestedRepairHints,
+      `Runtime target unresolved: ${resolution.unresolved.reason} Candidates: ${resolution.unresolved.candidateIds.join(", ")}.`,
+    ],
+  };
+}
+
+type SubmittedCodeRuntimeValidationInput = {
   buildApp?: boolean;
   externalResourceCache?: {
     directory: string;
@@ -1945,12 +1968,12 @@ async function validateSubmittedCodeRuntime(input: {
   runPlan: RunPlan;
   stage?: string;
   workspace: AgentHarnessWorkspace;
-}): Promise<ValidationReport> {
-  const resolution = resolvePreparationRuntime({
-    preparationManifest: input.preparationManifest,
-    repoProfile: input.repoProfile,
-    runPlan: input.runPlan,
-  });
+};
+
+async function validateResolvedSubmittedCodeRuntime(
+  input: SubmittedCodeRuntimeValidationInput,
+  resolution: ReturnType<typeof resolvePreparationRuntime>,
+): Promise<ValidationReport> {
   const manifest = resolution.preparationManifest;
   const runtimeTarget = resolution.runtimeTarget;
   const stage = input.stage ?? "preparation-preflight";

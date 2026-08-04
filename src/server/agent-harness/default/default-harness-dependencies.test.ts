@@ -2195,6 +2195,56 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(submittedNetworkRequests).toEqual([false]);
   });
 
+  it("carries the unresolved-runtime-target reason on failed preflight reports", async () => {
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        return command.includes("install")
+          ? { exitCode: 1, stderr: "registry unreachable", stdout: "" }
+          : { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+    const manifest = preparationManifest();
+    manifest.productContext.featureInventory[0]?.sourcePaths.push(
+      "apps/web/src/page.tsx",
+      "apps/admin/src/page.tsx",
+    );
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: manifest,
+      repoProfile: {
+        ...repoProfile(),
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "@acme/web",
+            ports: [],
+            scripts: { dev: "vite" },
+          },
+          {
+            dir: "apps/admin",
+            name: "@acme/admin",
+            ports: [],
+            scripts: { dev: "vite" },
+          },
+        ],
+        workspaces: { isMonorepo: true, packageDirectories: ["apps/*"] },
+      },
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.suggestedRepairHints).toContain(
+      "Runtime target unresolved: Prepared feature source paths span multiple runnable workspaces: apps/admin, apps/web. Candidates: apps/admin, apps/web.",
+    );
+  });
+
   it("suppresses lifecycle scripts on the install command that reaches the sandbox", async () => {
     const commands: string[] = [];
     const workspace = createFakeAgentHarnessWorkspace({
