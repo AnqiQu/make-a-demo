@@ -4189,7 +4189,10 @@ describe("createDefaultAgentHarnessDependencies", () => {
     const demoScriptContractWrite = textFiles.find((file) =>
       file.path.includes("demo-script-contract.json"),
     )?.contents;
-    expect(demoScriptContractWrite).toContain("architecture-v2.png");
+    // The agent-facing contract offers browser Scenes only; synthetic
+    // static-image Scenes are backend narrative surface.
+    expect(demoScriptContractWrite).not.toContain("architecture-v2.png");
+    expect(demoScriptContractWrite).not.toContain("full-screen-text");
   });
 
   it("assembles the canonical product and feature narrative around browser Scenes", async () => {

@@ -41,12 +41,7 @@ const externalUrlPattern =
 const placeholderPattern =
   /\b(?:TODO|FIXME|replace-me|example\.com|lorem ipsum|placeholder)\b/i;
 
-export function createDemoScriptContract(
-  options: { trustedStaticImageAssetIds?: readonly string[] } = {},
-): DemoScriptContract {
-  const trustedStaticImageAssetIds = [
-    ...new Set(options.trustedStaticImageAssetIds ?? []),
-  ];
+export function createDemoScriptContract(): DemoScriptContract {
   const browserActionSchema = createBrowserActionJsonSchema();
   const groundedBrowserActionItems = {
     oneOf: browserActionSchema.items.oneOf.map((actionSchema) => ({
@@ -86,25 +81,9 @@ export function createDemoScriptContract(
   const font = {
     enum: approvedFontFamilies,
   } as const;
-  const textStyle = {
-    additionalProperties: false,
-    properties: {
-      color: { pattern: "^#[0-9a-fA-F]{6}$", type: "string" },
-      content: description,
-      font,
-      position: { enum: ["bottom-left", "center", "top-left"] },
-      size: { enum: ["large", "medium", "small"] },
-    },
-    required: ["color", "content", "font", "position", "size"],
-    type: "object",
-  } as const;
   const sceneBaseProperties = {
     humanReadableDescription: description,
     id: sceneId,
-  } as const;
-  const transitionSceneIds = {
-    fromSceneId: sceneId,
-    toSceneId: sceneId,
   } as const;
   const jsonSchema = {
     $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -171,123 +150,29 @@ export function createDemoScriptContract(
             maxItems: demoScriptLimits.maxTextOverlays,
             type: "array",
           },
-          transitions: {
-            items: {
-              oneOf: [
-                {
-                  additionalProperties: false,
-                  properties: {
-                    ...transitionSceneIds,
-                    style: { const: "cut" },
-                  },
-                  required: ["fromSceneId", "style", "toSceneId"],
-                  type: "object",
-                },
-                {
-                  additionalProperties: false,
-                  properties: {
-                    durationSeconds: {
-                      maximum: demoScriptLimits.maxFadeDurationSeconds,
-                      minimum: demoScriptLimits.minFadeDurationSeconds,
-                      type: "number",
-                    },
-                    ...transitionSceneIds,
-                    style: { const: "fade" },
-                  },
-                  required: [
-                    "durationSeconds",
-                    "fromSceneId",
-                    "style",
-                    "toSceneId",
-                  ],
-                  type: "object",
-                },
-              ],
-            },
-            maxItems: demoScriptLimits.maxTransitions,
-            type: "array",
-          },
         },
         type: "object",
       },
+      // The agent authors only browser Scenes: the narrative's synthetic
+      // cards and transitions are assembled by the backend afterwards.
       scenes: {
         items: {
-          oneOf: [
-            {
-              additionalProperties: false,
-              properties: {
-                actions: browserActions,
-                expectedVisibleOutcome: description,
-                featureId: safeId,
-                ...sceneBaseProperties,
-                type: { const: "playwright-recording" },
-              },
-              required: [
-                "actions",
-                "expectedVisibleOutcome",
-                "featureId",
-                "id",
-                "type",
-              ],
-              type: "object",
-            },
-            {
-              additionalProperties: false,
-              properties: {
-                backgroundColor: {
-                  pattern: "^#[0-9a-fA-F]{6}$",
-                  type: "string",
-                },
-                durationSeconds: {
-                  maximum: demoScriptLimits.maxSyntheticSceneDurationSeconds,
-                  minimum: demoScriptLimits.minSyntheticSceneDurationSeconds,
-                  type: "number",
-                },
-                ...sceneBaseProperties,
-                text: textStyle,
-                type: { const: "full-screen-text" },
-              },
-              required: [
-                "backgroundColor",
-                "durationSeconds",
-                "id",
-                "text",
-                "type",
-              ],
-              type: "object",
-            },
-            ...(trustedStaticImageAssetIds.length === 0
-              ? []
-              : [
-                  {
-                    additionalProperties: false,
-                    properties: {
-                      alt: description,
-                      assetId: {
-                        enum: trustedStaticImageAssetIds,
-                        type: "string",
-                      },
-                      durationSeconds: {
-                        maximum:
-                          demoScriptLimits.maxSyntheticSceneDurationSeconds,
-                        minimum:
-                          demoScriptLimits.minSyntheticSceneDurationSeconds,
-                        type: "number",
-                      },
-                      ...sceneBaseProperties,
-                      type: { const: "static-image" },
-                    },
-                    required: [
-                      "alt",
-                      "assetId",
-                      "durationSeconds",
-                      "id",
-                      "type",
-                    ],
-                    type: "object",
-                  } as const,
-                ]),
+          additionalProperties: false,
+          properties: {
+            actions: browserActions,
+            expectedVisibleOutcome: description,
+            featureId: safeId,
+            ...sceneBaseProperties,
+            type: { const: "playwright-recording" },
+          },
+          required: [
+            "actions",
+            "expectedVisibleOutcome",
+            "featureId",
+            "id",
+            "type",
           ],
+          type: "object",
         },
         maxItems: demoScriptLimits.maxScenes,
         minItems: 1,
@@ -347,19 +232,6 @@ export function createDemoScriptContract(
           id: "dashboard",
           type: "playwright-recording",
         },
-        {
-          backgroundColor: "#101828",
-          durationSeconds: 2.5,
-          id: "summary",
-          text: {
-            color: "#ffffff",
-            content: "Ready to build",
-            font: "Inter",
-            position: "center",
-            size: "large",
-          },
-          type: "full-screen-text",
-        },
       ],
       scriptId: "dashboard-demo",
       title: "Dashboard Demo",
@@ -384,7 +256,6 @@ export function createDemoScriptContract(
       "locator.fill",
       "locator.press",
       "locator.selectOption",
-      "locator.evaluate (backend-compiled typed scroll only)",
       "expect(locator).toBeVisible",
       "expect(locator).toContainText",
       "expect(page).toHaveTitle",
@@ -434,7 +305,6 @@ export function createDemoScriptContract(
     timingConventions: [
       "bounded waits only",
       "browser Scene durations are measured from capture markers",
-      "synthetic Scene durations are bounded schema fields",
     ],
   };
 }

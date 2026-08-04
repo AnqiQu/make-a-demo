@@ -3044,7 +3044,7 @@ async function writeScriptContracts(
   await writeWorkspaceJson(
     workspace,
     artifactPaths.demoScriptContract,
-    createDemoScriptContract({ trustedStaticImageAssetIds }),
+    createDemoScriptContract(),
   );
 }
 

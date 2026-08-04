@@ -37,10 +37,8 @@ describe("DemoScriptContract", () => {
     );
   });
 
-  it("publishes a strict mixed-Scene JSON Schema and backend-compilation example", () => {
-    const contract = createDemoScriptContract({
-      trustedStaticImageAssetIds: ["architecture-v2.png"],
-    });
+  it("publishes a browser-Scene-only JSON Schema and backend-compilation example", () => {
+    const contract = createDemoScriptContract();
 
     expect(contract.jsonSchema).toMatchObject({
       additionalProperties: false,
@@ -49,11 +47,10 @@ describe("DemoScriptContract", () => {
         presentation: {
           properties: {
             textOverlays: { maxItems: 40 },
-            transitions: { maxItems: 19 },
           },
         },
         scenes: {
-          items: { oneOf: expect.any(Array) },
+          items: { properties: { type: { const: "playwright-recording" } } },
           maxItems: 20,
           minItems: 1,
           type: "array",
@@ -62,54 +59,30 @@ describe("DemoScriptContract", () => {
       },
       type: "object",
     });
+    // The narrative's intro/outro cards and transitions are backend-owned:
+    // offering them to the agent would misdescribe the contract.
     expect(
       (
         contract.jsonSchema as {
-          properties: { scenes: { items: { oneOf: unknown[] } } };
+          properties: { presentation: { properties: Record<string, unknown> } };
         }
-      ).properties.scenes.items.oneOf,
-    ).toHaveLength(3);
-    expect(
-      (
-        createDemoScriptContract().jsonSchema as {
-          properties: { scenes: { items: { oneOf: unknown[] } } };
-        }
-      ).properties.scenes.items.oneOf,
-    ).toHaveLength(2);
-    expect(
-      (
-        contract.jsonSchema as {
-          properties: {
-            scenes: {
-              items: {
-                oneOf: Array<{
-                  properties: {
-                    durationSeconds?: { maximum?: number; minimum?: number };
-                  };
-                }>;
-              };
-            };
-          };
-        }
-      ).properties.scenes.items.oneOf[1]?.properties.durationSeconds,
-    ).toEqual({ maximum: 30, minimum: 0.5, type: "number" });
+      ).properties.presentation.properties,
+    ).not.toHaveProperty("transitions");
     const browserSceneSchema = (
       contract.jsonSchema as {
         properties: {
           scenes: {
             items: {
-              oneOf: Array<{
-                properties: {
-                  actions?: {
-                    items: { oneOf: Array<{ required: string[] }> };
-                  };
+              properties: {
+                actions?: {
+                  items: { oneOf: Array<{ required: string[] }> };
                 };
-              }>;
+              };
             };
           };
         };
       }
-    ).properties.scenes.items.oneOf[0];
+    ).properties.scenes.items;
     expect(
       browserSceneSchema?.properties.actions?.items.oneOf.every((schema) =>
         schema.required.includes("sourceActionId"),
@@ -161,10 +134,7 @@ describe("DemoScriptContract", () => {
     });
     expect(contract.examples[0]).not.toHaveProperty("demoPlaywrightScript");
     expect(contract.examples[0]).toMatchObject({
-      scenes: [
-        { actions: expect.any(Array), type: "playwright-recording" },
-        { type: "full-screen-text" },
-      ],
+      scenes: [{ actions: expect.any(Array), type: "playwright-recording" }],
     });
   });
 
