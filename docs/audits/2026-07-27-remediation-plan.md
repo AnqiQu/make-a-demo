@@ -1634,6 +1634,19 @@ when the tier rejects overrides — it would silently weaken the boundary Phase 
 just built (the tier allow-list still permits registry egress for submitted
 code), and a tier 3 org is available.
 
+**N30 executed (2026-08-04).** With `DAYTONA_API_KEY` switched to the tier 3
+org: `makeademo-opencode-linked-ca-20260804` (0.84 GB, cpu 2 / mem 4 GiB) and
+`makeademo-submitted-code-browser-ca-20260804` (2.41 GB, cpu 2 / mem 4 GiB /
+disk 10 GB) built server-side via `daytona snapshot create` from the repo's
+pinned Dockerfiles; `.env` updated; secret name left at the `makeademo-openai`
+default (auto-ensured at run start). `bun run verify:daytona-image` passed
+end-to-end — including the submitted-code `setSubmittedCodeNetworkAccess`
+open→close toggle that tier 2 rejected, the 4 GiB / 2-CPU capacity floor
+(`memory.max` exactly 4 GiB, `oom_kill 0`), Git/CA trust in both plain and
+secret-mounted parents, the pinned opencode launch, and the Capture SDK under
+network lockdown. The org is shared: it already contained another
+collaborator's `makeademo-*-rav3n` snapshots, which were left untouched.
+
 **N30b (Low, feature, queued with the small fixes)** — fail fast on a
 restricted org: teach `verify:daytona-image` (or a pipeline-start capability
 check) to exercise `updateNetworkSettings` once on a throwaway sandbox so a
