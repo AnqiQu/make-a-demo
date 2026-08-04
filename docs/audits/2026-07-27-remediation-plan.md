@@ -1766,6 +1766,52 @@ is one-lesson-per-paid-attempt bandwidth, which is exactly the N29a class
 new real-world repo end-to-end — can ride the next matrix run now that
 excalidraw/cyberchef are in the matrix (`6cc4dba`).
 
+## Addendum (2026-08-04, Phase 6 landed)
+
+All seven remaining WS6 items (6.1–6.7; 6.8/6.9 landed 2026-07-29) landed
+TDD-first, one behavior per commit, full gauntlet per commit (final state
+**790/790**, lint/typecheck/knip clean). Commits, oldest to newest: `47fe38e`
+(6.1 placeholder scan scoped to `humanReadableDescription` +
+`expectedVisibleOutcome`; a maker's "Add a TODO" feature passes), `900e988`
+(6.2 compiler emits `humanType`/`animatedClick`/`animatedHover`/
+`animatedScrollTo` directly; `stylizeBrowserActions` + both `chromium.launch`
+passthrough sniffs deleted; the tsc-validated body is the executed body, with
+`declare global` helper types; the injection test proves a hostile
+`.fill(");`-bearing value survives untouched), `7572e57` (6.3 per-attempt
+capture run directories with retry suffix, remote scratch `rm -rf` before
+recording, exit 137 classified as timeout beside 124, guarded browser
+teardown emitting `[makeademo:context-close-failed]` instead of substituting
+the body error, and all five provider `exitCode ?? 0` sites flipped to fail
+closed), `8316821` (6.4 the capture-runtime-reset proof binds every recorder,
+injected test doubles included), `1f1329b`/`862923b`/`6e73870` (6.5 narrative
+rejects agent synthetic scenes with the backend-owned rule instead of silent
+filtering — and `assertCanonicalDemoNarrative` names the same rule for stray
+synthetic scenes; the agent-facing contract schema/examples drop
+full-screen-text, static-image, and transitions; the capture-path validation
+timeout derives from a per-action cost model — 60s base + 15s/action, capped
+at the recording budget), `d71891f` (6.7 `sanitizeObservabilityError` bounds
+project-record errors to 2 KB and `formatSceneFailure` inlines a 1.6 KB
+excerpt plus retained-log paths instead of full streams), `59e9888` (6.6
+`parseDemoScript` rejects any supplied `demoPlaywrightScript` — the field is
+compiler output only, closing the disk-file→arbitrary-Playwright path — and
+the now-redundant ~200-line regex lint in `capture-sdk-contract.ts` is
+deleted with its nine tests). `0d25a05` widens the 5.9 perf bound for
+parallel-suite load.
+
+**Notes recorded honestly:** 6.5's `markUnresolved`/"external network
+attempted" classification was already landed pre-Phase-6 (verified, no
+change). The `demoPlaywrightScript` field survives on the parsed `DemoScript`
+type as the compiled artifact carrier — only the *input* path is closed;
+renaming the internal carrier was judged churn without a safety gain.
+`script-quality.ts` still scans the compiled source (updated for the
+humanized call forms); it is Phase 8 deletion surface now that only compiler
+output reaches it. `assertUsesManifestBaseUrl`/`assertNoExternalUrls` remain
+as cheap redundant checks on compiled output.
+
+**Gate next:** matrix run (homer must stay green through capture/compositing
+on the new compiled-humanization path; the extra matrix repos exercise the
+contract against non-Midday shapes).
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
