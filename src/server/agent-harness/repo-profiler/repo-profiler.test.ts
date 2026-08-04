@@ -85,6 +85,77 @@ describe("profileRepo", () => {
     ]);
   });
 
+  it("prefers the explicit packageManager declaration over a stale lockfile", () => {
+    const profile = profileRepo({
+      files: [
+        {
+          path: "package.json",
+          text: JSON.stringify({
+            packageManager: "pnpm@9.0.0",
+            scripts: { dev: "vite" },
+          }),
+        },
+        { path: "package-lock.json", text: "{}" },
+      ],
+      repoUrl: "https://github.com/example/stale-lockfile",
+    });
+
+    expect(profile.packageManager).toBe("pnpm");
+    expect(profile.candidateInstallCommands).toEqual([
+      "pnpm install --frozen-lockfile",
+    ]);
+  });
+
+  it("records an assumption when conflicting lockfiles force a manager tiebreak", () => {
+    const profile = profileRepo({
+      files: [
+        {
+          path: "package.json",
+          text: JSON.stringify({ scripts: { dev: "vite" } }),
+        },
+        { path: "package-lock.json", text: "{}" },
+        { path: "pnpm-lock.yaml", text: "" },
+      ],
+      repoUrl: "https://github.com/example/conflicting-lockfiles",
+    });
+
+    expect(profile.packageManager).toBe("pnpm");
+    expect(profile.confidence.assumptions).toContain(
+      "conflicting lockfiles (package-lock.json, pnpm-lock.yaml) resolved to pnpm by manager preference",
+    );
+  });
+
+  it("resolves a workspace member through the nearest ancestor declaration when lockfiles conflict", () => {
+    const profile = profileRepo({
+      files: [
+        {
+          path: "package.json",
+          text: JSON.stringify({
+            packageManager: "yarn@4.0.0",
+            workspaces: ["apps/*"],
+          }),
+        },
+        { path: "package-lock.json", text: "{}" },
+        { path: "yarn.lock", text: "" },
+        {
+          path: "apps/web/package.json",
+          text: JSON.stringify({
+            dependencies: { vite: "5.0.0" },
+            name: "web",
+            scripts: { dev: "vite" },
+          }),
+        },
+        { path: "apps/web/src/main.tsx", text: "export {};" },
+      ],
+      repoUrl: "https://github.com/example/ancestor-declaration",
+    });
+
+    expect(
+      profile.workspacePackages?.find(({ dir }) => dir === "apps/web")
+        ?.packageManager,
+    ).toBe("yarn");
+  });
+
   it("retains quarantined environment key names without retaining their values", () => {
     const profile = profileRepo({
       files: [

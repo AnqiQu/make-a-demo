@@ -84,10 +84,16 @@ export function profileRepo(input: RepoProfileInput): RepoProfile {
     .filter((path) => lockfileManager(path) !== undefined)
     .sort();
   const primaryPackage = selectPrimaryPackage(packages);
-  const packageManager =
+  const packageManagerDecision =
     primaryPackage === undefined
-      ? "unknown"
-      : resolvePackageManager(primaryPackage, lockfiles, workspacePatterns);
+      ? undefined
+      : decidePackageManager(
+          primaryPackage,
+          packages,
+          lockfiles,
+          workspacePatterns,
+        );
+  const packageManager = packageManagerDecision?.packageManager ?? "unknown";
   const packageJson = primaryPackage?.json;
   const packageScripts = primaryPackage?.scripts ?? {};
   const dependencies = Object.assign(
@@ -129,11 +135,12 @@ export function profileRepo(input: RepoProfileInput): RepoProfile {
     ]),
     ...optionalString("commitSha", input.commitSha),
     confidence: {
-      assumptions: createAssumptions(
-        packageManager,
-        dependencies,
-        packageScripts,
-      ),
+      assumptions: [
+        ...createAssumptions(packageManager, dependencies, packageScripts),
+        ...(packageManagerDecision?.conflict === undefined
+          ? []
+          : [packageManagerDecision.conflict]),
+      ],
       overall: calculateConfidence(packageJson, paths, packageScripts),
     },
     detectedFrameworks: detectFrameworks(dependencies),
@@ -352,11 +359,12 @@ function readWorkspacePackages(
         ...(packageRecord.name === undefined
           ? {}
           : { name: packageRecord.name }),
-        packageManager: resolvePackageManager(
+        packageManager: decidePackageManager(
           packageRecord,
+          packages,
           lockfiles,
           workspacePatterns,
-        ),
+        ).packageManager,
         ports: readCandidatePorts(runtimeScripts),
         scripts: runtimeScripts,
       },
@@ -469,27 +477,89 @@ function selectPrimaryPackage(
   );
 }
 
-function resolvePackageManager(
+const lockfileManagerPreference: PackageManager[] = [
+  "bun",
+  "pnpm",
+  "yarn",
+  "npm",
+];
+
+type PackageManagerDecision = {
+  /** Present when conflicting lockfiles forced a preference tiebreak. */
+  conflict?: string;
+  packageManager: PackageManager;
+};
+
+/**
+ * Precedence: the package's own `packageManager` declaration, a single owned
+ * lockfile, the nearest ancestor declaration, then a preference tiebreak among
+ * conflicting lockfiles — recorded as an assumption, never chosen silently.
+ */
+function decidePackageManager(
   packageRecord: PackageRecord,
+  packages: PackageRecord[],
   lockfiles: string[],
   workspacePatterns: string[],
-): PackageManager {
+): PackageManagerDecision {
+  if (packageRecord.packageManagerDeclaration !== undefined) {
+    return { packageManager: packageRecord.packageManagerDeclaration };
+  }
   const installDir = matchesWorkspacePatterns(
     packageRecord.dir,
     workspacePatterns,
   )
     ? "."
     : packageRecord.dir;
-  const ownedLockfile = lockfiles.find(
+  const ownedLockfiles = lockfiles.filter(
     (lockfile) => posix.dirname(lockfile) === installDir,
   );
-  return (
-    (ownedLockfile === undefined
-      ? undefined
-      : lockfileManager(ownedLockfile)) ??
-    packageRecord.packageManagerDeclaration ??
-    "npm"
+  const ownedManagers = [
+    ...new Set(
+      ownedLockfiles
+        .map(lockfileManager)
+        .filter((manager): manager is PackageManager => manager !== undefined),
+    ),
+  ];
+  if (ownedManagers.length === 1 && ownedManagers[0] !== undefined) {
+    return { packageManager: ownedManagers[0] };
+  }
+  const ancestorDeclaration = findAncestorPackageManagerDeclaration(
+    packageRecord.dir,
+    packages,
   );
+  if (ancestorDeclaration !== undefined) {
+    return { packageManager: ancestorDeclaration };
+  }
+  const tiebreak = lockfileManagerPreference.find((manager) =>
+    ownedManagers.includes(manager),
+  );
+  if (tiebreak !== undefined) {
+    return {
+      conflict: `conflicting lockfiles (${ownedLockfiles
+        .map((lockfile) => posix.basename(lockfile))
+        .sort()
+        .join(", ")}) resolved to ${tiebreak} by manager preference`,
+      packageManager: tiebreak,
+    };
+  }
+  return { packageManager: "npm" };
+}
+
+function findAncestorPackageManagerDeclaration(
+  dir: string,
+  packages: PackageRecord[],
+): PackageManager | undefined {
+  let current = dir;
+  while (current !== ".") {
+    current = posix.dirname(current);
+    const declaration = packages.find(
+      (packageRecord) => packageRecord.dir === current,
+    )?.packageManagerDeclaration;
+    if (declaration !== undefined) {
+      return declaration;
+    }
+  }
+  return undefined;
 }
 
 function lockfileManager(path: string): PackageManager | undefined {
