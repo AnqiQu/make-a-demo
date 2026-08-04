@@ -1589,6 +1589,58 @@ channel and merge both streams into `onStdout`, so callers must not read an
 empty `onStderr` as "no error output". Capture-protocol markers other than the
 exit sentinel and the runtime network marker remain un-nonced.
 
+## Addendum (2026-08-03, after the post-Phase-4 matrix run)
+
+Runs: `terminal-2026-08-04T05-38-40-911Z` (homer, failed, 126s) +
+`terminal-2026-08-04T05-40-46-847Z` (midday, failed, 270s). Both died at
+preparation-preflight with the identical error, immediately after a clean
+first-attempt repo preparation:
+
+> `Failed to reset submitted-code workspace: Network access is restricted and
+> cannot be overridden at the sandbox level. See
+> https://www.daytona.io/docs/en/network-limits/#tier-based-network-restrictions`
+
+**Diagnosis — Daytona org tier, surfaced by 4.5 working as designed.** The
+Daytona org rejects `sandbox.updateNetworkSettings({ networkBlockAll })` on the
+submitted-code sandbox because tier-based network restrictions forbid
+sandbox-level overrides. Preflight's first network call is the *close*
+(`setSubmittedCodeNetworkAccess(false)` before workspace sync); under `0d3186f`
+(4.5) the restricted-policy rejection on a close is only swallowed when a prior
+rejected *open* proved the sandbox stayed blocked — no open has happened yet at
+preflight, so the error now propagates as `harness/internal failure`. Before
+Phase 4 the swallow was unconditional and silent, which means earlier logs
+cannot tell us whether the org was already restricted: if it was, the
+Daytona-level Runtime Network Lockdown was a silent no-op in every prior run
+and only the in-process guards (Node preload guard + Playwright route policy)
+actually held. Yesterday's passing-preflight runs (20:23Z/20:32Z) predate the
+4.5 commits (22:22Z), so they are evidence of nothing either way. One further
+ambiguity recorded honestly: the linked-sandbox *create* with
+`networkBlockAll: true` did not error, so on a restricted tier we cannot tell
+whether Daytona applied or ignored the create-time flag — only updates reject
+loudly. This is not a pipeline defect and needs no code rollback: 4.5 exists
+precisely to refuse to pretend the network is sealed when it cannot prove it.
+
+**N30 (ops, blocking matrix runs) — move to the tier 3 Daytona org.** The
+tier 3 workspace permits sandbox-level network overrides, restoring the
+lockdown as designed with zero code changes. Switching requires: a new
+`DAYTONA_API_KEY`; rebuilding both org-scoped snapshots in the new org
+(`infra/daytona/opencode.Dockerfile` and
+`infra/daytona/submitted-code-node-browser.Dockerfile`) and updating
+`MAKEADEMO_DAYTONA_SNAPSHOT` / `MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT`;
+the `makeademo-openai` Daytona secret needs no manual step (the pipeline
+ensures it at run start). Verify with `bun run verify:daytona-image` before the
+first matrix run. Rejected alternative: a degraded in-process-guards-only mode
+when the tier rejects overrides — it would silently weaken the boundary Phase 4
+just built (the tier allow-list still permits registry egress for submitted
+code), and a tier 3 org is available.
+
+**N30b (Low, feature, queued with the small fixes)** — fail fast on a
+restricted org: teach `verify:daytona-image` (or a pipeline-start capability
+check) to exercise `updateNetworkSettings` once on a throwaway sandbox so a
+restricted org fails in seconds at setup instead of minutes into a paid run
+after a full repo preparation (homer burned ~2 min, midday ~4.5 min of agent
+time before the preflight throw).
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
