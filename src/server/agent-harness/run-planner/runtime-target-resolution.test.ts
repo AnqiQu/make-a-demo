@@ -372,6 +372,66 @@ describe("resolveRuntimeTarget", () => {
     });
   });
 
+  it("does not run a root script whose command targets a different workspace sharing a name prefix", () => {
+    const target = resolveRuntimeTarget({
+      preparationManifest: manifest("apps/web/src/page.tsx"),
+      repoProfile: profile({
+        candidateInstallCommands: ["yarn install --immutable"],
+        lockfiles: ["yarn.lock"],
+        packageManager: "yarn",
+        packageScripts: {
+          dev: "turbo dev --filter=@a/web-admin",
+        },
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "@a/web",
+            ports: [],
+            scripts: { dev: "vite" },
+          },
+          {
+            dir: "apps/web-admin",
+            name: "@a/web-admin",
+            ports: [],
+            scripts: { dev: "vite" },
+          },
+        ],
+      }),
+    });
+
+    expect(target?.start).toEqual({ command: "yarn run dev", cwd: "apps/web" });
+  });
+
+  it("rejects a conventionally named root script whose command targets another workspace", () => {
+    const target = resolveRuntimeTarget({
+      preparationManifest: manifest("apps/web/src/page.tsx"),
+      repoProfile: profile({
+        candidateInstallCommands: ["yarn install --immutable"],
+        lockfiles: ["yarn.lock"],
+        packageManager: "yarn",
+        packageScripts: {
+          "dev:web": "turbo dev --filter=@a/web-admin",
+        },
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "@a/web",
+            ports: [],
+            scripts: { dev: "vite" },
+          },
+          {
+            dir: "apps/web-admin",
+            name: "@a/web-admin",
+            ports: [],
+            scripts: { dev: "vite" },
+          },
+        ],
+      }),
+    });
+
+    expect(target?.start).toEqual({ command: "yarn run dev", cwd: "apps/web" });
+  });
+
   it("keeps a full install when focused installation is not safely supported", () => {
     const target = resolveRuntimeTarget({
       preparationManifest: manifest("apps/web/src/page.tsx"),

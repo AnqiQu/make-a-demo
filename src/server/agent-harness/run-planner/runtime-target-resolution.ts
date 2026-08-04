@@ -415,11 +415,7 @@ function findStartCommand(
     }
     const rootScriptName = preferWorkspaceLocal
       ? undefined
-      : findScopedRootScript(
-          repoProfile.packageScripts,
-          workspacePackage,
-          scriptName,
-        );
+      : findScopedRootScript(repoProfile, workspacePackage, scriptName);
     if (rootScriptName !== undefined) {
       return {
         command: scriptCommand(packageManager, rootScriptName),
@@ -455,11 +451,7 @@ function findBuildCommand(
   }
   const rootScriptName = preferWorkspaceLocal
     ? undefined
-    : findScopedRootScript(
-        repoProfile.packageScripts,
-        workspacePackage,
-        "build",
-      );
+    : findScopedRootScript(repoProfile, workspacePackage, "build");
   return rootScriptName === undefined
     ? {
         command: scriptCommand(packageManager, "build"),
@@ -472,13 +464,23 @@ function findBuildCommand(
 }
 
 function findScopedRootScript(
-  scripts: Record<string, string>,
+  repoProfile: RepoProfile,
   workspacePackage: RepoWorkspacePackage,
   operation: string,
 ): string | undefined {
+  const scripts = repoProfile.packageScripts;
+  const otherWorkspaceNames = (repoProfile.workspacePackages ?? [])
+    .map(({ name }) => name)
+    .filter(
+      (name): name is string =>
+        name !== undefined && name !== workspacePackage.name,
+    );
+  const targetsAnotherWorkspace = (command: string) =>
+    otherWorkspaceNames.some((name) => referencesPackageName(command, name));
   const shortName = posix.basename(workspacePackage.dir);
   const named = `${operation}:${shortName}`;
-  if (scripts[named] !== undefined) {
+  const namedCommand = scripts[named];
+  if (namedCommand !== undefined && !targetsAnotherWorkspace(namedCommand)) {
     return named;
   }
   if (workspacePackage.name === undefined) {
@@ -487,8 +489,21 @@ function findScopedRootScript(
   return Object.entries(scripts).find(
     ([name, command]) =>
       (name === operation || name.startsWith(`${operation}:`)) &&
-      command.includes(workspacePackage.name as string),
+      referencesPackageName(command, workspacePackage.name as string) &&
+      !targetsAnotherWorkspace(command),
   )?.[0];
+}
+
+/**
+ * Whether a script command references a package name as a whole token. A name
+ * that is a prefix or suffix of a longer name never matches, so `@a/web` does
+ * not claim a script targeting `@a/web-admin`.
+ */
+function referencesPackageName(command: string, name: string): boolean {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![@/A-Za-z0-9._-])${escaped}(?![A-Za-z0-9._-])`).test(
+    command,
+  );
 }
 
 function scriptCommand(
