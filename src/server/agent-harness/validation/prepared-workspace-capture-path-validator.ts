@@ -2,8 +2,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import {
   CAPTURE_COMMAND_SHUTDOWN_GRACE_SECONDS,
-  CAPTURE_COMMAND_TIMEOUT_MS,
   CAPTURE_SCRIPT_TIMEOUT_SECONDS,
+  readCaptureValidationTimeoutSeconds,
 } from "../../pipeline/06-footage-capture/capture-execution-budget";
 import {
   CaptureBrowserActionFailureError,
@@ -110,11 +110,24 @@ export async function validatePreparedWorkspaceCapturePath(input: {
     }),
   );
 
+  const scriptTimeoutSeconds =
+    input.expectedStepIdsByScene === undefined
+      ? CAPTURE_SCRIPT_TIMEOUT_SECONDS
+      : readCaptureValidationTimeoutSeconds(
+          Object.values(input.expectedStepIdsByScene).reduce(
+            (total, stepIds) => total + stepIds.length,
+            0,
+          ),
+        );
   const result = await runObservedCommand(input, "script-execution", () =>
     executeSubmittedCode(
       workspace,
-      `cd ${shellQuote(remoteRunDirectory)} && NODE_PATH="$(npm root -g)" timeout -k ${CAPTURE_COMMAND_SHUTDOWN_GRACE_SECONDS}s ${CAPTURE_SCRIPT_TIMEOUT_SECONDS}s bun ${shellQuote(remoteScriptPath)}`,
-      { timeoutMs: CAPTURE_COMMAND_TIMEOUT_MS },
+      `cd ${shellQuote(remoteRunDirectory)} && NODE_PATH="$(npm root -g)" timeout -k ${CAPTURE_COMMAND_SHUTDOWN_GRACE_SECONDS}s ${scriptTimeoutSeconds}s bun ${shellQuote(remoteScriptPath)}`,
+      {
+        timeoutMs:
+          (scriptTimeoutSeconds + CAPTURE_COMMAND_SHUTDOWN_GRACE_SECONDS) *
+          1_000,
+      },
     ),
   );
   await Promise.all([
@@ -195,7 +208,7 @@ export async function validatePreparedWorkspaceCapturePath(input: {
       failureReason:
         validationFailure?.message ??
         (result.exitCode === 124 || result.exitCode === 137
-          ? `Capture Path Validation script timed out after ${CAPTURE_SCRIPT_TIMEOUT_SECONDS}s.`
+          ? `Capture Path Validation script timed out after ${scriptTimeoutSeconds}s.`
           : formatProcessExitFailure(result)),
       status: "failed",
     };

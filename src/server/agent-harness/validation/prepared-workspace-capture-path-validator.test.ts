@@ -110,6 +110,67 @@ describe("validatePreparedWorkspaceCapturePath", () => {
     );
   });
 
+  it("derives the validation timeout from the compiled plan's action count", async () => {
+    const localRunDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-capture-validation-test-"),
+    );
+    const submittedCommands: Array<{ command: string; timeoutMs?: number }> =
+      [];
+    const workspace: AgentHarnessWorkspaceHandle = {
+      async destroy() {},
+      id: "agent_sandbox",
+      workspace: createFakeAgentHarnessWorkspace({
+        async executeSubmittedCode(command, options) {
+          submittedCommands.push({
+            command,
+            ...(options?.timeoutMs === undefined
+              ? {}
+              : { timeoutMs: options.timeoutMs }),
+          });
+          if (command.includes("bun ")) {
+            return {
+              exitCode: 0,
+              stderr: "",
+              stdout: [
+                '[makeademo:validation] script started {"baseUrl":"http://127.0.0.1:3000"}',
+                '[makeademo:scene] {"elapsedMs":10,"event":"started","sceneId":"scene-main"}',
+                '[makeademo:action] {"elapsedMs":12,"event":"started","label":"expect.toBeVisible(locator(main))","sceneId":"scene-main"}',
+                '[makeademo:action] {"elapsedMs":18,"event":"succeeded","label":"expect.toBeVisible(locator(main))","sceneId":"scene-main"}',
+                '[makeademo:scene] {"elapsedMs":20,"event":"succeeded","sceneId":"scene-main"}',
+                '[makeademo:validation] script succeeded {"title":"Demo","url":"http://127.0.0.1:3000/"}',
+              ].join("\n"),
+            };
+          }
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+      }),
+    };
+
+    await validatePreparedWorkspaceCapturePath({
+      baseUrl: "http://127.0.0.1:3000",
+      demoPlaywrightScript: [
+        "import { setup, scene } from './makeademo-capture-sdk';",
+        "await setup(async ({ page, baseUrl, expect }) => { await page.goto(baseUrl); await expect(page.locator('body')).toBeVisible(); });",
+        "await scene('scene-main', async ({ page, expect }) => { await expect(page.locator('body')).toBeVisible(); });",
+      ].join("\n"),
+      expectedStepIdsByScene: {
+        "scene-main": ["open-main", "assert-main"],
+        setup: ["dismiss-welcome"],
+      },
+      localRunDirectory,
+      sceneIds: ["scene-main"],
+      workspace,
+    });
+
+    // 60s base + 3 declared actions x 15s = 105s, well under the fixed cap.
+    expect(
+      submittedCommands.find(({ command }) => command.includes("bun ")),
+    ).toMatchObject({
+      command: expect.stringContaining("timeout -k 10s 105s"),
+      timeoutMs: 115_000,
+    });
+  });
+
   it("fails a successful process that did not prove a visible assertion in every declared Scene", async () => {
     const localRunDirectory = await mkdtemp(
       join(tmpdir(), "makeademo-capture-validation-test-"),
