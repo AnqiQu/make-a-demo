@@ -7,6 +7,7 @@ import {
   type AgentHarnessSubmittedCodeAppStatus,
   type AgentHarnessWorkspace,
 } from "../daytona/workspace.interface";
+import { redactSecretText } from "../default/json-artifact-diagnostic";
 import {
   type ActionCatalog,
   type AppMap,
@@ -562,8 +563,8 @@ function createAppStatusDiagnostics(
 } {
   // One server-side render error with its cause and stack runs 1-2KB; a
   // shorter tail truncates the error name away and leaves only frame noise.
-  const stderrExcerpt = appStatus?.stderr.slice(-2000) ?? "";
-  const stdoutExcerpt = appStatus?.stdout.slice(-2000) ?? "";
+  const stderrExcerpt = redactSecretText(appStatus?.stderr.slice(-2000) ?? "");
+  const stdoutExcerpt = redactSecretText(appStatus?.stdout.slice(-2000) ?? "");
   return {
     output: [stderrExcerpt, stdoutExcerpt].filter(Boolean).join("\n"),
     stderrExcerpts: stderrExcerpt ? [stderrExcerpt] : [],

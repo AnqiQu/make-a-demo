@@ -2293,10 +2293,10 @@ async function validateSubmittedCodeRuntime(input: {
     runtimeProbe: preflightResult.runtimeProbe,
     status: probeSucceeded ? "passed" : "failed",
     stderrExcerpts: preflightResult.stderr
-      ? [preflightResult.stderr.slice(-500)]
+      ? [redactSecretText(preflightResult.stderr.slice(-500))]
       : [],
     stdoutExcerpts: preflightResult.stdout
-      ? [preflightResult.stdout.slice(-500)]
+      ? [redactSecretText(preflightResult.stdout.slice(-500))]
       : [],
     urlChecked: preflightUrl,
   });
@@ -2525,7 +2525,11 @@ async function probeSubmittedCodeRuntime(
     attempts.push({
       attempt,
       ...(result.stderr || result.stdout
-        ? { detail: (result.stderr || result.stdout).slice(-500) }
+        ? {
+            detail: redactSecretText(
+              (result.stderr || result.stdout).slice(-500),
+            ),
+          }
         : {}),
       durationMs: Date.now() - startedAtMs,
       exitCode: result.exitCode,
@@ -3457,8 +3461,12 @@ function failedPreparationValidation(input: {
     stage: input.stage,
     status: "failed",
     networkAttempts: input.blockedNetworkAttempts ?? [],
-    stderrExcerpts: input.stderr ? [input.stderr.slice(-500)] : [],
-    stdoutExcerpts: input.stdout ? [input.stdout.slice(-500)] : [],
+    stderrExcerpts: input.stderr
+      ? [redactSecretText(input.stderr.slice(-500))]
+      : [],
+    stdoutExcerpts: input.stdout
+      ? [redactSecretText(input.stdout.slice(-500))]
+      : [],
     ...(input.suggestedRepairHints === undefined
       ? {}
       : { suggestedRepairHints: input.suggestedRepairHints }),

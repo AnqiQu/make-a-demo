@@ -676,6 +676,31 @@ describe("exploreSubmittedApp", () => {
     );
   });
 
+  it("redacts secrets from managed-app output before they enter the exploration verdict", async () => {
+    const { result } = await exploreObservation({
+      featureInventory: [preparedFeature()],
+      readSubmittedCodeAppStatus: async () => ({
+        running: true,
+        stderr:
+          "fetch failed for https://api.example.com with Authorization: Bearer sk-live-4242424242",
+        stdout: "",
+      }),
+      routes: [
+        observedRoute({
+          featureIds: ["post-article"],
+          headings: [],
+          path: "/#/editor",
+          text: [],
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    const excerpts = result.validationReport.stderrExcerpts.join("\n");
+    expect(excerpts).not.toContain("sk-live-4242424242");
+    expect(excerpts).toContain("Bearer [Redacted]");
+  });
+
   it("keeps the exploration verdict intact when app status cannot be read", async () => {
     const { result } = await exploreObservation({
       featureInventory: [preparedFeature()],
