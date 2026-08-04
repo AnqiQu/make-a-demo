@@ -2,6 +2,12 @@ import {
   type BrowserLocator,
   readBrowserLocator,
 } from "../../pipeline/06-footage-capture/browser-action-plan";
+import {
+  assertRecord,
+  childPath,
+  readBoolean,
+  readNonEmptyString,
+} from "../../shared/artifact-storage/persisted-record-readers";
 
 export const DEMO_SCRIPT_OUTPUT_PATH = "/workspace/.makeademo/demo-script.json";
 export const browserRuntimeScriptNames = [
@@ -396,7 +402,7 @@ export function readRunPlan(value: unknown): RunPlan {
     allowedPorts: readPortArray(record, "allowedPorts"),
     appDir: readRepoRelativePath(record, "appDir"),
     assumptions: readStringArray(record, "assumptions"),
-    ...optionalStringKey(record, "buildCommand"),
+    ...optionalKey(record, "buildCommand", readNonEmptyString),
     env: readStringRecord(record, "env"),
     expectedLocalUrl: readLocalHttpUrl(record, "expectedLocalUrl"),
     installCommand: readNonEmptyString(record, "installCommand"),
@@ -452,13 +458,13 @@ export function readPreparationManifest(value: unknown): PreparationManifest {
   return {
     appDir: readRepoRelativePath(record, "appDir"),
     appExplorationHints: readStringArray(record, "appExplorationHints"),
-    ...optionalStringKey(record, "authBypassOrDemoIdentity"),
+    ...optionalKey(record, "authBypassOrDemoIdentity", readNonEmptyString),
     baseUrl: readLocalHttpUrl(record, "baseUrl"),
     blockedExternalServicesReplaced: readStringArray(
       record,
       "blockedExternalServicesReplaced",
     ),
-    ...optionalStringKey(record, "buildCommandUsed"),
+    ...optionalKey(record, "buildCommandUsed", readNonEmptyString),
     cleanupAndReproInstructions: readStringArray(
       record,
       "cleanupAndReproInstructions",
@@ -706,15 +712,15 @@ export function readValidationReport(value: unknown): ValidationReport {
   const record = assertRecord(value, "ValidationReport");
   return {
     artifactReferences: readStringArray(record, "artifactReferences"),
-    ...optionalStringKey(record, "attemptedCommand"),
+    ...optionalKey(record, "attemptedCommand", readNonEmptyString),
     blockedNetworkAttempts: readNetworkAttempts(
       record,
       "blockedNetworkAttempts",
     ),
     browserObservations: readStringArray(record, "browserObservations"),
     consoleErrors: readStringArray(record, "consoleErrors"),
-    ...optionalNumberKey(record, "exitCode"),
-    ...optionalStringKey(record, "failureClassification"),
+    ...optionalKey(record, "exitCode", readNonNegativeNumber),
+    ...optionalKey(record, "failureClassification", readNonEmptyString),
     logsSummary: readNonEmptyString(record, "logsSummary"),
     networkAttempts: readNetworkAttempts(record, "networkAttempts"),
     pageErrors: readStringArray(record, "pageErrors"),
@@ -728,7 +734,7 @@ export function readValidationReport(value: unknown): ValidationReport {
     stderrExcerpts: readStringArray(record, "stderrExcerpts"),
     stdoutExcerpts: readStringArray(record, "stdoutExcerpts"),
     suggestedRepairHints: readStringArray(record, "suggestedRepairHints"),
-    ...optionalLocalUrlKey(record, "urlChecked"),
+    ...optionalKey(record, "urlChecked", readLocalHttpUrl),
   };
 }
 
@@ -818,7 +824,7 @@ export function readAppMap(value: unknown): AppMap {
   const record = assertRecord(value, "AppMap");
   return {
     accessibilitySnapshots: readStringArray(record, "accessibilitySnapshots"),
-    ...optionalStringKey(record, "actionCatalogId"),
+    ...optionalKey(record, "actionCatalogId", readNonEmptyString),
     appStateAssumptions: readStringArray(record, "appStateAssumptions"),
     baseUrl: readLocalHttpUrl(record, "baseUrl"),
     blockedNetworkAttempts: readNetworkAttempts(
@@ -956,7 +962,7 @@ export function readPipelineRunManifest(value: unknown): PipelineRunManifest {
   const record = assertRecord(value, "PipelineRunManifest");
   return {
     artifactPaths: readStringRecord(record, "artifactPaths"),
-    ...optionalString(record, "commitSha"),
+    ...optionalKey(record, "commitSha", readNonEmptyString),
     daytonaSandboxIds: readDaytonaSandboxIds(record.daytonaSandboxIds),
     finalStatus: readEnum(record, "finalStatus", [
       "failed",
@@ -971,7 +977,7 @@ export function readPipelineRunManifest(value: unknown): PipelineRunManifest {
     runId: readNonEmptyString(record, "runId"),
     stageStatuses: readStageStatuses(record.stageStatuses),
     stageTimings: readStageTimings(record.stageTimings),
-    ...optionalStringKey(record, "unsupportedOrFailureReason"),
+    ...optionalKey(record, "unsupportedOrFailureReason", readNonEmptyString),
   };
 }
 
@@ -1259,8 +1265,8 @@ function readDaytonaSandboxIds(
 ): PipelineRunManifest["daytonaSandboxIds"] {
   const record = assertRecord(value, "daytonaSandboxIds");
   return {
-    ...optionalStringKey(record, "agent"),
-    ...optionalStringKey(record, "submittedCode"),
+    ...optionalKey(record, "agent", readNonEmptyString),
+    ...optionalKey(record, "submittedCode", readNonEmptyString),
   };
 }
 
@@ -1317,13 +1323,6 @@ function readStageStatuses(value: unknown): Record<string, HarnessStageStatus> {
   );
 }
 
-function assertRecord(value: unknown, path: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`${path} must be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
 function readArray<T>(
   value: unknown,
   path: string,
@@ -1340,7 +1339,7 @@ function readStringArray(
   key: string,
   parentPath?: string,
 ): string[] {
-  const path = parentPath ? `${parentPath}.${key}` : key;
+  const path = childPath(parentPath, key);
   return readArray(record[key], path, (item, index) => {
     if (typeof item !== "string") {
       throw new Error(`${path}[${index}] must be a string`);
@@ -1365,19 +1364,6 @@ function readStringRecord(
   );
 }
 
-function readNonEmptyString(
-  record: Record<string, unknown>,
-  key: string,
-  parentPath?: string,
-): string {
-  const path = parentPath ? `${parentPath}.${key}` : key;
-  const value = record[key];
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error(`${path} must be a non-empty string`);
-  }
-  return value;
-}
-
 /**
  * Reads an observed app route. Routes become synthesized navigation, so they
  * must resolve back to the app's own origin; a bare string would let an
@@ -1388,7 +1374,7 @@ function readLocalRoute(
   key: string,
   parentPath?: string,
 ): string {
-  const path = parentPath ? `${parentPath}.${key}` : key;
+  const path = childPath(parentPath, key);
   const route = readNonEmptyString(record, key, parentPath);
   const probeOrigin = "http://makeademo.invalid";
   try {
@@ -1429,7 +1415,7 @@ function readLocalHttpUrl(
   parentPath?: string,
 ): string {
   const value = readNonEmptyString(record, key, parentPath);
-  const path = parentPath ? `${parentPath}.${key}` : key;
+  const path = childPath(parentPath, key);
   try {
     const url = new URL(value);
     if (
@@ -1464,7 +1450,7 @@ function readEnum<const T extends readonly string[]>(
   allowedValues: T,
   parentPath?: string,
 ): T[number] {
-  const path = parentPath ? `${parentPath}.${key}` : key;
+  const path = childPath(parentPath, key);
   return readEnumValue(record[key], allowedValues, path);
 }
 
@@ -1482,19 +1468,6 @@ function readEnumValue<const T extends readonly string[]>(
   return value as T[number];
 }
 
-function readBoolean(
-  record: Record<string, unknown>,
-  key: string,
-  parentPath?: string,
-): boolean {
-  const path = parentPath ? `${parentPath}.${key}` : key;
-  const value = record[key];
-  if (typeof value !== "boolean") {
-    throw new Error(`${path} must be a boolean`);
-  }
-  return value;
-}
-
 function readConfidenceNumber(
   record: Record<string, unknown>,
   key: string,
@@ -1502,7 +1475,7 @@ function readConfidenceNumber(
 ): number {
   const value = readNonNegativeNumber(record, key, parentPath);
   if (value > 1) {
-    const path = parentPath ? `${parentPath}.${key}` : key;
+    const path = childPath(parentPath, key);
     throw new Error(`${path} must be between 0 and 1`);
   }
   return value;
@@ -1513,7 +1486,7 @@ function readNonNegativeNumber(
   key: string,
   parentPath?: string,
 ): number {
-  const path = parentPath ? `${parentPath}.${key}` : key;
+  const path = childPath(parentPath, key);
   const value = record[key];
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
     throw new Error(`${path} must be a non-negative number`);
@@ -1528,7 +1501,7 @@ function readNonNegativeInteger(
 ): number {
   const value = readNonNegativeNumber(record, key, parentPath);
   if (!Number.isInteger(value)) {
-    const path = parentPath ? `${parentPath}.${key}` : key;
+    const path = childPath(parentPath, key);
     throw new Error(`${path} must be an integer`);
   }
   return value;
@@ -1551,49 +1524,19 @@ function readIsoDateString(
   parentPath?: string,
 ): string {
   const value = readNonEmptyString(record, key, parentPath);
-  const path = parentPath ? `${parentPath}.${key}` : key;
+  const path = childPath(parentPath, key);
   if (Number.isNaN(Date.parse(value))) {
     throw new Error(`${path} must be an ISO timestamp`);
   }
   return value;
 }
 
-function optionalString(
-  record: Record<string, unknown>,
-  key: string,
-): Record<string, string> {
-  return record[key] === undefined
-    ? {}
-    : { [key]: readNonEmptyString(record, key) };
-}
-
-function optionalStringKey<K extends string>(
+function optionalKey<K extends string, V>(
   record: Record<string, unknown>,
   key: K,
-): Partial<Record<K, string>> {
+  read: (record: Record<string, unknown>, key: K) => V,
+): Partial<Record<K, V>> {
   return record[key] === undefined
     ? {}
-    : ({ [key]: readNonEmptyString(record, key) } as Partial<
-        Record<K, string>
-      >);
-}
-
-function optionalNumberKey<K extends string>(
-  record: Record<string, unknown>,
-  key: K,
-): Partial<Record<K, number>> {
-  return record[key] === undefined
-    ? {}
-    : ({ [key]: readNonNegativeNumber(record, key) } as Partial<
-        Record<K, number>
-      >);
-}
-
-function optionalLocalUrlKey<K extends string>(
-  record: Record<string, unknown>,
-  key: K,
-): Partial<Record<K, string>> {
-  return record[key] === undefined
-    ? {}
-    : ({ [key]: readLocalHttpUrl(record, key) } as Partial<Record<K, string>>);
+    : ({ [key]: read(record, key) } as Partial<Record<K, V>>);
 }

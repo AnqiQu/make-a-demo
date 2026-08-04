@@ -10,6 +10,11 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  assertRecord,
+  readBoolean,
+  readNonEmptyString,
+} from "../../shared/artifact-storage/persisted-record-readers";
 import type { CaptureManifest } from "../06-footage-capture/capture-scenes";
 import { createDemoScriptDigest } from "../06-footage-capture/demo-script-identity";
 import {
@@ -675,41 +680,6 @@ function parseCaptureManifest(value: unknown): CaptureManifest {
     temporary: true,
     title: readNonEmptyString(record, "title", "capture manifest"),
   };
-}
-
-function readBoolean(
-  record: Record<string, unknown>,
-  key: string,
-  parentPath: string,
-) {
-  const value = record[key];
-  if (typeof value !== "boolean") {
-    throw new Error(`${parentPath}.${key} must be a boolean`);
-  }
-  return value;
-}
-
-function assertRecord(value: unknown, path: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`${path} must be an object`);
-  }
-
-  return value as Record<string, unknown>;
-}
-
-function readNonEmptyString(
-  record: Record<string, unknown>,
-  key: string,
-  parentPath?: string,
-) {
-  const path = parentPath ? `${parentPath}.${key}` : key;
-  const value = record[key];
-
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error(`${path} must be a non-empty string`);
-  }
-
-  return value;
 }
 
 function readSha256Digest(
