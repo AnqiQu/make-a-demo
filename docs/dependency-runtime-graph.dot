@@ -215,7 +215,6 @@ strict digraph "dependency-cruiser output"{
     subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/agent-harness" {label="agent-harness" subgraph "cluster_src/server/agent-harness/script-contract" {label="script-contract" "src/server/agent-harness/script-contract/demo-script-contract.ts" [label=<demo-script-contract.ts> tooltip="demo-script-contract.ts" URL="src/server/agent-harness/script-contract/demo-script-contract.ts" fillcolor="#ddfeff"] } } } }
     "src/server/agent-harness/script-contract/demo-script-contract.ts" -> "src/server/pipeline/06-footage-capture/browser-action-plan.ts"
     "src/server/agent-harness/script-contract/demo-script-contract.ts" -> "src/server/pipeline/06-footage-capture/capture-contract-versions.ts"
-    "src/server/agent-harness/script-contract/demo-script-contract.ts" -> "src/server/pipeline/06-footage-capture/capture-sdk-contract.ts"
     "src/server/agent-harness/script-contract/demo-script-contract.ts" -> "src/server/pipeline/06-footage-capture/demo-script.schema.ts"
     "src/server/agent-harness/script-contract/demo-script-contract.ts" -> "src/server/agent-harness/schemas/artifacts.ts"
     "src/server/agent-harness/script-contract/demo-script-contract.ts" -> "src/server/agent-harness/script-contract/demo-narrative.ts"
@@ -306,7 +305,6 @@ strict digraph "dependency-cruiser output"{
     "src/server/pipeline/06-footage-capture/capture-scenes.test.ts" -> "src/server/pipeline/06-footage-capture/capture-scenes.ts"
     "src/server/pipeline/06-footage-capture/capture-scenes.test.ts" -> "src/server/pipeline/06-footage-capture/playwright-scene-recorder.ts"
     subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/pipeline" {label="pipeline" subgraph "cluster_src/server/pipeline/06-footage-capture" {label="06-footage-capture" "src/server/pipeline/06-footage-capture/capture-scenes.ts" [label=<capture-scenes.ts> tooltip="capture-scenes.ts" URL="src/server/pipeline/06-footage-capture/capture-scenes.ts" fillcolor="#ddfeff"] } } } }
-    "src/server/pipeline/06-footage-capture/capture-scenes.ts" -> "src/server/pipeline/06-footage-capture/capture-sdk-contract.ts"
     "src/server/pipeline/06-footage-capture/capture-scenes.ts" -> "src/server/pipeline/06-footage-capture/demo-script-identity.ts"
     "src/server/pipeline/06-footage-capture/capture-scenes.ts" -> "src/server/pipeline/06-footage-capture/demo-script.schema.ts"
     "src/server/pipeline/06-footage-capture/capture-scenes.ts" -> "src/server/pipeline/06-footage-capture/playwright-scene-recorder.ts"
