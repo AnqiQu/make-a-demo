@@ -1654,6 +1654,37 @@ restricted org fails in seconds at setup instead of minutes into a paid run
 after a full repo preparation (homer burned ~2 min, midday ~4.5 min of agent
 time before the preflight throw).
 
+## Addendum (2026-08-04, first tier-3 matrix run)
+
+Runs: `terminal-2026-08-04T17-45-57-826Z` (homer, **passed end-to-end**, 567s,
+final video) + `terminal-2026-08-04T17-55-24-854Z` (midday, failed, 411s).
+
+**Homer is the first full pass with the network boundary genuinely enforced**:
+zero network incidents, zero drift/denial events, the seal opened and closed
+cleanly around the install window on tier 3. The Phase 4 stack is now
+production-validated on the passing lane.
+
+**Midday — OOM under the 4 GiB snapshot, not a pipeline defect.** Prep
+succeeded first-try; preflight passed; then the prepared Next.js dev server was
+OOM-killed at exploration launch. The cgroup-OOM seam classified it correctly
+("1 OOM kill(s) under a 4096 MiB memory ceiling… the app needs more resources")
+and the run stopped immediately with zero repair attempts burned — the cheapest
+possible failure of this class. Root cause: the N30 rebuild sized the
+submitted-code snapshot at the capacity-floor minimum (4 GiB), but the old
+org's sandbox ran at 8 GiB (per the 2026-07-31 VP9-trim OOM evidence). Homer's
+static dashboard fits in 4 GiB; midday's dev server does not. The familiar SSR
+relative-URL error appears in the app-output tail but was not the killer.
+
+**N31 executed (ops):** `makeademo-submitted-code-browser-ca-20260804b` built
+at cpu 2 / mem 8 GiB / disk 10 GB; `.env` updated; the superseded 4 GiB
+snapshot deleted; `verify:daytona-image` rerun against the new snapshot.
+
+**N31b (Low, feature, queued with the small fixes)** — raise
+`submittedCodeSandboxCapacityFloor.memoryMiB` from 3900 to ~7900 so
+`verify:daytona-image` rejects an under-sized snapshot at provisioning time;
+the 3900 floor is what let the 4 GiB rebuild pass verification and cost a
+paid run to discover.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
