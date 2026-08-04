@@ -390,131 +390,6 @@ export type PipelineRunManifest = {
   unsupportedOrFailureReason?: string;
 };
 
-export function readRepoProfile(value: unknown): RepoProfile {
-  const record = assertRecord(value, "RepoProfile");
-  return {
-    authHints: readStringArray(record, "authHints"),
-    candidateAppDirs: readStringArray(record, "candidateAppDirs"),
-    candidateBuildCommands: readStringArray(record, "candidateBuildCommands"),
-    candidateInstallCommands: readStringArray(
-      record,
-      "candidateInstallCommands",
-    ),
-    candidatePorts: readPortArray(record, "candidatePorts"),
-    candidateStartCommands: readStringArray(record, "candidateStartCommands"),
-    ...optionalString(record, "commitSha"),
-    confidence: readConfidence(record.confidence),
-    detectedFrameworks: readStringArray(record, "detectedFrameworks"),
-    dockerHints: readStringArray(record, "dockerHints"),
-    envExamples: readStringArray(record, "envExamples"),
-    externalServiceHints: readStringArray(record, "externalServiceHints"),
-    lockfiles: readStringArray(record, "lockfiles"),
-    packageManager: readEnum(record, "packageManager", [
-      "bun",
-      "npm",
-      "pnpm",
-      "unknown",
-      "yarn",
-    ]),
-    packageScripts: readStringRecord(record, "packageScripts"),
-    repoUrl: readNonEmptyString(record, "repoUrl"),
-    requiredEnvHints: readStringArray(record, "requiredEnvHints"),
-    rootDir: readNonEmptyString(record, "rootDir"),
-    ...optionalString(record, "rootPackageName"),
-    securityWarnings: readStringArray(record, "securityWarnings"),
-    unsupportedReasons: readStringArray(record, "unsupportedReasons"),
-    workspaces: readWorkspaces(record.workspaces),
-    ...readOptionalBrowserRuntimeCandidates(record.browserRuntimeCandidates),
-    ...readOptionalWorkspacePackages(record.workspacePackages),
-  };
-}
-
-function readOptionalBrowserRuntimeCandidates(
-  value: unknown,
-): Pick<RepoProfile, "browserRuntimeCandidates"> {
-  if (value === undefined) return {};
-  if (!Array.isArray(value)) {
-    throw new Error("RepoProfile.browserRuntimeCandidates must be an array");
-  }
-  return {
-    browserRuntimeCandidates: value.map((entry, index) => {
-      const record = assertRecord(
-        entry,
-        `RepoProfile.browserRuntimeCandidates[${index}]`,
-      );
-      return {
-        ...readRepoWorkspacePackage(record),
-        evidencePaths: readRepoPathArray(
-          record,
-          "evidencePaths",
-          `RepoProfile.browserRuntimeCandidates[${index}]`,
-        ),
-        frameworks: readStringArray(
-          record,
-          "frameworks",
-          `RepoProfile.browserRuntimeCandidates[${index}]`,
-        ),
-      };
-    }),
-  };
-}
-
-function readOptionalWorkspacePackages(
-  value: unknown,
-): Pick<RepoProfile, "workspacePackages"> {
-  if (value === undefined) {
-    return {};
-  }
-  if (!Array.isArray(value)) {
-    throw new Error("RepoProfile.workspacePackages must be an array");
-  }
-  return {
-    workspacePackages: value.map((entry, index) => {
-      const record = assertRecord(
-        entry,
-        `RepoProfile.workspacePackages[${index}]`,
-      );
-      return readRepoWorkspacePackage(record);
-    }),
-  };
-}
-
-function readRepoWorkspacePackage(
-  record: Record<string, unknown>,
-): RepoWorkspacePackage {
-  return {
-    dir: readRepoRelativePath(record, "dir"),
-    ...(record.installDir === undefined
-      ? {}
-      : { installDir: readRepoRelativePath(record, "installDir") }),
-    ...(record.isWorkspace === undefined
-      ? {}
-      : { isWorkspace: readBoolean(record, "isWorkspace") }),
-    ...optionalString(record, "name"),
-    ...(record.packageManager === undefined
-      ? {}
-      : {
-          packageManager: readEnum(record, "packageManager", [
-            "bun",
-            "npm",
-            "pnpm",
-            "unknown",
-            "yarn",
-          ]),
-        }),
-    ports: readPortArray(record, "ports"),
-    scripts: readStringRecord(record, "scripts"),
-    ...(record.workspaceDependencies === undefined
-      ? {}
-      : {
-          workspaceDependencies: readStringArray(
-            record,
-            "workspaceDependencies",
-          ),
-        }),
-  };
-}
-
 export function readRunPlan(value: unknown): RunPlan {
   const record = assertRecord(value, "RunPlan");
   const runPlan: RunPlan = {
@@ -1048,37 +923,6 @@ function readFlowSpecFeature(value: unknown, index: number): FlowSpecFeature {
   };
 }
 
-export function readDemoScriptContract(value: unknown): DemoScriptContract {
-  const record = assertRecord(value, "DemoScriptContract");
-  if (!Array.isArray(record.examples) || record.examples.length === 0) {
-    throw new Error("examples must be a non-empty array");
-  }
-  return {
-    allowedCaptureSdkActions: readStringArray(
-      record,
-      "allowedCaptureSdkActions",
-    ),
-    baseUrlBinding: readNonEmptyString(record, "baseUrlBinding"),
-    browserContextOwnership: readNonEmptyString(
-      record,
-      "browserContextOwnership",
-    ),
-    captureSdkVersion: readNonEmptyString(record, "captureSdkVersion"),
-    contractVersion: readNonEmptyString(record, "contractVersion"),
-    examples: record.examples,
-    forbiddenApis: readStringArray(record, "forbiddenApis"),
-    forbiddenExternalUrls: readBoolean(record, "forbiddenExternalUrls"),
-    forbiddenFields: readStringArray(record, "forbiddenFields"),
-    jsonSchema: assertRecord(record.jsonSchema, "jsonSchema"),
-    networkRestrictions: readStringArray(record, "networkRestrictions"),
-    outputPath: readDemoScriptOutputPath(record, "outputPath"),
-    requiredAssertions: readStringArray(record, "requiredAssertions"),
-    requiredJsonShape: readStringArray(record, "requiredJsonShape"),
-    requiredMetadata: readStringArray(record, "requiredMetadata"),
-    timingConventions: readStringArray(record, "timingConventions"),
-  };
-}
-
 export function readScriptCandidate(value: unknown): ScriptCandidate {
   const record = assertRecord(value, "ScriptCandidate");
   return {
@@ -1128,22 +972,6 @@ export function readPipelineRunManifest(value: unknown): PipelineRunManifest {
     stageStatuses: readStageStatuses(record.stageStatuses),
     stageTimings: readStageTimings(record.stageTimings),
     ...optionalStringKey(record, "unsupportedOrFailureReason"),
-  };
-}
-
-function readConfidence(value: unknown): RepoProfile["confidence"] {
-  const record = assertRecord(value, "confidence");
-  return {
-    assumptions: readStringArray(record, "assumptions"),
-    overall: readConfidenceNumber(record, "overall"),
-  };
-}
-
-function readWorkspaces(value: unknown): RepoProfile["workspaces"] {
-  const record = assertRecord(value, "workspaces");
-  return {
-    isMonorepo: readBoolean(record, "isMonorepo"),
-    packageDirectories: readStringArray(record, "packageDirectories"),
   };
 }
 

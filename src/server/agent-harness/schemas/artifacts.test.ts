@@ -3,11 +3,9 @@ import {
   DEMO_SCRIPT_OUTPUT_PATH,
   readActionCatalog,
   readAppMap,
-  readDemoScriptContract,
   readFlowSpec,
   readPipelineRunManifest,
   readPreparationManifest,
-  readRepoProfile,
   readRunPlan,
   readScriptCandidate,
   readValidationReport,
@@ -15,7 +13,6 @@ import {
 
 describe("agent harness artifact schemas", () => {
   it("accepts the complete core artifact set used as durable stage handoffs", () => {
-    const repoProfile = readRepoProfile(validRepoProfile());
     const runPlan = readRunPlan(validRunPlan());
     const preparationManifest = readPreparationManifest(
       validPreparationManifest(),
@@ -24,13 +21,11 @@ describe("agent harness artifact schemas", () => {
     const appMap = readAppMap(validAppMap());
     const actionCatalog = readActionCatalog(validActionCatalog());
     const flowSpec = readFlowSpec(validFlowSpec());
-    const contract = readDemoScriptContract(validDemoScriptContract());
     const scriptCandidate = readScriptCandidate(validScriptCandidate());
     const pipelineRunManifest = readPipelineRunManifest(
       validPipelineRunManifest(),
     );
 
-    expect(repoProfile.repoUrl).toBe("https://github.com/example/app");
     expect(runPlan.expectedLocalUrl).toBe("http://127.0.0.1:3000");
     expect(preparationManifest.baseUrl).toBe("http://127.0.0.1:3000");
     expect(validationReport.stage).toBe("preparation-preflight");
@@ -47,7 +42,6 @@ describe("agent harness artifact schemas", () => {
     expect(flowSpec.features[0]?.referencedActionIds).toEqual([
       "open-dashboard",
     ]);
-    expect(contract.outputPath).toBe(DEMO_SCRIPT_OUTPUT_PATH);
     expect(scriptCandidate.sourceFlowSpecId).toBe("flow_001");
     expect(scriptCandidate.browserActionCompilerVersion).toBe("2026-07-18.1");
     expect(scriptCandidate.bunRuntimeVersion).toBe("1.3.14");
@@ -165,13 +159,6 @@ describe("agent harness artifact schemas", () => {
     ).toThrow("appDir must be a relative path within /workspace/repo");
 
     expect(() =>
-      readDemoScriptContract({
-        ...validDemoScriptContract(),
-        outputPath: "/tmp/demo-script.json",
-      }),
-    ).toThrow("outputPath must be /workspace/.makeademo/demo-script.json");
-
-    expect(() =>
       readScriptCandidate({
         ...validScriptCandidate(),
         outputPath: "/workspace/demo-script.json",
@@ -234,32 +221,6 @@ describe("agent harness artifact schemas", () => {
     );
   });
 });
-
-function validRepoProfile() {
-  return {
-    authHints: ["clerk dependency"],
-    candidateAppDirs: ["."],
-    candidateBuildCommands: ["bun run build"],
-    candidateInstallCommands: ["bun install --frozen-lockfile"],
-    candidatePorts: [3000],
-    candidateStartCommands: ["bun run dev --host 127.0.0.1 --port 3000"],
-    commitSha: "abc123",
-    confidence: { assumptions: ["Vite app"], overall: 0.83 },
-    detectedFrameworks: ["vite", "react"],
-    dockerHints: [],
-    envExamples: [".env.example"],
-    externalServiceHints: ["stripe"],
-    lockfiles: ["bun.lock"],
-    packageManager: "bun",
-    packageScripts: { build: "vite build", dev: "vite" },
-    repoUrl: "https://github.com/example/app",
-    requiredEnvHints: ["DATABASE_URL"],
-    rootDir: "/workspace",
-    securityWarnings: ["postinstall script"],
-    unsupportedReasons: [],
-    workspaces: { isMonorepo: false, packageDirectories: [] },
-  };
-}
 
 function validRunPlan() {
   return {
@@ -440,27 +401,6 @@ function validFlowSpec() {
     id: "flow_001",
     repairConstraints: ["Do not remove dashboard assertion"],
     version: 2,
-  };
-}
-
-function validDemoScriptContract() {
-  return {
-    allowedCaptureSdkActions: ["setup", "scene", "page.goto", "locator.click"],
-    baseUrlBinding: "Capture SDK context baseUrl",
-    browserContextOwnership: "MakeADemo owns browser and context",
-    captureSdkVersion: "2026-07-18.1",
-    contractVersion: "2026-07-08",
-    examples: [{ scriptId: "script_001" }],
-    forbiddenApis: ["fetch", "XMLHttpRequest", "WebSocket"],
-    forbiddenExternalUrls: true,
-    forbiddenFields: ["durationSeconds"],
-    jsonSchema: { type: "object" },
-    networkRestrictions: ["runtime network blocked"],
-    outputPath: DEMO_SCRIPT_OUTPUT_PATH,
-    requiredAssertions: ["visible Playwright assertion per scene"],
-    requiredJsonShape: ["scriptId", "demoPlaywrightScript", "scenes"],
-    requiredMetadata: ["title", "format", "presentation"],
-    timingConventions: ["bounded waits only"],
   };
 }
 

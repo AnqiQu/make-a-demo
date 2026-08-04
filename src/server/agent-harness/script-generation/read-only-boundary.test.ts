@@ -10,7 +10,6 @@ describe("readDisallowedScriptWritingChanges", () => {
       readDisallowedScriptWritingChanges([
         "/workspace/.makeademo/demo-script.json",
         "/workspace/.makeademo/script-candidate.json",
-        "/workspace/.makeademo/script-generation-report.json",
         "/workspace/.makeademo/static-script-contract-validation.json",
       ]),
     ).toEqual([]);
