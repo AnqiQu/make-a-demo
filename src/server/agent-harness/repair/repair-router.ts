@@ -75,6 +75,21 @@ export function isDependencyRepairFailure(
   );
 }
 
+/**
+ * Formats the one exhaustion message every repair budget reports. The
+ * optional label names which of a route's budgets ran out (for example
+ * `global` or `repeated failure`); without it the message describes the
+ * route's plain retry budget.
+ */
+export function repairBudgetExhaustedMessage(input: {
+  attempts: number;
+  budgetLabel?: string;
+  route: Exclude<RepairRoute, "fail">;
+}): string {
+  const label = input.budgetLabel === undefined ? "" : `${input.budgetLabel} `;
+  return `${input.route} ${label}retry budget exhausted after ${input.attempts} attempts`;
+}
+
 export function readRepairBudgetDecision(input: {
   attempted: number;
   limit: number;
@@ -84,7 +99,10 @@ export function readRepairBudgetDecision(input: {
   | { reason: string; status: "exhausted" } {
   if (input.attempted >= input.limit) {
     return {
-      reason: `${input.route} retry budget exhausted after ${input.limit} attempts`,
+      reason: repairBudgetExhaustedMessage({
+        attempts: input.limit,
+        route: input.route,
+      }),
       status: "exhausted",
     };
   }

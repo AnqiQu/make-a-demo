@@ -7,6 +7,7 @@ import {
   classifyRepairRoute,
   isDependencyRepairFailure,
   readRepairBudgetDecision,
+  repairBudgetExhaustedMessage,
 } from "../repair/repair-router";
 import {
   isPackageManagerLockfilePath,
@@ -464,7 +465,7 @@ export async function runAgentHarnessPipeline(
           });
     const scriptRepairLimit = options.scriptRepairLimit ?? 3;
     const validationAttemptCounts: Record<string, number> = {};
-    let preparationState = await ensureValidPreparation({
+    const preparationState = await ensureValidPreparation({
       capturePreparationWorkspaceDiff,
       dependencies,
       input,
@@ -484,11 +485,57 @@ export async function runAgentHarnessPipeline(
     preparationManifest = preparationState.preparationManifest;
     let acceptedPreparation = preparationState.acceptedPreparation;
     let preparationValidation = preparationState.preparationValidation;
+    // Every mid-pipeline preparation failure re-enters validated preparation
+    // with the same budgets and bindings; only the triggering failure varies.
+    const revalidatePreparation = async (initialFailure: ValidationReport) => {
+      const revalidatedState = await ensureValidPreparation({
+        ...(acceptedPreparation === undefined ? {} : { acceptedPreparation }),
+        capturePreparationWorkspaceDiff,
+        dependencies,
+        initialFailure,
+        input,
+        preparationManifest,
+        preparationRepairBudget,
+        preparationRepairAttemptsByPhase,
+        recordOpenCodeSessionId,
+        repoPreparationRepairLimit,
+        repoProfile,
+        runPlan,
+        stageStatuses,
+        stageTimings,
+        validationReports,
+        validationAttemptCounts,
+        workspace: requireWorkspace(workspace),
+      });
+      preparationManifest = revalidatedState.preparationManifest;
+      acceptedPreparation = revalidatedState.acceptedPreparation;
+      preparationValidation = revalidatedState.preparationValidation;
+    };
 
     let appMap: AppMap;
     let actionCatalog: ActionCatalog;
     let flowSpec: FlowSpec;
     let scriptCandidate: ScriptCandidate;
+    // Re-plans the flow against the current catalog and app map after a
+    // grounding change, persisting the replanned FlowSpec artifact.
+    const replanFlow = async () => {
+      flowSpec = await runAsyncStage(
+        "flow-replanning",
+        stageStatuses,
+        stageTimings,
+        async () =>
+          readFlowSpec(
+            await dependencies.planFlow({
+              actionCatalog,
+              appMap,
+              demoBrief: input.demoBrief,
+              preparationManifest,
+              repoProfile,
+            }),
+          ),
+      );
+      await writeArtifact(dependencies, artifactPaths.flowSpec, flowSpec);
+    };
     pipelineAttempt: for (;;) {
       for (;;) {
         const exploration = await runAsyncStage(
@@ -524,7 +571,10 @@ export async function runAgentHarnessPipeline(
           ),
           writeArtifact(
             dependencies,
-            `${artifactPaths.validationAttempts}/app-exploration/attempt-${explorationAttempt}.json`,
+            validationAttemptArtifactPath(
+              "app-exploration",
+              explorationAttempt,
+            ),
             explorationValidation,
           ),
         ]);
@@ -534,7 +584,11 @@ export async function runAgentHarnessPipeline(
         ) {
           await writeArtifact(
             dependencies,
-            `${artifactPaths.validationAttempts}/app-exploration/attempt-${explorationAttempt}-observation.json`,
+            validationAttemptArtifactPath(
+              "app-exploration",
+              explorationAttempt,
+              "-observation",
+            ),
             exploration.observation,
           );
         }
@@ -557,28 +611,7 @@ export async function runAgentHarnessPipeline(
           break;
         }
 
-        preparationState = await ensureValidPreparation({
-          ...(acceptedPreparation === undefined ? {} : { acceptedPreparation }),
-          capturePreparationWorkspaceDiff,
-          dependencies,
-          initialFailure: explorationValidation,
-          input,
-          preparationManifest,
-          preparationRepairBudget,
-          preparationRepairAttemptsByPhase,
-          recordOpenCodeSessionId,
-          repoPreparationRepairLimit,
-          repoProfile,
-          runPlan,
-          stageStatuses,
-          stageTimings,
-          validationReports,
-          validationAttemptCounts,
-          workspace: requireWorkspace(workspace),
-        });
-        preparationManifest = preparationState.preparationManifest;
-        acceptedPreparation = preparationState.acceptedPreparation;
-        preparationValidation = preparationState.preparationValidation;
+        await revalidatePreparation(explorationValidation);
       }
 
       flowSpec = await runAsyncStage(
@@ -704,30 +737,7 @@ export async function runAgentHarnessPipeline(
           captureRepairAttempts,
         );
         if (capturePathPreflight.status === "failed") {
-          preparationState = await ensureValidPreparation({
-            ...(acceptedPreparation === undefined
-              ? {}
-              : { acceptedPreparation }),
-            capturePreparationWorkspaceDiff,
-            dependencies,
-            initialFailure: capturePathPreflight,
-            input,
-            preparationManifest,
-            preparationRepairBudget,
-            preparationRepairAttemptsByPhase,
-            recordOpenCodeSessionId,
-            repoPreparationRepairLimit,
-            repoProfile,
-            runPlan,
-            stageStatuses,
-            stageTimings,
-            validationReports,
-            validationAttemptCounts,
-            workspace: requireWorkspace(workspace),
-          });
-          preparationManifest = preparationState.preparationManifest;
-          acceptedPreparation = preparationState.acceptedPreparation;
-          preparationValidation = preparationState.preparationValidation;
+          await revalidatePreparation(capturePathPreflight);
           continue pipelineAttempt;
         }
         const capturePathValidation = await runValidationStage(
@@ -766,30 +776,7 @@ export async function runAgentHarnessPipeline(
           classifyRepairRoute(capturePathValidation) ===
           "repo-preparation-repair"
         ) {
-          preparationState = await ensureValidPreparation({
-            ...(acceptedPreparation === undefined
-              ? {}
-              : { acceptedPreparation }),
-            capturePreparationWorkspaceDiff,
-            dependencies,
-            initialFailure: capturePathValidation,
-            input,
-            preparationManifest,
-            preparationRepairBudget,
-            preparationRepairAttemptsByPhase,
-            recordOpenCodeSessionId,
-            repoPreparationRepairLimit,
-            repoProfile,
-            runPlan,
-            stageStatuses,
-            stageTimings,
-            validationReports,
-            validationAttemptCounts,
-            workspace: requireWorkspace(workspace),
-          });
-          preparationManifest = preparationState.preparationManifest;
-          acceptedPreparation = preparationState.acceptedPreparation;
-          preparationValidation = preparationState.preparationValidation;
+          await revalidatePreparation(capturePathValidation);
           continue pipelineAttempt;
         }
 
@@ -814,22 +801,7 @@ export async function runAgentHarnessPipeline(
               artifactPaths.actionCatalog,
               withoutExcludedActions(actionCatalog),
             );
-            flowSpec = await runAsyncStage(
-              "flow-replanning",
-              stageStatuses,
-              stageTimings,
-              async () =>
-                readFlowSpec(
-                  await dependencies.planFlow({
-                    actionCatalog,
-                    appMap,
-                    demoBrief: input.demoBrief,
-                    preparationManifest,
-                    repoProfile,
-                  }),
-                ),
-            );
-            await writeArtifact(dependencies, artifactPaths.flowSpec, flowSpec);
+            await replanFlow();
             flowReplanned = true;
           }
         }
@@ -870,7 +842,10 @@ export async function runAgentHarnessPipeline(
             ),
             writeArtifact(
               dependencies,
-              `${artifactPaths.validationAttempts}/locator-regrounding/attempt-${regroundingAttempt}.json`,
+              validationAttemptArtifactPath(
+                "locator-regrounding",
+                regroundingAttempt,
+              ),
               regroundingValidation,
             ),
           ]);
@@ -892,22 +867,7 @@ export async function runAgentHarnessPipeline(
               readActionCatalog(regrounding.actionCatalog),
             ),
           );
-          flowSpec = await runAsyncStage(
-            "flow-replanning",
-            stageStatuses,
-            stageTimings,
-            async () =>
-              readFlowSpec(
-                await dependencies.planFlow({
-                  actionCatalog,
-                  appMap,
-                  demoBrief: input.demoBrief,
-                  preparationManifest,
-                  repoProfile,
-                }),
-              ),
-          );
-          await writeArtifact(dependencies, artifactPaths.flowSpec, flowSpec);
+          await replanFlow();
         }
 
         scriptCandidate = await repairScriptCandidate({
@@ -1244,13 +1204,12 @@ async function repairScriptCandidate(input: {
     input.dependencies.repairScript === undefined
   ) {
     assertValidationPassed(input.failureReport);
-    throw new Error("Unreachable validation state.");
   }
 
   const budget = readRepairBudgetDecision({
     attempted: input.scriptRepairAttempts,
     limit: input.scriptRepairLimit,
-    route,
+    route: "script-repair",
   });
   if (budget.status === "exhausted") {
     throw new Error(
@@ -1444,7 +1403,6 @@ async function ensureValidPreparation(input: {
       );
     }
 
-    reconcileLockfile = false;
     const workspaceDiff = await input.capturePreparationWorkspaceDiff();
     lastWorkspaceDiff = workspaceDiff;
     const fidelityAttempt =
@@ -1503,7 +1461,6 @@ async function ensureValidPreparation(input: {
     dependencyRepair = false;
     repairBaseline = undefined;
     if (fidelityValidation.status === "failed") {
-      reconcileLockfile = false;
       if (
         acceptedPreparation !== undefined &&
         activeRepairFailure !== undefined &&
@@ -1677,12 +1634,17 @@ async function repairPreparationManifest(input: {
     input.dependencies.repairPreparation === undefined
   ) {
     assertValidationPassed(input.failureReport);
-    throw new Error("Unreachable validation state.");
   }
 
   if (input.totalRepairAttempts >= input.repoPreparationRepairLimit) {
     throw new Error(
-      `${input.failureReport.stage} failed: ${input.failureReport.logsSummary}. ${route} global retry budget exhausted after ${input.repoPreparationRepairLimit} attempts`,
+      `${input.failureReport.stage} failed: ${input.failureReport.logsSummary}. ${repairBudgetExhaustedMessage(
+        {
+          attempts: input.repoPreparationRepairLimit,
+          budgetLabel: "global",
+          route: "repo-preparation-repair",
+        },
+      )}`,
     );
   }
   const repeatedFailureLimit = Math.min(
@@ -1691,7 +1653,13 @@ async function repairPreparationManifest(input: {
   );
   if (input.fingerprintRepairAttempts >= repeatedFailureLimit) {
     throw new Error(
-      `${input.failureReport.stage} failed: ${input.failureReport.logsSummary}. ${route} repeated failure retry budget exhausted after ${repeatedFailureLimit} attempts`,
+      `${input.failureReport.stage} failed: ${input.failureReport.logsSummary}. ${repairBudgetExhaustedMessage(
+        {
+          attempts: repeatedFailureLimit,
+          budgetLabel: "repeated failure",
+          route: "repo-preparation-repair",
+        },
+      )}`,
     );
   }
   const nextAttempt = input.phaseRepairAttempts + 1;
@@ -1799,7 +1767,14 @@ function normalizeFailureSummaryLine(summary: string): string {
     .trim();
 }
 
-function assertValidationPassed(report: ValidationReport): void {
+/**
+ * Throws the stage's failure as the pipeline error unless the report passed.
+ * The asserts signature lets repair guards end on this call: a failed report
+ * never returns, so no unreachable fallback throw is needed after it.
+ */
+function assertValidationPassed(
+  report: ValidationReport,
+): asserts report is ValidationReport & { status: "passed" } {
   if (report.status !== "passed") {
     throw new Error(`${report.stage} failed: ${report.logsSummary}`);
   }
