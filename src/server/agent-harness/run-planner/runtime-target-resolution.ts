@@ -7,6 +7,13 @@ import {
   type ValidationReport,
   browserRuntimeScriptNames,
 } from "../schemas/artifacts";
+import {
+  createInstallCommand,
+  createRunScriptCommand,
+  isDevServerScriptBody,
+  readPackageName,
+  readScriptPort,
+} from "./package-commands";
 
 type RuntimeCommand = {
   command: string;
@@ -200,24 +207,26 @@ export function resolveRuntimeTarget(input: {
   if (start === undefined) {
     return undefined;
   }
+  const selectedScriptBody = workspacePackage.scripts[start.scriptName] ?? "";
   const port =
     start.port ??
+    readScriptPort(selectedScriptBody) ??
     workspacePackage.ports[0] ??
-    readFrameworkDefaultPort(
-      workspacePackage.scripts[start.scriptName] ?? "",
-    ) ??
+    readFrameworkDefaultPort(selectedScriptBody) ??
     input.preparationManifest.ports[0] ??
     3000;
   return {
     baseUrl: `http://127.0.0.1:${port}`,
-    build: ["dev", "develop", "serve"].includes(start.scriptName)
-      ? undefined
-      : findBuildCommand(
-          input.repoProfile,
-          workspacePackage,
-          preferPackageLocalCommands,
-          packageManager,
-        ),
+    build:
+      (isDevServerScriptBody(selectedScriptBody) ??
+      ["dev", "develop"].includes(start.scriptName))
+        ? undefined
+        : findBuildCommand(
+            input.repoProfile,
+            workspacePackage,
+            preferPackageLocalCommands,
+            packageManager,
+          ),
     install: {
       command: installCommand,
       cwd:
@@ -318,17 +327,6 @@ function readSelectedWorkspaceNames(command: string): string[] {
   });
 }
 
-function readPackageName(specifier: string): string | undefined {
-  if (specifier.startsWith("@")) {
-    const [scope, name] = specifier.split("/");
-    return scope !== undefined && name !== undefined
-      ? `${scope}/${name}`
-      : undefined;
-  }
-  const [name] = specifier.split("/");
-  return name?.length === 0 || specifier.startsWith(".") ? undefined : name;
-}
-
 function readWorkspaceFilter(
   workspacePackage: RepoWorkspacePackage,
 ): string | undefined {
@@ -417,27 +415,23 @@ function findStartCommand(
       ? undefined
       : findScopedRootScript(repoProfile, workspacePackage, scriptName);
     if (rootScriptName !== undefined) {
+      const rootPort = readScriptPort(
+        repoProfile.packageScripts[rootScriptName] ?? "",
+      );
       return {
-        command: scriptCommand(packageManager, rootScriptName),
+        command: createRunScriptCommand(packageManager, rootScriptName),
         cwd: ".",
-        ...readCommandPort(repoProfile.packageScripts[rootScriptName] ?? ""),
+        ...(rootPort === undefined ? {} : { port: rootPort }),
         scriptName,
       };
     }
     return {
-      command: scriptCommand(packageManager, scriptName),
+      command: createRunScriptCommand(packageManager, scriptName),
       cwd: workspacePackage.dir,
       scriptName,
     };
   }
   return undefined;
-}
-
-function readCommandPort(command: string): { port?: number } {
-  const value = Number(/(?:--port|-p)\s+(\d{2,5})/.exec(command)?.[1]);
-  return Number.isInteger(value) && value > 0 && value <= 65_535
-    ? { port: value }
-    : {};
 }
 
 function findBuildCommand(
@@ -454,11 +448,11 @@ function findBuildCommand(
     : findScopedRootScript(repoProfile, workspacePackage, "build");
   return rootScriptName === undefined
     ? {
-        command: scriptCommand(packageManager, "build"),
+        command: createRunScriptCommand(packageManager, "build"),
         cwd: workspacePackage.dir,
       }
     : {
-        command: scriptCommand(packageManager, rootScriptName),
+        command: createRunScriptCommand(packageManager, rootScriptName),
         cwd: ".",
       };
 }
@@ -504,31 +498,6 @@ function referencesPackageName(command: string, name: string): boolean {
   return new RegExp(`(?<![@/A-Za-z0-9._-])${escaped}(?![A-Za-z0-9._-])`).test(
     command,
   );
-}
-
-function scriptCommand(
-  packageManager: RepoProfile["packageManager"],
-  scriptName: string,
-): string {
-  const runner = packageManager === "unknown" ? "npm" : packageManager;
-  return `${runner} run ${scriptName}`;
-}
-
-function createInstallCommand(
-  packageManager: RepoProfile["packageManager"],
-): string {
-  switch (packageManager) {
-    case "bun":
-      return "bun install --frozen-lockfile";
-    case "npm":
-      return "npm ci --no-audit";
-    case "pnpm":
-      return "pnpm install --frozen-lockfile";
-    case "yarn":
-      return "yarn install --immutable";
-    case "unknown":
-      return "npm install --no-audit";
-  }
 }
 
 function findInstallDirectory(

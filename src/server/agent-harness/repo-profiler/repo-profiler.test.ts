@@ -260,10 +260,10 @@ describe("profileRepo", () => {
     expect(profile).toMatchObject({
       authHints: ["@clerk/nextjs"],
       candidateAppDirs: [".", "apps/web"],
-      candidateBuildCommands: ["pnpm build"],
+      candidateBuildCommands: ["pnpm run build"],
       candidateInstallCommands: ["pnpm install --frozen-lockfile"],
       candidatePorts: [3000],
-      candidateStartCommands: ["pnpm dev --port 3000"],
+      candidateStartCommands: ["pnpm run dev --port 3000"],
       commitSha: "abc123",
       detectedFrameworks: ["next"],
       dockerHints: ["Dockerfile"],

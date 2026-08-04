@@ -432,6 +432,62 @@ describe("resolveRuntimeTarget", () => {
     expect(target?.start).toEqual({ command: "yarn run dev", cwd: "apps/web" });
   });
 
+  it("reads equals-form and env-form ports from the selected script", () => {
+    const target = resolveRuntimeTarget({
+      preparationManifest: manifest("apps/web/src/page.tsx"),
+      repoProfile: profile({
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "@acme/web",
+            ports: [],
+            scripts: { dev: "vite --port=4300" },
+          },
+        ],
+      }),
+    });
+
+    expect(target?.baseUrl).toBe("http://127.0.0.1:4300");
+
+    const envPortTarget = resolveRuntimeTarget({
+      preparationManifest: manifest("apps/site/src/page.tsx"),
+      repoProfile: profile({
+        workspacePackages: [
+          {
+            dir: "apps/site",
+            name: "@acme/site",
+            ports: [],
+            scripts: { dev: "PORT=3105 next dev" },
+          },
+        ],
+      }),
+    });
+
+    expect(envPortTarget?.baseUrl).toBe("http://127.0.0.1:3105");
+  });
+
+  it("requires a build when the selected script body is a static file server", () => {
+    const target = resolveRuntimeTarget({
+      preparationManifest: manifest("apps/web/src/page.tsx"),
+      repoProfile: profile({
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "@acme/web",
+            ports: [],
+            scripts: { build: "vite build", dev: "serve -s dist -l 3000" },
+          },
+        ],
+      }),
+    });
+
+    expect(target?.build).toEqual({
+      command: "bun run build",
+      cwd: "apps/web",
+    });
+    expect(target?.baseUrl).toBe("http://127.0.0.1:3000");
+  });
+
   it("keeps a full install when focused installation is not safely supported", () => {
     const target = resolveRuntimeTarget({
       preparationManifest: manifest("apps/web/src/page.tsx"),

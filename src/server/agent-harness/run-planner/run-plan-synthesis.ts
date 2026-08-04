@@ -6,6 +6,12 @@ import {
   type RuntimeTargetSelection,
   browserRuntimeScriptNames,
 } from "../schemas/artifacts";
+import {
+  createInstallCommand,
+  createRunScriptCommand,
+  isDevServerScriptBody,
+  readScriptPort,
+} from "./package-commands";
 import { readFrameworkDefaultPort } from "./runtime-target-resolution";
 import { RuntimeTargetSelectionRequiredError } from "./runtime-target-selection";
 
@@ -44,7 +50,16 @@ export function synthesizeRunPlan(
           targetId: onlyCandidate.dir,
         });
   const target = findSelectedTarget(repoProfile, targetSelection);
+  const startScript =
+    target === undefined ? undefined : findStartScript(target);
+  const startScriptBody =
+    target === undefined || startScript === undefined
+      ? undefined
+      : target.scripts[startScript];
   const port =
+    (startScriptBody === undefined
+      ? undefined
+      : readScriptPort(startScriptBody)) ??
     target?.ports[0] ??
     (target === undefined
       ? undefined
@@ -52,13 +67,16 @@ export function synthesizeRunPlan(
     repoProfile.candidatePorts[0] ??
     3000;
   const packageManager = target?.packageManager ?? repoProfile.packageManager;
-  const startScript =
-    target === undefined ? undefined : findStartScript(target);
   const startCommand =
     (startScript === undefined
       ? repoProfile.candidateStartCommands[0]
-      : scriptCommand(packageManager, startScript)) ??
+      : createRunScriptCommand(packageManager, startScript)) ??
     fallbackStartCommand(packageManager, port);
+  const startsDevServer =
+    startScriptBody === undefined
+      ? isDevelopmentCommand(startCommand)
+      : (isDevServerScriptBody(startScriptBody) ??
+        ["dev", "develop"].includes(startScript ?? ""));
   return {
     allowedPorts: [port],
     appDir: target?.dir ?? repoProfile.candidateAppDirs[0] ?? ".",
@@ -71,11 +89,11 @@ export function synthesizeRunPlan(
     ],
     ...optionalString(
       "buildCommand",
-      isDevelopmentCommand(startCommand)
+      startsDevServer
         ? undefined
         : target?.scripts.build === undefined
           ? repoProfile.candidateBuildCommands[0]
-          : scriptCommand(packageManager, "build"),
+          : createRunScriptCommand(packageManager, "build"),
     ),
     env: { NODE_ENV: "development" },
     expectedLocalUrl: `http://127.0.0.1:${port}`,
@@ -83,9 +101,9 @@ export function synthesizeRunPlan(
       target !== undefined &&
       (target.isWorkspace === false ||
         packageManager !== repoProfile.packageManager)
-        ? fallbackInstallCommand(packageManager)
+        ? createInstallCommand(packageManager)
         : (repoProfile.candidateInstallCommands[0] ??
-          fallbackInstallCommand(packageManager)),
+          createInstallCommand(packageManager)),
     localServices: [],
     riskFlags: readRiskFlags(repoProfile),
     runtime: readRuntime(packageManager),
@@ -122,13 +140,6 @@ function findStartScript(
   );
 }
 
-function scriptCommand(
-  packageManager: RepoProfile["packageManager"],
-  script: string,
-): string {
-  return `${packageManager === "unknown" ? "npm" : packageManager} run ${script}`;
-}
-
 function isDevelopmentCommand(command: string): boolean {
   return /(?:^|\s)(?:run\s+)?(?:dev|develop|serve)(?:\s|$)/.test(command);
 }
@@ -160,21 +171,6 @@ function readRuntime(
     return "unknown";
   }
   return "node";
-}
-
-function fallbackInstallCommand(packageManager: RepoProfile["packageManager"]) {
-  switch (packageManager) {
-    case "bun":
-      return "bun install --frozen-lockfile";
-    case "npm":
-      return "npm ci --no-audit";
-    case "pnpm":
-      return "pnpm install --frozen-lockfile";
-    case "yarn":
-      return "yarn install --immutable";
-    case "unknown":
-      return "npm ci --no-audit";
-  }
 }
 
 function fallbackStartCommand(

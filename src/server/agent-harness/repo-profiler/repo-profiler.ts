@@ -5,6 +5,13 @@ import {
   readEnvironmentAssignmentKeys,
 } from "../repo-security/secret-predicates";
 import {
+  createInstallCommand,
+  createRunScriptCommand,
+  readCandidatePorts,
+  readPackageName,
+  readScriptPort,
+} from "../run-planner/package-commands";
+import {
   type PackageManager,
   type RepoProfile,
   browserRuntimeScriptNames,
@@ -126,9 +133,10 @@ export function profileRepo(input: RepoProfileInput): RepoProfile {
     candidateBuildCommands: readScriptCommands(packageManager, packageScripts, [
       "build",
     ]),
-    candidateInstallCommands: [createInstallCommand(packageManager)].filter(
-      (command) => command.length > 0,
-    ),
+    candidateInstallCommands:
+      packageManager === "unknown"
+        ? []
+        : [createInstallCommand(packageManager)],
     candidatePorts,
     candidateStartCommands: readScriptCommands(packageManager, packageScripts, [
       ...browserRuntimeScriptNames,
@@ -423,17 +431,6 @@ function readModuleSpecifiers(source: string): string[] {
   );
 }
 
-function readPackageName(specifier: string): string | undefined {
-  if (specifier.startsWith("@")) {
-    const [scope, name] = specifier.split("/");
-    return scope !== undefined && name !== undefined
-      ? `${scope}/${name}`
-      : undefined;
-  }
-  const [name] = specifier.split("/");
-  return name?.length === 0 || specifier.startsWith(".") ? undefined : name;
-}
-
 function readPackages(files: RepoProfileFile[]): PackageRecord[] {
   return files.flatMap((file) => {
     if (file.path !== "package.json" && !file.path.endsWith("/package.json")) {
@@ -616,21 +613,6 @@ function globMatches(pattern: string, value: string): boolean {
   return new RegExp(`^${expression}$`).test(value);
 }
 
-function createInstallCommand(packageManager: RepoProfile["packageManager"]) {
-  switch (packageManager) {
-    case "bun":
-      return "bun install --frozen-lockfile";
-    case "npm":
-      return "npm ci --no-audit";
-    case "pnpm":
-      return "pnpm install --frozen-lockfile";
-    case "yarn":
-      return "yarn install --immutable";
-    case "unknown":
-      return "";
-  }
-}
-
 function readScriptCommands(
   packageManager: RepoProfile["packageManager"],
   scripts: Record<string, string>,
@@ -653,34 +635,13 @@ function createScriptCommand(
   script: string,
 ): string {
   const port = readScriptPort(script);
-  if (packageManager === "npm") {
-    return `npm run ${name}${port === undefined ? "" : ` -- --port ${port}`}`;
+  const command = createRunScriptCommand(packageManager, name);
+  if (port === undefined) {
+    return command;
   }
-  return `${packageManager} ${name}${port === undefined ? "" : ` --port ${port}`}`;
-}
-
-function readScriptPort(script: string): string | undefined {
-  const match = /(?:--port|-p)\s+(\d{2,5})/.exec(script);
-  return match?.[1];
-}
-
-function readCandidatePorts(scripts: Record<string, string>): number[] {
-  const ports = new Set<number>();
-  for (const script of Object.values(scripts)) {
-    for (const pattern of [
-      /(?:--port|-p)\s+(\d{2,5})/g,
-      /localhost:(\d{2,5})/g,
-      /127\.0\.0\.1:(\d{2,5})/g,
-    ]) {
-      for (const match of script.matchAll(pattern)) {
-        const port = Number(match[1]);
-        if (Number.isInteger(port) && port > 0 && port <= 65_535) {
-          ports.add(port);
-        }
-      }
-    }
-  }
-  return [...ports].sort((left, right) => left - right);
+  return packageManager === "npm"
+    ? `${command} -- --port ${port}`
+    : `${command} --port ${port}`;
 }
 
 function readCandidateAppDirs(files: RepoProfileFile[]): string[] {
