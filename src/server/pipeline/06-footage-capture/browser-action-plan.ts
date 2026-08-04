@@ -538,19 +538,34 @@ function readActionType(value: unknown, path: string): BrowserActionType {
  * characters as authority separators, so `/\evil.com` reads as a local path
  * and still navigates off-origin once resolved against the base URL.
  */
-function readLocalPath(value: unknown, path: string): string {
-  const route = readString(value, path);
-  if (!localAppPathPattern.test(route)) {
-    throw new Error(`${path} must be a local app path`);
-  }
+/**
+ * Asserts one string is a same-origin app reference: it must start like a
+ * local path, fragment, or query AND resolve back to a probe origin, so
+ * authority-bearing spellings such as "/\\evil.com" cannot smuggle an
+ * off-origin navigation into compiled capture scripts. Every reader of a
+ * local app path or route must call this rather than shape-testing.
+ */
+export function assertLocalAppPath(
+  route: string,
+  path: string,
+  noun: "path" | "route" = "path",
+): void {
   const probeOrigin = "http://makeademo.invalid";
   try {
-    if (new URL(route, `${probeOrigin}/`).origin !== probeOrigin) {
-      throw new Error(`${path} must be a local app path`);
+    if (
+      !localAppPathPattern.test(route) ||
+      new URL(route, `${probeOrigin}/`).origin !== probeOrigin
+    ) {
+      throw new Error(`${path} must be a local app ${noun}`);
     }
   } catch {
-    throw new Error(`${path} must be a local app path`);
+    throw new Error(`${path} must be a local app ${noun}`);
   }
+}
+
+function readLocalPath(value: unknown, path: string): string {
+  const route = readString(value, path);
+  assertLocalAppPath(route, path);
   return route;
 }
 

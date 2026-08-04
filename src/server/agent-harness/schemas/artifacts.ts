@@ -1,5 +1,6 @@
 import {
   type BrowserLocator,
+  assertLocalAppPath,
   readBrowserLocator,
 } from "../../pipeline/06-footage-capture/browser-action-plan";
 import {
@@ -697,13 +698,10 @@ function readLocalAppPathArray(
 ): string[] {
   const path = `${parentPath}.${key}`;
   return readArray(record[key], path, (entry, index) => {
-    if (
-      typeof entry !== "string" ||
-      entry.trim().length === 0 ||
-      !/^(?:\/(?!\/)|#|\?)/.test(entry)
-    ) {
+    if (typeof entry !== "string" || entry.trim().length === 0) {
       throw new Error(`${path}[${index}] must be a local app path`);
     }
+    assertLocalAppPath(entry, `${path}[${index}]`);
     return entry;
   });
 }
@@ -1376,17 +1374,7 @@ function readLocalRoute(
 ): string {
   const path = childPath(parentPath, key);
   const route = readNonEmptyString(record, key, parentPath);
-  const probeOrigin = "http://makeademo.invalid";
-  try {
-    if (
-      !/^[/#?]/.test(route) ||
-      new URL(route, `${probeOrigin}/`).origin !== probeOrigin
-    ) {
-      throw new Error(`${path} must be a local app route`);
-    }
-  } catch {
-    throw new Error(`${path} must be a local app route`);
-  }
+  assertLocalAppPath(route, path, "route");
   return route;
 }
 

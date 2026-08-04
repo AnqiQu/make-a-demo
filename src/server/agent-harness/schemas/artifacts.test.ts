@@ -194,6 +194,19 @@ describe("agent harness artifact schemas", () => {
     );
   });
 
+  it("rejects feature entry paths that resolve off the app origin", () => {
+    const manifest = validPreparationManifest();
+    const feature = manifest.productContext.featureInventory[0];
+    if (feature === undefined) {
+      throw new Error("Expected a prepared feature fixture");
+    }
+    feature.entryPaths = ["/\\evil.com"];
+
+    expect(() => readPreparationManifest(manifest)).toThrow(
+      "entryPaths[0] must be a local app path",
+    );
+  });
+
   it("reports every invalid feature inventory field in one pass", () => {
     const manifest = validPreparationManifest();
     const feature = manifest.productContext.featureInventory[0];
