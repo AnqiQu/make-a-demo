@@ -419,19 +419,12 @@ async function requestExternalResource(
             );
             return;
           }
-          const contentType = response.headers["content-type"]
-            ?.split(";", 1)[0]
-            ?.trim()
-            .toLowerCase();
-          if (contentType === undefined || contentType.length === 0) {
-            reject(
-              new Error("External resource response omitted Content-Type."),
-            );
-            return;
-          }
           resolve({
             body: Buffer.concat(chunks),
-            contentType,
+            // Hydration normalizes and validates Content-Type once for every
+            // fetcher through normalizeContentType; a missing header still
+            // rejects there with the same message.
+            contentType: response.headers["content-type"] ?? "",
             finalUrl: url.href,
             headers: readReplayHeaders(response.headers),
             status,
