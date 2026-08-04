@@ -1,4 +1,5 @@
 import path from "node:path/posix";
+import { shellQuote } from "../../shared/shell/shell-quote";
 import type {
   OpenCodeHarnessRunInput,
   OpenCodeHarnessRunResult,
@@ -175,8 +176,4 @@ function readSessionId(result: {
   }
 
   return undefined;
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
 }

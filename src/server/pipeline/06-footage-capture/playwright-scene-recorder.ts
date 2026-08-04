@@ -12,6 +12,7 @@ import type {
   AgentHarnessWorkspaceHandle,
 } from "../../agent-harness/daytona/workspace.interface";
 import type { ExternalResourceManifest } from "../../shared/external-resources/external-resource-manifest.schema";
+import { shellQuote } from "../../shared/shell/shell-quote";
 import {
   CAPTURE_COMMAND_TIMEOUT_MS,
   CAPTURE_SCRIPT_TIMEOUT_MS,
@@ -505,8 +506,4 @@ async function findSingleRemoteVideo(input: {
   }
 
   return video;
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
 }

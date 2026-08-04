@@ -11,6 +11,7 @@ import {
 } from "../src/server/pipeline/06-footage-capture/capture-contract-versions";
 import { writeGeneratedCaptureSdkHarness } from "../src/server/pipeline/06-footage-capture/capture-sdk-contract";
 import { prepareStylizedPlaywrightScript } from "../src/server/pipeline/06-footage-capture/stylized-playwright-script";
+import { shellQuote } from "../src/server/shared/shell/shell-quote";
 
 export const EXPECTED_SUBMITTED_CODE_BUN_VERSION = BUN_RUNTIME_VERSION;
 export const EXPECTED_SUBMITTED_CODE_PLAYWRIGHT_VERSION =
@@ -145,10 +146,6 @@ function formatCommandOutput(result: { stderr: string; stdout: string }) {
     .map((value) => value.trim())
     .filter(Boolean)
     .join("\n");
-}
-
-function shellQuote(value: string) {
-  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function escapeRegExp(value: string) {

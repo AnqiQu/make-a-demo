@@ -28,6 +28,7 @@ import {
   type PipelineLogSink,
   createPipelineEventLogger,
 } from "../../logging/pipeline-event-logger";
+import { shellQuote } from "../../shell/shell-quote";
 
 type DaytonaSdkClient = {
   create(
@@ -1591,10 +1592,6 @@ function createManagedAppCommand(
   ];
 
   return `mkdir -p ${shellQuote(submittedCodeRuntimeTempDirectory)} && cd ${shellQuote(input.cwd)} && env ${runtimeEnvironment.join(" ")} sh -lc ${shellQuote(input.command)}`;
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function assertLockfilePath(path: string): string {

@@ -27,6 +27,7 @@ import {
 } from "../../shared/integrations/agents/opencode-provider-secrets";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../../shared/integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import type { PipelineEventLogger } from "../../shared/logging/pipeline-event-logger";
+import { shellQuote } from "../../shared/shell/shell-quote";
 import {
   type SubmittedAppExplorationResult,
   exploreSubmittedApp,
@@ -4016,8 +4017,4 @@ function createScriptRepairPrompt(input: {
     ].join("\n"),
     stage: "script-repair",
   });
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
 }

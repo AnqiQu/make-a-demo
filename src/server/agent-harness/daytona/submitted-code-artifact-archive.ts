@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { shellQuote } from "../../shared/shell/shell-quote";
 import { executeSubmittedCode } from "./submitted-code-execution";
 import type { AgentHarnessWorkspace } from "./workspace.interface";
 
@@ -175,10 +176,6 @@ function formatCommandOutput(result: { stderr: string; stdout: string }) {
     .map((value) => value.trim())
     .filter((value) => value.length > 0)
     .join("\n");
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function assertSafeArchiveName(value: string): void {

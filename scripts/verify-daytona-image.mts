@@ -9,6 +9,7 @@ import {
   ensureOpenCodeProviderDaytonaSecret,
 } from "../src/server/shared/integrations/agents/opencode-provider-secrets";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../src/server/shared/integrations/daytona/daytona-sdk-preparation-workspace-provider";
+import { shellQuote } from "../src/server/shared/shell/shell-quote";
 import { verifyDaytonaSubmittedCodeRuntime } from "./verify-daytona-submitted-code-runtime";
 
 const snapshot = process.env.MAKEADEMO_DAYTONA_SNAPSHOT;
@@ -233,10 +234,6 @@ function createSecretMountedGitCaDiagnosticsCommand(): string {
       "git config --show-origin --get http.sslCAInfo 2>&1 | cut -c 1-500 || true",
     ].join("\n"),
   )}`;
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function assertCommandSucceeded(

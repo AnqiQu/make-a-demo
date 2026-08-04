@@ -7,6 +7,7 @@ import {
   type ExternalResourceManifest,
   readExternalResourceManifest,
 } from "../../shared/external-resources/external-resource-manifest.schema";
+import { shellQuote } from "../../shared/shell/shell-quote";
 import { uploadSubmittedCodeArchive } from "./submitted-code-artifact-archive";
 import { executeSubmittedCode } from "./submitted-code-execution";
 import type { AgentHarnessWorkspace } from "./workspace.interface";
@@ -69,8 +70,4 @@ export async function uploadSubmittedCodeExternalResourceCache(input: {
       `Submitted-code resource cache integrity failed after upload: ${verification.stderr || verification.stdout}`,
     );
   }
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
 }

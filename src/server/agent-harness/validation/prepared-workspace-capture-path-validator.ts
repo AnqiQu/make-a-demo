@@ -20,6 +20,7 @@ import {
 } from "../../pipeline/06-footage-capture/capture-sdk-contract";
 import { prepareStylizedPlaywrightScript } from "../../pipeline/06-footage-capture/stylized-playwright-script";
 import type { ExternalResourceManifest } from "../../shared/external-resources/external-resource-manifest.schema";
+import { shellQuote } from "../../shared/shell/shell-quote";
 import { uploadSubmittedCodeArchive } from "../daytona/submitted-code-artifact-archive";
 import { executeSubmittedCode } from "../daytona/submitted-code-execution";
 import type { AgentHarnessWorkspaceHandle } from "../daytona/workspace.interface";
@@ -413,10 +414,6 @@ async function downloadFailureScreenshotBestEffort(input: {
   } catch {
     return undefined;
   }
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function formatErrorDiagnostic(error: unknown): string {

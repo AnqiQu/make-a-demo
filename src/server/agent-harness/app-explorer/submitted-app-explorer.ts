@@ -1,5 +1,6 @@
 import { createBrowserRuntimeNetworkPolicySource } from "../../shared/external-resources/browser-runtime-network-policy";
 import type { ExternalResourceManifest } from "../../shared/external-resources/external-resource-manifest.schema";
+import { shellQuote } from "../../shared/shell/shell-quote";
 import { executeSubmittedCode } from "../daytona/submitted-code-execution";
 import {
   AgentHarnessCommandTimeoutError,
@@ -2020,8 +2021,4 @@ function createFeatureEntryTargets(
     requestedPath: target.requestedPath,
     url: target.url,
   }));
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
 }
