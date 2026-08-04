@@ -1,21 +1,9 @@
-import {
-  type DefaultDemoPipelineInput,
-  type DefaultDemoPipelineResult,
-  runDefaultDemoPipeline,
-} from "../default/default-demo-pipeline";
+import type { DefaultDemoPipelineInput } from "../default/default-demo-pipeline";
 
 export type TerminalDemoInput = DefaultDemoPipelineInput;
 
 export type TerminalQuestioner = {
   question(prompt: string): Promise<string>;
-};
-
-export type TerminalDemoRunResult = DefaultDemoPipelineResult;
-
-export type TerminalDemoPipelineOptions = {
-  runPipeline?: (
-    input: DefaultDemoPipelineInput,
-  ) => Promise<DefaultDemoPipelineResult>;
 };
 
 const defaultDemoLengthSeconds = 30;
@@ -48,13 +36,6 @@ export async function collectTerminalDemoInput(
     repoUrl,
     ...(targetUsers === undefined ? {} : { targetUsers }),
   };
-}
-
-export async function runTerminalDemoPipeline(
-  input: TerminalDemoInput,
-  options: TerminalDemoPipelineOptions = {},
-): Promise<TerminalDemoRunResult> {
-  return await (options.runPipeline ?? runDefaultDemoPipeline)(input);
 }
 
 function optionalAnswer(value: string): string | undefined {

@@ -1,9 +1,7 @@
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline/promises";
-import {
-  collectTerminalDemoInput,
-  runTerminalDemoPipeline,
-} from "../src/server/agent-harness/terminal/terminal-demo-runner";
+import { runDefaultDemoPipeline } from "../src/server/agent-harness/default/default-demo-pipeline";
+import { collectTerminalDemoInput } from "../src/server/agent-harness/terminal/terminal-demo-runner";
 
 const questioner = createInterface({ input: stdin, output: stdout });
 
@@ -11,7 +9,7 @@ try {
   const input = await collectTerminalDemoInput({
     question: (prompt) => questioner.question(prompt),
   });
-  const result = await runTerminalDemoPipeline(input);
+  const result = await runDefaultDemoPipeline(input);
 
   stdout.write("\nMakeADemo terminal pipeline complete.\n");
   stdout.write(`Run directory: ${result.runDirectory}\n`);
