@@ -80,6 +80,51 @@ describe("synthesizeRunPlan", () => {
     expect(run).toThrow("apps/api, apps/worker");
   });
 
+  it("escalates instead of auto-locking a lone showcase-only candidate", () => {
+    const run = () =>
+      synthesizeRunPlan({
+        authHints: [],
+        browserRuntimeCandidates: [
+          {
+            dir: "packages/design-system",
+            evidencePaths: [
+              "packages/design-system/package.json",
+              "packages/design-system/src/button.stories.tsx",
+            ],
+            frameworks: ["react"],
+            installDir: ".",
+            isWorkspace: true,
+            name: "@acme/design-system",
+            ports: [6006],
+            roleHints: ["storybook"],
+            scripts: { dev: "storybook dev -p 6006" },
+          },
+        ],
+        candidateAppDirs: [".", "packages/design-system"],
+        candidateBuildCommands: [],
+        candidateInstallCommands: ["bun install --frozen-lockfile"],
+        candidatePorts: [],
+        candidateStartCommands: [],
+        confidence: { assumptions: [], overall: 0.7 },
+        detectedFrameworks: ["react"],
+        dockerHints: [],
+        envExamples: [],
+        externalServiceHints: [],
+        lockfiles: ["bun.lock"],
+        packageManager: "bun",
+        packageScripts: {},
+        repoUrl: "https://github.com/example/storybook-only",
+        requiredEnvHints: [],
+        rootDir: "/workspace",
+        securityWarnings: [],
+        unsupportedReasons: [],
+        workspaces: { isMonorepo: true, packageDirectories: ["packages/*"] },
+      });
+
+    expect(run).toThrow(RuntimeTargetSelectionRequiredError);
+    expect(run).toThrow(/showcase/);
+  });
+
   it("does not build before starting a development server", () => {
     const runPlan = synthesizeRunPlan({
       authHints: [],

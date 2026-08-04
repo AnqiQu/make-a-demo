@@ -38,6 +38,18 @@ export function synthesizeRunPlan(
     repoProfile.browserRuntimeCandidates?.length === 1
       ? repoProfile.browserRuntimeCandidates[0]
       : undefined;
+  if (
+    selectedTarget === undefined &&
+    onlyCandidate !== undefined &&
+    isShowcaseOnlyCandidate(onlyCandidate)
+  ) {
+    // A storybook or docs surface would demo components, not the product;
+    // locking it silently would look like success. The maker must confirm.
+    throw new RuntimeTargetSelectionRequiredError(
+      `The only runnable browser application ${onlyCandidate.dir} looks like a component showcase, not the product.`,
+      repoProfile.candidateAppDirs,
+    );
+  }
   const targetSelection =
     selectedTarget ??
     (onlyCandidate === undefined
@@ -114,6 +126,27 @@ export function synthesizeRunPlan(
       "at least one meaningful visible route is available",
     ],
   };
+}
+
+/**
+ * Showcase-only means every runnable script serves a component or docs
+ * viewer. One real dev-server script makes the candidate a genuine app.
+ */
+function isShowcaseOnlyCandidate(
+  candidate: RepoBrowserRuntimeCandidate,
+): boolean {
+  if (!(candidate.roleHints ?? []).includes("storybook")) {
+    return false;
+  }
+  const runtimeScriptBodies = browserRuntimeScriptNames.flatMap((name) =>
+    candidate.scripts[name] === undefined ? [] : [candidate.scripts[name]],
+  );
+  return (
+    runtimeScriptBodies.length > 0 &&
+    runtimeScriptBodies.every((body) =>
+      /\b(?:storybook|docusaurus|vitepress|ladle|histoire)\b/.test(body),
+    )
+  );
 }
 
 function findSelectedTarget(
