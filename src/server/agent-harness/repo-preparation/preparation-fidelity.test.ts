@@ -584,6 +584,20 @@ describe("validatePreparationFidelity", () => {
     expect(report.logsSummary).toContain(".env.local");
   });
 
+  it("rejects a created .envrc that changes authentication behavior", () => {
+    const report = validateDiff({
+      createdFiles: [".envrc"],
+      patch: [
+        "diff --git a/.envrc b/.envrc",
+        "+export AUTH_DISABLED=1",
+        "+export NEXT_PUBLIC_API_URL=http://127.0.0.1:3000",
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(".envrc");
+  });
+
   it("allows a created environment file that only tunes runtime settings", () => {
     const report = validateDiff({
       createdFiles: [".env.local"],

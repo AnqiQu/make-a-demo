@@ -1,3 +1,4 @@
+import { isEnvironmentSecretFileName } from "../repo-security/secret-predicates";
 import type {
   PreparationManifest,
   ValidationReport,
@@ -185,7 +186,10 @@ export function validatePreparationFidelity(input: {
       });
       continue;
     }
-    if (isDotenvPath(path) && containsAuthenticationTerms(patch.text)) {
+    if (
+      isEnvironmentSecretFileName(path) &&
+      containsAuthenticationTerms(patch.text)
+    ) {
       violations.push({
         hint: repairHints.envUsed,
         message: `${path} changes authentication behavior through a created environment file; demo environment belongs in envUsed with a gated adaptation.`,
@@ -706,11 +710,6 @@ function readResolvedStartCommands(
     if (script !== undefined) commands.push(script);
   }
   return commands;
-}
-
-function isDotenvPath(path: string) {
-  const name = path.split("/").at(-1) ?? path;
-  return /^\.env(?:\..+)?$/.test(name) && name !== ".env.example";
 }
 
 /**
