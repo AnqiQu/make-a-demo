@@ -1990,19 +1990,6 @@ async function validateResolvedSubmittedCodeRuntime(
       stage,
     });
   }
-  const buildScopeViolation = findBuildScopeViolation({
-    manifest,
-    repoProfile: input.repoProfile,
-  });
-  if (buildScopeViolation !== undefined) {
-    return failedPreparationValidation({
-      attemptedCommand: buildScopeViolation.attemptedCommand,
-      classification: "build failure",
-      logsSummary: `Root aggregate build is too broad for the prepared feature. Use ${buildScopeViolation.scopedCommand} instead.`,
-      manifest,
-      stage,
-    });
-  }
   try {
     await input.workspace.stopSubmittedCodeApp();
     await input.workspace.setSubmittedCodeNetworkAccess(false);
@@ -2425,50 +2412,6 @@ function readReconciledLockfilePaths(input: {
       ? fallback
       : posix.join(input.installDirectory, fallback),
   ];
-}
-
-function findBuildScopeViolation(input: {
-  manifest: PreparationManifest;
-  repoProfile: RepoProfile;
-}): { attemptedCommand: string; scopedCommand: string } | undefined {
-  const buildCommand = input.manifest.buildCommandUsed;
-  if (
-    buildCommand === undefined ||
-    input.manifest.appDir !== "." ||
-    !input.repoProfile.workspaces.isMonorepo ||
-    !/^(?:(?:bun|pnpm|yarn)(?:\s+run)?|npm\s+run)\s+build(?:\s|$)/.test(
-      buildCommand,
-    ) ||
-    !/\b(?:turbo|nx|lerna)\b/.test(input.repoProfile.packageScripts.build ?? "")
-  ) {
-    return undefined;
-  }
-
-  const appNames = new Set(
-    input.manifest.productContext.featureInventory.flatMap(({ sourcePaths }) =>
-      sourcePaths.flatMap((path) => {
-        const match = /(?:^|\/)apps\/([^/]+)\//.exec(path);
-        return match?.[1] === undefined ? [] : [match[1]];
-      }),
-    ),
-  );
-  if (appNames.size !== 1) {
-    return undefined;
-  }
-
-  const [appName] = appNames;
-  const scriptName = `build:${appName}`;
-  if (input.repoProfile.packageScripts[scriptName] === undefined) {
-    return undefined;
-  }
-  const runner =
-    input.repoProfile.packageManager === "unknown"
-      ? "npm"
-      : input.repoProfile.packageManager;
-  return {
-    attemptedCommand: buildCommand,
-    scopedCommand: `${runner} run ${scriptName}`,
-  };
 }
 
 async function installRuntimeNetworkGuard(workspace: AgentHarnessWorkspace) {
