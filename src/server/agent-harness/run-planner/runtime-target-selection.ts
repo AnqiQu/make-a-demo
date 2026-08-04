@@ -97,11 +97,19 @@ export function readModelRuntimeTargetSelection(
     );
   }
   if (
-    ["docs", "marketing", "showcase"].includes(selected.role) &&
-    assessments.some(({ role }) => role === "admin" || role === "product")
+    selected.role !== "product" &&
+    assessments.some(({ role }) => role === "product")
   ) {
     throw new Error(
       `Runtime target decision selected ${selected.role} application ${selectedTargetId} while a functional product application is available.`,
+    );
+  }
+  if (
+    ["docs", "marketing", "showcase"].includes(selected.role) &&
+    assessments.some(({ role }) => role === "admin")
+  ) {
+    throw new Error(
+      `Runtime target decision selected ${selected.role} application ${selectedTargetId} while a functional admin application is available.`,
     );
   }
   return {

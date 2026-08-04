@@ -85,6 +85,32 @@ describe("runtime target selection", () => {
     ).toThrow(RuntimeTargetSelectionRequiredError);
   });
 
+  it("rejects any non-product selection while a product application is available", () => {
+    expect(() =>
+      readModelRuntimeTargetSelection(
+        {
+          candidates: [
+            {
+              evidencePaths: ["apps/website/src/app/page.tsx"],
+              reason: "Internal operations console.",
+              role: "admin",
+              targetId: "apps/website",
+            },
+            {
+              evidencePaths: ["apps/dashboard/src/app/page.tsx"],
+              reason: "The customer-facing product.",
+              role: "product",
+              targetId: "apps/dashboard",
+            },
+          ],
+          reason: "The admin console is easier to run.",
+          selectedTargetId: "apps/website",
+        },
+        profile(),
+      ),
+    ).toThrow(/while a functional product application is available/);
+  });
+
   it("honors a valid maker override without model inference", () => {
     expect(
       createExplicitRuntimeTargetSelection(profile(), "apps/dashboard"),
