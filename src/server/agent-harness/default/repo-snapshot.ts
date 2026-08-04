@@ -16,6 +16,7 @@ import {
   isCredentialRegistryConfig,
   isEnvironmentFileName,
   isSecretInspectionPath,
+  registryConfigFileNames,
 } from "../repo-security/secret-predicates";
 import {
   type SecretQuarantineManifest,
@@ -115,8 +116,6 @@ const privateKeySentinel = "-----BEGIN PRIVATE KEY-----";
 const readableFileNames = new Set([
   ".env",
   ".env.example",
-  ".npmrc",
-  ".yarnrc",
   "astro.config.mjs",
   "bun.lock",
   "package-lock.json",
@@ -466,6 +465,7 @@ function isPackageManifestPath(relativePath: string): boolean {
 function isUsefulTextPath(relativePath: string): boolean {
   return (
     isEnvironmentFileName(relativePath) ||
+    registryConfigFileNames.has(basename(relativePath)) ||
     readableFileNames.has(basename(relativePath)) ||
     readableExtensions.has(extname(relativePath)) ||
     isSecretInspectionPath(relativePath)

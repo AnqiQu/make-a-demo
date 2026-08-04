@@ -1,7 +1,12 @@
 import { posix } from "node:path";
 
 const environmentFileNames = new Set([".envrc", ".netrc", ".pgpass"]);
-const registryConfigFileNames = new Set([".npmrc", ".yarnrc"]);
+/**
+ * Package-manager registry config names screened for embedded credentials.
+ * Snapshot readers must read the text of every name in this set: quarantine
+ * decides by content, so an unread member would be screened blind.
+ */
+export const registryConfigFileNames = new Set([".npmrc", ".yarnrc"]);
 const privateKeyFileNames = new Set([
   "id_dsa",
   "id_ecdsa",
