@@ -22,7 +22,6 @@ export type CaptureManifest = {
   createdAt: string;
   externalResourceManifestSha256?: string;
   keepTemp: boolean;
-  qualityFindings: string[];
   manifestPath: string;
   runDirectory: string;
   runId: string;
@@ -155,7 +154,6 @@ export async function captureScenesFromScript(
           rawTakePath: join(runDirectory, "raw-scenes", "continuous-take.webm"),
         }
       : {}),
-    qualityFindings: [],
     temporary: true,
     title: scriptPackage.title,
   };

@@ -628,7 +628,6 @@ function parseCaptureManifest(value: unknown): CaptureManifest {
       "manifestPath",
       "capture manifest",
     ),
-    qualityFindings: readStringArray(record.qualityFindings, "qualityFindings"),
     runDirectory: readNonEmptyString(
       record,
       "runDirectory",
@@ -676,21 +675,6 @@ function parseCaptureManifest(value: unknown): CaptureManifest {
     temporary: true,
     title: readNonEmptyString(record, "title", "capture manifest"),
   };
-}
-
-function readStringArray(value: unknown, path: string) {
-  if (value === undefined) {
-    return [];
-  }
-
-  if (
-    !Array.isArray(value) ||
-    value.some((entry) => typeof entry !== "string")
-  ) {
-    throw new Error(`capture manifest.${path} must be an array of strings`);
-  }
-
-  return value;
 }
 
 function readBoolean(

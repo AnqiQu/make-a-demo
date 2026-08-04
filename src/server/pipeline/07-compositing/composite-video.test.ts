@@ -1330,7 +1330,6 @@ function makeCaptureManifest(input: {
     createdAt: "2026-06-06T12:00:00.000Z",
     keepTemp: true,
     manifestPath: input.manifestPath,
-    qualityFindings: [],
     runDirectory: input.runDirectory,
     runId: "capture-001",
     scenes: input.scenes,

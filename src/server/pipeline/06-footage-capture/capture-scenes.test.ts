@@ -136,7 +136,6 @@ describe("captureScenesFromScript", () => {
     expect(manifest.stderrLogPath).toBe(
       join(manifest.runDirectory, "stderr.log"),
     );
-    expect(manifest.qualityFindings).toEqual([]);
     expect(manifest.rawTakePath).toBeUndefined();
 
     const manifestJson = JSON.parse(
