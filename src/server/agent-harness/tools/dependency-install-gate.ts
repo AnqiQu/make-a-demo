@@ -147,24 +147,65 @@ const classicYarnOnlyFlags = new Set([
 ]);
 
 /**
+ * The single tokenized view of a package-manager install command shared by
+ * the install gate and lockfile reconciliation. Fields are positional facts
+ * only — no allowlisting: `packageManager` and `subcommand` are whatever
+ * tokens follow the optional `corepack` launcher, and `corepackPrefix` is the
+ * launcher verbatim (with its original whitespace) so rebuilt commands keep
+ * their exact spelling.
+ */
+export type ParsedInstallCommand = {
+  /** Tokens after the subcommand — flags and arguments. */
+  args: string[];
+  /** The command with surrounding whitespace trimmed. */
+  command: string;
+  /** Verbatim `corepack` launcher prefix including its whitespace, or "". */
+  corepackPrefix: string;
+  /** Token after the optional `corepack` launcher. */
+  packageManager: string | undefined;
+  /** Token after the package manager, e.g. `install` or `ci`. */
+  subcommand: string | undefined;
+  /** Every whitespace-separated token of the trimmed command. */
+  tokens: string[];
+};
+
+/**
+ * Tokenizes an install command once for every gate and reconciliation check.
+ * Parsing never rejects: callers decide what an absent or unrecognized
+ * package manager or subcommand means for their own policy.
+ */
+export function parseInstallCommand(command: string): ParsedInstallCommand {
+  const trimmed = command.trim();
+  const tokens = trimmed.length === 0 ? [] : trimmed.split(/\s+/);
+  const managerIndex = tokens[0] === "corepack" ? 1 : 0;
+  return {
+    args: tokens.slice(managerIndex + 2),
+    command: trimmed,
+    corepackPrefix:
+      managerIndex === 0 ? "" : (/^corepack\s+/.exec(trimmed)?.[0] ?? ""),
+    packageManager: tokens[managerIndex],
+    subcommand: tokens[managerIndex + 1],
+    tokens,
+  };
+}
+
+/**
  * Yarn Berry rejects `--ignore-scripts` and classic yarn rejects `--mode=...`,
  * so the yarn variant is read from version-specific flags already on the
  * command; a bare `yarn install` follows the run planner's Berry convention.
  */
 export function readYarnInstallVariant(command: string): "berry" | "classic" {
-  return command
-    .trim()
-    .split(/\s+/)
-    .some((token) => classicYarnOnlyFlags.has(token))
+  return parseInstallCommand(command).tokens.some((token) =>
+    classicYarnOnlyFlags.has(token),
+  )
     ? "classic"
     : "berry";
 }
 
 function withLifecycleScriptSuppression(command: string): string {
-  const tokens = command.trim().split(/\s+/);
-  const packageManager = tokens[tokens[0] === "corepack" ? 1 : 0];
+  const parsed = parseInstallCommand(command);
   if (
-    tokens.some(
+    parsed.tokens.some(
       (token) => token === "--ignore-scripts" || token.startsWith("--mode="),
     )
   ) {
@@ -172,37 +213,32 @@ function withLifecycleScriptSuppression(command: string): string {
   }
 
   const flag =
-    packageManager === "yarn" && readYarnInstallVariant(command) === "berry"
+    parsed.packageManager === "yarn" &&
+    readYarnInstallVariant(command) === "berry"
       ? "--mode=skip-builds"
       : "--ignore-scripts";
-  return `${command.trim()} ${flag}`;
+  return `${parsed.command} ${flag}`;
 }
 
 function isAllowedDependencyInstallCommand(command: string): boolean {
-  const normalized = command.trim();
-  if (normalized.length === 0 || hasShellSyntax(normalized)) {
+  const parsed = parseInstallCommand(command);
+  if (parsed.command.length === 0 || hasShellSyntax(parsed.command)) {
     return false;
   }
 
-  const tokens = normalized.split(/\s+/);
-  const packageManagerIndex = tokens[0] === "corepack" ? 1 : 0;
-  const packageManager = tokens[packageManagerIndex];
-  const installSubcommand = tokens[packageManagerIndex + 1];
-  const args = tokens.slice(packageManagerIndex + 2);
-
   if (
-    packageManager === undefined ||
-    installSubcommand === undefined ||
-    !allowedPackageManagers.has(packageManager)
+    parsed.packageManager === undefined ||
+    parsed.subcommand === undefined ||
+    !allowedPackageManagers.has(parsed.packageManager)
   ) {
     return false;
   }
 
-  if (!isInstallSubcommand(packageManager, installSubcommand)) {
+  if (!isInstallSubcommand(parsed.packageManager, parsed.subcommand)) {
     return false;
   }
 
-  return args.every(isAllowedInstallArgument);
+  return parsed.args.every(isAllowedInstallArgument);
 }
 
 function hasShellSyntax(command: string): boolean {

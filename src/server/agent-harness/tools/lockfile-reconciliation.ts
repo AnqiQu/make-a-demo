@@ -1,4 +1,7 @@
-import { readYarnInstallVariant } from "./dependency-install-gate";
+import {
+  parseInstallCommand,
+  readYarnInstallVariant,
+} from "./dependency-install-gate";
 
 export type LockfileReconciliationInput = {
   installCommand: string;
@@ -12,37 +15,63 @@ type PackageManagerInstall = {
   workspaceScope: string;
 };
 
+/**
+ * Per-package-manager reconciliation knowledge: the stale-lockfile failure
+ * signature in a clean install's output, and the lifecycle-script-free
+ * command that regenerates only the lockfile.
+ */
+const lockfileReconciliations: Record<
+  PackageManagerInstall["manager"],
+  {
+    isStaleLockfileFailure: (output: string) => boolean;
+    reconciliationCommand: (
+      install: PackageManagerInstall,
+      installCommand: string,
+    ) => string;
+  }
+> = {
+  bun: {
+    isStaleLockfileFailure: (output) =>
+      output.includes("lockfile") &&
+      output.includes("frozen") &&
+      (output.includes("change") || output.includes("outdated")),
+    reconciliationCommand: () => "bun install --lockfile-only --ignore-scripts",
+  },
+  npm: {
+    isStaleLockfileFailure: (output) =>
+      output.includes("package-lock.json") &&
+      (output.includes("in sync") || output.includes("missing:")),
+    reconciliationCommand: () =>
+      "npm install --package-lock-only --ignore-scripts --no-audit --no-fund",
+  },
+  pnpm: {
+    isStaleLockfileFailure: (output) =>
+      output.includes("err_pnpm_outdated_lockfile") ||
+      (output.includes("frozen-lockfile") && output.includes("cannot install")),
+    reconciliationCommand: (install) =>
+      `${install.corepack}pnpm install --lockfile-only --ignore-scripts`,
+  },
+  yarn: {
+    isStaleLockfileFailure: (output) =>
+      output.includes("yn0028") ||
+      (output.includes("lockfile") &&
+        output.includes("would have been modified")),
+    reconciliationCommand: (install, installCommand) =>
+      `${install.corepack}yarn install ${
+        readYarnInstallVariant(installCommand) === "berry"
+          ? "--mode=update-lockfile"
+          : "--ignore-scripts"
+      }`,
+  },
+};
+
 /** Returns the lifecycle-script-free lockfile command for a recognized install. */
 export function createLockfileReconciliationCommand(
   installCommand: string,
 ): string | undefined {
   const install = readPackageManagerInstall(installCommand);
   if (install === undefined) return undefined;
-  const scoped = (command: string) =>
-    install.workspaceScope.length === 0
-      ? command
-      : `${command} ${install.workspaceScope}`;
-
-  switch (install.manager) {
-    case "npm":
-      return scoped(
-        "npm install --package-lock-only --ignore-scripts --no-audit --no-fund",
-      );
-    case "pnpm":
-      return scoped(
-        `${install.corepack}pnpm install --lockfile-only --ignore-scripts`,
-      );
-    case "bun":
-      return scoped("bun install --lockfile-only --ignore-scripts");
-    case "yarn":
-      return scoped(
-        `${install.corepack}yarn install ${
-          readYarnInstallVariant(installCommand) === "berry"
-            ? "--mode=update-lockfile"
-            : "--ignore-scripts"
-        }`,
-      );
-  }
+  return scopedReconciliationCommand(install, installCommand);
 }
 
 /**
@@ -54,10 +83,7 @@ export function planLockfileReconciliation(
   input: LockfileReconciliationInput,
 ): string | undefined {
   const install = readPackageManagerInstall(input.installCommand);
-  const reconciliationCommand = createLockfileReconciliationCommand(
-    input.installCommand,
-  );
-  if (install === undefined || reconciliationCommand === undefined) {
+  if (install === undefined) {
     return undefined;
   }
 
@@ -69,42 +95,28 @@ export function planLockfileReconciliation(
   ) {
     return undefined;
   }
-  switch (install.manager) {
-    case "npm":
-      return output.includes("package-lock.json") &&
-        (output.includes("in sync") || output.includes("missing:"))
-        ? reconciliationCommand
-        : undefined;
-    case "pnpm":
-      return output.includes("err_pnpm_outdated_lockfile") ||
-        (output.includes("frozen-lockfile") &&
-          output.includes("cannot install"))
-        ? reconciliationCommand
-        : undefined;
-    case "bun":
-      return output.includes("lockfile") &&
-        output.includes("frozen") &&
-        (output.includes("change") || output.includes("outdated"))
-        ? reconciliationCommand
-        : undefined;
-    case "yarn":
-      return output.includes("yn0028") ||
-        (output.includes("lockfile") &&
-          output.includes("would have been modified"))
-        ? reconciliationCommand
-        : undefined;
-  }
+  return lockfileReconciliations[install.manager].isStaleLockfileFailure(output)
+    ? scopedReconciliationCommand(install, input.installCommand)
+    : undefined;
+}
+
+function scopedReconciliationCommand(
+  install: PackageManagerInstall,
+  installCommand: string,
+): string {
+  const command = lockfileReconciliations[
+    install.manager
+  ].reconciliationCommand(install, installCommand);
+  return install.workspaceScope.length === 0
+    ? command
+    : `${command} ${install.workspaceScope}`;
 }
 
 function readPackageManagerInstall(
   installCommand: string,
 ): PackageManagerInstall | undefined {
-  const command = installCommand.trim();
-  const match =
-    /^(?<corepack>corepack\s+)?(?<manager>bun|npm|pnpm|yarn)\s+(?:ci|install)(?:\s|$)/.exec(
-      command,
-    );
-  const manager = match?.groups?.manager;
+  const parsed = parseInstallCommand(installCommand);
+  const manager = parsed.packageManager;
   if (
     manager !== "bun" &&
     manager !== "npm" &&
@@ -113,11 +125,13 @@ function readPackageManagerInstall(
   ) {
     return undefined;
   }
+  if (parsed.subcommand !== "ci" && parsed.subcommand !== "install") {
+    return undefined;
+  }
   return {
-    corepack: match?.groups?.corepack ?? "",
+    corepack: parsed.corepackPrefix,
     manager,
-    workspaceScope: command
-      .split(/\s+/)
+    workspaceScope: parsed.tokens
       .filter(
         (argument) =>
           argument.startsWith("--filter=") ||
