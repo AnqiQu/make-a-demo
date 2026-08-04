@@ -159,7 +159,6 @@ const makeADemoDirectory = "/workspace/.makeademo";
 const misplacedPreparationManifestPath =
   "/workspace/repo/.makeademo/preparation-manifest.json";
 const openCodeConfigDirectory = "/tmp/makeademo/opencode";
-const maxShellArtifactWriteBytes = 120 * 1024;
 const openCodeInactivityTimeoutMs = 5 * 60_000;
 const preparationDiffCommandTimeoutMs = 60_000;
 const preparationHashMarker = "\0MAKEADEMO_HASHES\0";
@@ -491,18 +490,16 @@ export async function createDefaultAgentHarnessDependencies(
     };
     const readUncachedAttempts = async (result: T) => {
       let runtimeAttempts: NetworkAttempt[] = [];
-      if (input.workspace.readSubmittedCodeAppStatus !== undefined) {
-        try {
-          const status = await input.workspace.readSubmittedCodeAppStatus();
-          runtimeAttempts = readRuntimeNetworkAttempts(
-            [status.stderr, status.stdout].filter(Boolean).join("\n"),
-          );
-        } catch (error) {
-          await options.logger?.warn({
-            error: readUnknownErrorMessage(error),
-            event: "external-resource.runtime-attempts.unavailable",
-          });
-        }
+      try {
+        const status = await input.workspace.readSubmittedCodeAppStatus();
+        runtimeAttempts = readRuntimeNetworkAttempts(
+          [status.stderr, status.stdout].filter(Boolean).join("\n"),
+        );
+      } catch (error) {
+        await options.logger?.warn({
+          error: readUnknownErrorMessage(error),
+          event: "external-resource.runtime-attempts.unavailable",
+        });
       }
       const attempts = new Map(
         [...input.readBlockedAttempts(result), ...runtimeAttempts].map(
@@ -512,11 +509,7 @@ export async function createDefaultAgentHarnessDependencies(
       return readUncachedExternalResourceAttempts([...attempts.values()]);
     };
     const restartSubmittedCodeApp = async () => {
-      if (
-        submittedCodeAppStartInput === undefined ||
-        input.workspace.startSubmittedCodeApp === undefined ||
-        input.workspace.stopSubmittedCodeApp === undefined
-      ) {
+      if (submittedCodeAppStartInput === undefined) {
         return;
       }
       await input.workspace.stopSubmittedCodeApp();
@@ -1822,9 +1815,6 @@ async function writeSandboxLogBestEffort(input: {
   logger: PipelineEventLogger | undefined;
   workspace: AgentHarnessWorkspace;
 }): Promise<void> {
-  if (input.workspace.writeSandboxLog === undefined) {
-    return;
-  }
   try {
     await input.workspace.writeSandboxLog(input.entry);
   } catch (error) {
@@ -1897,11 +1887,6 @@ async function materializeScreenedRepo(input: {
   await assertRepoSourceArchiveIntegrity(input.sourceArchive);
   if (!/^[0-9a-f]{64}$/.test(input.sourceArchive.sha256)) {
     throw new Error("Screened repository archive SHA-256 is malformed.");
-  }
-  if (input.workspace.uploadFiles === undefined) {
-    throw new Error(
-      "Repo Preparation workspace artifact upload is unavailable.",
-    );
   }
   const remoteArchivePath = `${makeADemoDirectory}/screened-repo.tar`;
   await input.workspace.uploadFiles([
@@ -1985,10 +1970,10 @@ async function validateSubmittedCodeRuntime(input: {
     });
   }
   try {
-    await stopSubmittedCodeApp(input.workspace);
-    await setSubmittedCodeNetwork(input.workspace, false);
+    await input.workspace.stopSubmittedCodeApp();
+    await input.workspace.setSubmittedCodeNetworkAccess(false);
     if (input.resetWorkspace !== false) {
-      await input.workspace.syncSubmittedCodeWorkspace?.();
+      await input.workspace.syncSubmittedCodeWorkspace();
     }
   } catch (error) {
     if (isAgentHarnessInfrastructureError(error)) throw error;
@@ -2005,9 +1990,10 @@ async function validateSubmittedCodeRuntime(input: {
       manifest.installCommandUsed || input.runPlan.installCommand;
     const runInstall = (command: string) =>
       runDependencyInstallThroughGate({
-        closeNetwork: () => setSubmittedCodeNetwork(input.workspace, false),
+        closeNetwork: () =>
+          input.workspace.setSubmittedCodeNetworkAccess(false),
         command,
-        openNetwork: () => setSubmittedCodeNetwork(input.workspace, true),
+        openNetwork: () => input.workspace.setSubmittedCodeNetworkAccess(true),
         // The gate may append a lifecycle-script suppression flag, so the
         // executed string must be the gate's command, not the closure's.
         runCommand: (gateCommand) =>
@@ -2027,11 +2013,6 @@ async function validateSubmittedCodeRuntime(input: {
       const reconciliation = await runInstall(reconciliationCommand);
       if (reconciliation.status === "succeeded") {
         try {
-          if (input.workspace.promoteSubmittedCodeFiles === undefined) {
-            throw new Error(
-              "Workspace cannot persist an automatic lockfile reconciliation.",
-            );
-          }
           await input.workspace.promoteSubmittedCodeFiles(
             readReconciledLockfilePaths({
               installCommand,
@@ -2152,16 +2133,6 @@ async function validateSubmittedCodeRuntime(input: {
     }
   }
 
-  if (input.workspace.startSubmittedCodeApp === undefined) {
-    return failedPreparationValidation({
-      attemptedCommand: manifest.startCommandUsed,
-      classification: "harness/internal failure",
-      logsSummary:
-        "Managed submitted-code app execution is not configured for this workspace.",
-      manifest,
-      stage,
-    });
-  }
   if (input.externalResourceCache !== undefined) {
     try {
       await uploadSubmittedCodeExternalResourceCache({
@@ -2261,20 +2232,12 @@ async function validateSubmittedCodeRuntime(input: {
   const probeResponded =
     preflightResult.exitCode === 0 &&
     preflightResult.runtimeProbe.attempts.at(-1)?.outcome === "responded";
-  let appStatus:
-    | Awaited<
-        ReturnType<
-          NonNullable<AgentHarnessWorkspace["readSubmittedCodeAppStatus"]>
-        >
-      >
-    | undefined;
+  let appStatus: AgentHarnessSubmittedCodeAppStatus | undefined;
   let appStatusError: string | undefined;
-  if (input.workspace.readSubmittedCodeAppStatus !== undefined) {
-    try {
-      appStatus = await input.workspace.readSubmittedCodeAppStatus();
-    } catch (error) {
-      appStatusError = readErrorMessage(error);
-    }
+  try {
+    appStatus = await input.workspace.readSubmittedCodeAppStatus();
+  } catch (error) {
+    appStatusError = readErrorMessage(error);
   }
   const appOutput = [appStatus?.stderr, appStatus?.stdout]
     .filter((value): value is string => value !== undefined && value.length > 0)
@@ -2484,32 +2447,11 @@ async function installRuntimeNetworkGuard(workspace: AgentHarnessWorkspace) {
   );
 }
 
-async function stopSubmittedCodeApp(
-  workspace: AgentHarnessWorkspace,
-): Promise<void> {
-  if (workspace.stopSubmittedCodeApp === undefined) {
-    throw new Error(
-      "Managed submitted-code app execution is not configured for this workspace.",
-    );
-  }
-  await workspace.stopSubmittedCodeApp();
-}
-
-async function setSubmittedCodeNetwork(
-  workspace: AgentHarnessWorkspace,
-  enabled: boolean,
-): Promise<void> {
-  await workspace.setSubmittedCodeNetworkAccess?.(enabled);
-}
-
 async function executeSubmitted(
   workspace: AgentHarnessWorkspace,
   command: string,
   options: AgentHarnessWorkspaceExecuteOptions = {},
 ) {
-  if (workspace.executeSubmittedCode === undefined) {
-    throw new Error("Submitted-code execution is not configured.");
-  }
   return await workspace.executeSubmittedCode(command, options);
 }
 
@@ -2633,7 +2575,6 @@ function readRuntimeProbeResponseMetadata(
 async function readRuntimeProcessObservation(
   workspace: AgentHarnessWorkspace,
 ): Promise<RuntimeProbeAttempt["process"] | undefined> {
-  if (workspace.readSubmittedCodeAppStatus === undefined) return undefined;
   try {
     const status = await workspace.readSubmittedCodeAppStatus();
     return runtimeProcessObservation(status);
@@ -3125,33 +3066,12 @@ async function writeWorkspaceText(
   value: string,
 ): Promise<void> {
   const contents = `${value}\n`;
-  const payloadBytes = Buffer.byteLength(contents);
-  if (workspace.writeTextFile !== undefined) {
-    try {
-      await workspace.writeTextFile(path, contents);
-      return;
-    } catch (error) {
-      throw new Error(
-        `Failed to write workspace artifact ${path} through filesystem transfer (${payloadBytes} bytes): ${error instanceof Error ? error.message : String(error)}`,
-        { cause: error },
-      );
-    }
-  }
-  const command = `sh -lc ${shellQuote(
-    `mkdir -p ${shellQuote(makeADemoDirectory)} && printf '%s' ${shellQuote(
-      contents,
-    )} > ${shellQuote(path)}`,
-  )}`;
-  const commandBytes = Buffer.byteLength(command);
-  if (commandBytes > maxShellArtifactWriteBytes) {
+  try {
+    await workspace.writeTextFile(path, contents);
+  } catch (error) {
     throw new Error(
-      `Cannot write workspace artifact ${path}: workspace has no filesystem transfer seam and the ${payloadBytes}-byte payload produces a ${commandBytes}-byte shell command, exceeding the ${maxShellArtifactWriteBytes}-byte compatibility limit.`,
-    );
-  }
-  const result = await workspace.execute(command);
-  if (result.exitCode !== 0) {
-    throw new Error(
-      `Failed to write workspace artifact ${path} through shell fallback (${payloadBytes} bytes, exit code ${result.exitCode}). stderr: ${result.stderr || "(empty)"} stdout: ${result.stdout || "(empty)"}`,
+      `Failed to write workspace artifact ${path} through filesystem transfer (${Buffer.byteLength(contents)} bytes): ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
     );
   }
 }

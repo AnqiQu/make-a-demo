@@ -8,9 +8,5 @@ export async function executeSubmittedCode(
   command: string,
   options: AgentHarnessWorkspaceExecuteOptions = {},
 ) {
-  if (workspace.executeSubmittedCode === undefined) {
-    throw new Error("Submitted-code execution is not configured.");
-  }
-
   return await workspace.executeSubmittedCode(command, options);
 }

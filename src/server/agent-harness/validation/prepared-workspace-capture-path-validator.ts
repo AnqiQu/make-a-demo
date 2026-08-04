@@ -376,7 +376,7 @@ async function emitValidationEventBestEffort(
     stage: "capture-path-validation",
   };
   await Promise.allSettled([
-    input.workspace.workspace.writeSandboxLog?.(logEntry),
+    input.workspace.workspace.writeSandboxLog(logEntry),
     input.onEvent?.(logEntry),
   ]);
 }
@@ -395,14 +395,7 @@ async function downloadFailureScreenshotBestEffort(input: {
   };
   remoteScreenshotPath: string;
 }): Promise<string | undefined> {
-  const downloadSubmittedCodeFiles =
-    input.input.workspace.workspace.downloadSubmittedCodeFiles?.bind(
-      input.input.workspace.workspace,
-    );
-  if (
-    input.failure?.screenshotPath === undefined ||
-    downloadSubmittedCodeFiles === undefined
-  ) {
+  if (input.failure?.screenshotPath === undefined) {
     return undefined;
   }
   const remotePath = input.remoteScreenshotPath;
@@ -412,7 +405,7 @@ async function downloadFailureScreenshotBestEffort(input: {
   );
   try {
     await runObservedOperation(input.input, "failure-screenshot-download", () =>
-      downloadSubmittedCodeFiles([
+      input.input.workspace.workspace.downloadSubmittedCodeFiles([
         { destinationPath: localPath, sourcePath: remotePath },
       ]),
     );

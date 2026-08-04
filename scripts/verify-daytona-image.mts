@@ -88,12 +88,10 @@ try {
   console.log(
     `Verifying preloaded submitted-code runtime image in ${handle.id}...`,
   );
-  if (handle.workspace.setSubmittedCodeNetworkAccess !== undefined) {
-    await handle.workspace.setSubmittedCodeNetworkAccess(true);
-    submittedCodeNetworkOpened = true;
-  }
+  await handle.workspace.setSubmittedCodeNetworkAccess(true);
+  submittedCodeNetworkOpened = true;
   try {
-    const runtime = await handle.workspace.executeSubmittedCode?.(
+    const runtime = await handle.workspace.executeSubmittedCode(
       [
         "node --version",
         "bunx tsc --version",
@@ -105,30 +103,17 @@ try {
         onStdout: (chunk) => process.stdout.write(chunk),
       },
     );
-    if (runtime === undefined) {
-      throw new Error(
-        "Prepared Daytona workspace lacks submitted-code execution.",
-      );
-    }
     assertCommandSucceeded("submitted-code runtime", runtime);
   } finally {
-    if (
-      submittedCodeNetworkOpened &&
-      handle.workspace.setSubmittedCodeNetworkAccess !== undefined
-    ) {
+    if (submittedCodeNetworkOpened) {
       await handle.workspace.setSubmittedCodeNetworkAccess(false);
       submittedCodeNetworkOpened = false;
     }
   }
   console.log("Verifying submitted-code sandbox capacity for dev servers...");
-  const capacityProbe = await handle.workspace.executeSubmittedCode?.(
+  const capacityProbe = await handle.workspace.executeSubmittedCode(
     sandboxCapacityProbeCommand,
   );
-  if (capacityProbe === undefined) {
-    throw new Error(
-      "Prepared Daytona workspace lacks submitted-code execution.",
-    );
-  }
   console.log(capacityProbe.stdout.trim());
   assertSandboxMeetsCapacityFloor(
     readSandboxCapacityEvidence(
@@ -194,10 +179,7 @@ try {
   console.log("Prepared Daytona image verification passed.");
 } finally {
   try {
-    if (
-      submittedCodeNetworkOpened &&
-      handle.workspace.setSubmittedCodeNetworkAccess !== undefined
-    ) {
+    if (submittedCodeNetworkOpened) {
       await handle.workspace.setSubmittedCodeNetworkAccess(false);
     }
   } finally {

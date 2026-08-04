@@ -6,7 +6,7 @@ import {
   EXPECTED_SUBMITTED_CODE_PLAYWRIGHT_VERSION,
   verifyDaytonaSubmittedCodeRuntime,
 } from "../scripts/verify-daytona-submitted-code-runtime";
-import type { AgentHarnessWorkspace } from "../src/server/agent-harness/daytona/workspace.interface";
+import { createFakeAgentHarnessWorkspace } from "../src/server/agent-harness/daytona/workspace.test-helpers";
 
 describe("verifyDaytonaSubmittedCodeRuntime", () => {
   it("pins the local browser toolchain to the submitted-code runtime", async () => {
@@ -28,11 +28,7 @@ describe("verifyDaytonaSubmittedCodeRuntime", () => {
     const uploads: Array<
       Array<{ destinationPath: string; sourcePath: string }>
     > = [];
-    const workspace: AgentHarnessWorkspace = {
-      async destroy() {},
-      async execute() {
-        return { exitCode: 0, stderr: "", stdout: "" };
-      },
+    const workspace = createFakeAgentHarnessWorkspace({
       async executeSubmittedCode(command) {
         commands.push(command);
         if (command.includes("makeademo_capture_sdk_smoke=passed")) {
@@ -66,7 +62,7 @@ describe("verifyDaytonaSubmittedCodeRuntime", () => {
           uploadedSmokeScript = extracted.stdout;
         }
       },
-    };
+    });
 
     await verifyDaytonaSubmittedCodeRuntime(workspace);
 
@@ -90,11 +86,7 @@ describe("verifyDaytonaSubmittedCodeRuntime", () => {
   });
 
   it("requires evidence that the backend-compiled action step executed", async () => {
-    const workspace: AgentHarnessWorkspace = {
-      async destroy() {},
-      async execute() {
-        return { exitCode: 0, stderr: "", stdout: "" };
-      },
+    const workspace = createFakeAgentHarnessWorkspace({
       async executeSubmittedCode(command) {
         if (command.includes("makeademo_capture_sdk_smoke=passed")) {
           return {
@@ -111,8 +103,7 @@ describe("verifyDaytonaSubmittedCodeRuntime", () => {
         }
         return { exitCode: 0, stderr: "", stdout: "" };
       },
-      async uploadSubmittedCodeFiles() {},
-    };
+    });
 
     await expect(verifyDaytonaSubmittedCodeRuntime(workspace)).rejects.toThrow(
       "backend-compiled action step",

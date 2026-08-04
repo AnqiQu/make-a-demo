@@ -836,12 +836,9 @@ describe("createDefaultAgentHarnessDependencies", () => {
   });
 
   it("writes a complete Preparation Manifest contract when no features were supplied", async () => {
-    const commands: string[] = [];
-    const workspace: AgentHarnessWorkspace = {
-      async destroy() {},
-      async uploadFiles() {},
+    const textFiles: Array<{ contents: string; path: string }> = [];
+    const workspace = createFakeAgentHarnessWorkspace({
       async execute(command) {
-        commands.push(command);
         if (command.includes("git clone --depth 1")) {
           return { exitCode: 0, stderr: "", stdout: "cloned\n" };
         }
@@ -856,7 +853,10 @@ describe("createDefaultAgentHarnessDependencies", () => {
         }
         return { exitCode: 0, stderr: "", stdout: "" };
       },
-    };
+      async writeTextFile(path, contents) {
+        textFiles.push({ contents, path });
+      },
+    });
     const harness = await createDefaultAgentHarnessDependencies({
       artifactStore: { async writeJson() {} },
       openCodeRunner: repoPreparationRunner(),
@@ -874,15 +874,15 @@ describe("createDefaultAgentHarnessDependencies", () => {
     });
 
     expect(
-      commands.some(
-        (command) =>
-          command.includes("preparation-manifest-template.json") &&
-          command.includes("scriptGenerationContext"),
+      textFiles.some(
+        (file) =>
+          file.path.includes("preparation-manifest-template.json") &&
+          file.contents.includes("scriptGenerationContext"),
       ),
     ).toBe(true);
-    const contractWrite = commands.find((command) =>
-      command.includes("preparation-manifest-contract.json"),
-    );
+    const contractWrite = textFiles.find((file) =>
+      file.path.includes("preparation-manifest-contract.json"),
+    )?.contents;
     expect(contractWrite).toContain('"description"');
     expect(contractWrite).toContain('"fixtureNotes"');
     expect(contractWrite).toContain('"label"');
@@ -896,9 +896,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
     let canonicalPromoted = false;
     let fallbackWritten = false;
     const commands: string[] = [];
-    const workspace: AgentHarnessWorkspace = {
-      async destroy() {},
-      async uploadFiles() {},
+    const workspace = createFakeAgentHarnessWorkspace({
       async execute(command) {
         commands.push(command);
         if (command.includes("git clone --depth 1")) {
@@ -926,17 +924,14 @@ describe("createDefaultAgentHarnessDependencies", () => {
             stdout: JSON.stringify(preparationManifest()),
           };
         }
-        if (
-          command.includes("printf") &&
-          command.includes("/workspace/.makeademo/preparation-manifest.json") &&
-          !command.includes("preparation-manifest-contract.json") &&
-          !command.includes("preparation-manifest-template.json")
-        ) {
-          canonicalPromoted = true;
-        }
         return { exitCode: 0, stderr: "", stdout: "" };
       },
-    };
+      async writeTextFile(path) {
+        if (path === "/workspace/.makeademo/preparation-manifest.json") {
+          canonicalPromoted = true;
+        }
+      },
+    });
     const harness = await createDefaultAgentHarnessDependencies({
       artifactStore: { async writeJson() {} },
       openCodeRunner: {
@@ -1929,13 +1924,10 @@ describe("createDefaultAgentHarnessDependencies", () => {
 
   it("recovers malformed manifest JSON from a valid template with safe diagnostics", async () => {
     const artifacts: Record<string, unknown> = {};
-    const commands: string[] = [];
+    const textFiles: Array<{ contents: string; path: string }> = [];
     let manifestText: string | undefined;
-    const workspace: AgentHarnessWorkspace = {
-      async destroy() {},
-      async uploadFiles() {},
+    const workspace = createFakeAgentHarnessWorkspace({
       async execute(command) {
-        commands.push(command);
         if (
           command === "cat '/workspace/.makeademo/preparation-manifest.json'"
         ) {
@@ -1945,7 +1937,10 @@ describe("createDefaultAgentHarnessDependencies", () => {
         }
         return { exitCode: 0, stderr: "", stdout: "" };
       },
-    };
+      async writeTextFile(path, contents) {
+        textFiles.push({ contents, path });
+      },
+    });
     let attempts = 0;
     const harness = await createDefaultAgentHarnessDependencies({
       artifactStore: {
@@ -2000,18 +1995,17 @@ describe("createDefaultAgentHarnessDependencies", () => {
       },
     });
     expect(
-      commands.some(
-        (command) =>
-          command.includes("invalid-preparation-manifest-attempt-1.json") &&
-          command.includes("should-not-persist"),
+      textFiles.some(
+        (file) =>
+          file.path.includes("invalid-preparation-manifest-attempt-1.json") &&
+          file.contents.includes("should-not-persist"),
       ),
     ).toBe(true);
     expect(
-      commands.some(
-        (command) =>
-          command.includes("replace-with-preparation-id") &&
-          command.includes("/workspace/.makeademo/preparation-manifest.json") &&
-          !command.includes("preparation-manifest-template.json"),
+      textFiles.some(
+        (file) =>
+          file.path === "/workspace/.makeademo/preparation-manifest.json" &&
+          file.contents.includes("replace-with-preparation-id"),
       ),
     ).toBe(true);
   });
@@ -2026,9 +2020,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
       2,
     )}\n`;
     let manifestText: string | undefined;
-    const workspace: AgentHarnessWorkspace = {
-      async destroy() {},
-      async uploadFiles() {},
+    const workspace = createFakeAgentHarnessWorkspace({
       async execute(command) {
         if (
           command === "cat '/workspace/.makeademo/preparation-manifest.json'"
@@ -2037,16 +2029,17 @@ describe("createDefaultAgentHarnessDependencies", () => {
             ? { exitCode: 1, stderr: "missing", stdout: "" }
             : { exitCode: 0, stderr: "", stdout: manifestText };
         }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async writeTextFile(path, contents) {
         if (
-          command.includes("replace-with-preparation-id") &&
-          command.includes("/workspace/.makeademo/preparation-manifest.json") &&
-          !command.includes("preparation-manifest-template.json")
+          path === "/workspace/.makeademo/preparation-manifest.json" &&
+          contents.includes("replace-with-preparation-id")
         ) {
           manifestText = templateText;
         }
-        return { exitCode: 0, stderr: "", stdout: "" };
       },
-    };
+    });
     let attempts = 0;
     const harness = await createDefaultAgentHarnessDependencies({
       artifactStore: {
@@ -2540,28 +2533,18 @@ describe("createDefaultAgentHarnessDependencies", () => {
   it("starts and stops the submitted app through the workspace managed-process seam", async () => {
     const shellCommands: string[] = [];
     const lifecycleCalls: unknown[] = [];
-    const workspace = {
-      async destroy() {},
-      async uploadFiles() {},
-      async execute() {
-        return { exitCode: 0, stderr: "", stdout: "" };
-      },
+    const workspace = createFakeAgentHarnessWorkspace({
       async executeSubmittedCode(command: string) {
         shellCommands.push(command);
         return { exitCode: 0, stderr: "", stdout: "" };
       },
-      async setSubmittedCodeNetworkAccess() {},
       async startSubmittedCodeApp(input: unknown) {
         lifecycleCalls.push({ start: input });
       },
       async stopSubmittedCodeApp() {
         lifecycleCalls.push({ stop: true });
       },
-      async syncSubmittedCodeWorkspace() {},
-    } as AgentHarnessWorkspace & {
-      startSubmittedCodeApp(input: unknown): Promise<void>;
-      stopSubmittedCodeApp(): Promise<void>;
-    };
+    });
     const harness = await createDefaultAgentHarnessDependencies({
       artifactStore: { async writeJson() {} },
       openCodeRunner: repoPreparationRunner(),
@@ -3659,13 +3642,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
           archiveCommands.push(command);
           return { exitCode: 0, stderr: "", stdout: "" };
         }
-        return (
-          base.executeSubmittedCode?.(command) ?? {
-            exitCode: 0,
-            stderr: "",
-            stdout: "",
-          }
-        );
+        return base.executeSubmittedCode(command);
       },
       async downloadSubmittedCodeFiles(files) {
         for (const file of files) {
@@ -4119,12 +4096,9 @@ describe("createDefaultAgentHarnessDependencies", () => {
   });
 
   it("gives Script Writing the canonical Capture SDK contract artifact", async () => {
-    const commands: string[] = [];
-    const workspace: AgentHarnessWorkspace = {
-      async destroy() {},
-      async uploadFiles() {},
+    const textFiles: Array<{ contents: string; path: string }> = [];
+    const workspace = createFakeAgentHarnessWorkspace({
       async execute(command) {
-        commands.push(command);
         if (command === "cat '/workspace/.makeademo/demo-script.json'") {
           return {
             exitCode: 0,
@@ -4134,7 +4108,10 @@ describe("createDefaultAgentHarnessDependencies", () => {
         }
         return { exitCode: 0, stderr: "", stdout: "" };
       },
-    };
+      async writeTextFile(path, contents) {
+        textFiles.push({ contents, path });
+      },
+    });
     const harness = await createDefaultAgentHarnessDependencies({
       artifactStore: { async writeJson() {} },
       openCodeRunner: {
@@ -4174,17 +4151,17 @@ describe("createDefaultAgentHarnessDependencies", () => {
       contractVersion: "2026-07-12.1",
     });
 
-    const contractWrite = commands.find((command) =>
-      command.includes("capture-sdk-contract.json"),
-    );
+    const contractWrite = textFiles.find((file) =>
+      file.path.includes("capture-sdk-contract.json"),
+    )?.contents;
     expect(contractWrite).toContain(
       "await setup(async ({ page, baseUrl, expect }) => {",
     );
     expect(contractWrite).toContain("scene_main");
     expect(contractWrite).toContain("async ({ page, expect }) => {");
-    const demoScriptContractWrite = commands.find((command) =>
-      command.includes("demo-script-contract.json"),
-    );
+    const demoScriptContractWrite = textFiles.find((file) =>
+      file.path.includes("demo-script-contract.json"),
+    )?.contents;
     expect(demoScriptContractWrite).toContain("architecture-v2.png");
   });
 
@@ -4450,11 +4427,7 @@ function explorationProtocol(blockedNetworkAttempts: NetworkAttempt[] = []) {
 function blockedImageExplorationWorkspace(
   onExploration: () => void,
 ): AgentHarnessWorkspace {
-  return {
-    async destroy() {},
-    async execute() {
-      return { exitCode: 0, stderr: "", stdout: "" };
-    },
+  return createFakeAgentHarnessWorkspace({
     async executeSubmittedCode(command) {
       if (!command.includes("explore-app.mjs")) {
         return { exitCode: 0, stderr: "", stdout: "" };
@@ -4476,7 +4449,7 @@ function blockedImageExplorationWorkspace(
         ]),
       };
     },
-  };
+  });
 }
 
 function capturePathScriptCandidate(): ScriptCandidate {
@@ -4795,9 +4768,7 @@ async function runFlowPlanningScenario(input: {
 function secretMountedDaytonaWorkspace(): AgentHarnessWorkspace {
   const manifest = preparationManifest();
 
-  return {
-    async destroy() {},
-    async uploadFiles() {},
+  return createFakeAgentHarnessWorkspace({
     async execute(command) {
       if (command.includes("git clone --depth 1")) {
         const usesGitCa =
@@ -4819,12 +4790,7 @@ function secretMountedDaytonaWorkspace(): AgentHarnessWorkspace {
 
       return { exitCode: 0, stderr: "", stdout: "" };
     },
-    async executeSubmittedCode() {
-      return { exitCode: 0, stderr: "", stdout: "" };
-    },
-    async setSubmittedCodeNetworkAccess() {},
-    async syncSubmittedCodeWorkspace() {},
-  };
+  });
 }
 
 function repoPreparationRunner(): OpenCodeHarnessRunner {
@@ -4891,33 +4857,30 @@ function repairableRepoPreparationWorkspace(): AgentHarnessWorkspace & {
   let manifestWritten = false;
 
   return {
+    ...createFakeAgentHarnessWorkspace({
+      async execute(command) {
+        if (command.includes("git clone --depth 1")) {
+          return { exitCode: 0, stderr: "", stdout: "cloned\n" };
+        }
+
+        if (
+          command === "cat '/workspace/.makeademo/preparation-manifest.json'"
+        ) {
+          return manifestWritten
+            ? { exitCode: 0, stderr: "", stdout: JSON.stringify(manifest) }
+            : {
+                exitCode: 1,
+                stderr: "cat: can't open preparation-manifest.json\n",
+                stdout: "",
+              };
+        }
+
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    }),
     writePreparationManifest() {
       manifestWritten = true;
     },
-    async destroy() {},
-    async uploadFiles() {},
-    async execute(command) {
-      if (command.includes("git clone --depth 1")) {
-        return { exitCode: 0, stderr: "", stdout: "cloned\n" };
-      }
-
-      if (command === "cat '/workspace/.makeademo/preparation-manifest.json'") {
-        return manifestWritten
-          ? { exitCode: 0, stderr: "", stdout: JSON.stringify(manifest) }
-          : {
-              exitCode: 1,
-              stderr: "cat: can't open preparation-manifest.json\n",
-              stdout: "",
-            };
-      }
-
-      return { exitCode: 0, stderr: "", stdout: "" };
-    },
-    async executeSubmittedCode() {
-      return { exitCode: 0, stderr: "", stdout: "" };
-    },
-    async setSubmittedCodeNetworkAccess() {},
-    async syncSubmittedCodeWorkspace() {},
   };
 }
 
@@ -4933,27 +4896,24 @@ function schemaRepairableRepoPreparationWorkspace(): AgentHarnessWorkspace & {
   };
 
   return {
+    ...createFakeAgentHarnessWorkspace({
+      async execute(command) {
+        if (command.includes("git clone --depth 1")) {
+          return { exitCode: 0, stderr: "", stdout: "cloned\n" };
+        }
+
+        if (
+          command === "cat '/workspace/.makeademo/preparation-manifest.json'"
+        ) {
+          return { exitCode: 0, stderr: "", stdout: JSON.stringify(manifest) };
+        }
+
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    }),
     writeValidPreparationManifest() {
       manifest = validManifest;
     },
-    async destroy() {},
-    async uploadFiles() {},
-    async execute(command) {
-      if (command.includes("git clone --depth 1")) {
-        return { exitCode: 0, stderr: "", stdout: "cloned\n" };
-      }
-
-      if (command === "cat '/workspace/.makeademo/preparation-manifest.json'") {
-        return { exitCode: 0, stderr: "", stdout: JSON.stringify(manifest) };
-      }
-
-      return { exitCode: 0, stderr: "", stdout: "" };
-    },
-    async executeSubmittedCode() {
-      return { exitCode: 0, stderr: "", stdout: "" };
-    },
-    async setSubmittedCodeNetworkAccess() {},
-    async syncSubmittedCodeWorkspace() {},
   };
 }
 

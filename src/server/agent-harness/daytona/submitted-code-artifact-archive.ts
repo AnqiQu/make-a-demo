@@ -20,12 +20,6 @@ export async function uploadSubmittedCodeArchive(input: {
 }): Promise<void> {
   assertSafeArchiveName(input.archiveName);
   assertSafeArchiveEntries(input.entries);
-  const uploadFiles = input.workspace.uploadSubmittedCodeFiles?.bind(
-    input.workspace,
-  );
-  if (uploadFiles === undefined) {
-    throw new Error("Submitted-code artifact upload support is required.");
-  }
   const localArchivePath = join(input.localDirectory, input.archiveName);
   const remoteArchivePath = `${input.remoteDirectory}/${input.archiveName}`;
   let remoteArchiveMayExist = false;
@@ -47,7 +41,7 @@ export async function uploadSubmittedCodeArchive(input: {
       );
     }
     remoteArchiveMayExist = true;
-    await uploadFiles([
+    await input.workspace.uploadSubmittedCodeFiles([
       { destinationPath: remoteArchivePath, sourcePath: localArchivePath },
     ]);
     const extraction = await executeSubmittedCode(
@@ -94,12 +88,6 @@ export async function downloadSubmittedCodeArchive(input: {
 }): Promise<void> {
   assertSafeArchiveName(input.archiveName);
   assertSafeArchiveEntries(input.entries);
-  const downloadFiles = input.workspace.downloadSubmittedCodeFiles?.bind(
-    input.workspace,
-  );
-  if (downloadFiles === undefined) {
-    throw new Error("Submitted-code artifact download support is required.");
-  }
   await mkdir(input.localDirectory, { recursive: true });
   const localArchivePath = join(input.localDirectory, input.archiveName);
   const remoteArchivePath = `${input.remoteDirectory}/${input.archiveName}`;
@@ -116,7 +104,7 @@ export async function downloadSubmittedCodeArchive(input: {
       `Failed to create submitted-code output archive ${remoteArchivePath}.\n${formatCommandOutput(creation)}`,
     );
   }
-  await downloadFiles([
+  await input.workspace.downloadSubmittedCodeFiles([
     { destinationPath: localArchivePath, sourcePath: remoteArchivePath },
   ]);
   await extractLocalArchive({

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import { createFakeAgentHarnessWorkspace } from "../daytona/workspace.test-helpers";
 import { exploreSubmittedApp } from "./submitted-app-explorer";
 
 const execFileAsync = promisify(execFile);
@@ -29,11 +30,7 @@ async function buildExplorerScript(baseUrl: string): Promise<string> {
   await exploreSubmittedApp({
     baseUrl,
     preparationManifestId: "prep_script_test",
-    workspace: {
-      async destroy() {},
-      async execute() {
-        return { exitCode: 0, stderr: "", stdout: "" };
-      },
+    workspace: createFakeAgentHarnessWorkspace({
       async executeSubmittedCode(command: string) {
         commands.push(command);
         return {
@@ -43,7 +40,7 @@ async function buildExplorerScript(baseUrl: string): Promise<string> {
             '\n[makeademo:exploration] {"blockedNetworkAttempts":[],"consoleErrors":[],"pageErrors":[],"routes":[],"unreachableRoutes":[]}\n',
         };
       },
-    },
+    }),
   });
   const encoded = /printf %s '([^']+)'/.exec(
     commands.find((command) => command.includes("explore-app.mjs")) ?? "",

@@ -91,17 +91,6 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
     const captureTimeoutMs =
       this.sceneTimeoutMs + sumSceneHoldMs(sceneHoldMsById);
     const workspace = this.options.preparationWorkspace.workspace;
-    if (workspace.downloadSubmittedCodeFiles === undefined) {
-      throw new Error(
-        "Prepared workspace Footage Capture requires artifact download support.",
-      );
-    }
-    if (workspace.uploadSubmittedCodeFiles === undefined) {
-      throw new Error(
-        "Prepared workspace Footage Capture requires artifact upload support.",
-      );
-    }
-
     const runId = basename(input.runDirectory);
     const remoteRunDirectory = `/workspace/.makeademo/footage-capture-runs/${runId}`;
     const remoteSceneWorkspace = `${remoteRunDirectory}/work/continuous-take`;
@@ -180,16 +169,14 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
       writeFile(join(input.runDirectory, "stdout.log"), result.stdout),
       writeFile(join(input.runDirectory, "stderr.log"), result.stderr),
     ]);
-    if (workspace.readSubmittedCodeAppStatus !== undefined) {
-      const appStatus = await workspace.readSubmittedCodeAppStatus();
-      const appOutput = [appStatus.stderr, appStatus.stdout]
-        .filter((value) => value.length > 0)
-        .join("\n");
-      await writeFile(
-        join(input.runDirectory, "submitted-app-runtime.log"),
-        appOutput,
-      );
-    }
+    const appStatus = await workspace.readSubmittedCodeAppStatus();
+    const appOutput = [appStatus.stderr, appStatus.stdout]
+      .filter((value) => value.length > 0)
+      .join("\n");
+    await writeFile(
+      join(input.runDirectory, "submitted-app-runtime.log"),
+      appOutput,
+    );
     if (result.exitCode !== 0) {
       throw new Error(
         formatSceneFailure("continuous-take", {

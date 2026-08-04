@@ -1730,9 +1730,7 @@ async function exploreObservation(input: {
   consoleErrors?: string[];
   featureInventory?: PreparedDemoFeature[];
   pageErrors?: string[];
-  readSubmittedCodeAppStatus?: NonNullable<
-    AgentHarnessWorkspace["readSubmittedCodeAppStatus"]
-  >;
+  readSubmittedCodeAppStatus?: AgentHarnessWorkspace["readSubmittedCodeAppStatus"];
   requestedFeatures?: string[];
   routes: Array<Record<string, unknown>>;
   unreachableRoutes?: Array<{

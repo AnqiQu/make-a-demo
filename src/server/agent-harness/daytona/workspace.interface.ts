@@ -175,46 +175,46 @@ export interface AgentHarnessWorkspace {
     command: string,
     options?: AgentHarnessWorkspaceExecuteOptions,
   ): Promise<AgentHarnessWorkspaceCommandResult>;
-  executeSubmittedCode?(
+  executeSubmittedCode(
     command: string,
     options?: AgentHarnessWorkspaceExecuteOptions,
   ): Promise<AgentHarnessWorkspaceCommandResult>;
-  startSubmittedCodeApp?(
+  startSubmittedCodeApp(
     input: AgentHarnessSubmittedCodeAppStartInput,
   ): Promise<void>;
-  readSubmittedCodeAppStatus?(): Promise<AgentHarnessSubmittedCodeAppStatus>;
-  stopSubmittedCodeApp?(): Promise<void>;
-  syncSubmittedCodeWorkspace?(): Promise<void>;
+  readSubmittedCodeAppStatus(): Promise<AgentHarnessSubmittedCodeAppStatus>;
+  stopSubmittedCodeApp(): Promise<void>;
+  syncSubmittedCodeWorkspace(): Promise<void>;
   /**
    * Copies only backend-approved dependency metadata from the submitted-code
    * sandbox into the prepared agent workspace so a later clean sync retains a
    * deterministic package-manager repair. Implementations must reject paths
    * outside the repository and files other than recognized lockfiles.
    */
-  promoteSubmittedCodeFiles?(paths: string[]): Promise<void>;
-  setSubmittedCodeNetworkAccess?(enabled: boolean): Promise<void>;
-  writeSandboxLog?(entry: AgentHarnessWorkspaceLogEntry): Promise<void>;
+  promoteSubmittedCodeFiles(paths: string[]): Promise<void>;
+  setSubmittedCodeNetworkAccess(enabled: boolean): Promise<void>;
+  writeSandboxLog(entry: AgentHarnessWorkspaceLogEntry): Promise<void>;
   /**
    * Writes exact UTF-8 text into the agent sandbox without exposing it to the
    * submitted-code sandbox or transporting the contents as a shell argument.
    */
-  writeTextFile?(path: string, contents: string): Promise<void>;
-  uploadFiles?(files: AgentHarnessWorkspaceUploadFile[]): Promise<void>;
+  writeTextFile(path: string, contents: string): Promise<void>;
+  uploadFiles(files: AgentHarnessWorkspaceUploadFile[]): Promise<void>;
   /**
    * Uploads runtime inputs only to the submitted-code trust boundary.
    * Implementations must not copy these files into an agent sandbox.
    */
-  uploadSubmittedCodeFiles?(
+  uploadSubmittedCodeFiles(
     files: AgentHarnessWorkspaceUploadFile[],
   ): Promise<void>;
   /**
    * Downloads runtime artifacts only from the submitted-code trust boundary.
    */
-  downloadSubmittedCodeFiles?(
+  downloadSubmittedCodeFiles(
     files: AgentHarnessWorkspaceDownloadFile[],
   ): Promise<void>;
-  collectSandboxLogs?(): Promise<string[]>;
-  collectNetworkStateLog?(): Promise<AgentHarnessNetworkStateTransition[]>;
+  collectSandboxLogs(): Promise<string[]>;
+  collectNetworkStateLog(): Promise<AgentHarnessNetworkStateTransition[]>;
 }
 
 export type AgentHarnessWorkspaceHandle = {

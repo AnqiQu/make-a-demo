@@ -188,7 +188,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
     const handle = await provider.create();
 
-    await handle.workspace.uploadFiles?.([
+    await handle.workspace.uploadFiles([
       {
         destinationPath: "/workspace/package.json",
         sourcePath: "/tmp/repo/package.json",
@@ -212,7 +212,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
     const handle = await provider.create();
 
-    await handle.workspace.uploadFiles?.([
+    await handle.workspace.uploadFiles([
       {
         destinationPath: "/workspace/.makeademo/capture/script.ts",
         sourcePath: "/tmp/script.ts",
@@ -237,7 +237,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
     const handle = await provider.create();
 
-    await handle.workspace.writeTextFile?.(
+    await handle.workspace.writeTextFile(
       "/workspace/.makeademo/action-catalog.json",
       `${"x".repeat(150_000)}\n`,
     );
@@ -272,7 +272,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     const handle = await provider.create();
 
     await expect(
-      handle.workspace.writeTextFile?.(
+      handle.workspace.writeTextFile(
         "/workspace/.makeademo/action-catalog.json",
         "large catalog",
       ),
@@ -459,12 +459,12 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
     const handle = await provider.create();
 
-    await handle.workspace.writeSandboxLog?.({
+    await handle.workspace.writeSandboxLog({
       event: "repo-preparation.started",
       stage: "repo-preparation",
       timestamp: "2026-06-17T00:00:00.000Z",
     });
-    await handle.workspace.writeSandboxLog?.({
+    await handle.workspace.writeSandboxLog({
       event: "repo-preparation.succeeded",
       stage: "repo-preparation",
     });
@@ -535,7 +535,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
     const handle = await provider.create();
 
-    await expect(handle.workspace.collectSandboxLogs?.()).resolves.toEqual([
+    await expect(handle.workspace.collectSandboxLogs()).resolves.toEqual([
       '{"event":"agent.started"}',
       '{"event":"agent.failed"}',
     ]);
@@ -551,7 +551,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
     const handle = await provider.create();
 
-    await expect(handle.workspace.collectSandboxLogs?.()).resolves.toEqual([
+    await expect(handle.workspace.collectSandboxLogs()).resolves.toEqual([
       '{"event":"repo-preparation.failed"}',
     ]);
     expect(calls.filter((call) => "start" in Object(call))).toEqual([
@@ -566,7 +566,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
     const handle = await provider.create();
 
-    await handle.workspace.writeSandboxLog?.({
+    await handle.workspace.writeSandboxLog({
       event: "repo-preparation.started",
       stage: "repo-preparation",
     });
@@ -594,7 +594,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     const handle = await provider.create();
 
     await expect(
-      handle.workspace.writeSandboxLog?.({
+      handle.workspace.writeSandboxLog({
         event: "project-validation.started",
         stage: "project-validation",
       }),
@@ -913,7 +913,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
     const handle = await provider.create();
 
-    await handle.workspace.writeSandboxLog?.({
+    await handle.workspace.writeSandboxLog({
       event: "project-validation.dependency-install.started",
       stage: "project-validation",
       workspaceId: "workspace_123",
@@ -977,10 +977,10 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     const handle = await provider.create();
 
     await expect(
-      handle.workspace.setSubmittedCodeNetworkAccess?.(true),
+      handle.workspace.setSubmittedCodeNetworkAccess(true),
     ).resolves.toBeUndefined();
     await expect(
-      handle.workspace.setSubmittedCodeNetworkAccess?.(false),
+      handle.workspace.setSubmittedCodeNetworkAccess(false),
     ).resolves.toBeUndefined();
 
     expect(
@@ -1006,13 +1006,13 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     const handle = await provider.create();
 
     await expect(
-      handle.workspace.setSubmittedCodeNetworkAccess?.(true),
+      handle.workspace.setSubmittedCodeNetworkAccess(true),
     ).resolves.toBeUndefined();
     await expect(
-      handle.workspace.setSubmittedCodeNetworkAccess?.(false),
+      handle.workspace.setSubmittedCodeNetworkAccess(false),
     ).rejects.toThrow(/cannot be overridden/);
 
-    const transitions = await handle.workspace.collectNetworkStateLog?.();
+    const transitions = await handle.workspace.collectNetworkStateLog();
     expect(transitions?.map((transition) => transition.state)).toEqual([
       "runtime-locked",
       "dependency-install-open",
@@ -1027,7 +1027,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
     const handle = await provider.create();
 
-    await handle.workspace.uploadSubmittedCodeFiles?.([
+    await handle.workspace.uploadSubmittedCodeFiles([
       {
         destinationPath: "/workspace/.makeademo/capture/demo-script.ts",
         sourcePath: "/tmp/demo-script.ts",
@@ -1071,7 +1071,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
     const handle = await provider.create();
 
-    await handle.workspace.uploadSubmittedCodeFiles?.([
+    await handle.workspace.uploadSubmittedCodeFiles([
       {
         destinationPath: "/workspace/.makeademo/capture/demo-script.ts",
         sourcePath: "/tmp/demo-script.ts",
@@ -1103,7 +1103,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     const handle = await provider.create();
 
     await expect(
-      handle.workspace.uploadSubmittedCodeFiles?.([
+      handle.workspace.uploadSubmittedCodeFiles([
         {
           destinationPath: "/workspace/.makeademo/capture/demo-script.ts",
           sourcePath: "/tmp/demo-script.ts",
@@ -1134,7 +1134,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     const handle = await provider.create();
 
     await expect(
-      handle.workspace.uploadSubmittedCodeFiles?.([
+      handle.workspace.uploadSubmittedCodeFiles([
         {
           destinationPath: "/workspace/.makeademo/capture/demo-script.ts",
           sourcePath: "/tmp/demo-script.ts",
@@ -1225,16 +1225,15 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
     const handle = await provider.create();
 
-    await handle.workspace.uploadFiles?.([
+    await handle.workspace.uploadFiles([
       {
         destinationPath: "/workspace/package.json",
         sourcePath: "/tmp/repo/package.json",
       },
     ]);
-    const result = await handle.workspace.executeSubmittedCode?.("npm test");
-    await handle.workspace.setSubmittedCodeNetworkAccess?.(true);
-    const networkTransitions =
-      await handle.workspace.collectNetworkStateLog?.();
+    const result = await handle.workspace.executeSubmittedCode("npm test");
+    await handle.workspace.setSubmittedCodeNetworkAccess(true);
+    const networkTransitions = await handle.workspace.collectNetworkStateLog();
 
     expect(result).toEqual({ exitCode: 0, stderr: "", stdout: "child ok" });
     expect(networkTransitions?.map((transition) => transition.state)).toEqual([
@@ -1286,13 +1285,13 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
     const handle = await provider.create();
 
-    await handle.workspace.startSubmittedCodeApp?.({
+    await handle.workspace.startSubmittedCodeApp({
       command: "npm run dev -- --host 0.0.0.0",
       cwd: "/workspace/repo with spaces",
       env: { DEMO_MODE: "customer's demo" },
     });
-    const status = await handle.workspace.readSubmittedCodeAppStatus?.();
-    await handle.workspace.stopSubmittedCodeApp?.();
+    const status = await handle.workspace.readSubmittedCodeAppStatus();
+    await handle.workspace.stopSubmittedCodeApp();
 
     const session = calls.find(
       (
@@ -1359,7 +1358,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
     const handle = await provider.create();
 
-    await handle.workspace.executeSubmittedCode?.("npm test", {
+    await handle.workspace.executeSubmittedCode("npm test", {
       env: { NODE_ENV: "test" },
     });
 
@@ -1384,7 +1383,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     const handle = await provider.create();
 
     await expect(
-      handle.workspace.executeSubmittedCode?.("npm ci"),
+      handle.workspace.executeSubmittedCode("npm ci"),
     ).rejects.toThrow("Daytona command did not finish within 1ms.");
 
     expect(calls).toEqual(
@@ -1404,7 +1403,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
     const handle = await provider.create();
 
-    await handle.workspace.syncSubmittedCodeWorkspace?.();
+    await handle.workspace.syncSubmittedCodeWorkspace();
 
     expect(calls).toContainEqual({
       executeCommand: {
@@ -1542,7 +1541,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
     const handle = await provider.create();
 
-    await handle.workspace.syncSubmittedCodeWorkspace?.();
+    await handle.workspace.syncSubmittedCodeWorkspace();
 
     const restoreCommand = calls.find(
       (
@@ -1613,7 +1612,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     try {
       const handle = await provider.create();
 
-      await handle.workspace.syncSubmittedCodeWorkspace?.();
+      await handle.workspace.syncSubmittedCodeWorkspace();
 
       await expect(
         readFile(join(submittedWorkspace, "package.json"), "utf8"),
@@ -1666,7 +1665,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
 
     try {
       const handle = await provider.create();
-      await handle.workspace.promoteSubmittedCodeFiles?.([
+      await handle.workspace.promoteSubmittedCodeFiles([
         "apps/web/package-lock.json",
       ]);
 
@@ -1677,7 +1676,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         ),
       ).resolves.toBe("reconciled lockfile");
       await expect(
-        handle.workspace.promoteSubmittedCodeFiles?.(["apps/web/package.json"]),
+        handle.workspace.promoteSubmittedCodeFiles(["apps/web/package.json"]),
       ).rejects.toThrow("recognized lockfile");
     } finally {
       await rm(root, { force: true, recursive: true });
@@ -1694,9 +1693,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
     const handle = await provider.create();
 
-    await expect(
-      handle.workspace.syncSubmittedCodeWorkspace?.(),
-    ).rejects.toThrow(
+    await expect(handle.workspace.syncSubmittedCodeWorkspace()).rejects.toThrow(
       "Failed to archive prepared Daytona workspace (exit code 8). stderr: tar: permission denied stdout: archive started",
     );
   });
@@ -1711,9 +1708,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
     const handle = await provider.create();
 
-    await expect(
-      handle.workspace.syncSubmittedCodeWorkspace?.(),
-    ).rejects.toThrow(
+    await expect(handle.workspace.syncSubmittedCodeWorkspace()).rejects.toThrow(
       "Failed to restore prepared files in submitted-code sandbox (exit code 9). stderr: tar: corrupt archive stdout: restore started",
     );
   });
@@ -1730,9 +1725,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
     const handle = await provider.create();
 
-    await expect(
-      handle.workspace.syncSubmittedCodeWorkspace?.(),
-    ).rejects.toThrow(
+    await expect(handle.workspace.syncSubmittedCodeWorkspace()).rejects.toThrow(
       "Daytona prepared workspace archive download did not finish within 1ms.",
     );
 

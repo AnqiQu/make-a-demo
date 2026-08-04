@@ -346,7 +346,7 @@ async function persistSandboxLogs(
   runDirectory: string,
   logger: PipelineEventLogger,
 ): Promise<void> {
-  if (handle?.workspace.collectSandboxLogs === undefined) {
+  if (handle === undefined) {
     return;
   }
 

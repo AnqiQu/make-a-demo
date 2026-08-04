@@ -551,7 +551,7 @@ async function readAppStatus(
   workspace: AgentHarnessWorkspace,
 ): Promise<AgentHarnessSubmittedCodeAppStatus | undefined> {
   try {
-    return await workspace.readSubmittedCodeAppStatus?.();
+    return await workspace.readSubmittedCodeAppStatus();
   } catch {
     return undefined;
   }

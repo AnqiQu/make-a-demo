@@ -4,6 +4,7 @@ import {
   AgentHarnessCommandTimeoutError,
   AgentHarnessSandboxUnavailableError,
 } from "../daytona/workspace.interface";
+import { createFakeAgentHarnessWorkspace } from "../daytona/workspace.test-helpers";
 import { DEMO_SCRIPT_OUTPUT_PATH } from "../schemas/artifacts";
 import {
   type AgentHarnessPipelineDependencies,
@@ -2425,7 +2426,7 @@ function stubPipelineDependencies(
 }
 
 function workspace() {
-  return {
+  return createFakeAgentHarnessWorkspace({
     agentSandboxId: "agent_sandbox",
     async collectNetworkStateLog() {
       return [
@@ -2443,14 +2444,8 @@ function workspace() {
         },
       ];
     },
-    async destroy() {
-      return undefined;
-    },
-    async execute() {
-      return { exitCode: 0, stderr: "", stdout: "" };
-    },
     submittedCodeSandboxId: "submitted_sandbox",
-  };
+  });
 }
 
 function failingPreparationDependencies(

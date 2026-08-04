@@ -1885,7 +1885,7 @@ async function persistRunManifest(input: {
   workspace: AgentHarnessWorkspace | undefined;
 }): Promise<PipelineRunManifest> {
   const networkStateTransitions =
-    (await input.workspace?.collectNetworkStateLog?.()) ?? [];
+    (await input.workspace?.collectNetworkStateLog()) ?? [];
   const manifest = readPipelineRunManifest({
     artifactPaths,
     ...optionalString("commitSha", input.input.commitSha),
