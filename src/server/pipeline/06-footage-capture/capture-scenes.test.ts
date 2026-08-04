@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import type { AgentHarnessWorkspaceHandle } from "../../agent-harness/daytona/workspace.interface";
+import { createFakeAgentHarnessWorkspace } from "../../agent-harness/daytona/workspace.test-helpers";
 import type { ExternalResourceManifest } from "../../shared/external-resources/external-resource-manifest.schema";
 import { captureScenesFromScript } from "./capture-scenes";
 import { PreparedWorkspacePlaywrightSceneRecorder } from "./playwright-scene-recorder";
@@ -295,8 +296,7 @@ describe("captureScenesFromScript", () => {
     const preparationWorkspace: AgentHarnessWorkspaceHandle = {
       async destroy() {},
       id: "daytona_workspace",
-      workspace: {
-        async destroy() {},
+      workspace: createFakeAgentHarnessWorkspace({
         async downloadFiles() {
           throw new Error(
             "generic artifact download must not cross trust boundaries",
@@ -376,7 +376,7 @@ describe("captureScenesFromScript", () => {
             ...files.map((file) => file.destinationPath),
           );
         },
-      },
+      }),
     };
 
     const externalResourceCache: {
@@ -528,12 +528,7 @@ describe("captureScenesFromScript", () => {
     const preparationWorkspace: AgentHarnessWorkspaceHandle = {
       async destroy() {},
       id: "daytona_workspace",
-      workspace: {
-        async destroy() {},
-        async execute() {
-          return { exitCode: 0, stderr: "", stdout: "" };
-        },
-      },
+      workspace: createFakeAgentHarnessWorkspace(),
     };
 
     await expect(

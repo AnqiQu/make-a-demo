@@ -3,6 +3,7 @@ import {
   AgentHarnessCommandTimeoutError,
   type AgentHarnessWorkspace,
 } from "../daytona/workspace.interface";
+import { createFakeAgentHarnessWorkspace } from "../daytona/workspace.test-helpers";
 import type { PreparedDemoFeature } from "../schemas/artifacts";
 import { sandboxCapacityProbeCommand } from "../tools/sandbox-capacity";
 import {
@@ -1436,11 +1437,7 @@ describe("exploreSubmittedApp", () => {
     const result = await exploreSubmittedApp({
       baseUrl,
       preparationManifestId: "prep_001",
-      workspace: {
-        async destroy() {},
-        async execute() {
-          return { exitCode: 0, stderr: "", stdout: "" };
-        },
+      workspace: createFakeAgentHarnessWorkspace({
         async executeSubmittedCode(command) {
           if (command.includes("explore-app.mjs")) {
             return {
@@ -1453,7 +1450,7 @@ describe("exploreSubmittedApp", () => {
             ? { exitCode: 0, stderr: "", stdout: protocol }
             : { exitCode: 0, stderr: "", stdout: "" };
         },
-      },
+      }),
     });
 
     expect(requireArtifacts(result).appMap.discoveredRoutes[0]).toMatchObject({
@@ -1472,11 +1469,7 @@ describe("exploreSubmittedApp", () => {
     const result = await exploreSubmittedApp({
       baseUrl,
       preparationManifestId: "prep_001",
-      workspace: {
-        async destroy() {},
-        async execute() {
-          return { exitCode: 0, stderr: "", stdout: "" };
-        },
+      workspace: createFakeAgentHarnessWorkspace({
         async executeSubmittedCode(command) {
           if (command.includes("explore-app.mjs")) {
             throw new AgentHarnessCommandTimeoutError(300_000);
@@ -1485,7 +1478,7 @@ describe("exploreSubmittedApp", () => {
             ? { exitCode: 0, stderr: "", stdout: protocol }
             : { exitCode: 0, stderr: "", stdout: "" };
         },
-      },
+      }),
     });
 
     expect(requireArtifacts(result).appMap.discoveredRoutes[0]).toMatchObject({
@@ -1497,11 +1490,7 @@ describe("exploreSubmittedApp", () => {
     const result = await exploreSubmittedApp({
       baseUrl,
       preparationManifestId: "prep_001",
-      workspace: {
-        async destroy() {},
-        async execute() {
-          return { exitCode: 0, stderr: "", stdout: "" };
-        },
+      workspace: createFakeAgentHarnessWorkspace({
         async executeSubmittedCode(command) {
           if (command.includes("explore-app.mjs")) {
             return {
@@ -1514,7 +1503,7 @@ describe("exploreSubmittedApp", () => {
             ? { exitCode: 1, stderr: "cat: no such file", stdout: "" }
             : { exitCode: 0, stderr: "", stdout: "" };
         },
-      },
+      }),
     });
 
     expect(result.kind).toBe("repairable-failure");
@@ -1681,11 +1670,7 @@ describe("exploreSubmittedApp", () => {
     const result = await exploreSubmittedApp({
       baseUrl,
       preparationManifestId: "prep_001",
-      workspace: {
-        async destroy() {},
-        async execute() {
-          return { exitCode: 0, stderr: "", stdout: "" };
-        },
+      workspace: createFakeAgentHarnessWorkspace({
         async executeSubmittedCode(_command, options) {
           timeoutMs ??= options?.timeoutMs;
           throw new AgentHarnessCommandTimeoutError(options?.timeoutMs ?? 0);
@@ -1698,7 +1683,7 @@ describe("exploreSubmittedApp", () => {
             stdout: "",
           };
         },
-      },
+      }),
     });
 
     expect(timeoutMs).toBe(7 * 60_000);
@@ -1716,18 +1701,14 @@ describe("exploreSubmittedApp", () => {
     const exploration = exploreSubmittedApp({
       baseUrl,
       preparationManifestId: "prep_001",
-      workspace: {
-        async destroy() {},
-        async execute() {
-          return { exitCode: 0, stderr: "", stdout: "" };
-        },
+      workspace: createFakeAgentHarnessWorkspace({
         async executeSubmittedCode() {
           throw new AgentHarnessCommandTimeoutError(5 * 60_000);
         },
         async readSubmittedCodeAppStatus() {
           throw new Error("Daytona status unavailable");
         },
-      },
+      }),
     });
 
     await expect(exploration).rejects.toBeInstanceOf(
@@ -1770,11 +1751,7 @@ async function exploreObservation(input: {
     ...(input.requestedFeatures === undefined
       ? {}
       : { requestedFeatures: input.requestedFeatures }),
-    workspace: {
-      async destroy() {},
-      async execute() {
-        return { exitCode: 0, stderr: "", stdout: "" };
-      },
+    workspace: createFakeAgentHarnessWorkspace({
       async executeSubmittedCode(command) {
         commands.push(command);
         if (command === sandboxCapacityProbeCommand) {
@@ -1801,7 +1778,7 @@ async function exploreObservation(input: {
         : {
             readSubmittedCodeAppStatus: input.readSubmittedCodeAppStatus,
           }),
-    },
+    }),
   });
   return { commands, result };
 }

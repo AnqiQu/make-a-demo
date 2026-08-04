@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { externalResourceManifestVersion } from "../../shared/external-resources/external-resource-manifest.schema";
 import { uploadSubmittedCodeExternalResourceCache } from "./submitted-code-external-resource-cache";
-import type { AgentHarnessWorkspace } from "./workspace.interface";
+import { createFakeAgentHarnessWorkspace } from "./workspace.test-helpers";
 
 const execFileAsync = promisify(execFile);
 
@@ -20,17 +20,12 @@ describe("uploadSubmittedCodeExternalResourceCache", () => {
     await mkdir(join(directory, "resources"), { recursive: true });
     await writeFile(join(directory, relativePath), body);
     const commands: string[] = [];
-    const workspace: AgentHarnessWorkspace = {
-      async destroy() {},
-      async execute() {
-        return { exitCode: 0, stderr: "", stdout: "" };
-      },
+    const workspace = createFakeAgentHarnessWorkspace({
       async executeSubmittedCode(command) {
         commands.push(command);
         return { exitCode: 0, stderr: "", stdout: "" };
       },
-      async uploadSubmittedCodeFiles() {},
-    };
+    });
 
     try {
       await uploadSubmittedCodeExternalResourceCache({
@@ -72,14 +67,7 @@ describe("uploadSubmittedCodeExternalResourceCache", () => {
     ]);
     const uploadedDestinations: string[] = [];
     let uploadedArchiveEntries: string[] = [];
-    const workspace: AgentHarnessWorkspace = {
-      async destroy() {},
-      async execute() {
-        return { exitCode: 0, stderr: "", stdout: "" };
-      },
-      async executeSubmittedCode() {
-        return { exitCode: 0, stderr: "", stdout: "" };
-      },
+    const workspace = createFakeAgentHarnessWorkspace({
       async uploadSubmittedCodeFiles(files) {
         uploadedDestinations.push(...files.map((file) => file.destinationPath));
         const archive = files.length === 1 ? files[0] : undefined;
@@ -91,7 +79,7 @@ describe("uploadSubmittedCodeExternalResourceCache", () => {
           uploadedArchiveEntries = stdout.trim().split("\n");
         }
       },
-    };
+    });
     const oldEntry = {
       contentType: "image/svg+xml",
       headers: {},

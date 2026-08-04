@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentHarnessWorkspaceHandle } from "../daytona/workspace.interface";
+import { createFakeAgentHarnessWorkspace } from "../daytona/workspace.test-helpers";
 import { DEMO_SCRIPT_OUTPUT_PATH } from "../schemas/artifacts";
 import {
   type DefaultDemoPipelineOptions,
@@ -101,7 +102,7 @@ describe("runDefaultDemoPipeline", () => {
         calls.push("workspace.destroy");
       },
       id: "workspace-1",
-      workspace: {
+      workspace: createFakeAgentHarnessWorkspace({
         async collectSandboxLogs() {
           calls.push("workspace.collectLogs");
           return [
@@ -109,13 +110,7 @@ describe("runDefaultDemoPipeline", () => {
             '{"event":"repo-preparation.failed"}',
           ];
         },
-        async destroy() {
-          return undefined;
-        },
-        async execute() {
-          return { exitCode: 0, stderr: "", stdout: "" };
-        },
-      },
+      }),
     };
 
     const result = await runDefaultDemoPipeline(
@@ -449,12 +444,11 @@ describe("runDefaultDemoPipeline", () => {
     const workspaceHandle = {
       async destroy() {},
       id: "workspace-synthetic",
-      workspace: {
-        async destroy() {},
+      workspace: createFakeAgentHarnessWorkspace({
         async execute() {
           throw new Error("synthetic-only capture must not execute Playwright");
         },
-      },
+      }),
     };
 
     const result = await runDefaultDemoPipeline(
@@ -480,12 +474,7 @@ describe("runDefaultDemoPipeline", () => {
         throw new Error("cleanup failed");
       },
       id: "workspace-cleanup",
-      workspace: {
-        async destroy() {},
-        async execute() {
-          return { exitCode: 0, stderr: "", stdout: "" };
-        },
-      },
+      workspace: createFakeAgentHarnessWorkspace(),
     };
 
     const result = await runDefaultDemoPipeline(
@@ -511,12 +500,7 @@ describe("runDefaultDemoPipeline", () => {
         throw new Error("cleanup failed");
       },
       id: "workspace-1",
-      workspace: {
-        async destroy() {},
-        async execute() {
-          return { exitCode: 0, stderr: "", stdout: "" };
-        },
-      },
+      workspace: createFakeAgentHarnessWorkspace(),
     };
 
     let caught: unknown;

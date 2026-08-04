@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentHarnessWorkspaceExecuteOptions } from "../daytona/workspace.interface";
+import { createFakeAgentHarnessWorkspace } from "../daytona/workspace.test-helpers";
 import { DefaultOpenCodeHarnessRunner } from "./default-opencode-harness-runner";
 import {
   type OpenCodeHarnessRunInput,
@@ -48,14 +49,7 @@ describe("OpenCode harness seam", () => {
         stage: "repo-preparation",
         timeoutMs: 1000,
         workingDirectory: "/workspace",
-        workspace: {
-          async destroy() {
-            return undefined;
-          },
-          async execute() {
-            return { exitCode: 0, stderr: "", stdout: "" };
-          },
-        },
+        workspace: createFakeAgentHarnessWorkspace(),
       }),
     ).resolves.toMatchObject({
       sessionId: "session_new",
@@ -75,10 +69,7 @@ describe("OpenCode harness seam", () => {
         stage: "repo-preparation",
         timeoutMs: 1000,
         workingDirectory: "/workspace/repo",
-        workspace: {
-          async destroy() {
-            return undefined;
-          },
+        workspace: createFakeAgentHarnessWorkspace({
           async execute(command, options) {
             if (!command.startsWith("mkdir -p '/tmp/makeademo/opencode' && ")) {
               return {
@@ -95,7 +86,7 @@ describe("OpenCode harness seam", () => {
               stdout: options?.env?.OPENCODE_CONFIG_DIR ?? "",
             };
           },
-        },
+        }),
       }),
     ).resolves.toMatchObject({
       exitCode: 0,
@@ -122,15 +113,14 @@ describe("OpenCode harness seam", () => {
       stage: "repo-preparation",
       timeoutMs: 1_234,
       workingDirectory: "/workspace/repo",
-      workspace: {
-        async destroy() {},
+      workspace: createFakeAgentHarnessWorkspace({
         async execute(_command, options) {
           executeOptions = options;
           options?.onStdout?.("progress\n");
           options?.onStderr?.("warning\n");
           return { exitCode: 0, stderr: "", stdout: "progress\n" };
         },
-      },
+      }),
     };
 
     await runner.run(input);
@@ -153,10 +143,7 @@ describe("OpenCode harness seam", () => {
         stage: "repo-preparation",
         timeoutMs: 1000,
         workingDirectory: "/workspace/repo",
-        workspace: {
-          async destroy() {
-            return undefined;
-          },
+        workspace: createFakeAgentHarnessWorkspace({
           async execute(command) {
             if (command.includes(" --session ")) {
               return {
@@ -172,7 +159,7 @@ describe("OpenCode harness seam", () => {
               stdout: `${JSON.stringify({ sessionID: "ses_repo_prepare" })}\n`,
             };
           },
-        },
+        }),
       }),
     ).resolves.toMatchObject({
       exitCode: 0,
@@ -193,14 +180,13 @@ describe("OpenCode harness seam", () => {
       stage: "script-writing",
       timeoutMs: 1000,
       workingDirectory: "/workspace/repo",
-      workspace: {
-        async destroy() {},
+      workspace: createFakeAgentHarnessWorkspace({
         async execute(receivedCommand, options) {
           command = receivedCommand;
           environment = options?.env ?? {};
           return { exitCode: 0, stderr: "", stdout: "" };
         },
-      },
+      }),
     });
 
     const config = JSON.parse(environment.OPENCODE_CONFIG_CONTENT ?? "{}") as {
@@ -235,13 +221,12 @@ describe("OpenCode harness seam", () => {
       stage: "repo-preparation",
       timeoutMs: 1000,
       workingDirectory: "/workspace/repo",
-      workspace: {
-        async destroy() {},
+      workspace: createFakeAgentHarnessWorkspace({
         async execute(_command, options) {
           configContent = options?.env?.OPENCODE_CONFIG_CONTENT ?? "{}";
           return { exitCode: 0, stderr: "", stdout: "" };
         },
-      },
+      }),
     });
 
     const config = JSON.parse(configContent) as {
@@ -279,13 +264,12 @@ describe("OpenCode harness seam", () => {
       stage: "flow-planning",
       timeoutMs: 1000,
       workingDirectory: "/workspace/repo",
-      workspace: {
-        async destroy() {},
+      workspace: createFakeAgentHarnessWorkspace({
         async execute(_command, options) {
           configContent = options?.env?.OPENCODE_CONFIG_CONTENT ?? "{}";
           return { exitCode: 0, stderr: "", stdout: "" };
         },
-      },
+      }),
     });
 
     const config = JSON.parse(configContent) as {
@@ -341,13 +325,12 @@ describe("OpenCode harness seam", () => {
         stage: testCase.stage,
         timeoutMs: 1000,
         workingDirectory: "/workspace/repo",
-        workspace: {
-          async destroy() {},
+        workspace: createFakeAgentHarnessWorkspace({
           async execute(_command, options) {
             configContent = options?.env?.OPENCODE_CONFIG_CONTENT ?? "{}";
             return { exitCode: 0, stderr: "", stdout: "" };
           },
-        },
+        }),
       });
       const config = JSON.parse(configContent) as {
         permission: { edit: Record<string, string> };

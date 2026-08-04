@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { uploadSubmittedCodeArchive } from "./submitted-code-artifact-archive";
+import { createFakeAgentHarnessWorkspace } from "./workspace.test-helpers";
 
 describe("submitted-code artifact archives", () => {
   it("rejects archive entries that escape the declared directory", async () => {
@@ -17,18 +18,11 @@ describe("submitted-code artifact archives", () => {
         entries: ["../secret.txt"],
         localDirectory,
         remoteDirectory: "/workspace/.makeademo/capture",
-        workspace: {
-          async destroy() {},
-          async execute() {
-            return { exitCode: 0, stderr: "", stdout: "" };
-          },
-          async executeSubmittedCode() {
-            return { exitCode: 0, stderr: "", stdout: "" };
-          },
+        workspace: createFakeAgentHarnessWorkspace({
           async uploadSubmittedCodeFiles() {
             uploadCalled = true;
           },
-        },
+        }),
       }),
     ).rejects.toThrow("Unsafe submitted-code archive entry: ../secret.txt");
 
@@ -50,11 +44,7 @@ describe("submitted-code artifact archives", () => {
           entries: ["input.txt"],
           localDirectory,
           remoteDirectory: "/workspace/.makeademo/capture",
-          workspace: {
-            async destroy() {},
-            async execute() {
-              return { exitCode: 0, stderr: "", stdout: "" };
-            },
+          workspace: createFakeAgentHarnessWorkspace({
             async executeSubmittedCode(command) {
               submittedCommands.push(command);
               return { exitCode: 0, stderr: "", stdout: "" };
@@ -62,7 +52,7 @@ describe("submitted-code artifact archives", () => {
             async uploadSubmittedCodeFiles() {
               throw failure;
             },
-          },
+          }),
         }),
       ).rejects.toBe(failure);
 

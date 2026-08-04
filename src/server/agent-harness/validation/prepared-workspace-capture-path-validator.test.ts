@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentHarnessWorkspaceHandle } from "../daytona/workspace.interface";
+import { createFakeAgentHarnessWorkspace } from "../daytona/workspace.test-helpers";
 import { validatePreparedWorkspaceCapturePath } from "./prepared-workspace-capture-path-validator";
 
 describe("validatePreparedWorkspaceCapturePath", () => {
@@ -20,11 +21,7 @@ describe("validatePreparedWorkspaceCapturePath", () => {
     const workspace: AgentHarnessWorkspaceHandle = {
       async destroy() {},
       id: "agent_sandbox",
-      workspace: {
-        async destroy() {},
-        async execute() {
-          return { exitCode: 0, stderr: "", stdout: "" };
-        },
+      workspace: createFakeAgentHarnessWorkspace({
         async executeSubmittedCode(command, options) {
           submittedCommands.push({
             command,
@@ -62,7 +59,7 @@ describe("validatePreparedWorkspaceCapturePath", () => {
             validationEvents.push(entry.event);
           }
         },
-      },
+      }),
     };
 
     const result = await validatePreparedWorkspaceCapturePath({
@@ -120,11 +117,7 @@ describe("validatePreparedWorkspaceCapturePath", () => {
     const workspace: AgentHarnessWorkspaceHandle = {
       async destroy() {},
       id: "agent_sandbox",
-      workspace: {
-        async destroy() {},
-        async execute() {
-          return { exitCode: 0, stderr: "", stdout: "" };
-        },
+      workspace: createFakeAgentHarnessWorkspace({
         async executeSubmittedCode(command) {
           if (command.includes("bun ")) {
             return {
@@ -140,8 +133,7 @@ describe("validatePreparedWorkspaceCapturePath", () => {
           }
           return { exitCode: 0, stderr: "", stdout: "" };
         },
-        async uploadSubmittedCodeFiles() {},
-      },
+      }),
     };
 
     const result = await validatePreparedWorkspaceCapturePath({
@@ -172,11 +164,7 @@ describe("validatePreparedWorkspaceCapturePath", () => {
     const workspace: AgentHarnessWorkspaceHandle = {
       async destroy() {},
       id: "agent_sandbox",
-      workspace: {
-        async destroy() {},
-        async execute() {
-          return { exitCode: 0, stderr: "", stdout: "" };
-        },
+      workspace: createFakeAgentHarnessWorkspace({
         async executeSubmittedCode(command) {
           if (command.includes("bun ")) {
             return {
@@ -201,13 +189,12 @@ describe("validatePreparedWorkspaceCapturePath", () => {
             files.map((file) => writeFile(file.destinationPath, "png")),
           );
         },
-        async uploadSubmittedCodeFiles() {},
         async writeSandboxLog(entry) {
           if (typeof entry.event === "string") {
             validationEvents.push(entry.event);
           }
         },
-      },
+      }),
     };
 
     const result = await validatePreparedWorkspaceCapturePath({
@@ -253,11 +240,7 @@ describe("validatePreparedWorkspaceCapturePath", () => {
     const workspace: AgentHarnessWorkspaceHandle = {
       async destroy() {},
       id: "agent_sandbox",
-      workspace: {
-        async destroy() {},
-        async execute() {
-          return { exitCode: 0, stderr: "", stdout: "" };
-        },
+      workspace: createFakeAgentHarnessWorkspace({
         async executeSubmittedCode(command) {
           if (command.includes("bun ")) {
             return {
@@ -281,8 +264,7 @@ describe("validatePreparedWorkspaceCapturePath", () => {
             files.map((file) => writeFile(file.destinationPath, "png")),
           );
         },
-        async uploadSubmittedCodeFiles() {},
-      },
+      }),
     };
 
     await validatePreparedWorkspaceCapturePath({
@@ -308,11 +290,7 @@ describe("validatePreparedWorkspaceCapturePath", () => {
     const workspace: AgentHarnessWorkspaceHandle = {
       async destroy() {},
       id: "agent_sandbox",
-      workspace: {
-        async destroy() {},
-        async execute() {
-          return { exitCode: 0, stderr: "", stdout: "" };
-        },
+      workspace: createFakeAgentHarnessWorkspace({
         async executeSubmittedCode(command) {
           if (command.includes("bun ")) {
             return {
@@ -328,8 +306,7 @@ describe("validatePreparedWorkspaceCapturePath", () => {
           }
           return { exitCode: 0, stderr: "", stdout: "" };
         },
-        async uploadSubmittedCodeFiles() {},
-      },
+      }),
     };
 
     const result = await validatePreparedWorkspaceCapturePath({
@@ -361,11 +338,7 @@ describe("validatePreparedWorkspaceCapturePath", () => {
     const workspace: AgentHarnessWorkspaceHandle = {
       async destroy() {},
       id: "agent_sandbox",
-      workspace: {
-        async destroy() {},
-        async execute() {
-          return { exitCode: 0, stderr: "", stdout: "" };
-        },
+      workspace: createFakeAgentHarnessWorkspace({
         async executeSubmittedCode(command) {
           if (command.includes("bun ")) {
             return {
@@ -376,8 +349,7 @@ describe("validatePreparedWorkspaceCapturePath", () => {
           }
           return { exitCode: 0, stderr: "", stdout: "" };
         },
-        async uploadSubmittedCodeFiles() {},
-      },
+      }),
     };
 
     const result = await validatePreparedWorkspaceCapturePath({
