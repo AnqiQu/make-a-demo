@@ -23,12 +23,6 @@ describe("captureScenesFromScript", () => {
     await writeFile(
       scriptPath,
       JSON.stringify({
-        demoPlaywrightScript: [
-          "import { scene, setup } from './makeademo-capture-sdk';",
-          "await setup(async ({ page, baseUrl }) => { await page.goto(baseUrl); });",
-          "await scene('scene-001', async ({ page }) => { await expect(page.locator('body')).toBeVisible(); });",
-          "await scene('scene-002', async ({ page }) => { await expect(page.locator('body')).toBeVisible(); });",
-        ].join("\n"),
         presentation: {
           music: { enabled: true, trackId: "clean" },
           textOverlays: [
@@ -51,14 +45,28 @@ describe("captureScenesFromScript", () => {
         },
         scenes: [
           {
-            description: "Open the app.",
+            actions: [
+              {
+                id: "shell-visible",
+                locator: { strategy: "css", value: "body" },
+                type: "assert-visible",
+              },
+            ],
             expectedVisibleOutcome: "The prepared app shell is visible.",
             id: "scene-001",
+            type: "playwright-recording",
           },
           {
-            description: "Click the main action.",
+            actions: [
+              {
+                id: "result-visible",
+                locator: { strategy: "css", value: "body" },
+                type: "assert-visible",
+              },
+            ],
             expectedVisibleOutcome: "The main action result is visible.",
             id: "scene-002",
+            type: "playwright-recording",
           },
         ],
         scriptId: "script-001",
@@ -355,6 +363,10 @@ describe("captureScenesFromScript", () => {
               stderr: "",
               stdout: [
                 '[makeademo:scene] {"elapsedMs":100,"event":"started","sceneId":"scene-001"}',
+                '[makeademo:step] {"elapsedMs":150,"event":"started","sceneId":"scene-001","stepId":"open-app"}',
+                '[makeademo:step] {"elapsedMs":250,"event":"succeeded","sceneId":"scene-001","stepId":"open-app"}',
+                '[makeademo:step] {"elapsedMs":300,"event":"started","sceneId":"scene-001","stepId":"shell-visible"}',
+                '[makeademo:step] {"elapsedMs":400,"event":"succeeded","sceneId":"scene-001","stepId":"shell-visible"}',
                 '[makeademo:scene] {"elapsedMs":900,"event":"succeeded","sceneId":"scene-001"}',
               ].join("\n"),
             };
@@ -730,11 +742,6 @@ function resetProof() {
 
 function validDemoScript() {
   return {
-    demoPlaywrightScript: [
-      "import { scene, setup } from './makeademo-capture-sdk';",
-      "await setup(async ({ page, baseUrl, expect }) => { await page.goto(baseUrl); await expect(page.locator('body')).toBeVisible(); });",
-      "await scene('scene-001', async ({ page, expect }) => { await expect(page.locator('body')).toBeVisible(); });",
-    ].join("\n"),
     format: "16:9",
     presentation: {
       music: { enabled: false as const },
@@ -743,9 +750,17 @@ function validDemoScript() {
     },
     scenes: [
       {
-        description: "Open the app.",
+        actions: [
+          { id: "open-app", path: "/", type: "goto" },
+          {
+            id: "shell-visible",
+            locator: { strategy: "css" as const, value: "body" },
+            type: "assert-visible" as const,
+          },
+        ],
         expectedVisibleOutcome: "The prepared app shell is visible.",
         id: "scene-001",
+        type: "playwright-recording" as const,
       },
     ],
     scriptId: "script-001",

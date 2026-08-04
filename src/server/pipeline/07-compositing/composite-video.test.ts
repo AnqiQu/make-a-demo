@@ -64,8 +64,6 @@ describe("compositeVideoFromScript", () => {
       },
       runId: "mixed-scenes",
       scriptPackage: {
-        demoPlaywrightScript:
-          "await scene('dashboard', async ({ page, expect }) => { await expect(page.locator('main')).toBeVisible(); });",
         format: "16:9",
         presentation: {
           textOverlays: [
@@ -95,6 +93,13 @@ describe("compositeVideoFromScript", () => {
         },
         scenes: [
           {
+            actions: [
+              {
+                id: "dashboard-visible",
+                locator: { strategy: "css", value: "main" },
+                type: "assert-visible",
+              },
+            ],
             expectedVisibleOutcome: "The dashboard is visible.",
             id: "dashboard",
             type: "playwright-recording",
@@ -196,8 +201,6 @@ describe("compositeVideoFromScript", () => {
         },
         runId: "prototype-asset",
         scriptPackage: {
-          demoPlaywrightScript:
-            "await scene('prototype', async ({ page, expect }) => { await expect(page.locator('main')).toBeVisible(); });",
           format: "16:9",
           presentation: { textOverlays: [], transitions: [] },
           scenes: [
@@ -932,7 +935,7 @@ describe("compositeVideoFromScript", () => {
             throw new Error("renderer must not run for stale captured footage");
           },
         },
-        scriptPackage: { ...acceptedScript, title: "Changed after capture" },
+        scriptPackage: { ...makeDemoScript(), title: "Changed after capture" },
       }),
     ).rejects.toThrow("capture manifest Demo Script digest does not match");
   });
@@ -1281,9 +1284,6 @@ function makeDemoScript(input: { sceneIds?: string[] } = {}): DemoScript {
   const sceneIds = input.sceneIds ?? ["scene-feed"];
 
   return {
-    demoPlaywrightScript: sceneIds
-      .map((sceneId) => `await scene('${sceneId}', async () => {});`)
-      .join("\n"),
     format: "16:9",
     presentation: {
       music: { enabled: true, trackId: "focus" },
@@ -1309,6 +1309,13 @@ function makeDemoScript(input: { sceneIds?: string[] } = {}): DemoScript {
           : [],
     },
     scenes: sceneIds.map((sceneId) => ({
+      actions: [
+        {
+          id: `${sceneId}-visible`,
+          locator: { strategy: "css" as const, value: "main" },
+          type: "assert-visible" as const,
+        },
+      ],
       expectedVisibleOutcome: `${sceneId} is visible`,
       humanReadableDescription: `Show ${sceneId}`,
       id: sceneId,

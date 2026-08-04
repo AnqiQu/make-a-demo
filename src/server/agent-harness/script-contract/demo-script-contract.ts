@@ -10,7 +10,6 @@ import {
   DEMO_SCRIPT_CONTRACT_VERSION,
   PLAYWRIGHT_RUNTIME_VERSION,
 } from "../../pipeline/06-footage-capture/capture-contract-versions";
-import { assertDemoScriptCaptureSdkContract } from "../../pipeline/06-footage-capture/capture-sdk-contract";
 import {
   type DemoScript,
   approvedFontFamilies,
@@ -432,7 +431,6 @@ export function validateDemoScriptCandidateContract(input: {
       scriptCandidate,
       trustedStaticImageAssetIds: input.trustedStaticImageAssetIds ?? [],
     });
-    assertDemoScriptCaptureSdkContract(demoScript);
     assertCaptureReadyScriptQuality(demoScript);
     if (demoScript.demoPlaywrightScript !== undefined) {
       assertUsesManifestBaseUrl(demoScript.demoPlaywrightScript);

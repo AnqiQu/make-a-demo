@@ -3875,8 +3875,10 @@ describe("createDefaultAgentHarnessDependencies", () => {
           stdout: [
             '[makeademo:validation] script started {"baseUrl":"http://127.0.0.1:3000"}',
             '[makeademo:scene] {"elapsedMs":10,"event":"started","sceneId":"scene_one"}',
+            '[makeademo:step] {"elapsedMs":11,"event":"started","sceneId":"scene_one","stepId":"reveal-visible"}',
             '[makeademo:action] {"elapsedMs":12,"event":"started","label":"expect.toBeVisible(locator(main))","sceneId":"scene_one"}',
             '[makeademo:action] {"elapsedMs":18,"event":"succeeded","label":"expect.toBeVisible(locator(main))","sceneId":"scene_one"}',
+            '[makeademo:step] {"elapsedMs":19,"event":"succeeded","sceneId":"scene_one","stepId":"reveal-visible"}',
             ...(captureRuns === 1
               ? [
                   '[makeademo:network-blocked] {"direction":"outbound","hasCredentials":false,"host":"assets.example.com","method":"GET","phase":"runtime","resourceType":"image","url":"https://assets.example.com/reveal.png"}',
@@ -4493,18 +4495,21 @@ function capturePathScriptCandidate(): ScriptCandidate {
     outputPath: "/workspace/.makeademo/demo-script.json",
     playwrightRuntimeVersion: "test",
     scriptJsonContent: {
-      demoPlaywrightScript: [
-        "import { setup, scene } from './makeademo-capture-sdk';",
-        "await setup(async ({ page, baseUrl }) => { await page.goto(baseUrl); });",
-        "await scene('scene_one', async ({ page, expect }) => { await expect(page.locator('main')).toBeVisible(); });",
-      ].join("\n"),
       format: "16:9",
       presentation: {},
       scenes: [
         {
+          actions: [
+            {
+              id: "reveal-visible",
+              locator: { strategy: "css", value: "main" },
+              type: "assert-visible",
+            },
+          ],
           expectedVisibleOutcome: "The reveal is visible.",
           humanReadableDescription: "Show the reveal.",
           id: "scene_one",
+          type: "playwright-recording",
         },
       ],
       scriptId: "script_capture_path",

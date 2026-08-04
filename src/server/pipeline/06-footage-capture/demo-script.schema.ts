@@ -161,26 +161,25 @@ export function parseDemoScript(value: unknown): DemoScript {
     version: readDemoScriptVersion(scriptRecord),
   };
 
+  // The compiled source is derived, never supplied: a Demo Script artifact
+  // that could carry its own Playwright program would bypass every typed
+  // action guarantee the compiler enforces.
   if (scriptRecord.demoPlaywrightScript !== undefined) {
-    demoScript.demoPlaywrightScript = readNonEmptyString(
-      scriptRecord,
-      "demoPlaywrightScript",
+    throw new Error(
+      "demoPlaywrightScript is not accepted: browser Scenes are compiled from typed actions",
     );
-  } else {
-    if (browserScenes.length > 0) {
-      if (browserScenes.some((scene) => scene.actions === undefined)) {
-        throw new Error(
-          "playwright-recording Scenes require actions when demoPlaywrightScript is omitted",
-        );
-      }
-      demoScript.demoPlaywrightScript = compileBrowserActionPlan({
-        scenes: browserScenes.map((scene) => ({
-          actions: scene.actions as BrowserAction[],
-          id: scene.id,
-        })),
-        ...(setupActions === undefined ? {} : { setupActions }),
-      });
+  }
+  if (browserScenes.length > 0) {
+    if (browserScenes.some((scene) => scene.actions === undefined)) {
+      throw new Error("playwright-recording Scenes require typed actions");
     }
+    demoScript.demoPlaywrightScript = compileBrowserActionPlan({
+      scenes: browserScenes.map((scene) => ({
+        actions: scene.actions as BrowserAction[],
+        id: scene.id,
+      })),
+      ...(setupActions === undefined ? {} : { setupActions }),
+    });
   }
 
   return demoScript;

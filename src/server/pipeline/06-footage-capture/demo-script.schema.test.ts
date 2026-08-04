@@ -21,6 +21,17 @@ describe("parseDemoScript", () => {
     });
   });
 
+  it("rejects a supplied demoPlaywrightScript so disk artifacts cannot carry arbitrary Playwright", () => {
+    expect(() =>
+      parseDemoScript({
+        ...validDemoScript(),
+        demoPlaywrightScript: "await page.goto('https://evil.example');",
+      }),
+    ).toThrow(
+      "demoPlaywrightScript is not accepted: browser Scenes are compiled from typed actions",
+    );
+  });
+
   it("defaults omitted presentation options to no music, overlays, or transitions", () => {
     expect(
       parseDemoScript({
@@ -36,20 +47,19 @@ describe("parseDemoScript", () => {
 
   it("accepts a Scene without a human-readable description", () => {
     const script = validDemoScript();
+    const sceneWithoutDescription = Object.fromEntries(
+      Object.entries(scene("scene_one")).filter(
+        ([key]) => key !== "humanReadableDescription",
+      ),
+    );
     expect(
       parseDemoScript({
         ...script,
-        scenes: [
-          {
-            expectedVisibleOutcome: "Main content is visible.",
-            id: "scene_one",
-          },
-        ],
+        scenes: [sceneWithoutDescription],
       }).scenes,
     ).toEqual([
       {
-        expectedVisibleOutcome: "Main content is visible.",
-        id: "scene_one",
+        ...sceneWithoutDescription,
         type: "playwright-recording",
       },
     ]);
@@ -660,16 +670,6 @@ describe("parseDemoScript", () => {
 
 function validDemoScript() {
   return {
-    demoPlaywrightScript: [
-      "import { setup, scene } from './makeademo-capture-sdk';",
-      "await setup(async ({ page, baseUrl, expect }) => {",
-      "  await page.goto(baseUrl);",
-      "  await expect(page.locator('main')).toBeVisible();",
-      "});",
-      "await scene('scene_one', async ({ page, expect }) => {",
-      "  await expect(page.locator('main')).toBeVisible();",
-      "});",
-    ].join("\n"),
     format: "16:9",
     presentation: {
       music: { enabled: true, trackId: "focus" },
@@ -693,6 +693,13 @@ function validDemoScript() {
 
 function scene(id: string) {
   return {
+    actions: [
+      {
+        id: `${id}-main-visible`,
+        locator: { strategy: "css" as const, value: "main" },
+        type: "assert-visible" as const,
+      },
+    ],
     expectedVisibleOutcome: "Main content is visible.",
     humanReadableDescription: "Show main content.",
     id,

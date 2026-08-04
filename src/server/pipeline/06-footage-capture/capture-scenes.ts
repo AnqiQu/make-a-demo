@@ -3,7 +3,6 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentHarnessWorkspaceHandle } from "../../agent-harness/daytona/workspace.interface";
 import type { ExternalResourceManifest } from "../../shared/external-resources/external-resource-manifest.schema";
-import { assertDemoScriptCaptureSdkContract } from "./capture-sdk-contract";
 import { createDemoScriptDigest } from "./demo-script-identity";
 import { type DemoScript, parseDemoScript } from "./demo-script.schema";
 import { PreparedWorkspacePlaywrightSceneRecorder } from "./playwright-scene-recorder";
@@ -71,12 +70,6 @@ export async function captureScenesFromScript(
   const browserScenes = scriptPackage.scenes.filter(
     (scene) => scene.type === "playwright-recording",
   );
-  if (browserScenes.length > 0) {
-    assertDemoScriptCaptureSdkContract({
-      ...scriptPackage,
-      scenes: browserScenes,
-    });
-  }
   const scenes: CapturedSceneManifestEntry[] = [];
 
   // On failure the run directory is deliberately retained: it holds the

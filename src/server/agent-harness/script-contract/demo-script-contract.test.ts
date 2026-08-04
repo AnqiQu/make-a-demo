@@ -693,7 +693,7 @@ describe("DemoScriptContract", () => {
           ...validDemoScript(),
           demoPlaywrightScript: "await page.goto(baseUrl);",
         }),
-        "demoPlaywrightScript is backend-generated",
+        "demoPlaywrightScript is not accepted: browser Scenes are compiled from typed actions",
       ],
       [
         "external URL",
