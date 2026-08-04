@@ -198,7 +198,10 @@ function assertKnownSourcePaths(
   }
 }
 
-function countNormalizedFeatures(features: string[]): Map<string, number> {
+/** Counts maker-requested features by their normalized comparison key. */
+export function countNormalizedFeatures(
+  features: string[],
+): Map<string, number> {
   const counts = new Map<string, number>();
   for (const feature of features) {
     const normalized = normalizeFeature(feature);
@@ -207,11 +210,17 @@ function countNormalizedFeatures(features: string[]): Map<string, number> {
   return counts;
 }
 
-function normalizeFeature(feature: string): string {
+/**
+ * Normalizes one requested-feature string for equality checks: trimmed,
+ * whitespace-collapsed, lowercased. Every feature-coverage comparison in the
+ * pipeline must use this key so the same submitted text always matches.
+ */
+export function normalizeFeature(feature: string): string {
   return feature.trim().replaceAll(/\s+/g, " ").toLowerCase();
 }
 
-function readFeatureCountDifference(
+/** Lists features counted more times on the left than the right, repeated per missing count. */
+export function readFeatureCountDifference(
   left: Map<string, number>,
   right: Map<string, number>,
 ): string[] {

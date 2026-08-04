@@ -60,7 +60,12 @@ import type {
   AgentHarnessPipelineInput,
 } from "../orchestration/agent-harness";
 import { isDependencyRepairFailure } from "../repair/repair-router";
-import { assertPreparedFeatureInventory } from "../repo-preparation/prepared-feature-inventory";
+import {
+  assertPreparedFeatureInventory,
+  countNormalizedFeatures,
+  normalizeFeature,
+  readFeatureCountDifference,
+} from "../repo-preparation/prepared-feature-inventory";
 import { synthesizeRunPlan } from "../run-planner/run-plan-synthesis";
 import {
   findRuntimeConfigurationIssue,
@@ -2851,31 +2856,6 @@ function assertExactRequestedFeatureCoverage(
         : [`Unexpected: ${unexpected.join(", ")}.`]),
     ].join(" "),
   );
-}
-
-function countNormalizedFeatures(features: string[]): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const feature of features) {
-    const normalized = normalizeFeature(feature);
-    counts.set(normalized, (counts.get(normalized) ?? 0) + 1);
-  }
-  return counts;
-}
-
-function normalizeFeature(feature: string): string {
-  return feature.trim().replaceAll(/\s+/g, " ").toLowerCase();
-}
-
-function readFeatureCountDifference(
-  left: Map<string, number>,
-  right: Map<string, number>,
-): string[] {
-  const difference: string[] = [];
-  for (const [feature, leftCount] of left) {
-    const missingCount = Math.max(0, leftCount - (right.get(feature) ?? 0));
-    difference.push(...Array.from({ length: missingCount }, () => feature));
-  }
-  return difference;
 }
 
 function wait(delayMs: number): Promise<void> {
