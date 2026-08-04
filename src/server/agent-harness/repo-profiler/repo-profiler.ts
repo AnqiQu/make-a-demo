@@ -108,14 +108,15 @@ export function profileRepo(input: RepoProfileInput): RepoProfile {
     {},
     ...packages.map((entry) => entry.dependencies),
   );
+  const filesByOwningPackage = bucketFilesByOwningPackage(files, packages);
   const workspacePackages = readWorkspacePackages(
-    files,
+    filesByOwningPackage,
     packages,
     lockfiles,
     workspacePatterns,
   );
   const browserRuntimeCandidates = readBrowserRuntimeCandidates(
-    files,
+    filesByOwningPackage,
     packages,
     workspacePackages,
     packageManager,
@@ -205,7 +206,7 @@ export function profileRepo(input: RepoProfileInput): RepoProfile {
 }
 
 function readBrowserRuntimeCandidates(
-  files: RepoProfileFile[],
+  filesByOwningPackage: Map<string, RepoProfileFile[]>,
   packages: PackageRecord[],
   workspacePackages: NonNullable<RepoProfile["workspacePackages"]>,
   rootPackageManager: PackageManager,
@@ -230,12 +231,13 @@ function readBrowserRuntimeCandidates(
       packageRecord.dir === "."
         ? "package.json"
         : `${packageRecord.dir}/package.json`;
-    const browserEvidencePaths = files
+    const browserEvidencePaths = (
+      filesByOwningPackage.get(packageRecord.dir) ?? []
+    )
       .map(({ path }) => path)
       .filter(
         (path) =>
           path !== packagePath &&
-          isOwnedByPackage(path, packageRecord.dir, packages) &&
           (isBrowserRuntimeEvidencePath(path) ||
             isStrongCustomBrowserEvidencePath(path)),
       )
@@ -342,25 +344,33 @@ function detectBrowserFrameworks(packageRecord: PackageRecord): string[] {
   return [...frameworks];
 }
 
-function isOwnedByPackage(
-  path: string,
-  directory: string,
+/**
+ * Buckets every file under its nearest owning package directory in one pass,
+ * so per-candidate evidence collection indexes instead of rescanning — the
+ * whole profile stays linear in the file count.
+ */
+function bucketFilesByOwningPackage(
+  files: RepoProfileFile[],
   packages: PackageRecord[],
-): boolean {
-  if (
-    directory !== "." &&
-    path !== directory &&
-    !path.startsWith(`${directory}/`)
-  ) {
-    return false;
-  }
-  return !packages.some(
-    ({ dir }) =>
-      dir !== "." &&
-      dir !== directory &&
-      (directory === "." || dir.startsWith(`${directory}/`)) &&
-      (path === dir || path.startsWith(`${dir}/`)),
+): Map<string, RepoProfileFile[]> {
+  const buckets = new Map<string, RepoProfileFile[]>(
+    packages.map(({ dir }) => [dir, []]),
   );
+  for (const file of files) {
+    let directory = file.path;
+    let owner = buckets.has(".") ? "." : undefined;
+    while (directory.includes("/")) {
+      directory = directory.slice(0, directory.lastIndexOf("/"));
+      if (buckets.has(directory)) {
+        owner = directory;
+        break;
+      }
+    }
+    if (owner !== undefined) {
+      buckets.get(owner)?.push(file);
+    }
+  }
+  return buckets;
 }
 
 function isBrowserRuntimeEvidencePath(path: string): boolean {
@@ -385,7 +395,7 @@ function isStrongCustomBrowserEvidencePath(path: string): boolean {
 }
 
 function readWorkspacePackages(
-  files: RepoProfileFile[],
+  filesByOwningPackage: Map<string, RepoProfileFile[]>,
   packages: PackageRecord[],
   lockfiles: string[],
   workspacePatterns: string[],
@@ -426,12 +436,11 @@ function readWorkspacePackages(
       .filter((name): name is string => name !== undefined),
   );
   return nestedPackages.map(({ declaredDependencies, ...workspacePackage }) => {
-    const observedDependencies = files
+    const observedDependencies = (
+      filesByOwningPackage.get(workspacePackage.dir) ?? []
+    )
       .filter(
-        ({ path, text }) =>
-          text !== undefined &&
-          path.startsWith(`${workspacePackage.dir}/`) &&
-          isSourceModulePath(path),
+        ({ path, text }) => text !== undefined && isSourceModulePath(path),
       )
       .flatMap(({ text }) => readModuleSpecifiers(text ?? ""));
     const workspaceDependencies = [

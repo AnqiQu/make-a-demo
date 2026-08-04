@@ -330,6 +330,42 @@ describe("profileRepo", () => {
     ]);
   });
 
+  it("profiles a 70k-file monorepo in linear time", () => {
+    const files = [
+      {
+        path: "package.json",
+        text: JSON.stringify({ workspaces: ["apps/*"] }),
+      },
+      { path: "bun.lock", text: "" },
+    ];
+    for (let app = 0; app < 200; app += 1) {
+      files.push({
+        path: `apps/app-${app}/package.json`,
+        text: JSON.stringify({
+          dependencies: { vite: "5.0.0" },
+          name: `@acme/app-${app}`,
+          scripts: { dev: "vite" },
+        }),
+      });
+      for (let file = 0; file < 349; file += 1) {
+        files.push({
+          path: `apps/app-${app}/src/components/component-${file}.tsx`,
+          text: "export {};",
+        });
+      }
+    }
+
+    const startedAt = performance.now();
+    const profile = profileRepo({
+      files,
+      repoUrl: "https://github.com/example/huge-monorepo",
+    });
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(profile.browserRuntimeCandidates).toHaveLength(200);
+    expect(elapsedMs).toBeLessThan(1000);
+  }, 120_000);
+
   it("retains quarantined environment key names without retaining their values", () => {
     const profile = profileRepo({
       files: [
