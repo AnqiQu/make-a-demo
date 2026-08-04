@@ -1751,6 +1751,55 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(stages).toEqual(["repo-preparation", "repo-preparation-repair"]);
   });
 
+  it("keeps a readable-but-invalid manifest repairable despite a stray denial line", async () => {
+    const workspace = schemaRepairableRepoPreparationWorkspace();
+    const stages: string[] = [];
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(input) {
+          stages.push(input.stage);
+          if (input.stage === "repo-preparation") {
+            return {
+              exitCode: 0,
+              sessionId: "session_prepare",
+              stderr: "",
+              stdout: [
+                "Wrote a malformed preparation manifest.",
+                "An earlier edit to /workspace/.makeademo/preparation-manifest.json was blocked by a permission rule, so I rewrote it.",
+              ].join("\n"),
+            };
+          }
+
+          workspace.writeValidPreparationManifest();
+          return {
+            exitCode: 0,
+            sessionId: "session_prepare",
+            stderr: "",
+            stdout: "Rewrote preparation-manifest.json.",
+          };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.prepareRepo({
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        normalizedSupportingDocuments: undefined,
+        repoProfile: repoProfile(),
+        repoSourcePaths: ["package.json", "src/App.tsx"],
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).resolves.toMatchObject({
+      manifest: { blockedExternalServicesReplaced: [], id: "prep_001" },
+    });
+
+    expect(stages).toEqual(["repo-preparation", "repo-preparation-repair"]);
+  });
+
   it("repairs preparation context that omits a requested feature", async () => {
     const completeManifest: PreparationManifest = {
       ...preparationManifest(),

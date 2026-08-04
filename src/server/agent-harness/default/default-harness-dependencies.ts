@@ -975,12 +975,14 @@ export async function createDefaultAgentHarnessDependencies(
           };
         }
         readError = formatPreparationManifestReadError(persistedManifestResult);
-        throwIfRequiredArtifactWriteWasDenied({
-          artifactError: readError,
-          path: artifactPaths.preparationManifest,
-          result,
-          stage: "Repo Preparation",
-        });
+        if (persistedManifestResult.failureClassification === "missing") {
+          throwIfRequiredArtifactWriteWasDenied({
+            artifactError: readError,
+            path: artifactPaths.preparationManifest,
+            result,
+            stage: "Repo Preparation",
+          });
+        }
         if (attempt === retryPolicy.agentArtifactAttempts) {
           throw attachOpenCodeSession(
             new Error(
@@ -1144,12 +1146,14 @@ export async function createDefaultAgentHarnessDependencies(
           };
         }
         artifactError = manifestResult.error;
-        throwIfRequiredArtifactWriteWasDenied({
-          artifactError,
-          path: artifactPaths.preparationManifest,
-          result,
-          stage: "Repo Preparation Repair",
-        });
+        if (manifestResult.failureClassification === "missing") {
+          throwIfRequiredArtifactWriteWasDenied({
+            artifactError,
+            path: artifactPaths.preparationManifest,
+            result,
+            stage: "Repo Preparation Repair",
+          });
+        }
         if (attempt === retryPolicy.agentArtifactAttempts) {
           throw new Error(
             formatOpenCodeArtifactContractError({
