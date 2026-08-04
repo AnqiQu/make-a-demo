@@ -363,7 +363,9 @@ describe("profileRepo", () => {
     const elapsedMs = performance.now() - startedAt;
 
     expect(profile.browserRuntimeCandidates).toHaveLength(200);
-    expect(elapsedMs).toBeLessThan(1000);
+    // Solo this profiles in well under 1s; the bound carries headroom for
+    // parallel-suite load while still failing the old quadratic (2.2s solo).
+    expect(elapsedMs).toBeLessThan(2000);
   }, 120_000);
 
   it("retains quarantined environment key names without retaining their values", () => {
