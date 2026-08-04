@@ -156,6 +156,84 @@ describe("profileRepo", () => {
     ).toBe("yarn");
   });
 
+  it("detects a monorepo from zero-indent pnpm workspace YAML", () => {
+    const profile = profileRepo({
+      files: [
+        { path: "package.json", text: JSON.stringify({ name: "root" }) },
+        { path: "pnpm-lock.yaml", text: "" },
+        { path: "pnpm-workspace.yaml", text: 'packages:\n- "apps/*"\n' },
+        {
+          path: "apps/web/package.json",
+          text: JSON.stringify({ name: "web", scripts: { dev: "vite" } }),
+        },
+        { path: "apps/web/src/main.tsx", text: "export {};" },
+      ],
+      repoUrl: "https://github.com/example/zero-indent",
+    });
+
+    expect(profile.workspaces).toEqual({
+      isMonorepo: true,
+      packageDirectories: ["apps/*"],
+    });
+    expect(
+      profile.workspacePackages?.find(({ dir }) => dir === "apps/web")
+        ?.isWorkspace,
+    ).toBe(true);
+  });
+
+  it("matches workspace members through brace globs", () => {
+    const profile = profileRepo({
+      files: [
+        {
+          path: "package.json",
+          text: JSON.stringify({ workspaces: ["apps/{web,admin}"] }),
+        },
+        { path: "bun.lock", text: "" },
+        {
+          path: "apps/web/package.json",
+          text: JSON.stringify({ name: "web", scripts: { dev: "vite" } }),
+        },
+        { path: "apps/web/src/main.tsx", text: "export {};" },
+        {
+          path: "apps/docs/package.json",
+          text: JSON.stringify({ name: "docs", scripts: { dev: "vite" } }),
+        },
+        { path: "apps/docs/src/main.tsx", text: "export {};" },
+      ],
+      repoUrl: "https://github.com/example/brace-globs",
+    });
+
+    const byDir = new Map(
+      (profile.workspacePackages ?? []).map((entry) => [entry.dir, entry]),
+    );
+    expect(byDir.get("apps/web")?.isWorkspace).toBe(true);
+    expect(byDir.get("apps/docs")?.isWorkspace).toBe(false);
+  });
+
+  it("detects a monorepo from lerna.json packages", () => {
+    const profile = profileRepo({
+      files: [
+        { path: "package.json", text: JSON.stringify({ name: "root" }) },
+        { path: "package-lock.json", text: "{}" },
+        {
+          path: "lerna.json",
+          text: JSON.stringify({ packages: ["packages/*"] }),
+        },
+        {
+          path: "packages/web/package.json",
+          text: JSON.stringify({ name: "web", scripts: { dev: "vite" } }),
+        },
+        { path: "packages/web/src/main.tsx", text: "export {};" },
+      ],
+      repoUrl: "https://github.com/example/lerna",
+    });
+
+    expect(profile.workspaces).toEqual({
+      isMonorepo: true,
+      packageDirectories: ["packages/*"],
+    });
+  });
+
   it("retains quarantined environment key names without retaining their values", () => {
     const profile = profileRepo({
       files: [

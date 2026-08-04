@@ -86,6 +86,7 @@ export function profileRepo(input: RepoProfileInput): RepoProfile {
   const workspacePatterns = [
     ...readWorkspacePatterns(rootPackage?.json.workspaces),
     ...readPnpmWorkspacePatterns(files),
+    ...readLernaWorkspacePatterns(files),
   ].filter((pattern, index, patterns) => patterns.indexOf(pattern) === index);
   const lockfiles = [...paths]
     .filter((path) => lockfileManager(path) !== undefined)
@@ -578,17 +579,27 @@ function readPnpmWorkspacePatterns(files: RepoProfileFile[]): string[] {
   const text = files.find(({ path }) => path === "pnpm-workspace.yaml")?.text;
   if (text === undefined) return [];
   const packagesBlock =
-    /(?:^|\n)packages\s*:\s*\n((?:[ \t]+-[^\n]*(?:\n|$))+)/.exec(text)?.[1];
+    /(?:^|\n)packages\s*:\s*\n((?:[ \t]*-[^\n]*(?:\n|$))+)/.exec(text)?.[1];
   if (packagesBlock === undefined) return [];
   return [
     ...packagesBlock.matchAll(
-      /^[ \t]+-[ \t]+["']?([^"'\n#]+?)["']?[ \t]*(?:#.*)?$/gm,
+      /^[ \t]*-[ \t]+["']?([^"'\n#]+?)["']?[ \t]*(?:#.*)?$/gm,
     ),
   ]
     .map((match) => match[1]?.trim())
     .filter((pattern): pattern is string =>
       pattern === undefined ? false : pattern.length > 0,
     );
+}
+
+function readLernaWorkspacePatterns(files: RepoProfileFile[]): string[] {
+  const json = readJsonObject(
+    files.find(({ path }) => path === "lerna.json")?.text,
+  );
+  const packages = json?.packages;
+  return Array.isArray(packages)
+    ? packages.filter((entry): entry is string => typeof entry === "string")
+    : [];
 }
 
 function matchesWorkspacePatterns(dir: string, patterns: string[]): boolean {
@@ -605,11 +616,15 @@ function matchesWorkspacePatterns(dir: string, patterns: string[]): boolean {
 }
 
 function globMatches(pattern: string, value: string): boolean {
-  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  const escaped = pattern.replace(/[.+^$()|[\]\\]/g, "\\$&");
   const expression = escaped
     .replaceAll("**", "\0")
     .replaceAll("*", "[^/]*")
-    .replaceAll("\0", ".*");
+    .replaceAll("\0", ".*")
+    .replace(
+      /\{([^{}]*)\}/g,
+      (_, body: string) => `(?:${body.split(",").join("|")})`,
+    );
   return new RegExp(`^${expression}$`).test(value);
 }
 
