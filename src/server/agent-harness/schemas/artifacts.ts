@@ -50,6 +50,11 @@ export type RepoBrowserRuntimeCandidate = RepoWorkspacePackage & {
   evidencePaths: string[];
   /** Browser frameworks declared directly by this package. */
   frameworks: string[];
+  /**
+   * Evidence that this package is a showcase or test surface rather than the
+   * product: "storybook" for story files/config, "e2e" for test-runner deps.
+   */
+  roleHints?: string[];
 };
 
 /** Durable, source-backed identity of the browser application a run must keep. */

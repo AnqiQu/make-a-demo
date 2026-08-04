@@ -220,7 +220,8 @@ function readBrowserRuntimeCandidates(
     if (
       !browserRuntimeScriptNames.some(
         (script) => packageRecord.scripts[script] !== undefined,
-      )
+      ) ||
+      isNativeMobilePackage(packageRecord)
     ) {
       return [];
     }
@@ -250,11 +251,13 @@ function readBrowserRuntimeCandidates(
     }
     const frameworks =
       detectedFrameworks.length === 0 ? ["custom-web"] : detectedFrameworks;
+    const roleHints = readRoleHints(packageRecord, browserEvidencePaths);
     return [
       {
         dir: packageRecord.dir,
         evidencePaths,
         frameworks,
+        ...(roleHints.length === 0 ? {} : { roleHints }),
         ...(workspacePackage?.installDir === undefined
           ? { installDir: packageRecord.dir }
           : { installDir: workspacePackage.installDir }),
@@ -277,6 +280,44 @@ function readBrowserRuntimeCandidates(
       },
     ];
   });
+}
+
+function readRoleHints(
+  packageRecord: PackageRecord,
+  evidencePaths: string[],
+): string[] {
+  const hints: string[] = [];
+  if (
+    packageRecord.dependencies.cypress !== undefined ||
+    packageRecord.dependencies["@playwright/test"] !== undefined
+  ) {
+    hints.push("e2e");
+  }
+  if (
+    evidencePaths.some(
+      (path) =>
+        /(?:^|\/)\.storybook\//.test(path) || /\.stories\.\w+$/.test(path),
+    ) ||
+    Object.values(packageRecord.scripts).some((script) =>
+      /\bstorybook\b/.test(script),
+    )
+  ) {
+    hints.push("storybook");
+  }
+  return hints;
+}
+
+/**
+ * A native mobile app cannot serve a browser demo. `react-native-web`
+ * re-admits it: that dependency exists precisely to render in a browser.
+ */
+function isNativeMobilePackage(packageRecord: PackageRecord): boolean {
+  const dependencies = packageRecord.dependencies;
+  return (
+    (dependencies.expo !== undefined ||
+      dependencies["react-native"] !== undefined) &&
+    dependencies["react-native-web"] === undefined
+  );
 }
 
 function detectBrowserFrameworks(packageRecord: PackageRecord): string[] {

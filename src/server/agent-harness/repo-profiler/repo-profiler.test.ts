@@ -234,6 +234,102 @@ describe("profileRepo", () => {
     });
   });
 
+  it("excludes native mobile workspaces so a lone web candidate remains", () => {
+    const profile = profileRepo({
+      files: [
+        {
+          path: "package.json",
+          text: JSON.stringify({ workspaces: ["apps/*"] }),
+        },
+        { path: "yarn.lock", text: "" },
+        {
+          path: "apps/mobile/package.json",
+          text: JSON.stringify({
+            dependencies: { expo: "51.0.0", "react-native": "0.74.0" },
+            name: "@acme/mobile",
+            scripts: { dev: "expo start" },
+          }),
+        },
+        { path: "apps/mobile/src/screens/home.tsx", text: "export {};" },
+        {
+          path: "apps/web/package.json",
+          text: JSON.stringify({
+            dependencies: { next: "15.0.0" },
+            name: "@acme/web",
+            scripts: { dev: "next dev" },
+          }),
+        },
+        { path: "apps/web/src/app/page.tsx", text: "export {};" },
+      ],
+      repoUrl: "https://github.com/example/native-and-web",
+    });
+
+    expect(profile.browserRuntimeCandidates?.map(({ dir }) => dir)).toEqual([
+      "apps/web",
+    ]);
+  });
+
+  it("keeps a react-native-web workspace as a browser candidate", () => {
+    const profile = profileRepo({
+      files: [
+        {
+          path: "package.json",
+          text: JSON.stringify({ workspaces: ["apps/*"] }),
+        },
+        { path: "yarn.lock", text: "" },
+        {
+          path: "apps/universal/package.json",
+          text: JSON.stringify({
+            dependencies: {
+              react: "18.0.0",
+              "react-native": "0.74.0",
+              "react-native-web": "0.19.0",
+            },
+            name: "@acme/universal",
+            scripts: { dev: "vite" },
+          }),
+        },
+        { path: "apps/universal/src/app.tsx", text: "export {};" },
+      ],
+      repoUrl: "https://github.com/example/universal",
+    });
+
+    expect(profile.browserRuntimeCandidates?.map(({ dir }) => dir)).toEqual([
+      "apps/universal",
+    ]);
+  });
+
+  it("flags storybook and e2e evidence as role hints on browser candidates", () => {
+    const profile = profileRepo({
+      files: [
+        {
+          path: "package.json",
+          text: JSON.stringify({ workspaces: ["apps/*"] }),
+        },
+        { path: "bun.lock", text: "" },
+        {
+          path: "apps/design/package.json",
+          text: JSON.stringify({
+            dependencies: { cypress: "13.0.0", react: "18.0.0" },
+            name: "@acme/design",
+            scripts: { dev: "storybook dev -p 6006" },
+          }),
+        },
+        { path: "apps/design/.storybook/main.ts", text: "export {};" },
+        {
+          path: "apps/design/src/button.stories.tsx",
+          text: "export {};",
+        },
+      ],
+      repoUrl: "https://github.com/example/design-system",
+    });
+
+    expect(profile.browserRuntimeCandidates?.[0]?.roleHints).toEqual([
+      "e2e",
+      "storybook",
+    ]);
+  });
+
   it("retains quarantined environment key names without retaining their values", () => {
     const profile = profileRepo({
       files: [
