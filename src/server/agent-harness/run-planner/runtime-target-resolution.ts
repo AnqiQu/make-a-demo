@@ -139,8 +139,13 @@ export function expandPreparationInstallScopeForMissingWorkspace(input: {
   const selectedWorkspaceNames = new Set(
     readSelectedWorkspaceNames(input.preparationManifest.installCommandUsed),
   );
+  const runtimeEvidence = [
+    input.failureReport.logsSummary,
+    ...input.failureReport.stderrExcerpts,
+    ...input.failureReport.stdoutExcerpts,
+  ].join("\n");
   const missingWorkspaceNames = [
-    ...input.failureReport.logsSummary.matchAll(
+    ...runtimeEvidence.matchAll(
       /(?:can't resolve|cannot find (?:module|package)|could not resolve|failed to resolve import)[^"'`\r\n]*["'`]([^"'`\r\n]+)["'`]/gi,
     ),
   ]
@@ -310,8 +315,12 @@ function readWorkspaceDependencyClosure(
     closure.push(workspacePackage);
     for (const dependency of workspacePackage.workspaceDependencies ?? []) {
       const dependencyPackage = packagesByName.get(dependency);
-      if (dependencyPackage !== undefined) {
-        queue.push(dependencyPackage);
+      // A file-linked package outside the declared workspaces resolves by
+      // path, so the root install cannot (and must not) filter for it.
+      if (dependencyPackage?.isWorkspace !== false) {
+        queue.push(
+          ...(dependencyPackage === undefined ? [] : [dependencyPackage]),
+        );
       }
     }
   }

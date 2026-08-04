@@ -178,6 +178,66 @@ describe("resolveRuntimeTarget", () => {
     );
   });
 
+  it("never filters a file-linked package the workspace root does not own", () => {
+    const target = resolveRuntimeTarget({
+      preparationManifest: manifest("apps/web/src/page.tsx"),
+      repoProfile: profile({
+        rootPackageName: "acme",
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "@acme/web",
+            ports: [],
+            scripts: { dev: "vite" },
+            workspaceDependencies: ["@acme/examples-lib"],
+          },
+          {
+            dir: "examples/lib",
+            installDir: "examples/lib",
+            isWorkspace: false,
+            name: "@acme/examples-lib",
+            ports: [],
+            scripts: {},
+          },
+        ],
+      }),
+    });
+
+    expect(target?.install.command).toBe(
+      "bun install --frozen-lockfile --filter=@acme/web --filter=acme",
+    );
+  });
+
+  it("expands scoped installation from stderr excerpts when the summary is silent", () => {
+    const expanded = expandPreparationInstallScopeForMissingWorkspace({
+      failureReport: {
+        ...validationReport(),
+        failureClassification: "start failure",
+        logsSummary: "The app exited before the base URL responded.",
+        stderrExcerpts: ["Error: Cannot find module '@acme/events'"],
+      },
+      preparationManifest: manifest("apps/web/src/page.tsx"),
+      repoProfile: profile({
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "@acme/web",
+            ports: [],
+            scripts: { dev: "vite" },
+          },
+          {
+            dir: "packages/events",
+            name: "@acme/events",
+            ports: [],
+            scripts: {},
+          },
+        ],
+      }),
+    });
+
+    expect(expanded?.installCommandUsed).toContain("--filter=@acme/events");
+  });
+
   it("uses npm workspace selection when the target is unambiguous", () => {
     const target = resolveRuntimeTarget({
       preparationManifest: manifest("apps/web/src/page.tsx"),
