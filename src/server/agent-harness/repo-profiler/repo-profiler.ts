@@ -219,7 +219,8 @@ function readBrowserRuntimeCandidates(
         (path) =>
           path !== packagePath &&
           isOwnedByPackage(path, packageRecord.dir, packages) &&
-          isBrowserRuntimeEvidencePath(path),
+          (isBrowserRuntimeEvidencePath(path) ||
+            isStrongCustomBrowserEvidencePath(path)),
       )
       .sort();
     if (browserEvidencePaths.length === 0) return [];

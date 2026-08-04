@@ -7,11 +7,27 @@ import {
   browserRuntimeScriptNames,
 } from "../schemas/artifacts";
 import { readFrameworkDefaultPort } from "./runtime-target-resolution";
+import { RuntimeTargetSelectionRequiredError } from "./runtime-target-selection";
 
 export function synthesizeRunPlan(
   repoProfile: RepoProfile,
   selectedTarget?: RuntimeTargetSelection,
 ): RunPlan {
+  if (
+    selectedTarget === undefined &&
+    repoProfile.workspaces.isMonorepo &&
+    (repoProfile.browserRuntimeCandidates?.length ?? 0) === 0
+  ) {
+    // A monorepo root is an orchestrator, not an app; running it would demo
+    // the wrong thing. Without one evidence-backed candidate, fail closed.
+    const packageDirs = repoProfile.candidateAppDirs.filter(
+      (dir) => dir !== ".",
+    );
+    throw new RuntimeTargetSelectionRequiredError(
+      "No package in this monorepo was proven to be a runnable browser application by screened evidence.",
+      packageDirs.length > 0 ? packageDirs : repoProfile.candidateAppDirs,
+    );
+  }
   const onlyCandidate =
     repoProfile.browserRuntimeCandidates?.length === 1
       ? repoProfile.browserRuntimeCandidates[0]

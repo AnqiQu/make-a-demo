@@ -49,6 +49,42 @@ describe("profileRepo", () => {
     expect(profile.confidence.overall).toBe(1);
   });
 
+  it("keeps a browser candidate whose component evidence lives outside conventional directories", () => {
+    const profile = profileRepo({
+      files: [
+        {
+          path: "package.json",
+          text: JSON.stringify({ workspaces: ["apps/*"] }),
+        },
+        { path: "bun.lock", text: "" },
+        {
+          path: "apps/web/package.json",
+          text: JSON.stringify({
+            dependencies: { next: "15.0.0" },
+            name: "@acme/web",
+            scripts: { dev: "next dev" },
+          }),
+        },
+        {
+          path: "apps/web/lib/dashboard-page.tsx",
+          text: "export const DashboardPage = () => null;",
+        },
+      ],
+      repoUrl: "https://github.com/example/unconventional-layout",
+    });
+
+    expect(profile.browserRuntimeCandidates).toMatchObject([
+      {
+        dir: "apps/web",
+        evidencePaths: [
+          "apps/web/package.json",
+          "apps/web/lib/dashboard-page.tsx",
+        ],
+        frameworks: ["next"],
+      },
+    ]);
+  });
+
   it("retains quarantined environment key names without retaining their values", () => {
     const profile = profileRepo({
       files: [

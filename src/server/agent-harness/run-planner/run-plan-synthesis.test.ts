@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { synthesizeRunPlan } from "./run-plan-synthesis";
+import { RuntimeTargetSelectionRequiredError } from "./runtime-target-selection";
 
 describe("synthesizeRunPlan", () => {
   it("selects a backend-executable local run plan from a RepoProfile", () => {
     expect(
       synthesizeRunPlan({
         authHints: ["@clerk/nextjs"],
-        candidateAppDirs: ["apps/web", "."],
+        candidateAppDirs: ["examples/web", "."],
         candidateBuildCommands: ["pnpm build"],
         candidateInstallCommands: ["pnpm install --frozen-lockfile"],
         candidatePorts: [4173],
@@ -24,11 +25,11 @@ describe("synthesizeRunPlan", () => {
         rootDir: "/workspace",
         securityWarnings: [],
         unsupportedReasons: [],
-        workspaces: { isMonorepo: true, packageDirectories: ["apps/*"] },
+        workspaces: { isMonorepo: false, packageDirectories: [] },
       }),
     ).toEqual({
       allowedPorts: [4173],
-      appDir: "apps/web",
+      appDir: "examples/web",
       assumptions: ["selected first profiled app directory"],
       buildCommand: "pnpm build",
       env: { NODE_ENV: "development" },
@@ -47,6 +48,36 @@ describe("synthesizeRunPlan", () => {
         "at least one meaningful visible route is available",
       ],
     });
+  });
+
+  it("fails closed in a monorepo when no browser application was proven", () => {
+    const run = () =>
+      synthesizeRunPlan({
+        authHints: [],
+        browserRuntimeCandidates: [],
+        candidateAppDirs: [".", "apps/api", "apps/worker"],
+        candidateBuildCommands: [],
+        candidateInstallCommands: ["pnpm install --frozen-lockfile"],
+        candidatePorts: [],
+        candidateStartCommands: [],
+        confidence: { assumptions: [], overall: 0.5 },
+        detectedFrameworks: [],
+        dockerHints: [],
+        envExamples: [],
+        externalServiceHints: [],
+        lockfiles: ["pnpm-lock.yaml"],
+        packageManager: "pnpm",
+        packageScripts: { dev: "turbo dev" },
+        repoUrl: "https://github.com/example/backend-only",
+        requiredEnvHints: [],
+        rootDir: "/workspace",
+        securityWarnings: [],
+        unsupportedReasons: [],
+        workspaces: { isMonorepo: true, packageDirectories: ["apps/*"] },
+      });
+
+    expect(run).toThrow(RuntimeTargetSelectionRequiredError);
+    expect(run).toThrow("apps/api, apps/worker");
   });
 
   it("does not build before starting a development server", () => {
