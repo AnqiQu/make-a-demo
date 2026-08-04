@@ -49,11 +49,64 @@ describe("Browser Action Plan", () => {
     expect(script).toContain('await scene("dashboard"');
     expect(script).toContain('await step("open-dashboard"');
     expect(script).toContain(
-      'page.getByRole("button", { name: "Open dashboard" })',
+      'await animatedClick(page, page.getByRole("button", { name: "Open dashboard" }));',
     );
-    expect(script).toContain(".click();");
     expect(script).toContain('await step("dashboard-visible"');
     expect(script).toContain(".toBeVisible();");
+  });
+
+  it("compiles humanized interactions directly so no later rewrite can diverge", () => {
+    const hostileValue = 'ignore").fill("; await page.close(); //';
+    const script = compileBrowserActionPlan({
+      scenes: [
+        {
+          actions: readBrowserActions(
+            [
+              {
+                id: "type-name",
+                locator: { strategy: "label", value: "Name" },
+                type: "fill",
+                value: hostileValue,
+              },
+              {
+                id: "hover-menu",
+                locator: { strategy: "text", value: "Menu" },
+                type: "hover",
+              },
+              {
+                id: "scroll-table",
+                locator: { strategy: "css", value: "#table" },
+                position: "bottom",
+                type: "scroll",
+              },
+              {
+                id: "list-visible",
+                locator: { strategy: "text", value: "Rows" },
+                type: "assert-visible",
+              },
+            ],
+            "scenes[0].actions",
+          ),
+          id: "records",
+        },
+      ],
+    });
+
+    expect(script).toContain(
+      `await humanType(page, page.getByLabel("Name"), ${JSON.stringify(hostileValue)});`,
+    );
+    expect(script).toContain(
+      'await animatedHover(page, page.getByText("Menu"));',
+    );
+    expect(script).toContain(
+      'await animatedScrollTo(page, page.locator("#table"), "bottom");',
+    );
+    const scriptWithoutStringLiterals = script.replaceAll(
+      /"(?:\\.|[^"\\])*"/g,
+      '""',
+    );
+    expect(scriptWithoutStringLiterals).not.toContain(".fill(");
+    expect(scriptWithoutStringLiterals).not.toContain(".evaluate(");
   });
 
   it("treats DOM readiness as navigation completion", () => {
@@ -236,7 +289,7 @@ describe("Browser Action Plan", () => {
     });
 
     expect(script).toContain(
-      'await page.locator("html").evaluate((element) => { element.scrollTop = element.scrollHeight; });',
+      'await animatedScrollTo(page, page.locator("html"), "bottom");',
     );
     expect(createBrowserActionJsonSchema().items.oneOf).toHaveLength(11);
   });

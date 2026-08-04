@@ -185,7 +185,7 @@ describe("parseDemoScript", () => {
       'page.getByRole("heading", { name: "Dashboard" })',
     );
     expect(parsed.demoPlaywrightScript).toContain(
-      'page.getByRole("button", { name: "Dismiss" }).click()',
+      'await animatedClick(page, page.getByRole("button", { name: "Dismiss" }));',
     );
   });
 

@@ -457,11 +457,18 @@ function compileAction(action: BrowserAction): string[] {
   }
 
   const locator = compileLocator(action.locator);
-  if (action.type === "click" || action.type === "hover") {
-    return [`await ${locator}.${action.type}();`];
+  // Humanized helpers are emitted directly so the validated artifact is the
+  // executed artifact; a later string rewrite could diverge on hostile values.
+  if (action.type === "click") {
+    return [`await animatedClick(page, ${locator});`];
+  }
+  if (action.type === "hover") {
+    return [`await animatedHover(page, ${locator});`];
   }
   if (action.type === "fill") {
-    return [`await ${locator}.fill(${JSON.stringify(action.value)});`];
+    return [
+      `await humanType(page, ${locator}, ${JSON.stringify(action.value)});`,
+    ];
   }
   if (action.type === "press") {
     return [`await ${locator}.press(${JSON.stringify(action.key)});`];
@@ -470,11 +477,9 @@ function compileAction(action: BrowserAction): string[] {
     return [`await ${locator}.selectOption(${JSON.stringify(action.value)});`];
   }
   if (action.type === "scroll") {
-    return action.position === "bottom"
-      ? [
-          `await ${locator}.evaluate((element) => { element.scrollTop = element.scrollHeight; });`,
-        ]
-      : [`await ${locator}.evaluate((element) => { element.scrollTop = 0; });`];
+    return [
+      `await animatedScrollTo(page, ${locator}, ${JSON.stringify(action.position)});`,
+    ];
   }
   if (action.type === "assert-text") {
     return [

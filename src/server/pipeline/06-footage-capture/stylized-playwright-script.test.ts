@@ -11,7 +11,7 @@ import { prepareStylizedPlaywrightScript } from "./stylized-playwright-script";
 describe("prepareStylizedPlaywrightScript", () => {
   it("keeps validation free of video and presentation holds", () => {
     const prepared = prepareStylizedPlaywrightScript(
-      "await page.getByLabel(/message/i).fill('Show me the launch plan');\nawait page.getByRole('button', { name: /send/i }).click();",
+      "await humanType(page, page.getByLabel(/message/i), 'Show me the launch plan');\nawait animatedClick(page, page.getByRole('button', { name: /send/i }));",
       {
         baseUrl: "http://localhost:3000",
         headed: false,
@@ -35,7 +35,7 @@ describe("prepareStylizedPlaywrightScript", () => {
 
   it("executes the same humanized browser actions during validation and recording", () => {
     const script =
-      "await page.getByLabel(/message/i).fill('Show me the launch plan');\nawait page.getByRole('button', { name: /send/i }).click();";
+      "await humanType(page, page.getByLabel(/message/i), 'Show me the launch plan');\nawait animatedClick(page, page.getByRole('button', { name: /send/i }));";
     const validation = prepareStylizedPlaywrightScript(script, {
       baseUrl: "http://127.0.0.1:3000",
       headed: false,
@@ -379,9 +379,9 @@ describe("prepareStylizedPlaywrightScript", () => {
     }
   }, 20_000);
 
-  it("types filled text with human pacing instead of instantly setting the input", () => {
+  it("provides the human typing helper to compiled scripts unchanged", () => {
     const prepared = prepareStylizedPlaywrightScript(
-      "await page.getByLabel(/message/i).fill('Show me the launch plan');",
+      "await humanType(page, page.getByLabel(/message/i), 'Show me the launch plan');",
       {
         baseUrl: "http://localhost:3000",
         headed: false,
@@ -390,10 +390,10 @@ describe("prepareStylizedPlaywrightScript", () => {
     );
 
     expect(prepared).toContain("const humanTypingDelayMs = 100;");
+    expect(prepared).toContain("async function humanType(page, locator, text)");
     expect(prepared).toContain(
       "await humanType(page, page.getByLabel(/message/i), 'Show me the launch plan');",
     );
-    expect(prepared).not.toContain(".fill('Show me the launch plan')");
   });
 
   it("defines Demo Script helpers in the recording wrapper", () => {
@@ -404,7 +404,7 @@ describe("prepareStylizedPlaywrightScript", () => {
         "  await expect(page.locator('body')).toBeVisible();",
         "});",
         "await scene('scene_recording', async ({ page }) => {",
-        "  await page.getByRole('button', { name: /send/i }).click();",
+        "  await animatedClick(page, page.getByRole('button', { name: /send/i }));",
         "});",
       ].join("\n"),
       {
@@ -472,9 +472,12 @@ describe("prepareStylizedPlaywrightScript", () => {
     }
   }, 20_000);
 
-  it("animates clicks through the visible recording pointer", () => {
+  it("provides the animated click and hover helpers to compiled scripts", () => {
     const prepared = prepareStylizedPlaywrightScript(
-      "await page.getByRole('button', { name: /send/i }).click();",
+      [
+        "await animatedClick(page, page.getByRole('button', { name: /send/i }));",
+        "await animatedHover(page, page.getByRole('button', { name: /launch plan chat/i }));",
+      ].join("\n"),
       {
         baseUrl: "http://localhost:3000",
         headed: false,
@@ -483,31 +486,7 @@ describe("prepareStylizedPlaywrightScript", () => {
     );
 
     expect(prepared).toContain("async function animatedClick(page, locator)");
-    expect(prepared).toContain(
-      "await animatedClick(page, page.getByRole('button', { name: /send/i }));",
-    );
-    expect(prepared).not.toContain(
-      "await page.getByRole('button', { name: /send/i }).click();",
-    );
-  });
-
-  it("animates hovers through the visible recording pointer", () => {
-    const prepared = prepareStylizedPlaywrightScript(
-      "await page.getByRole('button', { name: /launch plan chat/i }).hover();",
-      {
-        baseUrl: "http://localhost:3000",
-        headed: false,
-        videoDirectory: ".demo-capture-runs/run/playwright-videos",
-      },
-    );
-
     expect(prepared).toContain("async function animatedHover(page, locator)");
-    expect(prepared).toContain(
-      "await animatedHover(page, page.getByRole('button', { name: /launch plan chat/i }));",
-    );
-    expect(prepared).not.toContain(
-      "await page.getByRole('button', { name: /launch plan chat/i }).hover();",
-    );
 
     const hoverHelper = getFunctionSource(prepared, "animatedHover");
     expect(hoverHelper).toContain("await page.mouse.move(");
@@ -516,11 +495,13 @@ describe("prepareStylizedPlaywrightScript", () => {
     expect(hoverHelper).not.toContain("pulseRecordingPointer");
   });
 
-  it("animates scripted transcript scrolls", () => {
+  it("provides the animated scroll helper with its visible cues", () => {
     const prepared = prepareStylizedPlaywrightScript(
-      `const transcript = page.getByRole('log', { name: /conversation transcript/i });
-await transcript.evaluate((element) => { element.scrollTop = element.scrollHeight; });
-await transcript.evaluate((element) => { element.scrollTop = 0; });`,
+      [
+        "const transcript = page.getByRole('log', { name: /conversation transcript/i });",
+        'await animatedScrollTo(page, transcript, "bottom");',
+        'await animatedScrollTo(page, transcript, "top");',
+      ].join("\n"),
       {
         baseUrl: "http://localhost:3000",
         headed: false,
@@ -535,39 +516,6 @@ await transcript.evaluate((element) => { element.scrollTop = 0; });`,
     expect(prepared).toContain("async function hideScrollCue(page)");
     expect(prepared).toContain("await showScrollCue(page, box, position);");
     expect(prepared).toContain("await hideScrollCue(page);");
-    expect(prepared).toContain(
-      'await animatedScrollTo(page, transcript, "bottom");',
-    );
-    expect(prepared).toContain(
-      'await animatedScrollTo(page, transcript, "top");',
-    );
-    expect(prepared).not.toContain("element.scrollTop = element.scrollHeight");
-    expect(prepared).not.toContain("element.scrollTop = 0");
-  });
-
-  it("does not rewrite the recording helper internals when preparing full Playwright scripts", () => {
-    const prepared = prepareStylizedPlaywrightScript(
-      `import { chromium } from "@playwright/test";
-
-const browser = await chromium.launch();
-const context = await browser.newContext({
-  recordVideo: { dir: "artifacts/videos" },
-});
-const page = await context.newPage();
-await page.getByRole("button", { name: /send/i }).click();
-await context.close();
-await browser.close();`,
-      {
-        baseUrl: "http://localhost:3000",
-        headed: false,
-        videoDirectory: ".demo-capture-runs/run/playwright-videos",
-      },
-    );
-
-    expect(prepared).toContain(
-      'await animatedClick(page, page.getByRole("button", { name: /send/i }));',
-    );
-    expect(prepared).toContain("await target.click();");
   });
 });
 

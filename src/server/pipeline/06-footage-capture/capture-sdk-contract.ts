@@ -798,7 +798,7 @@ function removeUndefinedValues(value) {
 }
 
 function declarationSource() {
-  return `import type { expect as playwrightExpect, Page } from '@playwright/test';
+  return `import type { expect as playwrightExpect, Locator, Page } from '@playwright/test';
 
 export type MakeADemoSceneContext = {
   baseUrl: string;
@@ -820,6 +820,23 @@ export declare function step<Result>(
   id: string,
   callback: () => Promise<Result> | Result,
 ): Promise<Result>;
+
+// Humanized interaction helpers are provided by the capture wrapper at
+// execution time; compiled Demo Scripts reference them as globals.
+declare global {
+  function animatedClick(page: Page, locator: Locator): Promise<void>;
+  function animatedHover(page: Page, locator: Locator): Promise<void>;
+  function animatedScrollTo(
+    page: Page,
+    locator: Locator,
+    position: 'bottom' | 'top',
+  ): Promise<void>;
+  function humanType(
+    page: Page,
+    locator: Locator,
+    text: string,
+  ): Promise<void>;
+}
 `;
 }
 

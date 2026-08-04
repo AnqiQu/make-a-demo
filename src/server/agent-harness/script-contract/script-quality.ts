@@ -1,6 +1,10 @@
 import type { DemoScript } from "../../pipeline/06-footage-capture/demo-script.schema";
 
 const meaningfulInteractionPatterns = [
+  /\banimatedClick\s*\(/,
+  /\banimatedHover\s*\(/,
+  /\banimatedScrollTo\s*\(/,
+  /\bhumanType\s*\(/,
   /\.click\s*\(/,
   /\.fill\s*\(/,
   /\.press\s*\(/,
@@ -77,7 +81,7 @@ function isBodyOnlyVisibilityCheck(script: string): boolean {
     /expect\s*\(\s*page\.locator\(\s*['"]body['"]\s*\)\s*\)\.toBeVisible\s*\(\s*\)/.test(
       script,
     ) &&
-    !/\.click\s*\(|\.fill\s*\(|\.press\s*\(|\.selectOption\s*\(|locator\(\s*['"]#/.test(
+    !/\banimatedClick\s*\(|\banimatedHover\s*\(|\banimatedScrollTo\s*\(|\bhumanType\s*\(|\.click\s*\(|\.fill\s*\(|\.press\s*\(|\.selectOption\s*\(|locator\(\s*['"]#/.test(
       script.replace(
         /expect\s*\(\s*page\.locator\(\s*['"]body['"]\s*\)\s*\)\.toBeVisible\s*\(\s*\)/g,
         "",

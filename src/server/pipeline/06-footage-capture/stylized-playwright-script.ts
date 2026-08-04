@@ -21,34 +21,10 @@ export function prepareStylizedPlaywrightScript(
   input: PrepareStylizedPlaywrightScriptInput,
 ) {
   const demoScript = removeCaptureSdkImportsFromBody(script);
-  const stylizedDemoScript = stylizeBrowserActions(demoScript);
   if ((input.mode ?? "recording") === "validation") {
-    return prepareValidationPlaywrightScript(stylizedDemoScript, input);
+    return prepareValidationPlaywrightScript(demoScript, input);
   }
-
-  if (!stylizedDemoScript.includes("chromium.launch")) {
-    return wrapActionBody(stylizedDemoScript, input);
-  }
-
-  let prepared = stylizedDemoScript.replaceAll(
-    "http://localhost:3000",
-    input.baseUrl,
-  );
-  prepared = prepared.replace(
-    /dir:\s*(['"`])[^'"`]+?\1/,
-    `dir: ${JSON.stringify(input.videoDirectory)}`,
-  );
-
-  if (input.headed) {
-    prepared = prepared.replace(
-      /chromium\.launch\(\s*\)/,
-      "chromium.launch({ headless: false })",
-    );
-  }
-
-  prepared = injectRecordingHelpers(prepared);
-
-  return prepared;
+  return wrapActionBody(demoScript, input);
 }
 
 function wrapActionBody(
@@ -98,10 +74,6 @@ function prepareValidationPlaywrightScript(
   script: string,
   input: PrepareStylizedPlaywrightScriptInput,
 ) {
-  if (script.includes("chromium.launch")) {
-    return script.replaceAll("http://localhost:3000", input.baseUrl);
-  }
-
   const launchOptions = input.headed ? "{ headless: false }" : "";
 
   return `import { chromium, expect } from "@playwright/test";
@@ -199,62 +171,6 @@ ${createBrowserRuntimeNetworkPolicySource({
 
 function removeCaptureSdkImportsFromBody(script: string) {
   return script.replace(captureSdkImportDeclarationPattern, "");
-}
-
-function injectRecordingHelpers(script: string) {
-  if (script.includes("async function animatedClick(page, locator)")) {
-    return script;
-  }
-
-  const importMatch = script.match(/^import .*?;\n+/m);
-  if (!importMatch?.[0]) {
-    return `${recordingHelperSource()}\n${script}`;
-  }
-
-  return script.replace(
-    importMatch[0],
-    `${importMatch[0]}${recordingHelperSource()}\n`,
-  );
-}
-
-function stylizeBrowserActions(script: string) {
-  return script
-    .split("\n")
-    .map((line) => stylizeBrowserActionLine(line))
-    .join("\n");
-}
-
-function stylizeBrowserActionLine(line: string) {
-  const scrollToBottomMatch = line.match(
-    /^(\s*)await\s+(.+)\.evaluate\(\(element\)\s*=>\s*\{\s*element\.scrollTop\s*=\s*element\.scrollHeight;\s*\}\);(\s*)$/,
-  );
-  if (scrollToBottomMatch?.[1] !== undefined && scrollToBottomMatch[2]) {
-    return `${scrollToBottomMatch[1]}await animatedScrollTo(page, ${scrollToBottomMatch[2]}, "bottom");${scrollToBottomMatch[3] ?? ""}`;
-  }
-
-  const scrollToTopMatch = line.match(
-    /^(\s*)await\s+(.+)\.evaluate\(\(element\)\s*=>\s*\{\s*element\.scrollTop\s*=\s*0;\s*\}\);(\s*)$/,
-  );
-  if (scrollToTopMatch?.[1] !== undefined && scrollToTopMatch[2]) {
-    return `${scrollToTopMatch[1]}await animatedScrollTo(page, ${scrollToTopMatch[2]}, "top");${scrollToTopMatch[3] ?? ""}`;
-  }
-
-  const clickMatch = line.match(/^(\s*)await\s+(.+)\.click\(\);(\s*)$/);
-  if (clickMatch?.[1] !== undefined && clickMatch[2]) {
-    return `${clickMatch[1]}await animatedClick(page, ${clickMatch[2]});${clickMatch[3] ?? ""}`;
-  }
-
-  const hoverMatch = line.match(/^(\s*)await\s+(.+)\.hover\(\);(\s*)$/);
-  if (hoverMatch?.[1] !== undefined && hoverMatch[2]) {
-    return `${hoverMatch[1]}await animatedHover(page, ${hoverMatch[2]});${hoverMatch[3] ?? ""}`;
-  }
-
-  const fillMatch = line.match(/^(\s*)await\s+(.+)\.fill\((.*)\);(\s*)$/);
-  if (fillMatch?.[1] !== undefined && fillMatch[2] && fillMatch[3]) {
-    return `${fillMatch[1]}await humanType(page, ${fillMatch[2]}, ${fillMatch[3]});${fillMatch[4] ?? ""}`;
-  }
-
-  return line;
 }
 
 function recordingHelperSource() {
