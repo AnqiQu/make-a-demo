@@ -82,17 +82,18 @@ export async function captureScenesFromScript(
   // On failure the run directory is deliberately retained: it holds the
   // diagnosis (stdout, scene markers, downloaded clips).
   if (browserScenes.length > 0) {
-    const recorder = input.recorder ?? createPreparedWorkspaceRecorder(input);
+    // The proof binds every recorder, injected ones included: a test double
+    // must not be able to record from an unproven runtime state.
     if (
-      input.recorder === undefined &&
-      (input.captureRuntimeReset?.stage !== "capture-runtime-reset" ||
-        input.captureRuntimeReset.status !== "passed" ||
-        input.captureRuntimeReset.artifactPath.trim().length === 0)
+      input.captureRuntimeReset?.stage !== "capture-runtime-reset" ||
+      input.captureRuntimeReset.status !== "passed" ||
+      input.captureRuntimeReset.artifactPath.trim().length === 0
     ) {
       throw new Error(
         "Footage Capture requires a passed capture-runtime-reset proof",
       );
     }
+    const recorder = input.recorder ?? createPreparedWorkspaceRecorder(input);
     if (scriptPackage.demoPlaywrightScript === undefined) {
       throw new Error(
         "Footage Capture requires compiled Playwright source for browser Scenes.",

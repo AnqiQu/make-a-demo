@@ -100,6 +100,7 @@ describe("captureScenesFromScript", () => {
 
     const manifest = await captureScenesFromScript({
       baseUrl: "http://localhost:3000",
+      captureRuntimeReset: resetProof(),
       recorder,
       scriptPath,
       tempRoot,
@@ -167,6 +168,7 @@ describe("captureScenesFromScript", () => {
 
     const manifest = await captureScenesFromScript({
       baseUrl: "http://localhost:3000",
+      captureRuntimeReset: resetProof(),
       keepTemp: true,
       recorder,
       scriptPackage: validDemoScript(),
@@ -202,6 +204,7 @@ describe("captureScenesFromScript", () => {
 
     const manifest = await captureScenesFromScript({
       baseUrl: "http://localhost:3000",
+      captureRuntimeReset: resetProof(),
       recorder,
       scriptPackage: {
         ...validDemoScript(),
@@ -507,6 +510,7 @@ describe("captureScenesFromScript", () => {
     await expect(
       captureScenesFromScript({
         baseUrl: "http://localhost:3000",
+        captureRuntimeReset: resetProof(),
         scriptPackage: validDemoScript(),
         tempRoot,
       }),
@@ -588,6 +592,7 @@ describe("captureScenesFromScript", () => {
     await expect(
       captureScenesFromScript({
         baseUrl: "http://localhost:3000",
+        captureRuntimeReset: resetProof(),
         keepTemp: false,
         recorder,
         runId: "capture-keeps-evidence",
@@ -631,6 +636,7 @@ describe("captureScenesFromScript", () => {
     await expect(
       captureScenesFromScript({
         baseUrl: "http://localhost:3000",
+        captureRuntimeReset: resetProof(),
         recorder,
         runId: "capture-retry",
         scriptPackage: validDemoScript(),
@@ -640,6 +646,7 @@ describe("captureScenesFromScript", () => {
 
     const manifest = await captureScenesFromScript({
       baseUrl: "http://localhost:3000",
+      captureRuntimeReset: resetProof(),
       recorder,
       runId: "capture-retry",
       scriptPackage: validDemoScript(),
@@ -652,6 +659,30 @@ describe("captureScenesFromScript", () => {
       "raw-scenes",
     );
     expect(manifest.runDirectory).not.toBe(join(tempRoot, "capture-retry"));
+  });
+
+  it("requires the fresh-runtime reset proof even with an injected recorder", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "makeademo-capture-test-"));
+    const tempRoot = join(workspace, "runs");
+    let recordSceneWasCalled = false;
+
+    await expect(
+      captureScenesFromScript({
+        baseUrl: "http://localhost:3000",
+        recorder: {
+          async recordScenes() {
+            recordSceneWasCalled = true;
+            return [];
+          },
+        },
+        scriptPackage: validDemoScript(),
+        tempRoot,
+      }),
+    ).rejects.toThrow(
+      "Footage Capture requires a passed capture-runtime-reset proof",
+    );
+
+    expect(recordSceneWasCalled).toBe(false);
   });
 
   it("rejects malformed Demo Scripts before recording starts", async () => {
@@ -688,6 +719,14 @@ describe("captureScenesFromScript", () => {
     expect(recordSceneWasCalled).toBe(false);
   });
 });
+
+function resetProof() {
+  return {
+    artifactPath: "/workspace/.makeademo/validation/capture-runtime-reset.json",
+    stage: "capture-runtime-reset" as const,
+    status: "passed" as const,
+  };
+}
 
 function validDemoScript() {
   return {
