@@ -288,8 +288,9 @@ export class DaytonaSdkPreparationWorkspaceProvider
   private async deleteSandboxBestEffort(
     sandbox: DaytonaSdkSandbox,
   ): Promise<void> {
-    const [result] = await Promise.allSettled([this.client.delete(sandbox)]);
-    if (result?.status === "rejected") {
+    try {
+      await this.client.delete(sandbox);
+    } catch {
       await this.writeProviderLogBestEffort({
         event: "sandbox.compensating-delete.failed",
         message: `Compensating delete failed for sandbox ${sandbox.id ?? sandbox.name}; the auto-delete backstop must reap it.`,
@@ -422,32 +423,34 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     }
     await this.cancelActiveCommands();
     const failures: unknown[] = [];
+    // Returns true when the sandbox is gone (deleted now or already missing),
+    // recording any other failure instead of interrupting the sibling delete.
+    const deleteSandboxTolerantly = async (
+      sandbox: DaytonaSdkSandbox,
+    ): Promise<boolean> => {
+      try {
+        await this.deleteSandboxThroughStateConflict(sandbox);
+        return true;
+      } catch (error) {
+        if (isDaytonaNotFoundError(error)) {
+          return true;
+        }
+        failures.push(error);
+        return false;
+      }
+    };
     if (
       this.submittedCodeSandbox !== undefined &&
-      !this.submittedCodeSandboxDeleted
+      !this.submittedCodeSandboxDeleted &&
+      (await deleteSandboxTolerantly(this.submittedCodeSandbox))
     ) {
-      try {
-        await this.deleteSandboxThroughStateConflict(this.submittedCodeSandbox);
-        this.submittedCodeSandboxDeleted = true;
-      } catch (error) {
-        if (isDaytonaNotFoundError(error)) {
-          this.submittedCodeSandboxDeleted = true;
-        } else {
-          failures.push(error);
-        }
-      }
+      this.submittedCodeSandboxDeleted = true;
     }
-    if (!this.agentSandboxDeleted) {
-      try {
-        await this.deleteSandboxThroughStateConflict(this.sandbox);
-        this.agentSandboxDeleted = true;
-      } catch (error) {
-        if (isDaytonaNotFoundError(error)) {
-          this.agentSandboxDeleted = true;
-        } else {
-          failures.push(error);
-        }
-      }
+    if (
+      !this.agentSandboxDeleted &&
+      (await deleteSandboxTolerantly(this.sandbox))
+    ) {
+      this.agentSandboxDeleted = true;
     }
     if (failures.length === 1) {
       throw failures[0];
@@ -504,68 +507,23 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     command: string,
     options: AgentHarnessWorkspaceExecuteOptions,
   ): Promise<AgentHarnessWorkspaceCommandResult> {
-    const output: string[] = [];
-    const decoder = new TextDecoder();
-    const exitSentinel = createExitSentinel();
-    const inactivityDeadline = createCommandInactivityDeadline(
-      options.inactivityTimeoutMs,
-      (driftMs) => this.logHostClockDriftBestEffort(driftMs),
-    );
-    const pty = await this.createConnectedPty(this.sandbox, {
-      cols: 120,
-      cwd: "/workspace",
-      envs: options.env ?? {},
-      id: `makeademo-${randomUUID()}`,
-      onData: (data) => {
-        inactivityDeadline.touch();
-        const chunk = decoder.decode(data);
-        output.push(chunk);
-        const visibleChunk = removeExitMarker(chunk, exitSentinel);
-        if (visibleChunk.length > 0) {
-          options.onStdout?.(visibleChunk);
-        }
-      },
-      rows: 30,
-    });
-
-    const timeoutMs = options.timeoutMs ?? this.commandTimeoutMs;
-    try {
-      await pty.sendInput(
-        `stty -echo\n${command}\nprintf '\\n${exitSentinel}:%s\\n' $?\nexit\n`,
-      );
-      inactivityDeadline.touch();
-      const result = await withTimeout(
-        Promise.race([pty.wait(), inactivityDeadline.expired]),
-        timeoutMs,
-        () => new AgentHarnessCommandTimeoutError(timeoutMs),
-      );
-      const stdout = output.join("");
-      const exitCode =
-        readExitCode(stdout, exitSentinel) ?? result.exitCode ?? 0;
-
-      return {
-        exitCode,
-        stderr: result.error ?? "",
-        stdout: removeExitMarker(stdout, exitSentinel),
-      };
-    } catch (error) {
-      if (error instanceof AgentHarnessCommandTimeoutError) {
-        await this.terminatePtyBestEffort(pty, timeoutMs);
-      }
-      throw error;
-    } finally {
-      inactivityDeadline.dispose();
-      this.activePtys.delete(pty);
-      await this.disconnectPtyBestEffort(pty, timeoutMs);
-    }
+    return await this.executeStreamingInSandbox(this.sandbox, command, options);
   }
 
   private async cancelActiveCommands(): Promise<void> {
     await Promise.allSettled([
       this.stopSubmittedCodeApp(),
       ...[...this.activePtys].map(async (pty) => {
-        await this.terminatePtyBestEffort(pty, defaultPtyDisconnectTimeoutMs);
-        await this.disconnectPtyBestEffort(pty, defaultPtyDisconnectTimeoutMs);
+        await this.releasePtyBestEffort(
+          pty,
+          "termination",
+          defaultPtyDisconnectTimeoutMs,
+        );
+        await this.releasePtyBestEffort(
+          pty,
+          "disconnection",
+          defaultPtyDisconnectTimeoutMs,
+        );
       }),
     ]);
   }
@@ -1210,7 +1168,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     const timeoutMs = options.timeoutMs ?? this.commandTimeoutMs;
     try {
       await pty.sendInput(
-        `stty -echo\n${command}\nprintf '\n${exitSentinel}:%s\n' $?\nexit\n`,
+        `stty -echo\n${command}\nprintf '\\n${exitSentinel}:%s\\n' $?\nexit\n`,
       );
       inactivityDeadline.touch();
       const result = await withTimeout(
@@ -1229,13 +1187,13 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       };
     } catch (error) {
       if (error instanceof AgentHarnessCommandTimeoutError) {
-        await this.terminatePtyBestEffort(pty, timeoutMs);
+        await this.releasePtyBestEffort(pty, "termination", timeoutMs);
       }
       throw error;
     } finally {
       inactivityDeadline.dispose();
       this.activePtys.delete(pty);
-      await this.disconnectPtyBestEffort(pty, timeoutMs);
+      await this.releasePtyBestEffort(pty, "disconnection", timeoutMs);
     }
   }
 
@@ -1265,7 +1223,11 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
         lastError = error;
         if (pty !== undefined) {
           this.activePtys.delete(pty);
-          await this.disconnectPtyBestEffort(pty, this.ptyConnectionTimeoutMs);
+          await this.releasePtyBestEffort(
+            pty,
+            "disconnection",
+            this.ptyConnectionTimeoutMs,
+          );
         }
 
         if (
@@ -1308,38 +1270,24 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     return true;
   }
 
-  private async disconnectPtyBestEffort(
+  private async releasePtyBestEffort(
     pty: ManagedPty,
+    operation: "disconnection" | "termination",
     operationTimeoutMs: number,
   ): Promise<void> {
     const timeoutMs = Math.max(
       1,
       Math.min(operationTimeoutMs, defaultPtyDisconnectTimeoutMs),
     );
-    await Promise.allSettled([
-      withTimeout(
-        pty.disconnect(),
+    try {
+      await withTimeout(
+        operation === "termination" ? pty.kill() : pty.disconnect(),
         timeoutMs,
-        `Daytona PTY disconnection did not finish within ${timeoutMs}ms.`,
-      ),
-    ]);
-  }
-
-  private async terminatePtyBestEffort(
-    pty: ManagedPty,
-    operationTimeoutMs: number,
-  ): Promise<void> {
-    const timeoutMs = Math.max(
-      1,
-      Math.min(operationTimeoutMs, defaultPtyDisconnectTimeoutMs),
-    );
-    await Promise.allSettled([
-      withTimeout(
-        pty.kill(),
-        timeoutMs,
-        `Daytona PTY termination did not finish within ${timeoutMs}ms.`,
-      ),
-    ]);
+        `Daytona PTY ${operation} did not finish within ${timeoutMs}ms.`,
+      );
+    } catch {
+      // Best-effort PTY cleanup must never mask the command outcome.
+    }
   }
 }
 
