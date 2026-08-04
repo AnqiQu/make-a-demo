@@ -111,7 +111,7 @@ export function validatePreparationFidelity(input: {
     // them between diff captures (making repair attribution unreliable), and
     // frozen installation re-derives their content from package.json.
     if (isPackageManagerLockfilePath(path)) continue;
-    const patch = filePatches.get(path) ?? "";
+    const patch = filePatches.get(path) ?? emptyPatchSection;
     if (addsServerSelfRequest(path, patch, input.preparationManifest.baseUrl)) {
       violations.push({
         hint: repairHints.selfRequest,
@@ -126,31 +126,16 @@ export function validatePreparationFidelity(input: {
     const authenticationAdaptation = isAuthenticationAdaptation(path, patch);
     const integrationAdaptation = isIntegrationAdaptation(path, patch);
     if (authenticationAdaptation || integrationAdaptation) {
-      if (addsPresentation) {
-        violations.push({
-          hint: repairHints.preserveUi,
-          message: `${path} modifies original product UI, styling, or brand assets instead of preserving them.`,
-        });
-        continue;
-      }
-      const kind = authenticationAdaptation ? "authentication" : "integration";
-      const violation = readDemoAdaptationViolation(
+      const violation = readGatedAdaptationViolation({
+        addsPresentation,
         demoGate,
-        path,
-        patch,
-        kind,
+        kind: authenticationAdaptation ? "authentication" : "integration",
         originalSource,
-      );
+        patch,
+        path,
+      });
       if (violation !== undefined) {
-        violations.push({ hint: repairHints.gate, message: violation });
-        continue;
-      }
-      const unpreserved = readUnpreservedRemovedLine(patch);
-      if (unpreserved !== undefined) {
-        violations.push({
-          hint: repairHints.preserveBehavior,
-          message: `${path} removes original ${kind} behavior (\`${unpreserved}\`) instead of preserving it behind the demo gate.`,
-        });
+        violations.push(violation);
       }
       continue;
     }
@@ -164,26 +149,16 @@ export function validatePreparationFidelity(input: {
       // Each failed wrap condition gets its own message; a collapsed
       // "modifies UI" veto misdirects repairs that only lack the gate.
       if (!onlyLocalizesExternalAssets(patch)) {
-        const gateViolation = readDemoAdaptationViolation(
+        const violation = readGatedAdaptationViolation({
+          addsPresentation,
           demoGate,
-          path,
-          patch,
-          "presentation",
+          kind: "presentation",
           originalSource,
-        );
-        const unpreserved = readUnpreservedRemovedLine(patch);
-        if (addsPresentation) {
-          violations.push({
-            hint: repairHints.preserveUi,
-            message: `${path} modifies original product UI, styling, or brand assets instead of preserving them.`,
-          });
-        } else if (gateViolation !== undefined) {
-          violations.push({ hint: repairHints.gate, message: gateViolation });
-        } else if (unpreserved !== undefined) {
-          violations.push({
-            hint: repairHints.preserveBehavior,
-            message: `${path} removes original presentation (\`${unpreserved}\`) instead of preserving it behind the demo gate.`,
-          });
+          patch,
+          path,
+        });
+        if (violation !== undefined) {
+          violations.push(violation);
         }
       }
     } else if (isExecutableSourcePath(path) && !demoSeam) {
@@ -194,14 +169,15 @@ export function validatePreparationFidelity(input: {
     }
   }
 
+  const packagePatch = filePatches.get("package.json") ?? emptyPatchSection;
   const resolvedStartCommands = readResolvedStartCommands(
     input.preparationManifest.startCommandUsed,
     input.repoSourceFiles,
-    filePatches.get("package.json") ?? "",
+    packagePatch.addedText,
   );
   for (const path of createdPaths) {
     if (repairPaths.has(path)) continue;
-    const patch = filePatches.get(path) ?? "";
+    const patch = filePatches.get(path) ?? emptyPatchSection;
     if (addsServerSelfRequest(path, patch, input.preparationManifest.baseUrl)) {
       violations.push({
         hint: repairHints.selfRequest,
@@ -209,7 +185,7 @@ export function validatePreparationFidelity(input: {
       });
       continue;
     }
-    if (isDotenvPath(path) && containsAuthenticationTerms(patch)) {
+    if (isDotenvPath(path) && containsAuthenticationTerms(patch.text)) {
       violations.push({
         hint: repairHints.envUsed,
         message: `${path} changes authentication behavior through a created environment file; demo environment belongs in envUsed with a gated adaptation.`,
@@ -243,8 +219,7 @@ export function validatePreparationFidelity(input: {
     }
   }
 
-  const packagePatch = filePatches.get("package.json") ?? "";
-  if (/^-.*["']workspaces["']/m.test(packagePatch)) {
+  if (/^-.*["']workspaces["']/m.test(packagePatch.text)) {
     violations.push({
       hint: repairHints.keepWorkspaces,
       message:
@@ -252,7 +227,7 @@ export function validatePreparationFidelity(input: {
     });
   }
   for (const path of createdPaths) {
-    if (!isDemoSeamPath(path) && addedPatchText(packagePatch).includes(path)) {
+    if (!isDemoSeamPath(path) && packagePatch.addedText.includes(path)) {
       violations.push({
         hint: repairHints.adaptOriginal,
         message: `package.json redirects an application command to newly created file ${path}.`,
@@ -263,13 +238,55 @@ export function validatePreparationFidelity(input: {
   return createFidelityReport(violations);
 }
 
+/**
+ * Walks the shared gated-adaptation ladder: replacement presentation first,
+ * then the demo-gate check, then unpreserved removals — computing each step's
+ * evidence only when every earlier step passed.
+ */
+function readGatedAdaptationViolation(input: {
+  addsPresentation: boolean;
+  demoGate: DemoGateEvidence;
+  kind: "authentication" | "integration" | "presentation";
+  originalSource: string;
+  patch: PatchSection;
+  path: string;
+}): FidelityViolation | undefined {
+  if (input.addsPresentation) {
+    return {
+      hint: repairHints.preserveUi,
+      message: `${input.path} modifies original product UI, styling, or brand assets instead of preserving them.`,
+    };
+  }
+  const gateViolation = readDemoAdaptationViolation(
+    input.demoGate,
+    input.path,
+    input.patch,
+    input.kind,
+    input.originalSource,
+  );
+  if (gateViolation !== undefined) {
+    return { hint: repairHints.gate, message: gateViolation };
+  }
+  const unpreserved = readUnpreservedRemovedLine(input.patch);
+  if (unpreserved === undefined) {
+    return undefined;
+  }
+  return {
+    hint: repairHints.preserveBehavior,
+    message:
+      input.kind === "presentation"
+        ? `${input.path} removes original presentation (\`${unpreserved}\`) instead of preserving it behind the demo gate.`
+        : `${input.path} removes original ${input.kind} behavior (\`${unpreserved}\`) instead of preserving it behind the demo gate.`,
+  };
+}
+
 function readInvalidRepairPaths(input: {
   dependencyRepair?: boolean;
   repairBaseline?: PreparationWorkspaceDiff;
   workspaceDiff: PreparationWorkspaceDiff;
 }): Set<string> {
   const baseline = input.repairBaseline;
-  if (baseline === undefined) {
+  if (baseline === undefined || input.dependencyRepair !== true) {
     return new Set();
   }
   return new Set(
@@ -278,7 +295,6 @@ function readInvalidRepairPaths(input: {
       input.workspaceDiff,
     ).changedPaths.filter(
       (path) =>
-        input.dependencyRepair === true &&
         !isDependencyRepairInputPath(path) &&
         !isPackageManagerLockfilePath(path),
     ),
@@ -326,17 +342,21 @@ function createFidelityReport(
   };
 }
 
-function isStandaloneReplacementRuntime(patch: string) {
-  const additions = addedPatchText(patch);
+function isStandaloneReplacementRuntime(patch: PatchSection) {
+  const additions = patch.addedText;
   return (
     /\b(?:Bun\.serve|createServer|serve)\s*\(/.test(additions) &&
     /(?:<!doctype\s+html|<html\b|<style\b|style\s*=)/i.test(additions)
   );
 }
 
-function addsServerSelfRequest(path: string, patch: string, baseUrl: string) {
+function addsServerSelfRequest(
+  path: string,
+  patch: PatchSection,
+  baseUrl: string,
+) {
   if (!isServerExecutionPath(path)) return false;
-  const additions = addedPatchText(patch);
+  const additions = patch.addedText;
   if (
     !/\b(?:axios|fetch|got|httpBatchLink|httpLink|request|superagent|urllib)\b/i.test(
       additions,
@@ -361,8 +381,8 @@ function isServerExecutionPath(path: string) {
  * a demo-gate wrap re-adds the line it wraps, and re-introduced original
  * markup is preservation, not new authorship.
  */
-function addsProductPresentation(patch: string, originalSource = "") {
-  const additions = changedPatchLines(patch, "+")
+function addsProductPresentation(patch: PatchSection, originalSource = "") {
+  const additions = patch.added
     .filter((line) => !originalSource.includes(line.trim()))
     .join("\n");
   return (
@@ -375,9 +395,9 @@ function addsProductPresentation(patch: string, originalSource = "") {
   );
 }
 
-function onlyLocalizesExternalAssets(patch: string) {
-  const removed = changedPatchLines(patch, "-");
-  const added = changedPatchLines(patch, "+");
+function onlyLocalizesExternalAssets(patch: PatchSection) {
+  const removed = patch.removed;
+  const added = patch.added;
   return (
     removed.length > 0 &&
     removed.length === added.length &&
@@ -399,14 +419,6 @@ function onlyLocalizesExternalAssets(patch: string) {
       );
     })
   );
-}
-
-function changedPatchLines(patch: string, prefix: "+" | "-") {
-  const headerPrefix = prefix.repeat(3);
-  return patch
-    .split("\n")
-    .filter((line) => line.startsWith(prefix) && !line.startsWith(headerPrefix))
-    .map((line) => line.slice(1));
 }
 
 function isProductPresentationPath(path: string) {
@@ -433,7 +445,7 @@ function readDemoGateEvidence(
   preparationManifest: PreparationManifest,
   repoSourceFiles: ReadonlyMap<string, string | undefined>,
   workspaceDiff: PreparationWorkspaceDiff,
-  filePatches: ReadonlyMap<string, string>,
+  filePatches: ReadonlyMap<string, PatchSection>,
 ): DemoGateEvidence {
   const configuredFlags = Object.entries(preparationManifest.envUsed)
     .filter(
@@ -454,7 +466,7 @@ function readDemoGateEvidence(
     ...workspaceDiff.changedPaths
       .map(toRepoRelativePath)
       .filter(isExecutableSourcePath)
-      .map((path) => addedPatchText(filePatches.get(path) ?? "")),
+      .map((path) => filePatches.get(path)?.addedText ?? ""),
   ];
   const flags = configuredFlags.filter((flag) =>
     sources.some((source) => readsDemoFlag(source, flag)),
@@ -472,7 +484,7 @@ function readDemoGateEvidence(
 function readDemoAdaptationViolation(
   demoGate: DemoGateEvidence,
   path: string,
-  patch: string,
+  patch: PatchSection,
   kind: "authentication" | "integration" | "presentation",
   originalSource: string,
 ): string | undefined {
@@ -494,9 +506,9 @@ function readDemoAdaptationViolation(
  * no product behavior, and two matrix runs lost a correct repair candidate to
  * a dropped comment alone.
  */
-function readUnpreservedRemovedLine(patch: string): string | undefined {
-  const additions = addedPatchText(patch);
-  for (const removed of changedPatchLines(patch, "-")) {
+function readUnpreservedRemovedLine(patch: PatchSection): string | undefined {
+  const additions = patch.addedText;
+  for (const removed of patch.removed) {
     const line = removed.trim();
     if (line.length < 3 || /^[{}()[\]<>/*,;`'"\\|&-]*$/.test(line)) continue;
     if (isNonDirectiveCommentLine(line)) continue;
@@ -536,20 +548,20 @@ function readsDemoFlag(source: string, flag: string) {
   ).test(source);
 }
 
-function isAuthenticationAdaptation(path: string, patch: string) {
+function isAuthenticationAdaptation(path: string, patch: PatchSection) {
   return (
     isExecutableSourcePath(path) &&
-    (containsAuthenticationTerms(patch) ||
+    (containsAuthenticationTerms(patch.text) ||
       /(?:^|[./_-])(?:auth|identity|login|oauth|principal|session)(?:[./_-]|$)/i.test(
         path,
       ))
   );
 }
 
-function isIntegrationAdaptation(path: string, patch: string) {
+function isIntegrationAdaptation(path: string, patch: PatchSection) {
   return (
     isExecutableSourcePath(path) &&
-    (isDemoSeamPath(path) || containsIntegrationTerms(patch))
+    (isDemoSeamPath(path) || containsIntegrationTerms(patch.text))
   );
 }
 
@@ -577,11 +589,11 @@ function missingDemoGateViolation(
 }
 
 function hasConditionalDemoGate(
-  patch: string,
+  patch: PatchSection,
   demoGate: DemoGateEvidence,
   originalSource: string,
 ) {
-  const additions = stripComments(addedPatchText(patch));
+  const additions = stripComments(patch.addedText);
   const fileScope = `${stripComments(originalSource)}\n${additions}`;
   const tokens = [
     ...demoGate.flags.filter((flag) => readsDemoFlag(additions, flag)),
@@ -678,7 +690,7 @@ function commandReferencesPath(command: string, path: string) {
 function readResolvedStartCommands(
   startCommandUsed: string,
   repoSourceFiles: ReadonlyMap<string, string | undefined>,
-  packagePatch: string,
+  packageAdditions: string,
 ): string[] {
   const commands = [startCommandUsed];
   const scriptName =
@@ -686,10 +698,7 @@ function readResolvedStartCommands(
       startCommandUsed,
     )?.[1];
   if (scriptName === undefined) return commands;
-  const sources = [
-    repoSourceFiles.get("package.json") ?? "",
-    addedPatchText(packagePatch),
-  ];
+  const sources = [repoSourceFiles.get("package.json") ?? "", packageAdditions];
   for (const source of sources) {
     const script = new RegExp(
       `"${escapeRegExp(scriptName)}"\\s*:\\s*"([^"]+)"`,
@@ -704,20 +713,31 @@ function isDotenvPath(path: string) {
   return /^\.env(?:\..+)?$/.test(name) && name !== ".env.example";
 }
 
-function addedPatchText(patch: string) {
-  return patch
-    .split("\n")
-    .filter((line) => line.startsWith("+") && !line.startsWith("+++"))
-    .map((line) => line.slice(1))
-    .join("\n");
-}
+/**
+ * One file's slice of the preparation diff, with its added and removed lines
+ * (prefixes stripped) split out once so fidelity checks never re-scan the raw
+ * section per check.
+ */
+type PatchSection = {
+  added: string[];
+  addedText: string;
+  removed: string[];
+  text: string;
+};
+
+const emptyPatchSection: PatchSection = {
+  added: [],
+  addedText: "",
+  removed: [],
+  text: "",
+};
 
 /**
  * Splits a unified diff into per-file sections in one pass. Section headers
  * match only at line starts, so header-shaped text inside added or removed
  * content cannot open a section. Renamed files register under both paths.
  */
-function parsePatchSections(patch: string): Map<string, string> {
+function parsePatchSections(patch: string): Map<string, PatchSection> {
   const sections = new Map<string, string>();
   const lines = patch.split("\n");
   let start = -1;
@@ -748,7 +768,22 @@ function parsePatchSections(patch: string): Map<string, string> {
     ];
   }
   flush(lines.length);
-  return sections;
+  return new Map(
+    [...sections].map(([path, text]) => [path, createPatchSection(text)]),
+  );
+}
+
+function createPatchSection(text: string): PatchSection {
+  const added: string[] = [];
+  const removed: string[] = [];
+  for (const line of text.split("\n")) {
+    if (line.startsWith("+") && !line.startsWith("+++")) {
+      added.push(line.slice(1));
+    } else if (line.startsWith("-") && !line.startsWith("---")) {
+      removed.push(line.slice(1));
+    }
+  }
+  return { added, addedText: added.join("\n"), removed, text };
 }
 
 function isFrameworkConfigPath(path: string) {
