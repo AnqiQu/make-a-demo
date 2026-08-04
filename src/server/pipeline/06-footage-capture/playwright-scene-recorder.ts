@@ -20,7 +20,7 @@ import {
   type CaptureRuntimeProtocol,
   formatCaptureRuntimeProtocolLog,
   readCaptureRuntimeProtocol,
-  readSuccessfulCaptureSceneRanges,
+  readSuccessfulCaptureProtocol,
 } from "./capture-runtime-protocol";
 import {
   validateDemoScriptCaptureSdkTypes,
@@ -344,13 +344,13 @@ async function trimRecordedScenes(input: {
   sceneClipsDirectory: string;
 }): Promise<RecordedScene[]> {
   const sceneIds = input.recordInput.scenes.map((scene) => scene.id);
-  const markerRanges = readSuccessfulCaptureSceneRanges({
+  const markerRanges = readSuccessfulCaptureProtocol({
     expectedStepIdsByScene: expectedStepIdsByScene(input.recordInput),
     protocol: input.protocol,
     requireValidationLifecycle: false,
     requireVisibleAssertions: false,
     sceneIds,
-  });
+  }).sceneRanges;
   const clipRanges = createNonOverlappingClipRanges({
     markerRanges,
     postRollMs: input.postRollMs,

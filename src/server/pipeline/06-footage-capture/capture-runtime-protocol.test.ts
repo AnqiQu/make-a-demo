@@ -3,7 +3,6 @@ import {
   CaptureBrowserActionFailureError,
   readCaptureRuntimeProtocol,
   readSuccessfulCaptureProtocol,
-  readSuccessfulCaptureSceneRanges,
 } from "./capture-runtime-protocol";
 
 describe("Capture Runtime Protocol", () => {
@@ -44,10 +43,10 @@ describe("Capture Runtime Protocol", () => {
       },
     ]);
     expect(
-      readSuccessfulCaptureSceneRanges({
+      readSuccessfulCaptureProtocol({
         protocol,
         sceneIds: ["scene-one"],
-      }).get("scene-one"),
+      }).sceneRanges.get("scene-one"),
     ).toEqual({ endedAtMs: 20, startedAtMs: 10 });
   });
 
@@ -65,7 +64,7 @@ describe("Capture Runtime Protocol", () => {
     });
 
     expect(() =>
-      readSuccessfulCaptureSceneRanges({
+      readSuccessfulCaptureProtocol({
         protocol,
         requireVisibleAssertions: false,
         sceneIds: ["scene-one", "scene-two"],

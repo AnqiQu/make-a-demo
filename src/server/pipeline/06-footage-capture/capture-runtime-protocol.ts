@@ -211,7 +211,7 @@ export function readSuccessfulCaptureProtocol(input: {
 } {
   assertUniqueSceneIds(input.sceneIds);
 
-  const events = mergeRuntimeMarkers(input.protocol);
+  const events = input.protocol.runtimeEvents;
   const declaredSceneIds = new Set(input.sceneIds);
   const ranges = new Map<string, { endedAtMs: number; startedAtMs: number }>();
   const scenesWithVisibleAssertions = new Set<string>();
@@ -435,16 +435,6 @@ export function readSuccessfulCaptureProtocol(input: {
   return { executedStepIdsByScene, sceneRanges: ranges };
 }
 
-export function readSuccessfulCaptureSceneRanges(input: {
-  expectedStepIdsByScene?: Readonly<Record<string, readonly string[]>>;
-  protocol: CaptureRuntimeProtocol;
-  requireValidationLifecycle?: boolean;
-  requireVisibleAssertions?: boolean;
-  sceneIds: string[];
-}): Map<string, { endedAtMs: number; startedAtMs: number }> {
-  return readSuccessfulCaptureProtocol(input).sceneRanges;
-}
-
 function sameStrings(
   actual: readonly string[],
   expected: readonly string[],
@@ -639,16 +629,6 @@ function assertSuccessfulValidationLifecycle(
       "A successful capture run must emit exactly one validation started marker and one validation succeeded marker.",
     );
   }
-}
-
-function mergeRuntimeMarkers(
-  protocol: CaptureRuntimeProtocol,
-): Array<
-  | ({ kind: "action" } & CaptureActionMarker)
-  | ({ kind: "scene" } & CaptureSceneMarker)
-  | ({ kind: "step" } & CaptureStepMarker)
-> {
-  return protocol.runtimeEvents;
 }
 
 function isVisibleAssertionLabel(label: string) {

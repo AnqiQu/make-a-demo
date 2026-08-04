@@ -12,7 +12,7 @@ import {
   CaptureScriptProtocolViolationError,
   readCaptureRuntimeProtocol,
   readCaptureValidationFailure,
-  readSuccessfulCaptureSceneRanges,
+  readSuccessfulCaptureProtocol,
 } from "../../pipeline/06-footage-capture/capture-runtime-protocol";
 import {
   validateDemoScriptCaptureSdkTypes,
@@ -160,25 +160,32 @@ export async function validatePreparedWorkspaceCapturePath(input: {
             `Runtime Network Lockdown suppressed ${blockedNetworkAttempts.length} uncached external request(s).`,
           ],
   };
-  if (
-    result.exitCode !== 0 &&
-    protocol.runtimeEvents.some((event) => event.event === "failed")
-  ) {
+  const protocolFailure = () => {
     try {
-      readSuccessfulCaptureSceneRanges({
+      readSuccessfulCaptureProtocol({
         ...(input.expectedStepIdsByScene === undefined
           ? {}
           : { expectedStepIdsByScene: input.expectedStepIdsByScene }),
         protocol,
         sceneIds: input.sceneIds,
       });
+      return undefined;
     } catch (error) {
       return {
         ...common,
         failureClassification: classifyCaptureFailure(error),
         failureReason: formatProtocolFailure(error),
-        status: "failed",
+        status: "failed" as const,
       };
+    }
+  };
+  if (
+    result.exitCode !== 0 &&
+    protocol.runtimeEvents.some((event) => event.event === "failed")
+  ) {
+    const failure = protocolFailure();
+    if (failure !== undefined) {
+      return failure;
     }
   }
   if (result.exitCode !== 0) {
@@ -193,24 +200,7 @@ export async function validatePreparedWorkspaceCapturePath(input: {
     };
   }
 
-  try {
-    readSuccessfulCaptureSceneRanges({
-      ...(input.expectedStepIdsByScene === undefined
-        ? {}
-        : { expectedStepIdsByScene: input.expectedStepIdsByScene }),
-      protocol,
-      sceneIds: input.sceneIds,
-    });
-  } catch (error) {
-    return {
-      ...common,
-      failureClassification: classifyCaptureFailure(error),
-      failureReason: formatProtocolFailure(error),
-      status: "failed",
-    };
-  }
-
-  return { ...common, status: "succeeded" };
+  return protocolFailure() ?? { ...common, status: "succeeded" };
 }
 
 function formatProcessExitFailure(result: {
