@@ -2,6 +2,10 @@ import type { FlowSpec } from "../schemas/artifacts";
 
 const narrativeBackgroundColor = "#101828";
 const narrativeTextColor = "#ffffff";
+const backendOwnedNarrativeRule =
+  "Demo Script Scenes must all be playwright-recording: the narrative intro, outro, feature cards, and transitions are backend-owned.";
+const canonicalNarrativeSceneIdPattern =
+  /^(?:product-intro|product-outro|feature-intro-\d+)$/;
 
 /**
  * Produces the product-owned Demo Script narrative around agent-authored
@@ -24,10 +28,10 @@ export function assembleDemoNarrative(input: {
   const knownFeatureIds = new Set(
     input.flowSpec.features.map((feature) => feature.featureId),
   );
-  const browserScenes = draft.scenes.filter((scene, index) => {
+  const browserScenes = draft.scenes.map((scene, index) => {
     const record = readRecord(scene, `Demo Script draft scenes[${index}]`);
     if (record.type !== "playwright-recording") {
-      return false;
+      throw new Error(backendOwnedNarrativeRule);
     }
     if (
       typeof record.featureId !== "string" ||
@@ -37,8 +41,8 @@ export function assembleDemoNarrative(input: {
         `Demo Script browser Scene ${String(record.id)} must reference a known FlowSpec featureId`,
       );
     }
-    return true;
-  }) as Array<Record<string, unknown>>;
+    return record;
+  });
   const presentation =
     typeof draft.presentation === "object" &&
     draft.presentation !== null &&
@@ -75,6 +79,18 @@ export function assertCanonicalDemoNarrative(input: {
   const scenes = script.scenes.map((scene, index) =>
     readRecord(scene, `Demo narrative Scenes[${index}]`),
   );
+  for (const scene of scenes) {
+    if (
+      scene.type !== "playwright-recording" &&
+      !(
+        scene.type === "full-screen-text" &&
+        typeof scene.id === "string" &&
+        canonicalNarrativeSceneIdPattern.test(scene.id)
+      )
+    ) {
+      throw new Error(backendOwnedNarrativeRule);
+    }
+  }
   const productName = input.productName.trim();
   assertTextScene(
     scenes[0],

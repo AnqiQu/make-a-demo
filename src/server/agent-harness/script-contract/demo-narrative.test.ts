@@ -47,6 +47,68 @@ describe("Demo narrative assembly", () => {
     expect(assembled.presentation.transitions).toEqual([]);
   });
 
+  it("rejects an agent-authored synthetic Scene instead of silently dropping it", () => {
+    expect(() =>
+      assembleDemoNarrative({
+        draft: draft([
+          browserScene("register", "create-account"),
+          browserScene("read", "read-article"),
+          {
+            backgroundColor: "#101828",
+            durationSeconds: 2,
+            id: "agent-title-card",
+            text: {
+              color: "#ffffff",
+              content: "Welcome",
+              font: "Inter",
+              position: "center",
+              size: "large",
+            },
+            type: "full-screen-text",
+          },
+        ]),
+        flowSpec,
+        productName: "Conduit",
+      }),
+    ).toThrow(
+      "Demo Script Scenes must all be playwright-recording: the narrative intro, outro, feature cards, and transitions are backend-owned",
+    );
+  });
+
+  it("names the backend-owned narrative rule when a final script carries a stray synthetic Scene", () => {
+    const assembled = assembleDemoNarrative({
+      draft: draft([
+        browserScene("register", "create-account"),
+        browserScene("read", "read-article"),
+      ]),
+      flowSpec,
+      productName: "Conduit",
+    }) as { scenes: Array<Record<string, unknown>> };
+    assembled.scenes.splice(2, 0, {
+      backgroundColor: "#101828",
+      durationSeconds: 2,
+      id: "agent-title-card",
+      text: {
+        color: "#ffffff",
+        content: "Welcome",
+        font: "Inter",
+        position: "center",
+        size: "large",
+      },
+      type: "full-screen-text",
+    });
+
+    expect(() =>
+      assertCanonicalDemoNarrative({
+        demoScript: assembled,
+        flowSpec,
+        productName: "Conduit",
+      }),
+    ).toThrow(
+      "Demo Script Scenes must all be playwright-recording: the narrative intro, outro, feature cards, and transitions are backend-owned",
+    );
+  });
+
   it("rejects a final narrative without every feature introduction", () => {
     const assembled = assembleDemoNarrative({
       draft: draft([
