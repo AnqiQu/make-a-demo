@@ -16,6 +16,7 @@
     "fmt": "biome format --write .",
     "graph:deps": "bun scripts/regenerate-dependency-graphs.mts",
     "knip": "knip",
+    "knip:prod": "knip --production --include files --no-exit-code",
     "lint": "biome check .",
     "lsp:typescript": "typescript-language-server --stdio",
     "pipeline:matrix": "bun scripts/run-pipeline-matrix.ts",

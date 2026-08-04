@@ -1,10 +1,13 @@
 {
-  "entry": ["demo/app/main.tsx"],
+  "entry": [
+    "demo/app/main.tsx!",
+    "scripts/*.mts!",
+    "scripts/verify-daytona-submitted-code-runtime.ts!"
+  ],
   "ignoreDependencies": ["@railway/cli"],
   "ignore": [
     "tests/fixtures/repos/**",
     ".dependency-cruiser.graph.cjs",
-    "scripts/filter-type-only-dot.mts",
     "src/server/shared/integrations/remotion/makeademo-video.tsx",
     "src/server/shared/integrations/remotion/remotion-entry.tsx"
   ]
