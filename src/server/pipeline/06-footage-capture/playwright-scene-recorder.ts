@@ -186,12 +186,16 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
     );
     if (result.exitCode !== 0) {
       throw new Error(
-        formatSceneFailure("continuous-take", {
-          ...result,
-          // 124 is timeout's own exit; 137 is its SIGKILL escalation after
-          // the grace period (also the OOM-kill signature).
-          timedOut: result.exitCode === 124 || result.exitCode === 137,
-        }),
+        formatSceneFailure(
+          "continuous-take",
+          {
+            ...result,
+            // 124 is timeout's own exit; 137 is its SIGKILL escalation after
+            // the grace period (also the OOM-kill signature).
+            timedOut: result.exitCode === 124 || result.exitCode === 137,
+          },
+          input.runDirectory,
+        ),
       );
     }
 
@@ -442,18 +446,30 @@ async function probeVideoDurationSeconds(videoPath: string): Promise<number> {
   return durationSeconds;
 }
 
-function formatSceneFailure(sceneId: string, result: SceneScriptResult) {
+const maxSceneFailureDetailLength = 1_600;
+
+/**
+ * The failure carries a bounded excerpt and points at the retained logs: the
+ * full streams already live in the run directory, so inlining them would
+ * only bloat every downstream record with the same bytes.
+ */
+function formatSceneFailure(
+  sceneId: string,
+  result: SceneScriptResult,
+  runDirectory: string,
+) {
   const details = [result.stdout.trim(), result.stderr.trim()]
     .filter((output) => output.length > 0)
-    .join("\n");
+    .join("\n")
+    .slice(0, maxSceneFailureDetailLength);
+  const logsNote = `Full output: ${join(runDirectory, "stdout.log")}, ${join(runDirectory, "stderr.log")}.`;
+  const summary = result.timedOut
+    ? `Scene ${sceneId} timed out.`
+    : `Scene ${sceneId} failed with exit code ${result.exitCode}.`;
 
-  if (result.timedOut) {
-    return `Scene ${sceneId} timed out.${details.length > 0 ? `\n${details}` : ""}`;
-  }
-
-  return `Scene ${sceneId} failed with exit code ${result.exitCode}.${
-    details.length > 0 ? `\n${details}` : ""
-  }`;
+  return [summary, ...(details.length > 0 ? [details] : []), logsNote].join(
+    "\n",
+  );
 }
 
 async function runCommand(command: string, args: string[]) {

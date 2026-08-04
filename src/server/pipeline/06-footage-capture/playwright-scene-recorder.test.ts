@@ -77,6 +77,49 @@ describe("PreparedWorkspacePlaywrightSceneRecorder", () => {
     }
   }, 20_000);
 
+  it("bounds a capture failure to a summary that references the retained logs", async () => {
+    const runDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-recorder-test-"),
+    );
+    const recorder = new PreparedWorkspacePlaywrightSceneRecorder({
+      preparationWorkspace: fakeCaptureWorkspace({
+        bunResult: {
+          exitCode: 1,
+          stderr: `boom at the start\n${"x".repeat(100_000)}`,
+          stdout: "",
+        },
+      }),
+    });
+
+    try {
+      await expect(
+        recorder.recordScenes({
+          baseUrl: "data:text/html,<main>MakeADemo</main>",
+          demoPlaywrightScript: validDemoScript("scene-bounded"),
+          runDirectory,
+          scenes: [
+            sceneDescription("scene-bounded", [
+              { id: "open", path: "/", type: "goto" },
+              {
+                id: "show",
+                locator: { strategy: "css", value: "main" },
+                type: "assert-visible",
+              },
+            ]),
+          ],
+          sectionId: "demo-script",
+        }),
+      ).rejects.toSatisfy((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        expect(message.length).toBeLessThanOrEqual(2_048);
+        expect(message).toContain("stderr.log");
+        return true;
+      });
+    } finally {
+      await rm(runDirectory, { force: true, recursive: true });
+    }
+  }, 20_000);
+
   it("classifies a SIGKILLed capture as a timeout alongside exit 124", async () => {
     const runDirectory = await mkdtemp(
       join(tmpdir(), "makeademo-recorder-test-"),

@@ -108,10 +108,20 @@ export function createJsonPipelineObserver(
   };
 }
 
+const maxObservabilityErrorMessageLength = 2_048;
+
+/**
+ * Project records hold the failure's summary, not its streams: full stdout
+ * and stderr live in retained run-directory logs, so the message is bounded
+ * and the head (the classification) wins over the tail.
+ */
 export function sanitizeObservabilityError(error: unknown) {
   if (error instanceof Error) {
     return {
-      errorMessage: error.message,
+      errorMessage:
+        error.message.length > maxObservabilityErrorMessageLength
+          ? `${error.message.slice(0, maxObservabilityErrorMessageLength - 1)}…`
+          : error.message,
       errorType: error.name,
     };
   }
