@@ -675,6 +675,30 @@ describe("DemoScriptContract", () => {
     ).toMatchObject({ status: "passed" });
   });
 
+  it("accepts grounded values and titles that legitimately mention TODO", () => {
+    const catalog = actionCatalog();
+    const catalogAction = catalog.actions[0];
+    if (catalogAction === undefined) {
+      throw new Error("Expected an ActionCatalog fixture action");
+    }
+    catalogAction.kind = "fill";
+    const script = validDemoScript();
+    script.title = "TodoApp: organize every TODO";
+    Object.assign(script.scenes[0]?.actions[0] ?? {}, {
+      type: "fill",
+      value: "Add a TODO item",
+    });
+
+    expect(
+      validateDemoScriptCandidateContract({
+        actionCatalog: catalog,
+        flowSpec: flowSpec(),
+        preparationManifest: preparationManifest(),
+        scriptCandidate: scriptCandidate(script),
+      }),
+    ).toMatchObject({ status: "passed" });
+  });
+
   it("fails invalid scripts with typed contract failures", () => {
     const cases: Array<[string, unknown, string]> = [
       [
@@ -765,7 +789,12 @@ describe("DemoScriptContract", () => {
         "placeholder",
         scriptCandidate({
           ...validDemoScript(),
-          title: "TODO replace-me",
+          scenes: [
+            {
+              ...validDemoScript().scenes[0],
+              humanReadableDescription: "TODO describe this scene",
+            },
+          ],
         }),
         "Demo Script must not contain placeholder content",
       ],

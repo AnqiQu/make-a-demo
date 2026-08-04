@@ -12,6 +12,7 @@ import {
 } from "../../pipeline/06-footage-capture/capture-contract-versions";
 import { assertDemoScriptCaptureSdkContract } from "../../pipeline/06-footage-capture/capture-sdk-contract";
 import {
+  type DemoScript,
   approvedFontFamilies,
   approvedMusicTrackIds,
   demoScriptLimits,
@@ -567,7 +568,7 @@ export function validateDemoScriptCandidateContract(input: {
       assertUsesManifestBaseUrl(demoScript.demoPlaywrightScript);
       assertNoExternalUrls(demoScript.demoPlaywrightScript);
     }
-    assertNoPlaceholders(scriptCandidate.scriptJsonContent);
+    assertNoPlaceholders(demoScript);
 
     return readValidationReport({
       artifactReferences: [DEMO_SCRIPT_OUTPUT_PATH],
@@ -1053,11 +1054,21 @@ function assertNoExternalUrls(script: string): void {
   }
 }
 
-function assertNoPlaceholders(scriptJsonContent: unknown): void {
-  const serialized = JSON.stringify(scriptJsonContent, (key, value) =>
-    key === "strategy" && value === "placeholder" ? undefined : value,
-  );
-  if (placeholderPattern.test(serialized)) {
+/**
+ * Placeholder screening covers only agent-authored free text. Grounded
+ * values, maker labels, and titles legitimately contain words like "TODO"
+ * when the product itself does (a todo app must be able to demo one).
+ */
+function assertNoPlaceholders(demoScript: DemoScript): void {
+  const authoredTexts = demoScript.scenes.flatMap((scene) => [
+    ...(scene.humanReadableDescription === undefined
+      ? []
+      : [scene.humanReadableDescription]),
+    ...(scene.type === "playwright-recording"
+      ? [scene.expectedVisibleOutcome]
+      : []),
+  ]);
+  if (authoredTexts.some((text) => placeholderPattern.test(text))) {
     throw new Error("Demo Script must not contain placeholder content");
   }
 }
