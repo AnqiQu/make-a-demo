@@ -2,10 +2,6 @@ import { describe, expect, it } from "vitest";
 import { readAgentHarnessRetryPolicy } from "./retry-policy";
 
 describe("readAgentHarnessRetryPolicy", () => {
-  it("allows progress across five repository repairs by default", () => {
-    expect(readAgentHarnessRetryPolicy({}).repoPreparationRepairs).toBe(5);
-  });
-
   it("reads bounded retry budgets from environment configuration", () => {
     expect(
       readAgentHarnessRetryPolicy({

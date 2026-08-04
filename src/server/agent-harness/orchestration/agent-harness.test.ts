@@ -7,6 +7,7 @@ import {
 import { DEMO_SCRIPT_OUTPUT_PATH } from "../schemas/artifacts";
 import {
   type AgentHarnessPipelineDependencies,
+  type AgentHarnessPipelineInput,
   runAgentHarnessPipeline,
 } from "./agent-harness";
 
@@ -80,40 +81,18 @@ describe("runAgentHarnessPipeline", () => {
     const downstreamCalls: string[] = [];
 
     const result = await runAgentHarnessPipeline(
-      {
-        demoBrief: { keyProductFeatures: ["dashboard"] },
+      pipelineInput({
         files: [
           { path: ".env", text: "DATABASE_URL=postgres://live-secret" },
           { path: "package.json", text: "{}" },
         ],
-        repoStats: { fileCount: 2, sizeBytes: 200 },
         repoUrl: "https://github.com/example/unsafe-app",
         runId: "run_security_rejected",
-      },
-      {
-        async capturePreparationWorkspaceDiff() {
-          return preparationWorkspaceDiff();
-        },
-        async captureWorkspaceDiff() {
-          return [];
-        },
-        artifactStore: {
-          async writeJson() {
-            return undefined;
-          },
-        },
+      }),
+      stubPipelineDependencies({
         async createWorkspace() {
           downstreamCalls.push("workspace");
           return workspace();
-        },
-        async exploreApp() {
-          throw new Error("App Exploration must not run after rejection.");
-        },
-        async planFlow() {
-          throw new Error("Flow Planning must not run after rejection.");
-        },
-        async prepareRepo() {
-          throw new Error("Repo Preparation must not run after rejection.");
         },
         async resetCaptureRuntime() {
           throw new Error("Capture reset must not run after rejection.");
@@ -122,25 +101,7 @@ describe("runAgentHarnessPipeline", () => {
           downstreamCalls.push("run-plan");
           return runPlan();
         },
-        async validateCapturePath() {
-          throw new Error(
-            "Capture Path Validation must not run after rejection.",
-          );
-        },
-        async validatePreparation() {
-          throw new Error(
-            "Preparation Preflight must not run after rejection.",
-          );
-        },
-        async validateScriptContract() {
-          throw new Error(
-            "Script Contract Validation must not run after rejection.",
-          );
-        },
-        async writeScript() {
-          throw new Error("Script Writing must not run after rejection.");
-        },
-      },
+      }),
     );
 
     expect(result.status).toBe("security-rejected");
@@ -152,8 +113,7 @@ describe("runAgentHarnessPipeline", () => {
     const artifacts: Record<string, unknown> = {};
 
     const result = await runAgentHarnessPipeline(
-      {
-        demoBrief: { keyProductFeatures: ["dashboard"] },
+      pipelineInput({
         files: [
           {
             path: "package.json",
@@ -175,9 +135,8 @@ describe("runAgentHarnessPipeline", () => {
           { path: "bun.lock", text: "" },
         ],
         repoStats: { fileCount: 4, sizeBytes: 400 },
-        repoUrl: "https://github.com/example/app",
         runId: "run_001",
-      },
+      }),
       {
         async captureWorkspaceDiff() {
           return [];
@@ -318,27 +277,11 @@ describe("runAgentHarnessPipeline", () => {
     let diffChecks = 0;
     const repairClassifications: Array<string | undefined> = [];
     const result = await runAgentHarnessPipeline(
-      {
-        demoBrief: { keyProductFeatures: ["dashboard"] },
-        files: [
-          { path: "package.json", text: "{}" },
-          { path: "src/page.tsx", text: "export default 1" },
-          { path: "bun.lock", text: "" },
-        ],
-        repoStats: { fileCount: 2, sizeBytes: 200 },
-        repoUrl: "https://github.com/example/app",
-        runId: "run_002",
-      },
-      {
-        async capturePreparationWorkspaceDiff() {
-          return preparationWorkspaceDiff();
-        },
+      pipelineInput({ runId: "run_002" }),
+      stubPipelineDependencies({
         async captureWorkspaceDiff() {
           diffChecks += 1;
           return diffChecks === 1 ? ["/workspace/src/App.tsx"] : [];
-        },
-        async createWorkspace() {
-          return workspace();
         },
         async exploreApp() {
           return {
@@ -358,12 +301,6 @@ describe("runAgentHarnessPipeline", () => {
           repairClassifications.push(failureReport.failureClassification);
           return scriptCandidate();
         },
-        async resetCaptureRuntime() {
-          return report("capture-runtime-reset", "passed");
-        },
-        async synthesizeRunPlan() {
-          return runPlan();
-        },
         async validateCapturePath() {
           return report("capture-path-validation", "passed");
         },
@@ -376,7 +313,7 @@ describe("runAgentHarnessPipeline", () => {
         async writeScript() {
           return scriptCandidate();
         },
-      },
+      }),
     );
 
     expect(result.status).toBe("passed");
@@ -388,62 +325,19 @@ describe("runAgentHarnessPipeline", () => {
 
     await expect(
       runAgentHarnessPipeline(
-        {
-          demoBrief: { keyProductFeatures: ["dashboard"] },
-          files: [
-            { path: "package.json", text: "{}" },
-            { path: "src/page.tsx", text: "export default 1" },
-            { path: "bun.lock", text: "" },
-          ],
-          repoStats: { fileCount: 2, sizeBytes: 200 },
-          repoUrl: "https://github.com/example/app",
-          runId: "run_003",
-        },
-        {
-          async capturePreparationWorkspaceDiff() {
-            return preparationWorkspaceDiff();
-          },
-          async captureWorkspaceDiff() {
-            return [];
-          },
+        pipelineInput({ runId: "run_003" }),
+        stubPipelineDependencies({
           artifactStore: {
             async writeJson(path, value) {
               artifacts[path] = value;
             },
-          },
-          async createWorkspace() {
-            return workspace();
-          },
-          async exploreApp() {
-            throw new Error("App Exploration should not run.");
-          },
-          async planFlow() {
-            throw new Error("Flow Planning should not run.");
           },
           async prepareRepo() {
             throw Object.assign(new Error("Repo clone failed."), {
               opencodeSessionId: "session_failed_prepare",
             });
           },
-          async resetCaptureRuntime() {
-            return report("capture-runtime-reset", "passed");
-          },
-          async synthesizeRunPlan() {
-            return runPlan();
-          },
-          async validateCapturePath() {
-            throw new Error("Capture Path Validation should not run.");
-          },
-          async validatePreparation() {
-            throw new Error("Preparation Preflight should not run.");
-          },
-          async validateScriptContract() {
-            throw new Error("Static Script Contract should not run.");
-          },
-          async writeScript() {
-            throw new Error("Script Writing should not run.");
-          },
-        },
+        }),
       ),
     ).rejects.toThrow("Repo clone failed.");
 
@@ -471,33 +365,8 @@ describe("runAgentHarnessPipeline", () => {
   it("rejects a prepared manifest violating the feature inventory even when dependencies skip validation", async () => {
     await expect(
       runAgentHarnessPipeline(
-        {
-          demoBrief: { keyProductFeatures: ["dashboard"] },
-          files: [
-            { path: "package.json", text: "{}" },
-            { path: "src/page.tsx", text: "export default 1" },
-            { path: "bun.lock", text: "" },
-          ],
-          repoStats: { fileCount: 2, sizeBytes: 200 },
-          repoUrl: "https://github.com/example/app",
-          runId: "run_inventory_backstop",
-        },
-        {
-          async capturePreparationWorkspaceDiff() {
-            return preparationWorkspaceDiff();
-          },
-          async captureWorkspaceDiff() {
-            return [];
-          },
-          async createWorkspace() {
-            return workspace();
-          },
-          async exploreApp() {
-            throw new Error("App Exploration should not run.");
-          },
-          async planFlow() {
-            throw new Error("Flow Planning should not run.");
-          },
+        pipelineInput({ runId: "run_inventory_backstop" }),
+        stubPipelineDependencies({
           async prepareRepo() {
             const manifest = preparationManifest();
             const feature = manifest.productContext.featureInventory[0];
@@ -507,25 +376,7 @@ describe("runAgentHarnessPipeline", () => {
             feature.sourcePaths = ["package.json"];
             return { manifest };
           },
-          async resetCaptureRuntime() {
-            return report("capture-runtime-reset", "passed");
-          },
-          async synthesizeRunPlan() {
-            return runPlan();
-          },
-          async validateCapturePath() {
-            throw new Error("Capture Path Validation should not run.");
-          },
-          async validatePreparation() {
-            throw new Error("Preparation Preflight should not run.");
-          },
-          async validateScriptContract() {
-            throw new Error("Static Script Contract should not run.");
-          },
-          async writeScript() {
-            throw new Error("Script Writing should not run.");
-          },
-        },
+        }),
       ),
     ).rejects.toThrow(
       /must cite an original route, page, component, or browser UI module/,
@@ -536,33 +387,11 @@ describe("runAgentHarnessPipeline", () => {
     let preflightAttempts = 0;
     await expect(
       runAgentHarnessPipeline(
-        {
-          demoBrief: { keyProductFeatures: ["dashboard"] },
-          files: [
-            { path: "package.json", text: "{}" },
-            { path: "src/page.tsx", text: "export default 1" },
-            { path: "bun.lock", text: "" },
-          ],
+        pipelineInput({
           repoStats: { fileCount: 3, sizeBytes: 300 },
-          repoUrl: "https://github.com/example/app",
           runId: "run_repair_inventory_backstop",
-        },
-        {
-          async capturePreparationWorkspaceDiff() {
-            return preparationWorkspaceDiff();
-          },
-          async captureWorkspaceDiff() {
-            return [];
-          },
-          async createWorkspace() {
-            return workspace();
-          },
-          async exploreApp() {
-            throw new Error("App Exploration should not run.");
-          },
-          async planFlow() {
-            throw new Error("Flow Planning should not run.");
-          },
+        }),
+        stubPipelineDependencies({
           async prepareRepo() {
             return { manifest: preparationManifest() };
           },
@@ -584,15 +413,6 @@ describe("runAgentHarnessPipeline", () => {
               },
             };
           },
-          async resetCaptureRuntime() {
-            return report("capture-runtime-reset", "passed");
-          },
-          async synthesizeRunPlan() {
-            return runPlan();
-          },
-          async validateCapturePath() {
-            throw new Error("Capture Path Validation should not run.");
-          },
           async validatePreparation() {
             preflightAttempts += 1;
             if (preflightAttempts === 1) {
@@ -603,13 +423,7 @@ describe("runAgentHarnessPipeline", () => {
             }
             return report("preparation-preflight", "passed");
           },
-          async validateScriptContract() {
-            throw new Error("Static Script Contract should not run.");
-          },
-          async writeScript() {
-            throw new Error("Script Writing should not run.");
-          },
-        },
+        }),
       ),
     ).rejects.toThrow(/must prepare every requested demo feature exactly once/);
   });
@@ -643,13 +457,11 @@ describe("runAgentHarnessPipeline", () => {
 
       try {
         await runAgentHarnessPipeline(
-          {
-            demoBrief: { keyProductFeatures: ["dashboard"] },
+          pipelineInput({
             files: [{ path: "package.json", text: "{}" }],
             repoStats: { fileCount: 1, sizeBytes: 2 },
-            repoUrl: "https://github.com/example/app",
             runId: "run_infrastructure_failure",
-          },
+          }),
           failingPreparationDependencies(failure, artifacts),
         );
       } catch (error) {
@@ -677,13 +489,11 @@ describe("runAgentHarnessPipeline", () => {
 
     try {
       await runAgentHarnessPipeline(
-        {
-          demoBrief: { keyProductFeatures: ["dashboard"] },
+        pipelineInput({
           files: [{ path: "package.json", text: "{}" }],
           repoStats: { fileCount: 1, sizeBytes: 2 },
-          repoUrl: "https://github.com/example/app",
           runId: "run_failure_diff",
-        },
+        }),
         {
           ...failingPreparationDependencies(failure, {}),
           async capturePreparationWorkspaceDiff() {
@@ -709,20 +519,12 @@ describe("runAgentHarnessPipeline", () => {
 
     try {
       await runAgentHarnessPipeline(
-        {
-          demoBrief: { keyProductFeatures: ["dashboard"] },
+        pipelineInput({
           files: [{ path: "package.json", text: "{}" }],
           repoStats: { fileCount: 1, sizeBytes: 2 },
-          repoUrl: "https://github.com/example/app",
           runId: "run_teardown_failure",
-        },
-        {
-          async capturePreparationWorkspaceDiff() {
-            return preparationWorkspaceDiff();
-          },
-          async captureWorkspaceDiff() {
-            return [];
-          },
+        }),
+        stubPipelineDependencies({
           artifactStore: {
             async writeJson(path, value) {
               artifacts[path] = value;
@@ -736,34 +538,10 @@ describe("runAgentHarnessPipeline", () => {
               },
             };
           },
-          async exploreApp() {
-            throw new Error("should not explore");
-          },
-          async planFlow() {
-            throw new Error("should not plan");
-          },
           async prepareRepo() {
             throw new Error("Repo clone failed");
           },
-          async resetCaptureRuntime() {
-            return report("capture-runtime-reset", "passed");
-          },
-          async synthesizeRunPlan() {
-            return runPlan();
-          },
-          async validateCapturePath() {
-            throw new Error("should not validate capture");
-          },
-          async validatePreparation() {
-            throw new Error("should not validate preparation");
-          },
-          async validateScriptContract() {
-            throw new Error("should not validate script");
-          },
-          async writeScript() {
-            throw new Error("should not write script");
-          },
-        },
+        }),
       );
     } catch (error) {
       caught = error;
@@ -789,27 +567,8 @@ describe("runAgentHarnessPipeline", () => {
     let flowAttempts = 0;
 
     const result = await runAgentHarnessPipeline(
-      {
-        demoBrief: { keyProductFeatures: ["dashboard"] },
-        files: [
-          { path: "package.json", text: "{}" },
-          { path: "src/page.tsx", text: "export default 1" },
-          { path: "bun.lock", text: "" },
-        ],
-        repoStats: { fileCount: 2, sizeBytes: 200 },
-        repoUrl: "https://github.com/example/app",
-        runId: "run_repair",
-      },
-      {
-        async capturePreparationWorkspaceDiff() {
-          return preparationWorkspaceDiff();
-        },
-        async captureWorkspaceDiff() {
-          return [];
-        },
-        async createWorkspace() {
-          return workspace();
-        },
+      pipelineInput({ runId: "run_repair" }),
+      stubPipelineDependencies({
         async exploreApp() {
           explorationAttempts += 1;
           calls.push(`explore:${explorationAttempts}`);
@@ -836,9 +595,6 @@ describe("runAgentHarnessPipeline", () => {
           calls.push("reset");
           return report("capture-runtime-reset", "passed");
         },
-        async synthesizeRunPlan() {
-          return runPlan();
-        },
         async validateCapturePath() {
           captureAttempts += 1;
           calls.push(`dynamic:${captureAttempts}`);
@@ -860,7 +616,7 @@ describe("runAgentHarnessPipeline", () => {
         async writeScript() {
           return scriptCandidate();
         },
-      },
+      }),
     );
 
     expect(result.status).toBe("passed");
@@ -897,27 +653,8 @@ describe("runAgentHarnessPipeline", () => {
     let validatedCandidate: unknown;
 
     const result = await runAgentHarnessPipeline(
-      {
-        demoBrief: { keyProductFeatures: ["dashboard"] },
-        files: [
-          { path: "package.json", text: "{}" },
-          { path: "src/page.tsx", text: "export default 1" },
-          { path: "bun.lock", text: "" },
-        ],
-        repoStats: { fileCount: 2, sizeBytes: 200 },
-        repoUrl: "https://github.com/example/app",
-        runId: "run_navigation_derived",
-      },
-      {
-        async capturePreparationWorkspaceDiff() {
-          return preparationWorkspaceDiff();
-        },
-        async captureWorkspaceDiff() {
-          return [];
-        },
-        async createWorkspace() {
-          return workspace();
-        },
+      pipelineInput({ runId: "run_navigation_derived" }),
+      stubPipelineDependencies({
         async exploreApp() {
           return {
             kind: "artifacts" as const,
@@ -952,12 +689,6 @@ describe("runAgentHarnessPipeline", () => {
         },
         async prepareRepo() {
           return { manifest: preparationManifest() };
-        },
-        async resetCaptureRuntime() {
-          return report("capture-runtime-reset", "passed");
-        },
-        async synthesizeRunPlan() {
-          return runPlan();
         },
         async validateCapturePath() {
           return report("capture-path-validation", "passed");
@@ -996,7 +727,7 @@ describe("runAgentHarnessPipeline", () => {
             },
           };
         },
-      },
+      }),
     );
 
     expect(result.status).toBe("passed");
@@ -1020,27 +751,8 @@ describe("runAgentHarnessPipeline", () => {
     let captureAttempts = 0;
 
     const result = await runAgentHarnessPipeline(
-      {
-        demoBrief: { keyProductFeatures: ["dashboard"] },
-        files: [
-          { path: "package.json", text: "{}" },
-          { path: "src/page.tsx", text: "export default 1" },
-          { path: "bun.lock", text: "" },
-        ],
-        repoStats: { fileCount: 2, sizeBytes: 200 },
-        repoUrl: "https://github.com/example/app",
-        runId: "run_flow_lock_escape",
-      },
-      {
-        async capturePreparationWorkspaceDiff() {
-          return preparationWorkspaceDiff();
-        },
-        async captureWorkspaceDiff() {
-          return [];
-        },
-        async createWorkspace() {
-          return workspace();
-        },
+      pipelineInput({ runId: "run_flow_lock_escape" }),
+      stubPipelineDependencies({
         async exploreApp() {
           return {
             kind: "artifacts" as const,
@@ -1084,12 +796,6 @@ describe("runAgentHarnessPipeline", () => {
         async repairScript() {
           return scriptCandidate();
         },
-        async resetCaptureRuntime() {
-          return report("capture-runtime-reset", "passed");
-        },
-        async synthesizeRunPlan() {
-          return runPlan();
-        },
         async validateCapturePath() {
           captureAttempts += 1;
           return captureAttempts <= 2
@@ -1110,7 +816,7 @@ describe("runAgentHarnessPipeline", () => {
         async writeScript() {
           return scriptCandidate();
         },
-      },
+      }),
     );
 
     expect(result.status).toBe("passed");
@@ -1125,27 +831,8 @@ describe("runAgentHarnessPipeline", () => {
     let captureAttempts = 0;
 
     const result = await runAgentHarnessPipeline(
-      {
-        demoBrief: { keyProductFeatures: ["dashboard"] },
-        files: [
-          { path: "package.json", text: "{}" },
-          { path: "src/page.tsx", text: "export default 1" },
-          { path: "bun.lock", text: "" },
-        ],
-        repoStats: { fileCount: 2, sizeBytes: 200 },
-        repoUrl: "https://github.com/example/app",
-        runId: "run_transient",
-      },
-      {
-        async capturePreparationWorkspaceDiff() {
-          return preparationWorkspaceDiff();
-        },
-        async captureWorkspaceDiff() {
-          return [];
-        },
-        async createWorkspace() {
-          return workspace();
-        },
+      pipelineInput({ runId: "run_transient" }),
+      stubPipelineDependencies({
         async exploreApp() {
           return {
             kind: "artifacts" as const,
@@ -1163,12 +850,6 @@ describe("runAgentHarnessPipeline", () => {
         async repairScript({ failureReport }) {
           calls.push(`repair:${failureReport.logsSummary}`);
           return scriptCandidate();
-        },
-        async resetCaptureRuntime() {
-          return report("capture-runtime-reset", "passed");
-        },
-        async synthesizeRunPlan() {
-          return runPlan();
         },
         async validateCapturePath() {
           captureAttempts += 1;
@@ -1191,7 +872,7 @@ describe("runAgentHarnessPipeline", () => {
         async writeScript() {
           return scriptCandidate();
         },
-      },
+      }),
     );
 
     expect(result.status).toBe("passed");
@@ -1203,27 +884,8 @@ describe("runAgentHarnessPipeline", () => {
 
     await expect(
       runAgentHarnessPipeline(
-        {
-          demoBrief: { keyProductFeatures: ["dashboard"] },
-          files: [
-            { path: "package.json", text: "{}" },
-            { path: "src/page.tsx", text: "export default 1" },
-            { path: "bun.lock", text: "" },
-          ],
-          repoStats: { fileCount: 2, sizeBytes: 200 },
-          repoUrl: "https://github.com/example/app",
-          runId: "run_transient_exhausted",
-        },
-        {
-          async capturePreparationWorkspaceDiff() {
-            return preparationWorkspaceDiff();
-          },
-          async captureWorkspaceDiff() {
-            return [];
-          },
-          async createWorkspace() {
-            return workspace();
-          },
+        pipelineInput({ runId: "run_transient_exhausted" }),
+        stubPipelineDependencies({
           async exploreApp() {
             return {
               kind: "artifacts" as const,
@@ -1241,12 +903,6 @@ describe("runAgentHarnessPipeline", () => {
           async repairScript({ failureReport }) {
             calls.push(`repair:${failureReport.logsSummary}`);
             return scriptCandidate();
-          },
-          async resetCaptureRuntime() {
-            return report("capture-runtime-reset", "passed");
-          },
-          async synthesizeRunPlan() {
-            return runPlan();
           },
           async validateCapturePath() {
             calls.push("dynamic");
@@ -1266,7 +922,7 @@ describe("runAgentHarnessPipeline", () => {
           async writeScript() {
             return scriptCandidate();
           },
-        },
+        }),
       ),
     ).rejects.toThrow(/Submitted-code artifact download failed/);
     expect(calls).toEqual(["dynamic", "dynamic", "dynamic"]);
@@ -1278,31 +934,12 @@ describe("runAgentHarnessPipeline", () => {
     let preflightAttempts = 0;
 
     const result = await runAgentHarnessPipeline(
-      {
-        demoBrief: { keyProductFeatures: ["dashboard"] },
-        files: [
-          { path: "package.json", text: "{}" },
-          { path: "src/page.tsx", text: "export default 1" },
-          { path: "bun.lock", text: "" },
-        ],
-        repoStats: { fileCount: 2, sizeBytes: 200 },
-        repoUrl: "https://github.com/example/app",
-        runId: "run_preparation_repair",
-      },
-      {
-        async capturePreparationWorkspaceDiff() {
-          return preparationWorkspaceDiff();
-        },
-        async captureWorkspaceDiff() {
-          return [];
-        },
+      pipelineInput({ runId: "run_preparation_repair" }),
+      stubPipelineDependencies({
         artifactStore: {
           async writeJson(path) {
             artifactWrites.push(path);
           },
-        },
-        async createWorkspace() {
-          return workspace();
         },
         async exploreApp({ preparationManifest: manifest }) {
           calls.push(`explore:${manifest.id}`);
@@ -1324,12 +961,6 @@ describe("runAgentHarnessPipeline", () => {
           return {
             manifest: { ...preparationManifest(), id: "prep_repaired" },
           };
-        },
-        async resetCaptureRuntime() {
-          return report("capture-runtime-reset", "passed");
-        },
-        async synthesizeRunPlan() {
-          return runPlan();
         },
         async validateCapturePath() {
           return report("capture-path-validation", "passed");
@@ -1354,7 +985,7 @@ describe("runAgentHarnessPipeline", () => {
             sourcePreparationManifestId: "prep_repaired",
           };
         },
-      },
+      }),
     );
 
     expect(result.status).toBe("passed");
@@ -1378,8 +1009,7 @@ describe("runAgentHarnessPipeline", () => {
     let preflightAttempts = 0;
     let repairAttempts = 0;
     const result = await runAgentHarnessPipeline(
-      {
-        demoBrief: { keyProductFeatures: ["dashboard"] },
+      pipelineInput({
         files: [
           {
             path: "package.json",
@@ -1412,18 +1042,11 @@ describe("runAgentHarnessPipeline", () => {
           { path: "bun.lock", text: "" },
         ],
         repoStats: { fileCount: 8, sizeBytes: 800 },
-        repoUrl: "https://github.com/example/app",
         runId: "run_workspace_scope_recovery",
-      },
-      {
-        async captureWorkspaceDiff() {
-          return [];
-        },
+      }),
+      stubPipelineDependencies({
         async capturePreparationWorkspaceDiff() {
           return unchangedWorkspaceDiff();
-        },
-        async createWorkspace() {
-          return workspace();
         },
         async exploreApp() {
           return {
@@ -1447,12 +1070,6 @@ describe("runAgentHarnessPipeline", () => {
         async repairPreparation() {
           repairAttempts += 1;
           return { manifest: preparationManifest() };
-        },
-        async resetCaptureRuntime() {
-          return report("capture-runtime-reset", "passed");
-        },
-        async synthesizeRunPlan() {
-          return runPlan();
         },
         async validateCapturePath() {
           return report("capture-path-validation", "passed");
@@ -1480,7 +1097,7 @@ describe("runAgentHarnessPipeline", () => {
         async writeScript() {
           return scriptCandidate();
         },
-      },
+      }),
     );
 
     expect(result.status).toBe("passed");
@@ -1500,8 +1117,7 @@ describe("runAgentHarnessPipeline", () => {
 
     await expect(
       runAgentHarnessPipeline(
-        {
-          demoBrief: { keyProductFeatures: ["dashboard"] },
+        pipelineInput({
           files: [
             {
               path: "package.json",
@@ -1522,24 +1138,11 @@ describe("runAgentHarnessPipeline", () => {
             { path: "bun.lock", text: "" },
           ],
           repoStats: { fileCount: 5, sizeBytes: 500 },
-          repoUrl: "https://github.com/example/app",
           runId: "run_expansion_budget",
-        },
-        {
-          async captureWorkspaceDiff() {
-            return [];
-          },
+        }),
+        stubPipelineDependencies({
           async capturePreparationWorkspaceDiff() {
             return unchangedWorkspaceDiff();
-          },
-          async createWorkspace() {
-            return workspace();
-          },
-          async exploreApp() {
-            throw new Error("App Exploration must not run.");
-          },
-          async planFlow() {
-            throw new Error("Flow Planning must not run.");
           },
           async prepareRepo() {
             const manifest = preparationManifest();
@@ -1556,12 +1159,6 @@ describe("runAgentHarnessPipeline", () => {
           async resetCaptureRuntime() {
             throw new Error("Capture reset must not run.");
           },
-          async synthesizeRunPlan() {
-            return runPlan();
-          },
-          async validateCapturePath() {
-            throw new Error("Capture validation must not run.");
-          },
           async validatePreparation() {
             preflightAttempts += 1;
             return preflightAttempts === 1
@@ -1577,13 +1174,7 @@ describe("runAgentHarnessPipeline", () => {
                   logsSummary: "App exited before it became ready",
                 };
           },
-          async validateScriptContract() {
-            throw new Error("Script validation must not run.");
-          },
-          async writeScript() {
-            throw new Error("Script writing must not run.");
-          },
-        },
+        }),
         { repoPreparationRepairLimit: 1 },
       ),
     ).rejects.toThrow("global retry budget exhausted");
@@ -1596,29 +1187,20 @@ describe("runAgentHarnessPipeline", () => {
     let diffAttempts = 0;
 
     const result = await runAgentHarnessPipeline(
-      {
-        demoBrief: { keyProductFeatures: ["dashboard"] },
+      pipelineInput({
         files: [
           { path: "package.json", text: "{}" },
           { path: "src/page.tsx", text: "export default 1" },
           { path: "src/App.tsx", text: "export function App() {}" },
         ],
-        repoStats: { fileCount: 2, sizeBytes: 200 },
-        repoUrl: "https://github.com/example/app",
         runId: "run_fidelity_repair",
-      },
-      {
-        async captureWorkspaceDiff() {
-          return [];
-        },
+      }),
+      stubPipelineDependencies({
         async capturePreparationWorkspaceDiff() {
           diffAttempts += 1;
           return diffAttempts === 1
             ? replacementWorkspaceDiff()
             : unchangedWorkspaceDiff();
-        },
-        async createWorkspace() {
-          return workspace();
         },
         async exploreApp() {
           calls.push("explore");
@@ -1643,12 +1225,6 @@ describe("runAgentHarnessPipeline", () => {
           calls.push(`repair:${failureReport.stage}`);
           return { manifest: preparationManifest() };
         },
-        async resetCaptureRuntime() {
-          return report("capture-runtime-reset", "passed");
-        },
-        async synthesizeRunPlan() {
-          return runPlan();
-        },
         async validateCapturePath() {
           return report("capture-path-validation", "passed");
         },
@@ -1662,7 +1238,7 @@ describe("runAgentHarnessPipeline", () => {
         async writeScript() {
           return scriptCandidate();
         },
-      },
+      }),
     );
 
     expect(result.status).toBe("passed");
@@ -1692,17 +1268,14 @@ describe("runAgentHarnessPipeline", () => {
 
     await expect(
       runAgentHarnessPipeline(
-        {
-          demoBrief: { keyProductFeatures: ["dashboard"] },
+        pipelineInput({
           files: [
             { path: "package.json", text: "{}" },
             { path: "src/page.tsx", text: "export default 1" },
             { path: "src/App.tsx", text: "export function App() {}" },
           ],
-          repoStats: { fileCount: 2, sizeBytes: 200 },
-          repoUrl: "https://github.com/example/app",
           runId: "run_failed_fidelity_repair",
-        },
+        }),
         {
           ...failingPreparationDependencies(
             new Error("Unexpected pipeline stage."),
@@ -1778,8 +1351,7 @@ describe("runAgentHarnessPipeline", () => {
     let diffAttempt = 0;
 
     const result = await runAgentHarnessPipeline(
-      {
-        demoBrief: { keyProductFeatures: ["dashboard"] },
+      pipelineInput({
         files: [
           { path: "package.json", text: "{}" },
           { path: "bun.lock", text: "" },
@@ -1787,13 +1359,9 @@ describe("runAgentHarnessPipeline", () => {
           { path: "src/service/export.ts", text: "export const value = 1" },
         ],
         repoStats: { fileCount: 3, sizeBytes: 300 },
-        repoUrl: "https://github.com/example/app",
         runId: "run_transactional_install_repair",
-      },
-      {
-        async captureWorkspaceDiff() {
-          return [];
-        },
+      }),
+      stubPipelineDependencies({
         artifactStore: {
           async writeJson(path, value) {
             artifacts[path] = value;
@@ -1810,9 +1378,6 @@ describe("runAgentHarnessPipeline", () => {
           ][diffAttempt - 1];
           if (diff === undefined) throw new Error("Unexpected diff capture.");
           return diff;
-        },
-        async createWorkspace() {
-          return workspace();
         },
         async exploreApp() {
           return {
@@ -1838,14 +1403,8 @@ describe("runAgentHarnessPipeline", () => {
               repairInputs.length === 2 ? driftedManifest : approvedManifest,
           };
         },
-        async resetCaptureRuntime() {
-          return report("capture-runtime-reset", "passed");
-        },
         async restorePreparationCandidate({ preparationManifest }) {
           restored.push(preparationManifest.id);
-        },
-        async synthesizeRunPlan() {
-          return runPlan();
         },
         async validateCapturePath() {
           return report("capture-path-validation", "passed");
@@ -1874,7 +1433,7 @@ describe("runAgentHarnessPipeline", () => {
             sourcePreparationManifestId: approvedManifest.id,
           };
         },
-      },
+      }),
     );
 
     expect(result.status).toBe("passed");
@@ -1929,8 +1488,7 @@ describe("runAgentHarnessPipeline", () => {
     let explorationAttempt = 0;
 
     const result = await runAgentHarnessPipeline(
-      {
-        demoBrief: { keyProductFeatures: ["dashboard"] },
+      pipelineInput({
         files: [
           { path: "package.json", text: "{}" },
           { path: "bun.lock", text: "" },
@@ -1938,21 +1496,14 @@ describe("runAgentHarnessPipeline", () => {
           { path: "src/feature.ts", text: "export const feature = true" },
         ],
         repoStats: { fileCount: 3, sizeBytes: 200 },
-        repoUrl: "https://github.com/example/app",
         runId: "run_rejected_repair_hint",
-      },
-      {
-        async captureWorkspaceDiff() {
-          return [];
-        },
+      }),
+      stubPipelineDependencies({
         async capturePreparationWorkspaceDiff() {
           diffAttempt += 1;
           return diffAttempt === 2 || diffAttempt === 3
             ? invalidDiff
             : unchangedWorkspaceDiff();
-        },
-        async createWorkspace() {
-          return workspace();
         },
         async exploreApp() {
           explorationAttempt += 1;
@@ -1979,13 +1530,7 @@ describe("runAgentHarnessPipeline", () => {
           repairHintLists.push([...failureReport.suggestedRepairHints]);
           return { manifest: approvedManifest };
         },
-        async resetCaptureRuntime() {
-          return report("capture-runtime-reset", "passed");
-        },
         async restorePreparationCandidate() {},
-        async synthesizeRunPlan() {
-          return runPlan();
-        },
         async validateCapturePath() {
           return report("capture-path-validation", "passed");
         },
@@ -2001,7 +1546,7 @@ describe("runAgentHarnessPipeline", () => {
             sourcePreparationManifestId: approvedManifest.id,
           };
         },
-      },
+      }),
     );
 
     expect(result.status).toBe("passed");
@@ -2042,27 +1587,18 @@ describe("runAgentHarnessPipeline", () => {
     let explorationAttempt = 0;
 
     const result = await runAgentHarnessPipeline(
-      {
-        demoBrief: { keyProductFeatures: ["dashboard"] },
+      pipelineInput({
         files: [
           { path: "package.json", text: "{}" },
           { path: "src/page.tsx", text: "export default 1" },
           { path: "src/feature.ts", text: "export const feature = true" },
         ],
-        repoStats: { fileCount: 2, sizeBytes: 200 },
-        repoUrl: "https://github.com/example/app",
         runId: "run_downstream_preparation_baseline",
-      },
-      {
-        async captureWorkspaceDiff() {
-          return [];
-        },
+      }),
+      stubPipelineDependencies({
         async capturePreparationWorkspaceDiff() {
           diffAttempt += 1;
           return diffAttempt === 2 ? invalidDiff : unchangedWorkspaceDiff();
-        },
-        async createWorkspace() {
-          return workspace();
         },
         async exploreApp() {
           explorationAttempt += 1;
@@ -2094,14 +1630,8 @@ describe("runAgentHarnessPipeline", () => {
                 : approvedManifest,
           };
         },
-        async resetCaptureRuntime() {
-          return report("capture-runtime-reset", "passed");
-        },
         async restorePreparationCandidate({ preparationManifest }) {
           restored.push(preparationManifest.id);
-        },
-        async synthesizeRunPlan() {
-          return runPlan();
         },
         async validateCapturePath() {
           return report("capture-path-validation", "passed");
@@ -2118,7 +1648,7 @@ describe("runAgentHarnessPipeline", () => {
             sourcePreparationManifestId: approvedManifest.id,
           };
         },
-      },
+      }),
     );
 
     expect(result.status).toBe("passed");
@@ -2158,29 +1688,13 @@ describe("runAgentHarnessPipeline", () => {
     let repairs = 0;
 
     const result = await runAgentHarnessPipeline(
-      {
-        demoBrief: { keyProductFeatures: ["dashboard"] },
-        files: [
-          { path: "package.json", text: "{}" },
-          { path: "src/page.tsx", text: "export default 1" },
-          { path: "bun.lock", text: "" },
-        ],
-        repoStats: { fileCount: 2, sizeBytes: 200 },
-        repoUrl: "https://github.com/example/app",
-        runId: "run_generated_lockfile_baseline",
-      },
-      {
-        async captureWorkspaceDiff() {
-          return [];
-        },
+      pipelineInput({ runId: "run_generated_lockfile_baseline" }),
+      stubPipelineDependencies({
         async capturePreparationWorkspaceDiff() {
           diffCaptures += 1;
           if (state === "promoted") return promotedLockDiff;
           if (state === "repaired") return repairedDependencyDiff;
           return unchangedWorkspaceDiff();
-        },
-        async createWorkspace() {
-          return workspace();
         },
         async exploreApp() {
           return {
@@ -2201,14 +1715,8 @@ describe("runAgentHarnessPipeline", () => {
           state = "repaired";
           return { manifest: preparationManifest() };
         },
-        async resetCaptureRuntime() {
-          return report("capture-runtime-reset", "passed");
-        },
         async restorePreparationCandidate() {
           throw new Error("A backend-generated lockfile must not be rejected.");
-        },
-        async synthesizeRunPlan() {
-          return runPlan();
         },
         async validateCapturePath() {
           return report("capture-path-validation", "passed");
@@ -2230,7 +1738,7 @@ describe("runAgentHarnessPipeline", () => {
         async writeScript() {
           return scriptCandidate();
         },
-      },
+      }),
     );
 
     expect(result.status).toBe("passed");
@@ -2253,26 +1761,10 @@ describe("runAgentHarnessPipeline", () => {
     const reconcileRequests: Array<boolean | undefined> = [];
 
     const result = await runAgentHarnessPipeline(
-      {
-        demoBrief: { keyProductFeatures: ["dashboard"] },
-        files: [
-          { path: "package.json", text: "{}" },
-          { path: "src/page.tsx", text: "export default 1" },
-          { path: "bun.lock", text: "" },
-        ],
-        repoStats: { fileCount: 2, sizeBytes: 200 },
-        repoUrl: "https://github.com/example/app",
-        runId: "run_runtime_dependency_repair",
-      },
-      {
-        async captureWorkspaceDiff() {
-          return [];
-        },
+      pipelineInput({ runId: "run_runtime_dependency_repair" }),
+      stubPipelineDependencies({
         async capturePreparationWorkspaceDiff() {
           return repaired ? dependencyDiff : unchangedWorkspaceDiff();
-        },
-        async createWorkspace() {
-          return workspace();
         },
         async exploreApp() {
           return {
@@ -2292,12 +1784,6 @@ describe("runAgentHarnessPipeline", () => {
           repaired = true;
           return { manifest: preparationManifest() };
         },
-        async resetCaptureRuntime() {
-          return report("capture-runtime-reset", "passed");
-        },
-        async synthesizeRunPlan() {
-          return runPlan();
-        },
         async validateCapturePath() {
           return report("capture-path-validation", "passed");
         },
@@ -2316,7 +1802,7 @@ describe("runAgentHarnessPipeline", () => {
         async writeScript() {
           return scriptCandidate();
         },
-      },
+      }),
     );
 
     expect(result.status).toBe("passed");
@@ -2329,31 +1815,17 @@ describe("runAgentHarnessPipeline", () => {
 
     await expect(
       runAgentHarnessPipeline(
-        {
-          demoBrief: { keyProductFeatures: ["dashboard"] },
+        pipelineInput({
           files: [
             { path: "package.json", text: "{}" },
             { path: "src/page.tsx", text: "export default 1" },
           ],
           repoStats: { fileCount: 1, sizeBytes: 100 },
-          repoUrl: "https://github.com/example/app",
           runId: "run_noisy_repeated_failure",
-        },
-        {
-          async captureWorkspaceDiff() {
-            return [];
-          },
+        }),
+        stubPipelineDependencies({
           async capturePreparationWorkspaceDiff() {
             return unchangedWorkspaceDiff();
-          },
-          async createWorkspace() {
-            return workspace();
-          },
-          async exploreApp() {
-            throw new Error("App Exploration must not run.");
-          },
-          async planFlow() {
-            throw new Error("Flow Planning must not run.");
           },
           async prepareRepo() {
             return { manifest: preparationManifest() };
@@ -2365,9 +1837,6 @@ describe("runAgentHarnessPipeline", () => {
           async resetCaptureRuntime() {
             throw new Error("Capture reset must not run.");
           },
-          async synthesizeRunPlan() {
-            return runPlan();
-          },
           async validatePreparation() {
             preflightAttempts += 1;
             return {
@@ -2377,16 +1846,7 @@ describe("runAgentHarnessPipeline", () => {
               logsSummary: `Start command could not listen on 127.0.0.1:${3000 + preflightAttempts}\nfull log: /tmp/makeademo-run-${preflightAttempts}/app.log`,
             };
           },
-          async validateCapturePath() {
-            throw new Error("Capture validation must not run.");
-          },
-          async validateScriptContract() {
-            throw new Error("Script validation must not run.");
-          },
-          async writeScript() {
-            throw new Error("Script writing must not run.");
-          },
-        },
+        }),
         { repoPreparationRepairLimit: 5 },
       ),
     ).rejects.toThrow("repeated failure");
@@ -2400,31 +1860,17 @@ describe("runAgentHarnessPipeline", () => {
 
     await expect(
       runAgentHarnessPipeline(
-        {
-          demoBrief: { keyProductFeatures: ["dashboard"] },
+        pipelineInput({
           files: [
             { path: "package.json", text: "{}" },
             { path: "src/page.tsx", text: "export default 1" },
           ],
           repoStats: { fileCount: 1, sizeBytes: 100 },
-          repoUrl: "https://github.com/example/app",
           runId: "run_repeated_failure_budget",
-        },
-        {
-          async captureWorkspaceDiff() {
-            return [];
-          },
+        }),
+        stubPipelineDependencies({
           async capturePreparationWorkspaceDiff() {
             return unchangedWorkspaceDiff();
-          },
-          async createWorkspace() {
-            return workspace();
-          },
-          async exploreApp() {
-            throw new Error("App Exploration must not run.");
-          },
-          async planFlow() {
-            throw new Error("Flow Planning must not run.");
           },
           async prepareRepo() {
             return { manifest: preparationManifest() };
@@ -2436,12 +1882,6 @@ describe("runAgentHarnessPipeline", () => {
           async resetCaptureRuntime() {
             throw new Error("Capture reset must not run.");
           },
-          async synthesizeRunPlan() {
-            return runPlan();
-          },
-          async validateCapturePath() {
-            throw new Error("Capture validation must not run.");
-          },
           async validatePreparation() {
             preflightAttempts += 1;
             return {
@@ -2450,13 +1890,7 @@ describe("runAgentHarnessPipeline", () => {
               logsSummary: `Feature render timed out after ${90_000 + preflightAttempts}ms`,
             };
           },
-          async validateScriptContract() {
-            throw new Error("Script validation must not run.");
-          },
-          async writeScript() {
-            throw new Error("Script writing must not run.");
-          },
-        },
+        }),
         { repoPreparationRepairLimit: 5 },
       ),
     ).rejects.toThrow("repeated failure");
@@ -2471,8 +1905,7 @@ describe("runAgentHarnessPipeline", () => {
 
     await expect(
       runAgentHarnessPipeline(
-        {
-          demoBrief: { keyProductFeatures: ["dashboard"] },
+        pipelineInput({
           files: [
             { path: "package.json", text: "{}" },
             { path: "bun.lock", text: "" },
@@ -2480,9 +1913,8 @@ describe("runAgentHarnessPipeline", () => {
             { path: "src/service/export.ts", text: "export const value = 1" },
           ],
           repoStats: { fileCount: 3, sizeBytes: 300 },
-          repoUrl: "https://github.com/example/app",
           runId: "run_terminal_preparation_stage",
-        },
+        }),
         {
           ...failingPreparationDependencies(
             new Error("Unexpected pipeline stage."),
@@ -2548,27 +1980,11 @@ describe("runAgentHarnessPipeline", () => {
     const repairClassifications: Array<string | undefined> = [];
 
     const result = await runAgentHarnessPipeline(
-      {
-        demoBrief: { keyProductFeatures: ["dashboard"] },
-        files: [
-          { path: "package.json", text: "{}" },
-          { path: "src/page.tsx", text: "export default 1" },
-          { path: "bun.lock", text: "" },
-        ],
-        repoStats: { fileCount: 2, sizeBytes: 200 },
-        repoUrl: "https://github.com/example/app",
-        runId: "run_repair_mutation",
-      },
-      {
-        async capturePreparationWorkspaceDiff() {
-          return preparationWorkspaceDiff();
-        },
+      pipelineInput({ runId: "run_repair_mutation" }),
+      stubPipelineDependencies({
         async captureWorkspaceDiff() {
           diffChecks += 1;
           return diffChecks === 2 ? ["/workspace/repo/src/App.tsx"] : [];
-        },
-        async createWorkspace() {
-          return workspace();
         },
         async exploreApp() {
           return {
@@ -2588,12 +2004,6 @@ describe("runAgentHarnessPipeline", () => {
           repairClassifications.push(failureReport.failureClassification);
           return scriptCandidate();
         },
-        async resetCaptureRuntime() {
-          return report("capture-runtime-reset", "passed");
-        },
-        async synthesizeRunPlan() {
-          return runPlan();
-        },
         async validateCapturePath() {
           captureChecks += 1;
           return captureChecks === 1
@@ -2612,7 +2022,7 @@ describe("runAgentHarnessPipeline", () => {
         async writeScript() {
           return scriptCandidate();
         },
-      },
+      }),
     );
 
     expect(result.status).toBe("passed");
@@ -2627,27 +2037,8 @@ describe("runAgentHarnessPipeline", () => {
     const calls: string[] = [];
 
     const result = await runAgentHarnessPipeline(
-      {
-        demoBrief: { keyProductFeatures: ["dashboard"] },
-        files: [
-          { path: "package.json", text: "{}" },
-          { path: "src/page.tsx", text: "export default 1" },
-          { path: "bun.lock", text: "" },
-        ],
-        repoStats: { fileCount: 2, sizeBytes: 200 },
-        repoUrl: "https://github.com/example/app",
-        runId: "run_exploration_repair",
-      },
-      {
-        async capturePreparationWorkspaceDiff() {
-          return preparationWorkspaceDiff();
-        },
-        async captureWorkspaceDiff() {
-          return [];
-        },
-        async createWorkspace() {
-          return workspace();
-        },
+      pipelineInput({ runId: "run_exploration_repair" }),
+      stubPipelineDependencies({
         async exploreApp({ preparationManifest: manifest }) {
           explorationAttempts += 1;
           calls.push(`explore:${manifest.id}`);
@@ -2683,12 +2074,6 @@ describe("runAgentHarnessPipeline", () => {
             },
           };
         },
-        async resetCaptureRuntime() {
-          return report("capture-runtime-reset", "passed");
-        },
-        async synthesizeRunPlan() {
-          return runPlan();
-        },
         async validateCapturePath() {
           return report("capture-path-validation", "passed");
         },
@@ -2705,7 +2090,7 @@ describe("runAgentHarnessPipeline", () => {
             sourcePreparationManifestId: "prep_network_fixed",
           };
         },
-      },
+      }),
     );
 
     expect(result.status).toBe("passed");
@@ -2754,27 +2139,11 @@ describe("runAgentHarnessPipeline", () => {
 
     await expect(
       runAgentHarnessPipeline(
-        {
-          demoBrief: { keyProductFeatures: ["dashboard"] },
-          files: [
-            { path: "package.json", text: "{}" },
-            { path: "src/page.tsx", text: "export default 1" },
-            { path: "bun.lock", text: "" },
-          ],
-          repoStats: { fileCount: 2, sizeBytes: 200 },
-          repoUrl: "https://github.com/example/app",
-          runId: "run_phase_repair_budgets",
-        },
-        {
-          async captureWorkspaceDiff() {
-            return [];
-          },
+        pipelineInput({ runId: "run_phase_repair_budgets" }),
+        stubPipelineDependencies({
           async capturePreparationWorkspaceDiff() {
             diffCaptures += 1;
             return preparationWorkspaceDiff();
-          },
-          async createWorkspace() {
-            return workspace();
           },
           async exploreApp() {
             explorationAttempts += 1;
@@ -2807,12 +2176,6 @@ describe("runAgentHarnessPipeline", () => {
               },
             };
           },
-          async resetCaptureRuntime() {
-            return report("capture-runtime-reset", "passed");
-          },
-          async synthesizeRunPlan() {
-            return runPlan();
-          },
           async validateCapturePath() {
             return report("capture-path-validation", "passed");
           },
@@ -2839,7 +2202,7 @@ describe("runAgentHarnessPipeline", () => {
               sourcePreparationManifestId: manifest.id,
             };
           },
-        },
+        }),
       ),
     ).rejects.toThrow("global retry budget");
 
@@ -2859,27 +2222,8 @@ describe("runAgentHarnessPipeline", () => {
     const repairStages: string[] = [];
 
     const result = await runAgentHarnessPipeline(
-      {
-        demoBrief: { keyProductFeatures: ["dashboard"] },
-        files: [
-          { path: "package.json", text: "{}" },
-          { path: "src/page.tsx", text: "export default 1" },
-          { path: "bun.lock", text: "" },
-        ],
-        repoStats: { fileCount: 2, sizeBytes: 200 },
-        repoUrl: "https://github.com/example/app",
-        runId: "run_phase_script_repair_budgets",
-      },
-      {
-        async capturePreparationWorkspaceDiff() {
-          return preparationWorkspaceDiff();
-        },
-        async captureWorkspaceDiff() {
-          return [];
-        },
-        async createWorkspace() {
-          return workspace();
-        },
+      pipelineInput({ runId: "run_phase_script_repair_budgets" }),
+      stubPipelineDependencies({
         async exploreApp() {
           return {
             kind: "artifacts" as const,
@@ -2897,12 +2241,6 @@ describe("runAgentHarnessPipeline", () => {
         async repairScript({ failureReport }) {
           repairStages.push(failureReport.stage);
           return scriptCandidate();
-        },
-        async resetCaptureRuntime() {
-          return report("capture-runtime-reset", "passed");
-        },
-        async synthesizeRunPlan() {
-          return runPlan();
         },
         async validateCapturePath() {
           captureAttempts += 1;
@@ -2928,7 +2266,7 @@ describe("runAgentHarnessPipeline", () => {
         async writeScript() {
           return scriptCandidate();
         },
-      },
+      }),
     );
 
     expect(result.status).toBe("passed");
@@ -2947,27 +2285,8 @@ describe("runAgentHarnessPipeline", () => {
     const calls: string[] = [];
 
     const result = await runAgentHarnessPipeline(
-      {
-        demoBrief: { keyProductFeatures: ["dashboard"] },
-        files: [
-          { path: "package.json", text: "{}" },
-          { path: "src/page.tsx", text: "export default 1" },
-          { path: "bun.lock", text: "" },
-        ],
-        repoStats: { fileCount: 2, sizeBytes: 200 },
-        repoUrl: "https://github.com/example/app",
-        runId: "run_capture_preparation_repair",
-      },
-      {
-        async capturePreparationWorkspaceDiff() {
-          return preparationWorkspaceDiff();
-        },
-        async captureWorkspaceDiff() {
-          return [];
-        },
-        async createWorkspace() {
-          return workspace();
-        },
+      pipelineInput({ runId: "run_capture_preparation_repair" }),
+      stubPipelineDependencies({
         async exploreApp({ preparationManifest: manifest }) {
           calls.push(`explore:${manifest.id}`);
           return {
@@ -2989,12 +2308,6 @@ describe("runAgentHarnessPipeline", () => {
           return {
             manifest: { ...preparationManifest(), id: "prep_capture_fixed" },
           };
-        },
-        async resetCaptureRuntime() {
-          return report("capture-runtime-reset", "passed");
-        },
-        async synthesizeRunPlan() {
-          return runPlan();
         },
         async validateCapturePath({ preparationManifest: manifest }) {
           captureAttempts += 1;
@@ -3021,7 +2334,7 @@ describe("runAgentHarnessPipeline", () => {
             sourcePreparationManifestId: manifest.id,
           };
         },
-      },
+      }),
     );
 
     expect(result.status).toBe("passed");
@@ -3040,6 +2353,76 @@ describe("runAgentHarnessPipeline", () => {
     ]);
   });
 });
+
+/** The dominant pipeline input; tests override the fields they care about. */
+function pipelineInput(
+  overrides: Partial<AgentHarnessPipelineInput> = {},
+): AgentHarnessPipelineInput {
+  return {
+    demoBrief: { keyProductFeatures: ["dashboard"] },
+    files: [
+      { path: "package.json", text: "{}" },
+      { path: "src/page.tsx", text: "export default 1" },
+      { path: "bun.lock", text: "" },
+    ],
+    repoStats: { fileCount: 2, sizeBytes: 200 },
+    repoUrl: "https://github.com/example/app",
+    runId: "run_default",
+    ...overrides,
+  };
+}
+
+/**
+ * Complete dependency set whose stage methods throw stage-named sentinels, so
+ * a stage a test did not explicitly allow fails loudly if it runs. Tests
+ * override only the members they observe or allow.
+ */
+function stubPipelineDependencies(
+  overrides: Partial<AgentHarnessPipelineDependencies> = {},
+): AgentHarnessPipelineDependencies {
+  return {
+    artifactStore: {
+      async writeJson() {},
+    },
+    async capturePreparationWorkspaceDiff() {
+      return preparationWorkspaceDiff();
+    },
+    async captureWorkspaceDiff() {
+      return [];
+    },
+    async createWorkspace() {
+      return workspace();
+    },
+    async exploreApp() {
+      throw new Error("App Exploration must not run.");
+    },
+    async planFlow() {
+      throw new Error("Flow Planning must not run.");
+    },
+    async prepareRepo() {
+      throw new Error("Repo Preparation must not run.");
+    },
+    async resetCaptureRuntime() {
+      return report("capture-runtime-reset", "passed");
+    },
+    async synthesizeRunPlan() {
+      return runPlan();
+    },
+    async validateCapturePath() {
+      throw new Error("Capture Path Validation must not run.");
+    },
+    async validatePreparation() {
+      throw new Error("Preparation Preflight must not run.");
+    },
+    async validateScriptContract() {
+      throw new Error("Static Script Contract must not run.");
+    },
+    async writeScript() {
+      throw new Error("Script Writing must not run.");
+    },
+    ...overrides,
+  };
+}
 
 function workspace() {
   return {
