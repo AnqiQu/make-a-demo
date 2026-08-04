@@ -1685,6 +1685,58 @@ snapshot deleted; `verify:daytona-image` rerun against the new snapshot.
 the 3900 floor is what let the 4 GiB rebuild pass verification and cost a
 paid run to discover.
 
+## Addendum (2026-08-04, Phase 5 landed)
+
+All nine WS5 items landed TDD-first on `anqi-dev`, one behavior per commit,
+each through the full gauntlet (lint, typecheck, test, knip; final state
+**787/787**). Commits, oldest to newest: `8822a01` (5.1 token-delimited root
+scripts + other-workspace rejection), `ddb2b92` (5.2 strong-custom evidence
+gate + fail-closed zero-candidate monorepos), `2603b3f` (5.3 manager
+precedence: declaration → single lockfile → ancestor → recorded tiebreak),
+`5ae665f` (5.4 `run-planner/package-commands.ts`: one port extractor with
+`--port=`/`PORT=`/`-l`/last-match, `<pm> run <script>` builders killing bare
+`bun build`, body-based dev-server predicate killing `serve -s dist`, shared
+`readPackageName`; tri/duplicated copies deleted), `0b0c5cb` (5.5 closure
+excludes `isWorkspace: false` file-linked packages; expansion scans
+stderr/stdout excerpts), `7713394` (5.6 zero-indent pnpm YAML, brace globs,
+`lerna.json`), `3c21352`/`20c1772`/`2dc64b8`/`e1ba585` (5.7 native-mobile
+exclusion per N3, `roleHints` storybook/e2e evidence, non-product rejection
+while a product exists, lone showcase-only candidate escalates,
+`resolvePreparationRuntime` returns `unresolved` with reason + candidateIds
+and failed preflights carry it as a repair hint), `46910ef` (5.8
+`findBuildScopeViolation` deleted with its Midday-shaped test;
+`runtimeTarget.build.cwd` owns build scoping), `1cc6ef9` (5.9 one-pass
+nearest-owner file bucketing; the 70k-file/200-package synthetic profile went
+from 2.2s to under the 1s budget, asserted by a perf test).
+
+**Behavior changes worth knowing:** profiled non-npm script commands now emit
+the `run` form (`pnpm run dev --port 3000`, previously `pnpm dev --port
+3000`); a `serve`-named script with an unrecognized body now builds first
+(safe: no build script → no build command); synthesis for an unknown manager
+falls back to `npm install --no-audit` instead of `npm ci` (which refuses to
+run without a proven lockfile); a monorepo with zero proven browser
+candidates now fails closed with the candidate list instead of guessing
+`candidateAppDirs[0]`.
+
+**5.5 root-selector note:** the plan's "append root selector for pnpm when
+root declares prepare/postinstall" was already superseded by `c7ca0c2`, which
+appends the root filter unconditionally for non-npm managers because root
+*dependencies* (hoisting) matter beyond lifecycle scripts — and 4.4 suppresses
+install-time lifecycle scripts anyway. Recorded as done-by-generalization.
+
+**Not done, recorded honestly:** the N21 shared-concept glossary terms are
+unchanged (out of WS5 scope); `roleHints` reads storybook evidence from the
+filtered browser-evidence paths plus script bodies, so a candidate whose only
+storybook trace is a bare `.storybook/` config with no stories and no script
+keeps an empty hint; nearest-owner bucketing means a package nested inside a
+workspace member no longer contributes its imports to the parent's observed
+`workspaceDependencies` (previously it did — arguably a latent bug, now
+consistent with evidence ownership).
+
+**Gate next:** matrix run (all three fixtures select the right target,
+install scoped, start on the right port), then one new real-world monorepo
+end-to-end per the Phase 5 gate.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
