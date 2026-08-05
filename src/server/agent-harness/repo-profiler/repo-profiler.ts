@@ -7,6 +7,7 @@ import {
 import {
   createInstallCommand,
   createRunScriptCommand,
+  createTaskRunnerTargetScript,
   readCandidatePorts,
   readPackageName,
   readScriptPort,
@@ -81,7 +82,7 @@ export function profileRepo(input: RepoProfileInput): RepoProfile {
     path: normalizeRepoPath(file.path),
   }));
   const paths = new Set(files.map((file) => file.path));
-  const packages = readPackages(files);
+  const packages = mergeTaskRunnerTargets(readPackages(files), files);
   const rootPackage = packages.find(({ dir }) => dir === ".");
   const workspacePatterns = [
     ...readWorkspacePatterns(rootPackage?.json.workspaces),
@@ -480,6 +481,68 @@ function readModuleSpecifiers(source: string): string[] {
   ].flatMap((pattern) =>
     [...source.matchAll(pattern)].map((match) => match[1] ?? ""),
   );
+}
+
+/**
+ * Merges nx project.json run targets into their package's scripts as
+ * synthetic task-runner script bodies. nx-managed apps often keep only build
+ * tooling in package.json while their serve targets live in project.json;
+ * without this merge such products never become browser runtime candidates.
+ * package.json scripts win name collisions, and only browser-runtime target
+ * names are harvested.
+ */
+function mergeTaskRunnerTargets(
+  packages: PackageRecord[],
+  files: RepoProfileFile[],
+): PackageRecord[] {
+  const projectsByDir = new Map<
+    string,
+    { name?: string; targets: Record<string, unknown> }
+  >();
+  for (const file of files) {
+    if (file.path !== "project.json" && !file.path.endsWith("/project.json")) {
+      continue;
+    }
+    const json = readJsonObject(file.text);
+    const targets = json?.targets;
+    if (typeof targets !== "object" || targets === null) continue;
+    projectsByDir.set(
+      file.path === "project.json" ? "." : posix.dirname(file.path),
+      {
+        ...(typeof json?.name === "string" && json.name.trim().length > 0
+          ? { name: json.name }
+          : {}),
+        targets: targets as Record<string, unknown>,
+      },
+    );
+  }
+  if (projectsByDir.size === 0) return packages;
+  return packages.map((packageRecord) => {
+    const project = projectsByDir.get(packageRecord.dir);
+    if (project === undefined) return packageRecord;
+    const projectName =
+      project.name ?? packageRecord.name ?? posix.basename(packageRecord.dir);
+    const scripts = { ...packageRecord.scripts };
+    for (const [targetName, target] of Object.entries(project.targets)) {
+      if (
+        !(browserRuntimeScriptNames as readonly string[]).includes(
+          targetName,
+        ) ||
+        scripts[targetName] !== undefined
+      ) {
+        continue;
+      }
+      const options = (target as { options?: { port?: unknown } } | null)
+        ?.options;
+      const port = typeof options?.port === "number" ? options.port : undefined;
+      scripts[targetName] = createTaskRunnerTargetScript(
+        projectName,
+        targetName,
+        port,
+      );
+    }
+    return { ...packageRecord, scripts };
+  });
 }
 
 function readPackages(files: RepoProfileFile[]): PackageRecord[] {

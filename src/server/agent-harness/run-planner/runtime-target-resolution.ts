@@ -11,6 +11,7 @@ import {
   createInstallCommand,
   createRunScriptCommand,
   isDevServerScriptBody,
+  isTaskRunnerTargetScript,
   readCandidatePorts,
   readPackageName,
   readScriptPort,
@@ -505,8 +506,11 @@ function findStartCommand(
         scriptName,
       };
     }
+    const scriptBody = workspacePackage.scripts[scriptName] ?? "";
     return {
-      command: createRunScriptCommand(packageManager, scriptName),
+      command: isTaskRunnerTargetScript(scriptBody)
+        ? `npx ${scriptBody}`
+        : createRunScriptCommand(packageManager, scriptName),
       cwd: workspacePackage.dir,
       scriptName,
     };

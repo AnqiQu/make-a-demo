@@ -144,6 +144,32 @@ describe("resolveRuntimeTarget", () => {
     expect(target?.baseUrl).toBe("http://127.0.0.1:3000");
   });
 
+  it("starts a task-runner target script through npx instead of the package manager", () => {
+    // A script harvested from nx project.json has no package.json entry, so
+    // `yarn run start` cannot execute it; the task runner itself must.
+    const target = resolveRuntimeTarget({
+      preparationManifest: manifest("packages/twenty-front/src/App.tsx"),
+      repoProfile: profile({
+        candidateInstallCommands: ["yarn install --immutable"],
+        lockfiles: ["yarn.lock"],
+        packageManager: "yarn",
+        workspacePackages: [
+          {
+            dir: "packages/twenty-front",
+            name: "twenty-front",
+            ports: [],
+            scripts: { start: "nx run twenty-front:start" },
+          },
+        ],
+      }),
+    });
+
+    expect(target?.start).toEqual({
+      command: "npx nx run twenty-front:start",
+      cwd: "packages/twenty-front",
+    });
+  });
+
   it("ignores ports harvested from non-selected scripts and adopts the agent-declared port", () => {
     const preparationManifest = manifest("excalidraw-app/App.tsx");
     preparationManifest.ports = [5000];

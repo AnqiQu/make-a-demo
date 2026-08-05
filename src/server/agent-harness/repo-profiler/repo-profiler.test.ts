@@ -299,6 +299,64 @@ describe("profileRepo", () => {
     ]);
   });
 
+  it("harvests nx project.json run targets as runtime scripts", () => {
+    // An nx-managed product app can carry only a build script in its
+    // package.json while its serve targets live in project.json; without
+    // harvesting them the product never becomes a browser runtime candidate.
+    const profile = profileRepo({
+      files: [
+        {
+          path: "package.json",
+          text: JSON.stringify({ workspaces: ["packages/*"] }),
+        },
+        { path: "yarn.lock", text: "" },
+        {
+          path: "packages/twenty-front/package.json",
+          text: JSON.stringify({
+            dependencies: { react: "19.0.0" },
+            name: "twenty-front",
+            scripts: { build: "npx vite build" },
+          }),
+        },
+        {
+          path: "packages/twenty-front/project.json",
+          text: JSON.stringify({
+            name: "twenty-front",
+            targets: {
+              build: { options: { outputPath: "{projectRoot}/build" } },
+              lint: { executor: "nx:run-commands" },
+              preview: {
+                executor: "@nx/vite:preview-server",
+                options: { buildTarget: "twenty-front:build", port: 3001 },
+              },
+              start: {
+                executor: "@nx/vite:dev-server",
+                options: { buildTarget: "twenty-front:build", hmr: true },
+              },
+            },
+          }),
+        },
+        { path: "packages/twenty-front/src/App.tsx", text: "export {};" },
+      ],
+      repoUrl: "https://github.com/example/twenty",
+    });
+
+    expect(profile.browserRuntimeCandidates).toMatchObject([
+      {
+        dir: "packages/twenty-front",
+        scripts: {
+          build: "npx vite build",
+          preview: "nx run twenty-front:preview --port=3001",
+          start: "nx run twenty-front:start",
+        },
+      },
+    ]);
+    expect(profile.browserRuntimeCandidates?.[0]?.ports).toContain(3001);
+    expect(profile.browserRuntimeCandidates?.[0]?.scripts).not.toHaveProperty(
+      "lint",
+    );
+  });
+
   it("flags storybook and e2e evidence as role hints on browser candidates", () => {
     const profile = profileRepo({
       files: [

@@ -273,6 +273,8 @@ describe("readGithubRepoSnapshot", () => {
     );
     await mkdir(runDirectory, { recursive: true });
     const manifestText = '{"name":"app","scripts":{"start":"vite"}}\n';
+    const projectManifestText =
+      '{"name":"app","targets":{"start":{"executor":"@nx/vite:dev-server"}}}\n';
     const snapshot = await readGithubRepoSnapshot(
       {
         log: async () => undefined,
@@ -297,6 +299,10 @@ describe("readGithubRepoSnapshot", () => {
               join(input.checkoutPath, "packages", "app", "package.json"),
               manifestText,
             );
+            await writeFile(
+              join(input.checkoutPath, "packages", "app", "project.json"),
+              projectManifestText,
+            );
           },
           async readHead() {
             return "abc123def456";
@@ -309,6 +315,7 @@ describe("readGithubRepoSnapshot", () => {
       expect.arrayContaining([
         { path: "alpha.ts", scanned: false },
         { path: "packages/app/package.json", text: manifestText },
+        { path: "packages/app/project.json", text: projectManifestText },
       ]),
     );
   });

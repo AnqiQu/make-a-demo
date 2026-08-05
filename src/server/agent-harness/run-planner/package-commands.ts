@@ -61,6 +61,32 @@ export function createRunScriptCommand(
 }
 
 /**
+ * Formats a task-runner target (an nx project.json target) as a synthetic
+ * runtime script body. The body is the runner invocation without an `npx`
+ * prefix so script-evidence readers treat it like ordinary script text; a
+ * declared option port is appended as a `--port` flag so port harvesting
+ * sees it. `isTaskRunnerTargetScript` recognizes these bodies wherever the
+ * command must be issued through the task runner instead of `<pm> run`.
+ */
+export function createTaskRunnerTargetScript(
+  project: string,
+  target: string,
+  port?: number,
+): string {
+  return `nx run ${project}:${target}${port === undefined ? "" : ` --port=${port}`}`;
+}
+
+/**
+ * Whether a script body was synthesized from a task-runner target rather
+ * than read from package.json scripts. Such a script has no package.json
+ * entry, so `<pm> run <name>` cannot execute it; callers must invoke the
+ * body itself through `npx`.
+ */
+export function isTaskRunnerTargetScript(script: string): boolean {
+  return script.startsWith("nx run ");
+}
+
+/**
  * The deterministic lockfile-respecting install for each package manager.
  * An unknown manager gets a plain `npm install`: without a known lockfile,
  * `npm ci` would refuse to run at all.

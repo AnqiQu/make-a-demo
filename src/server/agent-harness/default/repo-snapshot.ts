@@ -122,6 +122,7 @@ const readableFileNames = new Set([
   "package.json",
   "pnpm-lock.yaml",
   "pnpm-workspace.yaml",
+  "project.json",
   "vite.config.js",
   "vite.config.ts",
   "yarn.lock",
@@ -465,7 +466,11 @@ async function readFileTextIfUseful(
 }
 
 function isPackageManifestPath(relativePath: string): boolean {
-  return basename(relativePath) === "package.json";
+  // project.json is nx's per-package manifest: run targets for nx-managed
+  // apps live there instead of package.json scripts, so the profiler needs
+  // its text with the same budget guarantees as package.json.
+  const name = basename(relativePath);
+  return name === "package.json" || name === "project.json";
 }
 
 function isUsefulTextPath(relativePath: string): boolean {
