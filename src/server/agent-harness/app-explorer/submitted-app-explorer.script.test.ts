@@ -257,12 +257,77 @@ describe("generated exploration script", () => {
       const result = JSON.parse((marker ?? "").trim()) as {
         fatalError?: string;
         routes: Array<{
-          emptyDataTables?: Array<{ columnHeaders: number }>;
+          emptyDataTables?: Array<{
+            columnHeaders: number;
+            headerTexts: string[];
+          }>;
         }>;
       };
 
       expect(result.fatalError).toBeUndefined();
-      expect(result.routes[0]?.emptyDataTables).toEqual([{ columnHeaders: 3 }]);
+      expect(result.routes[0]?.emptyDataTables).toEqual([
+        {
+          columnHeaders: 3,
+          headerTexts: ["Date", "Description", "Amount"],
+        },
+      ]);
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
+  it("keeps empty-table header text out of the accessibility-tree harvest", async () => {
+    // A zero-row table still exposes its column headers to the aria tree —
+    // as individual header cells and as the combined header-row name. Neither
+    // may enter route text as content evidence, while non-table aria text on
+    // the same thin page must still be harvested.
+    const skeletonPage = `<!doctype html><html><head><title>Ledger App</title></head><body>
+<main>
+<nav><ul><li><a href="/">Overview</a></li></ul></nav>
+<input placeholder="Search invoices..." />
+<div>Pending invoices overview</div>
+<table><thead><tr><th>Invoice no.</th><th>Due date</th><th>Amount</th></tr></thead><tbody></tbody></table>
+</main>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(skeletonPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-header-aria-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        routes: Array<{ text: string[] }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      const text = result.routes[0]?.text ?? [];
+      expect(text).toContain("Pending invoices overview");
+      expect(text).not.toContain("Invoice no.");
+      expect(text).not.toContain("Invoice no. Due date Amount");
     } finally {
       server.close();
     }

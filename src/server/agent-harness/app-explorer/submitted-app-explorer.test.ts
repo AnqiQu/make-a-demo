@@ -9,6 +9,7 @@ import { sandboxCapacityProbeCommand } from "../tools/sandbox-capacity";
 import {
   exploreSubmittedApp,
   normalizeCrawlUrl,
+  readRouteDistinctContent,
 } from "./submitted-app-explorer";
 
 const baseUrl = "http://127.0.0.1:3000";
@@ -1320,6 +1321,113 @@ describe("exploreSubmittedApp", () => {
       ),
       status: "failed",
     });
+  });
+
+  it("fails a run whose only route-distinct text is empty-table header text", async () => {
+    // A skeleton app's zero-row tables still render their column headers, and
+    // the accessibility-tree harvest surfaces them as route text — both as
+    // individual cells and as the combined header-row name. Header words of an
+    // empty table are structure, not rendered data, so they must not ground a
+    // feature.
+    const invoicing = preparedFeature({
+      description: "Demonstrate invoicing",
+      entryPaths: ["/en/invoices"],
+      id: "invoicing",
+      label: "Invoices",
+      requestedFeature: "invoicing",
+    });
+    const transactions = preparedFeature({
+      description: "Demonstrate transactions",
+      entryPaths: ["/en/transactions"],
+      id: "transactions",
+      label: "Transactions",
+      requestedFeature: "transactions",
+    });
+    const chrome = ["Categories", "Connect bank"];
+    const { result } = await exploreObservation({
+      featureInventory: [invoicing, transactions],
+      routes: [
+        observedRoute({
+          emptyDataTables: [
+            {
+              columnHeaders: 17,
+              headerTexts: ["Invoice no.", "Due date", "Amount"],
+            },
+          ],
+          featureIds: ["invoicing"],
+          path: "/en/invoices",
+          primaryNavigation: chrome,
+          requestedPath: "/en/invoices",
+          text: [...chrome, "Invoice no.", "Due date", "Amount"],
+        }),
+        observedRoute({
+          emptyDataTables: [
+            {
+              columnHeaders: 8,
+              headerTexts: ["Date", "Description", "Amount"],
+            },
+          ],
+          featureIds: ["transactions"],
+          interactions: [
+            {
+              kind: "fill",
+              locator: {
+                strategy: "placeholder",
+                value: "Search transactions...",
+              },
+              name: "Search transactions...",
+              outcome: "The field contained the observed demo value",
+            },
+          ],
+          path: "/en/transactions",
+          primaryNavigation: chrome,
+          requestedPath: "/en/transactions",
+          text: [
+            ...chrome,
+            "Date Description Amount",
+            "Date",
+            "Description",
+            "Amount",
+          ],
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "empty/unmeaningful app state",
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain("navigation chrome");
+    expect(result.validationReport.logsSummary).toContain(
+      "column headers, zero data rows",
+    );
+  });
+
+  it("keeps genuine content distinct on a route that also has an empty table", () => {
+    const content = readRouteDistinctContent([
+      {
+        emptyDataTables: [
+          {
+            columnHeaders: 3,
+            headerTexts: ["Invoice no.", "Due date", "Amount"],
+          },
+        ],
+        headings: [],
+        path: "/invoices",
+        primaryNavigation: ["Overview"],
+        text: [
+          "Invoice no.",
+          "Due date Amount",
+          "Amount due today: $1,200",
+          "No invoices yet",
+        ],
+      },
+    ]);
+
+    expect(content.get("/invoices")).toEqual([
+      "Amount due today: $1,200",
+      "No invoices yet",
+    ]);
   });
 
   it("grounds scrolling when the prepared page has scrollable content", async () => {

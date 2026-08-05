@@ -80,9 +80,11 @@ type ObservedRoute = {
    * contains zero populated rows. A silently-empty table is the signature of
    * a data query that resolved empty or mis-shaped — it produces no error,
    * no network failure, and no skeleton, so this structural fact is the only
-   * browser evidence that distinguishes it from a broken transport.
+   * browser evidence that distinguishes it from a broken transport. The
+   * header texts are carried so harvested strings made only of header words
+   * can be recognized as table structure rather than rendered data.
    */
-  emptyDataTables?: Array<{ columnHeaders: number }>;
+  emptyDataTables?: Array<{ columnHeaders: number; headerTexts?: string[] }>;
   forms: string[];
   featureIds?: string[];
   headings: string[];
@@ -591,10 +593,14 @@ async function readAppStatus(
  * its nav label is normal content, while a string repeated on most routes is
  * site chrome wherever it appears. Buttons, inputs, and links never count as
  * content: controls exist identically in hollow and healthy apps, so they
- * cannot evidence rendered data.
+ * cannot evidence rendered data. Strings made only of a route's empty-table
+ * header words are excluded the same way: a zero-row table renders its
+ * column headers — individually and as the combined header-row name — in a
+ * skeleton app exactly as in a healthy one.
  */
 export function readRouteDistinctContent(
   routes: ReadonlyArray<{
+    emptyDataTables?: Array<{ columnHeaders: number; headerTexts?: string[] }>;
     headings: string[];
     path: string;
     primaryNavigation?: string[];
@@ -619,18 +625,36 @@ export function readRouteDistinctContent(
           .filter(([, count]) => count > routes.length / 2)
           .map(([value]) => value),
   );
+  const tokens = (value: string) =>
+    value.toLowerCase().split(/\s+/).filter(Boolean);
   return new Map(
-    routes.map((route) => [
-      route.path,
-      unique([
-        ...trimmed(route.headings).filter(
-          (value) => !repeatedChrome.has(value),
+    routes.map((route) => {
+      const headerTokens = new Set(
+        (route.emptyDataTables ?? []).flatMap((table) =>
+          (table.headerTexts ?? []).flatMap(tokens),
         ),
-        ...trimmed(route.text).filter(
-          (value) => !repeatedChrome.has(value) && !navChrome.has(value),
-        ),
-      ]),
-    ]),
+      );
+      // Case-insensitive token comparison bridges the accessible-name vs
+      // innerText gap (text-transform styling affects only the latter).
+      const isEmptyTableStructure = (value: string) =>
+        headerTokens.size > 0 &&
+        tokens(value).every((token) => headerTokens.has(token));
+      return [
+        route.path,
+        unique([
+          ...trimmed(route.headings).filter(
+            (value) =>
+              !repeatedChrome.has(value) && !isEmptyTableStructure(value),
+          ),
+          ...trimmed(route.text).filter(
+            (value) =>
+              !repeatedChrome.has(value) &&
+              !navChrome.has(value) &&
+              !isEmptyTableStructure(value),
+          ),
+        ]),
+      ];
+    }),
   );
 }
 
@@ -1031,6 +1055,14 @@ function readExplorationFailure(
   };
   const chromeOnlyExplanation = (tail: string) =>
     `rendered only globally-repeated navigation chrome — no route-distinct headings, text, or data${tail}`;
+  const emptyTableEvidence = (routePaths: readonly string[]) => {
+    const emptyTableColumns = routePaths
+      .map((route) => emptyDataTablesByRoute.get(route))
+      .find((columns) => columns !== undefined);
+    return emptyTableColumns === undefined
+      ? ""
+      : ` An empty data table (${emptyTableColumns} column headers, zero data rows) rendered on these routes — the data query resolved empty or mis-shaped; align the fixture shape with the fields the consuming component reads.`;
+  };
   const actionsByFeatureId = new Map<
     string,
     Array<ActionCatalog["actions"][number]>
@@ -1095,21 +1127,26 @@ function readExplorationFailure(
   // When no route anywhere renders route-distinct content, grounding failures
   // are a data-rendering defect, not a feature-selection problem: exercised
   // controls and chrome asserts exist identically in hollow and healthy apps.
-  const hollowFailure = (features: PreparedDemoFeature[]) =>
-    contentRoutePaths.size > 0
-      ? undefined
-      : {
-          classification: "empty/unmeaningful app state",
-          message: `Explored ${appMap.discoveredRoutes.length} route(s) but every route ${chromeOnlyExplanation(
-            ` appeared within the content wait. Feature entry routes affected: ${[
-              ...new Set(features.flatMap((feature) => feature.entryPaths)),
-            ]
-              .slice(0, 4)
-              .join(
-                ", ",
-              )}. The prepared runtime's data fixtures or demo gating are not rendering content; repair the prepared app's data path.`,
-          )}`,
-        };
+  const hollowFailure = (features: PreparedDemoFeature[]) => {
+    if (contentRoutePaths.size > 0) {
+      return undefined;
+    }
+    const affectedRoutes = [
+      ...new Set(features.flatMap((feature) => feature.entryPaths)),
+    ];
+    return {
+      classification: "empty/unmeaningful app state",
+      message: `Explored ${appMap.discoveredRoutes.length} route(s) but every route ${chromeOnlyExplanation(
+        ` appeared within the content wait. Feature entry routes affected: ${affectedRoutes
+          .slice(0, 4)
+          .join(
+            ", ",
+          )}. The prepared runtime's data fixtures or demo gating are not rendering content; repair the prepared app's data path.${emptyTableEvidence(
+          affectedRoutes,
+        )}`,
+      )}`,
+    };
+  };
   const groundedFeatureIds = new Set(
     featureInventory
       .filter((feature) => {
@@ -1216,17 +1253,12 @@ function readExplorationFailure(
             ", ",
           )}) — but no exercised interaction or visible-text assert matched the feature's wording; align the featureInventory wording with the on-screen labels or point entryPaths at the feature's own UI.`;
         }
-        const emptyTableColumns = routes
-          .map((route) => emptyDataTablesByRoute.get(route))
-          .find((columns) => columns !== undefined);
-        const emptyTableEvidence =
-          emptyTableColumns === undefined
-            ? ""
-            : ` An empty data table (${emptyTableColumns} column headers, zero data rows) rendered on these routes — the data query resolved empty or mis-shaped; align the fixture shape with the fields the consuming component reads.`;
         return ` Requested feature "${feature.requestedFeature}" routes ${routes
           .slice(0, 4)
           .join(", ")} ${chromeOnlyExplanation(
-          `; repair the prepared app's data path for these routes.${emptyTableEvidence}`,
+          `; repair the prepared app's data path for these routes.${emptyTableEvidence(
+            routes,
+          )}`,
         )}`;
       })
       .join("");
@@ -1785,11 +1817,13 @@ try {
             }]
           : [];
         const emptyDataTables = Array.from(document.querySelectorAll("table, [role=table], [role=grid]")).filter(visible).flatMap((table) => {
-          const columnHeaders = Array.from(table.querySelectorAll("th, [role=columnheader]")).filter(visible).length;
-          if (columnHeaders === 0) return [];
+          const headerCells = Array.from(table.querySelectorAll("th, [role=columnheader]")).filter(visible);
+          if (headerCells.length === 0) return [];
           const populatedRows = Array.from(table.querySelectorAll("tbody tr, [role=row]")).filter((row) =>
             row.querySelector("th, [role=columnheader]") == null && clean(row.innerText) !== "");
-          return populatedRows.length === 0 ? [{ columnHeaders }] : [];
+          return populatedRows.length === 0
+            ? [{ columnHeaders: headerCells.length, headerTexts: headerCells.map((cell) => clean(cell.innerText)).filter(Boolean).slice(0, 24) }]
+            : [];
         }).slice(0, 4);
         return {
           buttons: texts("button, [role=button]", 16),
@@ -1856,10 +1890,16 @@ try {
         // locator below.
         try {
           const aria = typeof page.locator("body").ariaSnapshot === "function" ? await page.locator("body").ariaSnapshot() : "";
+          // A zero-row table's column headers reach the aria tree as header
+          // cells and as the combined header-row name; both are table
+          // structure, not rendered data, and must not enter route text.
+          const emptyTableHeaderTokens = new Set((observed.emptyDataTables ?? []).flatMap((table) => (table.headerTexts ?? []).flatMap((text) => text.toLowerCase().split(/\\s+/).filter(Boolean))));
+          const isEmptyTableStructure = (candidate) =>
+            emptyTableHeaderTokens.size > 0 && candidate.toLowerCase().split(/\\s+/).filter(Boolean).every((token) => emptyTableHeaderTokens.has(token));
           const ariaTextCandidates = [...new Set([
             ...[...aria.matchAll(/-\\s+[a-z]+ "([^"\\n]{3,80})"/g)].map((match) => match[1]),
             ...[...aria.matchAll(/-\\s+text: (\\S[^\\n]{2,79})$/gm)].map((match) => match[1].trim()),
-          ])].filter((candidate) => !observed.text.includes(candidate) && !observed.headings.includes(candidate)).slice(0, 24);
+          ])].filter((candidate) => !observed.text.includes(candidate) && !observed.headings.includes(candidate) && !isEmptyTableStructure(candidate)).slice(0, 24);
           observed.text.push(...ariaTextCandidates);
         } catch {}
       }
