@@ -110,6 +110,7 @@ import {
 } from "../tools/dependency-install-gate";
 import {
   createLockfileReconciliationCommand,
+  planEngineMismatchRetry,
   planLockfileReconciliation,
 } from "../tools/lockfile-reconciliation";
 import { validateDynamicCapturePath } from "../validation/dynamic-capture-path-validation";
@@ -2094,6 +2095,16 @@ async function validateResolvedSubmittedCodeRuntime(
         result =
           (await reconcileLockfile(reconciliationCommand)) ??
           (await runInstall(installCommand));
+      }
+    }
+    if (result.status === "failed") {
+      const engineRetryCommand = planEngineMismatchRetry({
+        installCommand,
+        stderr: result.stderr,
+        stdout: result.stdout,
+      });
+      if (engineRetryCommand !== undefined) {
+        result = await runInstall(engineRetryCommand);
       }
     }
     if (result.status === "denied") {

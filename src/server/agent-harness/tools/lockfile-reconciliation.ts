@@ -100,6 +100,49 @@ export function planLockfileReconciliation(
     : undefined;
 }
 
+/**
+ * Per-package-manager engine-mismatch knowledge: the engine-check failure
+ * signature in a clean install's output, and the flag that bypasses the
+ * check. npm and bun are absent because they do not enforce engines by
+ * default; their engine failures stay agent-visible.
+ */
+const engineMismatchRetries: Partial<
+  Record<
+    PackageManagerInstall["manager"],
+    { isEngineMismatchFailure: (output: string) => boolean; retryFlag: string }
+  >
+> = {
+  pnpm: {
+    isEngineMismatchFailure: (output) =>
+      output.includes("err_pnpm_unsupported_engine"),
+    retryFlag: "--config.engine-strict=false",
+  },
+  yarn: {
+    isEngineMismatchFailure: (output) =>
+      output.includes('the engine "node" is incompatible with this module'),
+    retryFlag: "--ignore-engines",
+  },
+};
+
+/**
+ * Returns the original install command with the manager's engine-check bypass
+ * appended when a clean install failed specifically on an engine version
+ * check. A demo sandbox pins one Node version; a dependency's engines range
+ * must not be able to dead-end preparation when the manager offers a bypass.
+ */
+export function planEngineMismatchRetry(
+  input: LockfileReconciliationInput,
+): string | undefined {
+  const install = readPackageManagerInstall(input.installCommand);
+  if (install === undefined) return undefined;
+  const retry = engineMismatchRetries[install.manager];
+  if (retry === undefined) return undefined;
+  const output = `${input.stderr}\n${input.stdout}`.toLowerCase();
+  return retry.isEngineMismatchFailure(output)
+    ? `${input.installCommand} ${retry.retryFlag}`
+    : undefined;
+}
+
 function scopedReconciliationCommand(
   install: PackageManagerInstall,
   installCommand: string,

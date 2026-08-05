@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { planLockfileReconciliation } from "./lockfile-reconciliation";
+import {
+  planEngineMismatchRetry,
+  planLockfileReconciliation,
+} from "./lockfile-reconciliation";
 
 describe("lockfile reconciliation", () => {
   it("plans script-free lockfile repair only for recognized frozen-lockfile failures", () => {
@@ -70,6 +73,44 @@ describe("lockfile reconciliation", () => {
         installCommand: "bun install --frozen-lockfile",
         stderr:
           "ConnectionClosed downloading tarball xlsx; Lockfile had changes, but lockfile is frozen",
+        stdout: "",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("retries an engine-incompatible install with the manager's engine bypass", () => {
+    expect(
+      planEngineMismatchRetry({
+        installCommand: "yarn install --immutable",
+        stderr:
+          'error i18next-parser@9.4.0: The engine "node" is incompatible with this module. Expected version "^18.0.0 || ^20.0.0 || ^22.0.0". Got "24.15.0"\nerror Found incompatible module.',
+        stdout: "",
+      }),
+    ).toBe("yarn install --immutable --ignore-engines");
+    expect(
+      planEngineMismatchRetry({
+        installCommand: "corepack pnpm install --frozen-lockfile",
+        stderr:
+          "ERR_PNPM_UNSUPPORTED_ENGINE Unsupported environment (bad pnpm and/or Node.js version)",
+        stdout: "",
+      }),
+    ).toBe(
+      "corepack pnpm install --frozen-lockfile --config.engine-strict=false",
+    );
+  });
+
+  it("does not plan an engine retry for other failures or managers", () => {
+    expect(
+      planEngineMismatchRetry({
+        installCommand: "yarn install --immutable",
+        stderr: "YN0028: The lockfile would have been modified",
+        stdout: "",
+      }),
+    ).toBeUndefined();
+    expect(
+      planEngineMismatchRetry({
+        installCommand: "npm ci --no-audit",
+        stderr: 'The engine "node" is incompatible with this module.',
         stdout: "",
       }),
     ).toBeUndefined();

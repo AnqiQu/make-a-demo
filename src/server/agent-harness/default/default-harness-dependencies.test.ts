@@ -2377,6 +2377,60 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
   });
 
+  it("retries an engine-incompatible yarn install once with --ignore-engines", async () => {
+    const commands: string[] = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        if (
+          command.includes("yarn install") &&
+          !command.includes("--ignore-engines")
+        ) {
+          return {
+            exitCode: 1,
+            stderr:
+              'error i18next-parser@9.4.0: The engine "node" is incompatible with this module. Expected version "^18.0.0 || ^20.0.0 || ^22.0.0". Got "24.15.0"\nerror Found incompatible module.',
+            stdout: "",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.validatePreparation({
+        preparationManifest: {
+          ...preparationManifest(),
+          installCommandUsed: "yarn install --immutable",
+          startCommandUsed: "yarn run dev",
+        },
+        repoProfile: {
+          ...repoProfile(),
+          lockfiles: ["yarn.lock"],
+          packageManager: "yarn",
+        },
+        runPlan: {
+          ...runPlan(),
+          installCommand: "yarn install --immutable",
+          runtime: "node",
+          startCommand: "yarn run dev",
+        },
+        workspace,
+      }),
+    ).resolves.toMatchObject({ status: "passed" });
+    expect(commands).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("yarn install --immutable --ignore-engines"),
+      ]),
+    );
+  });
+
   it("reconciles a repaired dependency graph before the next frozen install", async () => {
     const commands: string[] = [];
     const promotedFiles: string[][] = [];
