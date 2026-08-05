@@ -76,8 +76,21 @@ export function screenStaticRepoSecurity(
     rejections.push("package.json is required for JavaScript/TypeScript repos");
   }
 
+  const symlinkTargets = new Map(
+    files.flatMap((file) =>
+      file.symlinkTarget === undefined
+        ? []
+        : [[file.path, file.symlinkTarget] as const],
+    ),
+  );
   for (const file of files) {
-    inspectFileSecurity(file, quarantinedPaths, rejections, warnings);
+    inspectFileSecurity(
+      file,
+      quarantinedPaths,
+      symlinkTargets,
+      rejections,
+      warnings,
+    );
   }
 
   for (const packageJson of packageJsonFiles) {
@@ -130,13 +143,14 @@ export function screenStaticRepoSecurity(
 function inspectFileSecurity(
   file: StaticRepoSecurityFile,
   quarantinedPaths: ReadonlySet<string>,
+  symlinkTargets: ReadonlyMap<string, string>,
   rejections: string[],
   warnings: string[],
 ): void {
   const filename = file.path.split("/").at(-1) ?? file.path;
   if (
     file.symlinkTarget !== undefined &&
-    symlinkEscapesRepo(file.path, file.symlinkTarget)
+    symlinkEscapesRepo(file.path, file.symlinkTarget, symlinkTargets)
   ) {
     rejections.push(`repo symlink ${file.path} escapes the repository`);
   }
@@ -167,17 +181,63 @@ function inspectFileSecurity(
   }
 }
 
-function symlinkEscapesRepo(path: string, target: string): boolean {
-  if (posix.isAbsolute(target)) return true;
-  // Any `..` component is rejected outright: normalization cannot prove an
-  // upward hop stays inside the repo once other symlinks are in the chain.
-  if (target.split(/[\\/]/).some((component) => component === "..")) {
-    return true;
+const maxSymlinkResolutionDepth = 40;
+
+/**
+ * Resolves a symlink target component-by-component against the archive's own
+ * entry set, following known in-repo symlinks, so an upward hop through an
+ * aliased directory cannot lexically hide an escape. Returns undefined when
+ * the target is absolute, leaves the repository root at any step, or cannot
+ * be resolved within the depth bound (cycles fail closed).
+ */
+function resolveRepoSymlinkTarget(
+  baseComponents: readonly string[],
+  target: string,
+  symlinkTargets: ReadonlyMap<string, string>,
+  depth: number,
+): string[] | undefined {
+  if (depth <= 0 || posix.isAbsolute(target)) return undefined;
+  const resolved = [...baseComponents];
+  for (const component of target.split(/[\\/]/)) {
+    if (component === "" || component === ".") continue;
+    if (component === "..") {
+      if (resolved.length === 0) return undefined;
+      resolved.pop();
+      continue;
+    }
+    resolved.push(component);
+    const linkTarget = symlinkTargets.get(resolved.join("/"));
+    if (linkTarget === undefined) continue;
+    const linkResolution = resolveRepoSymlinkTarget(
+      resolved.slice(0, -1),
+      linkTarget,
+      symlinkTargets,
+      depth - 1,
+    );
+    if (linkResolution === undefined) return undefined;
+    resolved.length = 0;
+    resolved.push(...linkResolution);
   }
-  const resolvedTarget = posix.normalize(
-    posix.join(posix.dirname(path), target),
+  return resolved;
+}
+
+function symlinkEscapesRepo(
+  path: string,
+  target: string,
+  symlinkTargets: ReadonlyMap<string, string>,
+): boolean {
+  const baseComponents = path
+    .split("/")
+    .slice(0, -1)
+    .filter((component) => component.length > 0);
+  return (
+    resolveRepoSymlinkTarget(
+      baseComponents,
+      target,
+      symlinkTargets,
+      maxSymlinkResolutionDepth,
+    ) === undefined
   );
-  return resolvedTarget === ".." || resolvedTarget.startsWith("../");
 }
 
 function inspectPackageJson(

@@ -304,11 +304,74 @@ describe("screenStaticRepoSecurity", () => {
       expect.arrayContaining([
         "repo symlink src/environment escapes the repository",
         "repo symlink src/parent escapes the repository",
-        "repo symlink src/nested/sibling escapes the repository",
       ]),
     );
     expect(result.rejections).not.toContain(
       "repo symlink src/current.ts escapes the repository",
+    );
+    expect(result.rejections).not.toContain(
+      "repo symlink src/nested/sibling escapes the repository",
+    );
+  });
+
+  it("accepts upward relative symlinks that resolve inside the repository", () => {
+    const result = screenStaticRepoSecurity({
+      files: [
+        { path: "package.json", text: "{}" },
+        { path: "bun.lock", text: "" },
+        { path: ".agents/skills/commit/SKILL.md", text: "" },
+        { path: "agents/rules/README.md", text: "" },
+        {
+          path: ".claude/skills/commit",
+          symlinkTarget: "../../.agents/skills/commit",
+        },
+        { path: ".claude/rules", symlinkTarget: "../agents/rules" },
+      ],
+      repoStats: { fileCount: 6, sizeBytes: 600 },
+    });
+
+    expect(result.rejections).toEqual([]);
+  });
+
+  it("rejects symlinks that escape through another symlink in the chain", () => {
+    const result = screenStaticRepoSecurity({
+      files: [
+        { path: "package.json", text: "{}" },
+        { path: "bun.lock", text: "" },
+        { path: "docs/etc-alias", symlinkTarget: "/etc" },
+        { path: "docs/link", symlinkTarget: "etc-alias/../passwd" },
+        { path: "up-alias", symlinkTarget: "vendor/up/target" },
+        { path: "vendor/up", symlinkTarget: "../.." },
+      ],
+      repoStats: { fileCount: 6, sizeBytes: 600 },
+    });
+
+    expect(result.rejections).toEqual(
+      expect.arrayContaining([
+        "repo symlink docs/etc-alias escapes the repository",
+        "repo symlink docs/link escapes the repository",
+        "repo symlink up-alias escapes the repository",
+        "repo symlink vendor/up escapes the repository",
+      ]),
+    );
+  });
+
+  it("rejects symlink cycles as unresolvable", () => {
+    const result = screenStaticRepoSecurity({
+      files: [
+        { path: "package.json", text: "{}" },
+        { path: "bun.lock", text: "" },
+        { path: "a", symlinkTarget: "b" },
+        { path: "b", symlinkTarget: "a" },
+      ],
+      repoStats: { fileCount: 4, sizeBytes: 400 },
+    });
+
+    expect(result.rejections).toEqual(
+      expect.arrayContaining([
+        "repo symlink a escapes the repository",
+        "repo symlink b escapes the repository",
+      ]),
     );
   });
 });
