@@ -2663,6 +2663,23 @@ function assertFlowSpecGrounded(input: {
     (distinctContentByRoute.get(action.route) ?? []).includes(
       assertTargetText(action),
     );
+  // A rejection that names only the offending id leaves the planner guessing
+  // across the whole catalog; enumerating the feature's tagged ids makes the
+  // retry prompt satisfiable in one step.
+  const taggedActionSummary = (featureId: string) => {
+    const tagged = input.actionCatalog.actions.filter((action) =>
+      action.featureIds?.includes(featureId),
+    );
+    const ids = (kept: (action: ActionCatalog["actions"][number]) => boolean) =>
+      tagged
+        .filter(kept)
+        .slice(0, 6)
+        .map(({ id }) => id)
+        .join(", ") || "none";
+    return `Feature ${featureId} tagged asserts: ${ids(
+      (action) => action.kind === "assert",
+    )}; tagged interactions: ${ids((action) => action.kind !== "assert")}.`;
+  };
   for (const feature of input.flowSpec.features) {
     const selectedActions: ActionCatalog["actions"] = [];
     const selectedActionKinds = new Set<
@@ -2721,7 +2738,7 @@ function assertFlowSpecGrounded(input: {
       }
       if (!action.featureIds?.includes(feature.featureId)) {
         throw new Error(
-          `FlowSpec action ${actionId} is not grounded for feature ${feature.featureId}`,
+          `FlowSpec action ${actionId} is not grounded for feature ${feature.featureId}. ${taggedActionSummary(feature.featureId)}`,
         );
       }
       selectedActions.push(action);
@@ -2734,7 +2751,7 @@ function assertFlowSpecGrounded(input: {
     );
     if (!selectedActionKinds.has("assert")) {
       throw new Error(
-        `FlowSpec feature ${feature.featureId} must select both an interaction and visible assertion from ActionCatalog`,
+        `FlowSpec feature ${feature.featureId} must select both an interaction and visible assertion from ActionCatalog. ${taggedActionSummary(feature.featureId)}`,
       );
     }
     // Chrome-only asserts pass on a page that renders nothing: when the
@@ -2765,7 +2782,7 @@ function assertFlowSpecGrounded(input: {
       }
     } else if (!selectedActionKinds.has("navigate")) {
       throw new Error(
-        `FlowSpec feature ${feature.featureId} must select both an interaction and visible assertion from ActionCatalog`,
+        `FlowSpec feature ${feature.featureId} must select both an interaction and visible assertion from ActionCatalog. ${taggedActionSummary(feature.featureId)}`,
       );
     }
   }

@@ -630,6 +630,33 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(prompts[1]).toContain(
       "must select both an interaction and visible assertion",
     );
+    expect(prompts[1]).toContain("tagged asserts: dashboard");
+    expect(prompts[1]).toContain("tagged interactions: open-dashboard");
+  });
+
+  it("steers ungrounded action selections toward the feature's tagged ids", async () => {
+    // Naming only the rejected id leaves the planner guessing across the
+    // whole catalog; the retry prompt must enumerate the ids that would
+    // satisfy the rule for this feature.
+    const completeFlowSpec = flowSpec();
+    const wrongFeature = {
+      ...completeFlowSpec,
+      features: completeFlowSpec.features.map((feature) => ({
+        ...feature,
+        referencedActionIds: ["open-dashboard", "reporting-visible"],
+      })),
+    };
+    const { attempts, prompts, result } = await runFlowPlanningScenario({
+      candidates: [wrongFeature, completeFlowSpec],
+    });
+
+    expect(result).toEqual(completeFlowSpec);
+    expect(attempts).toBe(2);
+    expect(prompts[1]).toContain(
+      "reporting-visible is not grounded for feature dashboard",
+    );
+    expect(prompts[1]).toContain("tagged asserts: dashboard");
+    expect(prompts[1]).toContain("tagged interactions: open-dashboard");
   });
 
   it("does not let navigation replace an available browser-exercised feature interaction", async () => {
