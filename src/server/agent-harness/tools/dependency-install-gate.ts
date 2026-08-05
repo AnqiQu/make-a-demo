@@ -11,6 +11,7 @@ export type DependencyInstallCommandResult = {
 const allowedPackageManagers = new Set(["bun", "npm", "pnpm", "yarn"]);
 const allowedInstallFlags = new Set([
   "--check-files",
+  "--config.engine-strict=false",
   "--force",
   "--frozen-lockfile",
   "--ignore-engines",

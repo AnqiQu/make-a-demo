@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { evaluateDependencyInstallCommand } from "./dependency-install-gate";
 import {
   planEngineMismatchRetry,
   planLockfileReconciliation,
@@ -97,6 +98,64 @@ describe("lockfile reconciliation", () => {
     ).toBe(
       "corepack pnpm install --frozen-lockfile --config.engine-strict=false",
     );
+  });
+
+  it("plans only remedy commands the dependency-install gate allows", () => {
+    // A remedy this module plans but the gate denies is a deterministic
+    // dead-end: the repair fires, is silently rejected, and the failure is
+    // reported under the original command. Every plannable remedy must pass
+    // the gate that will execute it.
+    const failures = [
+      {
+        installCommand: "npm ci --no-audit --workspace=@acme/web",
+        stderr:
+          "npm ci can only install packages when package.json and package-lock.json are in sync. Missing: sqlite3 from lock file",
+      },
+      {
+        installCommand:
+          "corepack pnpm install --frozen-lockfile --filter=@directus/app",
+        stderr:
+          "ERR_PNPM_OUTDATED_LOCKFILE Cannot install with frozen-lockfile",
+      },
+      {
+        installCommand:
+          "bun install --frozen-lockfile --filter=@midday/website",
+        stderr: "Lockfile had changes, but lockfile is frozen",
+      },
+      {
+        installCommand: "corepack yarn install --immutable",
+        stderr: "YN0028: The lockfile would have been modified",
+      },
+      {
+        installCommand: "yarn install --frozen-lockfile",
+        stderr: "error Lockfile would have been modified by this install",
+      },
+      {
+        installCommand: "yarn install --immutable",
+        stderr:
+          'error i18next-parser@9.4.0: The engine "node" is incompatible with this module.',
+      },
+      {
+        installCommand:
+          "corepack pnpm install --frozen-lockfile --filter=@directus/app",
+        stderr:
+          "ERR_PNPM_UNSUPPORTED_ENGINE Unsupported environment (bad pnpm and/or Node.js version)",
+      },
+    ];
+    const remedies = failures.flatMap(({ installCommand, stderr }) =>
+      [
+        planLockfileReconciliation({ installCommand, stderr, stdout: "" }),
+        planEngineMismatchRetry({ installCommand, stderr, stdout: "" }),
+      ].filter((remedy) => remedy !== undefined),
+    );
+
+    expect(remedies.length).toBe(failures.length);
+    for (const remedy of remedies) {
+      expect({
+        decision: evaluateDependencyInstallCommand(remedy),
+        remedy,
+      }).toEqual({ decision: { status: "allowed" }, remedy });
+    }
   });
 
   it("does not plan an engine retry for other failures or managers", () => {
