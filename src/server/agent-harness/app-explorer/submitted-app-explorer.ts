@@ -1200,11 +1200,21 @@ function readExplorationFailure(
         );
         const routes =
           taggedRoutes.length > 0 ? taggedRoutes : feature.entryPaths;
-        if (
-          routes.length === 0 ||
-          routes.some((route) => contentRoutePaths.has(route))
-        ) {
+        if (routes.length === 0) {
           return "";
+        }
+        // A content-bearing route means rendering is fine and the lexical
+        // evidence match failed: without naming what the route showed, the
+        // repair agent is steered at the data path it cannot improve.
+        if (routes.some((route) => contentRoutePaths.has(route))) {
+          const shownContent = unique(
+            routes.flatMap((route) => distinctContentByRoute.get(route) ?? []),
+          ).slice(0, 4);
+          return ` Requested feature "${feature.requestedFeature}" is tagged to routes ${routes
+            .slice(0, 4)
+            .join(", ")}, which rendered distinct content (${shownContent.join(
+            ", ",
+          )}) — but no exercised interaction or visible-text assert matched the feature's wording; align the featureInventory wording with the on-screen labels or point entryPaths at the feature's own UI.`;
         }
         const emptyTableColumns = routes
           .map((route) => emptyDataTablesByRoute.get(route))
@@ -1835,18 +1845,21 @@ try {
         };
       }));
       const routeNavNames = new Set([...observed.primaryNavigation, ...observed.links.map((link) => link.name)].filter(Boolean));
-      if (![...observed.headings, ...observed.text].some((value) => value && !routeNavNames.has(value))) {
-        // Routes whose selector harvest found nothing beyond their own nav
-        // and link names — display-only dashboards, and data tables outside
-        // the paragraph/list selectors — get assert candidates from the
-        // accessibility tree so rendered content can still ground features.
-        // Each candidate is verified as a unique visible text locator below.
+      const distinctHarvestCount = [...new Set([...observed.headings, ...observed.text])].filter((value) => value && !routeNavNames.has(value)).length;
+      if (distinctHarvestCount < 8) {
+        // Routes whose selector harvest stays thin beyond their own nav and
+        // link names — display-only dashboards, data tables outside the
+        // paragraph/list selectors, and control-centric tools whose pane
+        // titles live in unlabeled containers — get assert candidates from
+        // the accessibility tree so rendered content can still ground
+        // features. Each candidate is verified as a unique visible text
+        // locator below.
         try {
           const aria = typeof page.locator("body").ariaSnapshot === "function" ? await page.locator("body").ariaSnapshot() : "";
           const ariaTextCandidates = [...new Set([
             ...[...aria.matchAll(/-\\s+[a-z]+ "([^"\\n]{3,80})"/g)].map((match) => match[1]),
             ...[...aria.matchAll(/-\\s+text: (\\S[^\\n]{2,79})$/gm)].map((match) => match[1].trim()),
-          ])].slice(0, 6);
+          ])].filter((candidate) => !observed.text.includes(candidate) && !observed.headings.includes(candidate)).slice(0, 24);
           observed.text.push(...ariaTextCandidates);
         } catch {}
       }

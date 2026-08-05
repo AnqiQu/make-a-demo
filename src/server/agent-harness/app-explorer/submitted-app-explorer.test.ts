@@ -1231,6 +1231,49 @@ describe("exploreSubmittedApp", () => {
     });
   });
 
+  it("names what a content-bearing route showed when the feature's wording matched nothing", async () => {
+    const encode = preparedFeature({
+      description: "Paste input and add an encoding operation",
+      entryPaths: ["/"],
+      id: "encode-input-output",
+      label: "Encode input to output",
+      requestedFeature:
+        "Paste sample input, add an encoding operation to the recipe, and inspect the transformed output",
+    });
+    const chain = preparedFeature({
+      description: "Chain and reorder recipe steps",
+      entryPaths: ["/"],
+      id: "chain-recipe-operations",
+      label: "Chain recipe operations",
+      requestedFeature:
+        "Chain multiple recipe operations and reorder or disable one",
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [encode, chain],
+      routes: [
+        observedRoute({
+          buttons: ["To Base64", "From Hex", "Fork"],
+          featureIds: [encode.id, chain.id],
+          headings: [],
+          path: "/",
+          requestedPath: "/",
+          text: ["To Base64", "From Hex", "Magic wand"],
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "requested feature not observable",
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain(
+      "rendered distinct content (To Base64",
+    );
+    expect(result.validationReport.logsSummary).toContain(
+      "align the featureInventory wording with the on-screen labels",
+    );
+  });
+
   it("reports an empty data table on a requested feature's chrome-only routes", async () => {
     const invoicing = preparedFeature({
       description: "Demonstrate invoicing",

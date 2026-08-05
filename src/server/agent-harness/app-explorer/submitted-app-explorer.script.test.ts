@@ -158,6 +158,64 @@ describe("generated exploration script", () => {
     }
   }, 30_000);
 
+  it("harvests accessibility-tree text when the selector harvest is thin", async () => {
+    // Control-centric tools render their substance in controls and unlabeled
+    // containers: one non-nav list string must not suppress the aria harvest
+    // that supplies the pane titles feature grounding needs.
+    const controlPanelPage = `<!doctype html><html><head><title>Tool App</title></head><body>
+<main>
+<nav><ul><li><a href="/">Docs</a></li></ul></nav>
+<ul><li><button>To Base64</button></li></ul>
+<div>Operations catalog</div>
+<input placeholder="Search..." />
+<div>Recipe</div>
+<button>Bake</button>
+<div>Auto Bake Input</div>
+</main>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(controlPanelPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-aria-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        routes: Array<{ text: string[] }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      expect(result.routes[0]?.text).toEqual(
+        expect.arrayContaining(["Recipe", "Auto Bake Input"]),
+      );
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
   it("reports a headers-only table as an empty data table and a populated one as none", async () => {
     // A data query that resolves empty or mis-shaped renders a table shell
     // with headers and no rows — silently, with no error and no request.
