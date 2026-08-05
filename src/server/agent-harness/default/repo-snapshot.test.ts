@@ -266,6 +266,53 @@ describe("readGithubRepoSnapshot", () => {
     );
   });
 
+  it("scans package manifests even after the cumulative scan budget is spent", async () => {
+    const runDirectory = join(
+      tmpdir(),
+      `makeademo-manifest-budget-snapshot-${crypto.randomUUID()}`,
+    );
+    await mkdir(runDirectory, { recursive: true });
+    const manifestText = '{"name":"app","scripts":{"start":"vite"}}\n';
+    const snapshot = await readGithubRepoSnapshot(
+      {
+        log: async () => undefined,
+        repoUrl: "https://github.com/acme/budget-app",
+        runDirectory,
+      },
+      {
+        contentScanBudgetBytes: 10,
+        git: {
+          async archiveRevision(input) {
+            await writeFile(input.archivePath, "budget archive");
+          },
+          async clone(input) {
+            await mkdir(join(input.checkoutPath, "packages", "app"), {
+              recursive: true,
+            });
+            await writeFile(
+              join(input.checkoutPath, "alpha.ts"),
+              `export const alpha = "${"a".repeat(100)}";\n`,
+            );
+            await writeFile(
+              join(input.checkoutPath, "packages", "app", "package.json"),
+              manifestText,
+            );
+          },
+          async readHead() {
+            return "abc123def456";
+          },
+        },
+      },
+    );
+
+    expect(snapshot.files).toEqual(
+      expect.arrayContaining([
+        { path: "alpha.ts", scanned: false },
+        { path: "packages/app/package.json", text: manifestText },
+      ]),
+    );
+  });
+
   it("quarantines environment files and private keys from the execution archive without rejecting public certificates", async () => {
     const runDirectory = join(
       tmpdir(),

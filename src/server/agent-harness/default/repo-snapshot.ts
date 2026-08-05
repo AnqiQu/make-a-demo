@@ -400,7 +400,13 @@ async function readRepoFiles(
         files.push({ path: relativePath });
         continue;
       }
-      if (fileStat.size > remainingContentScanBytes) {
+      // Package manifests are exempt from the cumulative budget: they carry
+      // the destructive-script screen, are individually size-capped below,
+      // and a large repo must not push its own manifests past the budget.
+      if (
+        fileStat.size > remainingContentScanBytes &&
+        !isPackageManifestPath(relativePath)
+      ) {
         files.push({ path: relativePath, scanned: false });
         continue;
       }

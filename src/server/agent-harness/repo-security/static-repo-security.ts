@@ -111,7 +111,7 @@ export function screenStaticRepoSecurity(
   for (const file of files) {
     if (file.scanned === false && !file.path.endsWith("package.json")) {
       warnings.push(
-        `repo file ${file.path} was too large to screen for secrets`,
+        `repo file ${file.path} was not content-screened for secrets (file size or repo scan budget)`,
       );
     }
   }

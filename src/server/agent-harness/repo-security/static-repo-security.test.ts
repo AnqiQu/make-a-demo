@@ -182,7 +182,7 @@ describe("screenStaticRepoSecurity", () => {
       "package.json is too large to screen for destructive scripts",
     );
     expect(result.warnings).toContain(
-      "repo file docs/NOTES.md was too large to screen for secrets",
+      "repo file docs/NOTES.md was not content-screened for secrets (file size or repo scan budget)",
     );
   });
 
