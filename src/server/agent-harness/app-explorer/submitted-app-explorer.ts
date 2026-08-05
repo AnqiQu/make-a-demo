@@ -1271,6 +1271,42 @@ function readExplorationFailure(
       }
     );
   }
+  // Exploration grounds a feature on exercised evidence alone, but flow
+  // planning demands a tagged interaction AND a tagged visible assertion per
+  // requested feature. A grounded feature missing either kind makes flow
+  // planning structurally unsatisfiable from its first attempt, so the gap
+  // must fail here, where preparation repair can render assertable content
+  // or reselect the feature.
+  const flowEvidenceGaps = featureInventory
+    .map((feature) => {
+      if (
+        feature.requestedFeature === undefined ||
+        !groundedFeatureIds.has(feature.id)
+      ) {
+        return undefined;
+      }
+      const tagged = actionsByFeatureId.get(feature.id) ?? [];
+      const missing = [
+        ...(tagged.some((action) => action.kind !== "assert")
+          ? []
+          : ["an interaction"]),
+        ...(tagged.some((action) => action.kind === "assert")
+          ? []
+          : ["a visible-text assert"]),
+      ];
+      return missing.length === 0
+        ? undefined
+        : `"${feature.requestedFeature}" lacks ${missing.join(" and ")}`;
+    })
+    .filter((gap): gap is string => gap !== undefined);
+  if (flowEvidenceGaps.length > 0) {
+    return {
+      classification: "requested feature not observable",
+      message: `Flow planning must pair a tagged interaction with a tagged visible-text assert for every requested feature, but the ActionCatalog cannot satisfy that: ${flowEvidenceGaps.join(
+        "; ",
+      )}. Prepare these features' routes to render visible text that names the feature's data or UI, or reselect featureInventory entries onto routes that already do.`,
+    };
+  }
   if (
     !featureInventory.some((feature) => feature.requestedFeature !== undefined)
   ) {

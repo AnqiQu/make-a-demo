@@ -1430,6 +1430,59 @@ describe("exploreSubmittedApp", () => {
     ]);
   });
 
+  it("fails a requested feature whose catalog tagging cannot satisfy flow planning", async () => {
+    // Exploration grounds a feature on exercised evidence alone, but flow
+    // planning demands an interaction AND a visible assertion. A requested
+    // feature with zero tagged asserts makes flow planning structurally
+    // unsatisfiable, so the gap must fail here, where preparation repair can
+    // render assertable content or reselect the feature.
+    const posting = preparedFeature({
+      description: "Publish a new article.",
+      entryPaths: ["/#/article/demo"],
+      id: "post-article",
+      label: "Posting an article",
+      requestedFeature: "posting an article",
+    });
+    const comments = preparedFeature({
+      description: "Comment on an article.",
+      entryPaths: ["/#/article/demo"],
+      id: "article-comments",
+      label: "Article comments",
+      requestedFeature: "article comments",
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [posting, comments],
+      routes: [
+        observedRoute({
+          featureIds: ["post-article", "article-comments"],
+          headings: ["Publish demo article"],
+          interactions: [
+            {
+              kind: "fill",
+              locator: { strategy: "placeholder", value: "Write a comment..." },
+              name: "Write a comment...",
+              outcome: "The comment field contained the observed article text",
+            },
+          ],
+          path: "/#/article/demo",
+          requestedPath: "/#/article/demo",
+          text: ["A shared placeholder article body"],
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "requested feature not observable",
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain(
+      '"article comments" lacks a visible-text assert',
+    );
+    expect(result.validationReport.logsSummary).toContain(
+      "reselect featureInventory",
+    );
+  });
+
   it("grounds scrolling when the prepared page has scrollable content", async () => {
     const { result } = await exploreObservation({
       routes: [
