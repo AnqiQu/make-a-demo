@@ -1921,6 +1921,54 @@ unblocks ≥1 repo) → N36 (design work; unblocks the tool-SPA class) — then
 rerun the matrix. N29a remains the highest-leverage item for the
 midday/conduit convergence class; N30b and N31b stay queued.
 
+### Landed (2026-08-04, same day)
+
+All six items landed TDD-first, full gauntlet per commit (final state
+**802/802**, lint/typecheck/knip clean; no module-graph changes). `b1e246b`
+(N32: `symlinkEscapesRepo` resolves targets component-by-component against
+the archive's own entry set, following in-repo symlinks depth-bounded and
+cycle-closed; in-repo `..` links pass, absolute targets, root escapes at any
+step, chain aliasing, and cycles stay rejected). `a42783c` (N33: package
+manifests bypass `contentScanBudgetBytes` — the per-file 1 MiB cap remains
+the only manifest bound — and budget-skipped files warn "not
+content-screened … (file size or repo scan budget)" instead of "too large").
+`f9edd66` (N35: `planEngineMismatchRetry` mirrors the reconciliation
+pattern — on the yarn-classic engine-incompatibility signature the install
+retries once with `--ignore-engines`, pnpm with
+`--config.engine-strict=false`; npm/bun stay agent-visible because they are
+not engine-strict by default; hooked after the reconciliation dance so both
+paths are covered). `59405b5` (N34: port evidence scoped to the selected
+start script — `readCandidatePorts` over the selected body only, killing the
+sibling-`serve` pollution — and the agent-declared manifest port now ranks
+above the framework-default table, so a repair that corrects the port is
+adopted on the next resolution and the preflight loop can converge; the
+framework default still applies when the manifest names no port).
+`777e687` (N36: the aria enrichment fires whenever the non-nav selector
+harvest is thin — under 8 distinct strings, not only strict nav-subset — and
+supplies up to 24 deduped candidates; and when a requested feature ungrounds
+on a *content-bearing* route the failure now names the shown distinct
+content and steers at featureInventory wording/entryPaths instead of the
+data path). `95592cc` (N37: the auth-barrier message names the remedy —
+seed an authenticated demo session through the demo gate, or reselect onto
+routes outside authentication).
+
+**Honest scope notes:** N36 does not touch the interaction loop — cyberchef's
+zero click outcomes came from single-click-inert operation buttons, which is
+app behavior, not harness starvation; grounding for tool-SPAs now rides on
+aria-supplied text asserts token-matching feature wording, plus the new
+wording steer when they don't. N34 deliberately flips one precedence test:
+a workspace `vite` script with no port now resolves to the agent-declared
+port over 5173, the convergence trade chosen with excalidraw's
+env-configured port as evidence. The engine retry leaves
+`manifest.installCommandUsed` unchanged (the retry is a validator-local
+remedy, re-derived on each attempt).
+
+**Gate:** rerun the matrix. Expected: cal.com/Ghost/ghostfolio/twenty enter
+the pipeline for the first time (fresh downstream shapes likely surface new
+frontier items), outline clears install, excalidraw clears preflight and
+tests N36's grounding on a canvas app, cyberchef re-tests it on the
+operations catalog; homer must stay green.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
