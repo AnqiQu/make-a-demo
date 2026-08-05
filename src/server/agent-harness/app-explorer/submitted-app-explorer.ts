@@ -1068,7 +1068,7 @@ function readExplorationFailure(
       .map((feature) => feature.requestedFeature ?? feature.label);
     return {
       classification: "feature auth barrier",
-      message: `Prepared feature routes redirected to authentication for: ${blockedFeatures.join(", ")}.`,
+      message: `Prepared feature routes redirected to authentication for: ${blockedFeatures.join(", ")}. Seed an authenticated demo session through the repo's demo gate so these routes render signed in, or reselect featureInventory entries onto routes outside authentication.`,
     };
   }
   // Routes that serve their document shell but yield only structural actions

@@ -1038,6 +1038,9 @@ describe("exploreSubmittedApp", () => {
       logsSummary: expect.stringContaining("posting an article"),
       status: "failed",
     });
+    expect(result.validationReport.logsSummary).toContain(
+      "Seed an authenticated demo session",
+    );
   });
 
   it("recognizes an OAuth-only redirect as a protected feature auth wall", async () => {
