@@ -2046,6 +2046,37 @@ class) → N42 (one-line allowlist + seam test) → N41 (path exemption) →
 N40 → N39 (same seam, land together) → N43 (policy decision) → N44
 (feature-sized). Then rerun the matrix.
 
+**Landed (2026-08-05, same day).** `9fd53f0` (N38 — the generated script's
+empty-table walk now collects header texts; strings made only of an empty
+table's header words — individual cells and the combined header-row name —
+are excluded from the aria candidate push and from route-distinct content
+via a case-insensitive token-subset rule, and the hollow-app failure message
+now carries the N26c empty-table steering; regression test shaped exactly
+like the midday run, plus a real-browser test proving non-table aria text
+still harvests). `4734cef` (N42 — `--config.engine-strict=false` allowlisted;
+seam test proves every `planLockfileReconciliation`/`planEngineMismatchRetry`
+remedy passes `evaluateDependencyInstallCommand`). `6a9117a` (N41 — the
+preparation diff drops `.opencode/` from its temporary index and the
+script-writing fingerprint excludes it like the cache directories; OpenCode
+bookkeeping is tool state, not a workspace change). `ce6178c` (N40 — the
+"not grounded" and "must select both" flow-spec rejections now append the
+feature's tagged assert and interaction ids). `b7032c7` (N39 — exploration
+fails a requested feature whose catalog tagging lacks a tagged interaction
+or a tagged visible-text assert, classification `requested feature not
+observable`, naming the missing kind per feature). `9f0b4b2` (N43 — lane
+decision: JSON manifests and `.d.ts` declarations are gate-exempt and held
+to an additive-only preservation rule with a truthful removal message;
+stylesheets/markup deliberately stay in the strict lane — an ungated CSS
+auth-hiding rule must still fail). `e43478f` (N44 — `project.json` joins the
+manifest class in the repo snapshot; the profiler merges browser-runtime nx
+targets into workspace scripts as `nx run <project>:<target>` bodies
+(package.json wins collisions, declared option ports surface as `--port`),
+and runtime-target resolution invokes target-derived scripts via `npx`
+instead of `<pm> run`). Full gauntlet per commit; 813 tests green. Note: the
+local `remotion-video-renderer` browser test began failing environmentally
+mid-session (root-component load timeout, reproducible at clean HEAD in a
+fresh worktree) — unrelated to these changes and tracked outside this plan.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
