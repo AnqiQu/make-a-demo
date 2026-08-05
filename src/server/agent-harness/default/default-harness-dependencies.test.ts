@@ -157,6 +157,53 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(diffCommand).toContain("node_modules");
   });
 
+  it("keeps OpenCode bookkeeping out of workspace diffs and fingerprints", async () => {
+    // OpenCode writes session bookkeeping under .opencode/ inside the repo
+    // directory while it runs, so read-only stage checks and preparation
+    // diffs must treat that directory like .git/ — tool state, not a
+    // workspace change.
+    const commands: string[] = [];
+    const digest = "b".repeat(64);
+    const workspace = createFakeAgentHarnessWorkspace({
+      async execute(command) {
+        commands.push(command);
+        if (command.includes("MAKEADEMO_PATCH")) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: `src/app.ts\0\0MAKEADEMO_HASHES\0src/app.ts\0sha256:${digest}\0\0MAKEADEMO_PATCH\0diff --git a/src/app.ts b/src/app.ts`,
+          };
+        }
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout: `/workspace/repo/src/app.ts\0file:${digest}\0`,
+        };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await harness.dependencies.capturePreparationWorkspaceDiff?.({ workspace });
+    await harness.dependencies.captureWorkspaceDiff?.({ workspace });
+
+    const diffCommand =
+      commands.find((command) => command.includes("MAKEADEMO_PATCH")) ?? "";
+    expect(diffCommand).toContain(
+      "git rm -r --cached --ignore-unmatch -q -- .opencode",
+    );
+    const snapshotCommand =
+      commands.find(
+        (command) =>
+          command.includes("ls-files") && !command.includes("MAKEADEMO_PATCH"),
+      ) ?? "";
+    expect(snapshotCommand).toContain("-x .opencode");
+  });
+
   it("selects the product application before planning a multi-app monorepo", async () => {
     const stages: string[] = [];
     const workspace = createFakeAgentHarnessWorkspace({
