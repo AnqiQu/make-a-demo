@@ -141,6 +141,79 @@ describe("resolveRuntimeTarget", () => {
       command: "pnpm run dev",
       cwd: "packages/web",
     });
+    expect(target?.baseUrl).toBe("http://127.0.0.1:3000");
+  });
+
+  it("ignores ports harvested from non-selected scripts and adopts the agent-declared port", () => {
+    const preparationManifest = manifest("excalidraw-app/App.tsx");
+    preparationManifest.ports = [5000];
+    const target = resolveRuntimeTarget({
+      preparationManifest,
+      repoProfile: profile({
+        candidateInstallCommands: ["yarn install --immutable"],
+        lockfiles: ["yarn.lock"],
+        packageManager: "yarn",
+        workspacePackages: [
+          {
+            dir: "excalidraw-app",
+            name: "excalidraw-app",
+            ports: [5001],
+            scripts: {
+              serve: "npx http-server build -a localhost -p 5001 -o",
+              start: "yarn && vite",
+            },
+          },
+        ],
+      }),
+    });
+
+    expect(target?.baseUrl).toBe("http://127.0.0.1:5000");
+    expect(target?.ports).toEqual([5000]);
+  });
+
+  it("harvests the selected script's own localhost mention over the agent declaration", () => {
+    const preparationManifest = manifest("packages/web/src/routes/home.tsx");
+    preparationManifest.ports = [5000];
+    const target = resolveRuntimeTarget({
+      preparationManifest,
+      repoProfile: profile({
+        candidateInstallCommands: ["pnpm install --frozen-lockfile"],
+        lockfiles: ["pnpm-lock.yaml"],
+        packageManager: "pnpm",
+        workspacePackages: [
+          {
+            dir: "packages/web",
+            name: "web",
+            ports: [8080],
+            scripts: { dev: "wait-on http://localhost:8080 && vite" },
+          },
+        ],
+      }),
+    });
+
+    expect(target?.baseUrl).toBe("http://127.0.0.1:8080");
+  });
+
+  it("falls back to the framework default when neither script nor manifest name a port", () => {
+    const preparationManifest = manifest("packages/web/src/routes/home.tsx");
+    preparationManifest.ports = [];
+    const target = resolveRuntimeTarget({
+      preparationManifest,
+      repoProfile: profile({
+        candidateInstallCommands: ["pnpm install --frozen-lockfile"],
+        lockfiles: ["pnpm-lock.yaml"],
+        packageManager: "pnpm",
+        workspacePackages: [
+          {
+            dir: "packages/web",
+            name: "web",
+            ports: [],
+            scripts: { dev: "vite" },
+          },
+        ],
+      }),
+    });
+
     expect(target?.baseUrl).toBe("http://127.0.0.1:5173");
   });
 

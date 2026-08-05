@@ -11,6 +11,7 @@ import {
   createInstallCommand,
   createRunScriptCommand,
   isDevServerScriptBody,
+  readCandidatePorts,
   readPackageName,
   readScriptPort,
 } from "./package-commands";
@@ -243,12 +244,19 @@ function resolveRuntimeTargetOutcome(input: {
     };
   }
   const selectedScriptBody = workspacePackage.scripts[start.scriptName] ?? "";
+  // Port evidence is scoped to the selected script: a port in a sibling
+  // script (a static `serve`, a storybook) says nothing about where this
+  // start command binds. The agent-declared manifest port ranks above the
+  // framework-default table because the agent observed the running app, and
+  // config files routinely override framework defaults — a repair that
+  // corrects the port must be adoptable or the preflight loop cannot
+  // converge.
   const port =
     start.port ??
     readScriptPort(selectedScriptBody) ??
-    workspacePackage.ports[0] ??
-    readFrameworkDefaultPort(selectedScriptBody) ??
+    readCandidatePorts({ [start.scriptName]: selectedScriptBody })[0] ??
     input.preparationManifest.ports[0] ??
+    readFrameworkDefaultPort(selectedScriptBody) ??
     3000;
   return {
     target: {
