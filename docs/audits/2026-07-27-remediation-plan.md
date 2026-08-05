@@ -1812,6 +1812,115 @@ as cheap redundant checks on compiled output.
 on the new compiled-humanization path; the extra matrix repos exercise the
 contract against non-Midday shapes).
 
+## Addendum (2026-08-04, first 11-repo matrix — Phase 6 gate green; N32–N37)
+
+First run of the expanded matrix (`terminal-2026-08-04T21-04-58-386Z` …
+`…23-45-45-962Z`, ~2h42m): **homer passed end-to-end (599s) through capture
+and compositing on the compiled-humanization path — the Phase 6 gate is
+green.** The 10 failures decompose into four new deterministic pipeline
+defects (N32–N35), one exploration-generality frontier (N36), and three
+agent-frontier failures where the gates worked as designed. Full evidence row
+in the audit doc.
+
+**N32 — symlink screen rejects in-repo `..` links (cal.com, Ghost,
+ghostfolio).** `symlinkEscapesRepo` rejects any target containing a `..`
+component outright (the Phase 4 fail-closed shortcut). All three repos ship
+the now-standard agent-skill sharing pattern (`.claude/skills/X →
+../../.agents/skills/X`, cal.com `.claude/rules → ../agents/rules`) with
+every target present inside the tar. Fix: bounded static resolution over the
+archive's own entry set — resolve the target component-by-component from the
+symlink's parent, following known in-repo symlinks (depth-bounded,
+cycle-detected), rejecting absolute targets and any traversal that leaves the
+root at any intermediate step. The `a → b/..` aliasing attack still fails
+closed because `b` resolves first. Unblocks 3 of 11 matrix repos.
+
+**N33 — global content-scan budget mislabels manifests as "too large"
+(twenty).** The flagged `packages/twenty-e2e-testing/package.json` is 207
+bytes; the 280 MB/35k-file repo exhausted the 256 MiB
+`contentScanBudgetBytes` mid-traversal, the leftover manifest got
+`scanned: false`, and the fail-closed package.json rule (correct for
+genuinely unscannable manifests) rejected with a false message. Fix: package
+manifests bypass the global budget (they are already per-file capped at
+1 MiB), and budget-skipped files get an honest "content-scan budget
+exhausted" warning instead of "too large". Unblocks twenty.
+
+**N34 — backend port stomp makes preflight repair unconvergeable
+(excalidraw).** Composable defect: (a) the profiler's package-level `ports`
+harvest swept 5001 out of the *non-selected* `serve` script
+(`npx http-server … -p 5001`); the selected `start` body (`yarn && vite`)
+carries no port, so the WS5 precedence fell through to `ports[0]` = 5001;
+(b) `resolvePreparationRuntime` re-stamps `baseUrl`/`ports` from the backend
+target on **every** repair-loop iteration, so after repair attempts 3–4
+correctly declared 5000 (the vite banner `Local: http://127.0.0.1:5000/` sat
+in the preflight evidence the whole time) the loop overwrote them and
+re-probed dead 5001 — four attempts burned with convergence structurally
+impossible. Fix: scope port evidence to the selected start script (body +
+config), and stop overwriting agent-declared runtime fields on re-validation
+when the backend's own evidence is weaker than runtime evidence — or
+cross-check the managed-app output for the actually-bound URL and steer
+deterministically. Unblocks excalidraw's preflight (exploration will then hit
+N36's shape).
+
+**N35 — engine incompatibility has no deterministic remedy (outline).**
+`i18next-parser@9.4.0` engines `^18||^20||^22` vs the sandbox's node
+24.15.0; yarn classic hard-fails engines by default; lockfile reconciliation
+re-ran into the identical wall, and the repair agent has no handle — the
+install command is backend-stamped (all 5 candidates carry
+`yarn install --immutable`; final workspace diff empty). Fix: mirror the
+lockfile-reconciliation pattern — on the engine-incompatibility stderr
+signature under yarn classic, retry once with `--ignore-engines` and record
+the assumption in the manifest (pnpm equivalent
+`--config.engine-strict=false`; npm is not engine-strict by default).
+Unblocks outline's install.
+
+**N36 — exploration under-serves control-centric single-route tools
+(cyberchef; excalidraw next).** The app rendered fully — the retained aria
+snapshot shows "Operations 499", the category taxonomy, "Bake!", the
+operations list — yet grounding saw almost none of it: the selector harvest
+kept 6 strings (headings empty); the N21a aria-enrichment trigger is
+suppressed when even one non-nav string exists (here `To Base64`), and caps
+at 6 candidates; the interaction loop exercised exactly one action (the
+search fill) before its deadline; and sentence-shaped requested features
+("Paste sample input, add an encoding operation…") can never token-match
+control labels, so grounding degraded to exercised-interactions-only.
+Because the route *did* have distinct text, the chrome-only/empty-table
+explanations were suppressed and the failure message was the bare feature
+sentence — five repair attempts steered at the prep agent, which was never
+the problem. Direction (framework-agnostic): fire the aria enrichment on
+thin-harvest-relative-to-aria-tree rather than strict nav-subset and raise
+its cap; count verified high-cardinality distinct control names as route
+content for single-route apps (100+ unique operation names are the opposite
+of hollow chrome — the hollow-Midday signature stays caught by the
+empty-table and generic-chrome signals); and make the no-evidence message
+name what the route did show and which catalog actions exist. Two of the
+three anti-overfitting repos (cyberchef, excalidraw) share this shape — this
+is the biggest generality frontier after N29a.
+
+**N37 (steering note) — auth-barrier repairs need a named remedy
+(conduit).** The prepared app worked (2/3 features grounded on real fixture
+content); "Update profile settings" redirected to authentication because no
+session was seeded, and the auth-barrier message names the feature but not
+the remedy. Steer explicitly: "seed an authenticated demo session via the
+repo's demo gate, or reselect a feature outside auth." Conduit burned its
+final two attempts re-hitting the wall.
+
+**Working as designed (no N items):** midday reproduced the standing N29a
+frontier with the sharpest steering yet (empty-table + fixture-shape message
+verbatim, three identical attempts, fingerprint stop at 2). Directus's
+fidelity gate vetoed replacement product UI four times (`demo-mode.ts` →
+`demo-api.js` → auth conditionals → `demo-mode.ts` again) and the
+fidelity repeat-limit of 1 correctly killed the circle on the first revisit
+— "after 1 attempts" is the designed fidelity budget, not an accounting bug.
+All three repair-budget shapes (global 5, repeated 2, fidelity-repeat 1)
+verified in production. The three fixture repos (vite-spa, pnpm-monorepo,
+npm-express-static) were skipped: no repo URL configured in the matrix
+config.
+
+**Recommended order:** N32 → N33 → N35 → N34 (each deterministic, small,
+unblocks ≥1 repo) → N36 (design work; unblocks the tool-SPA class) — then
+rerun the matrix. N29a remains the highest-leverage item for the
+midday/conduit convergence class; N30b and N31b stay queued.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
