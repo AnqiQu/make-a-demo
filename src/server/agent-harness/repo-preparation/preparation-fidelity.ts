@@ -261,19 +261,28 @@ function readGatedAdaptationViolation(input: {
       message: `${input.path} modifies original product UI, styling, or brand assets instead of preserving them.`,
     };
   }
-  const gateViolation = readDemoAdaptationViolation(
-    input.demoGate,
-    input.path,
-    input.patch,
-    input.kind,
-    input.originalSource,
-  );
-  if (gateViolation !== undefined) {
-    return { hint: repairHints.gate, message: gateViolation };
+  const gateExempt = isGateExemptDataPath(input.path);
+  if (!gateExempt) {
+    const gateViolation = readDemoAdaptationViolation(
+      input.demoGate,
+      input.path,
+      input.patch,
+      input.kind,
+      input.originalSource,
+    );
+    if (gateViolation !== undefined) {
+      return { hint: repairHints.gate, message: gateViolation };
+    }
   }
   const unpreserved = readUnpreservedRemovedLine(input.patch);
   if (unpreserved === undefined) {
     return undefined;
+  }
+  if (gateExempt) {
+    return {
+      hint: repairHints.preserveBehavior,
+      message: `${input.path} removes original content (\`${unpreserved}\`); this file cannot carry the demo gate, so demo adaptations there must be additive.`,
+    };
   }
   return {
     hint: repairHints.preserveBehavior,
@@ -282,6 +291,19 @@ function readGatedAdaptationViolation(input: {
         ? `${input.path} removes original presentation (\`${unpreserved}\`) instead of preserving it behind the demo gate.`
         : `${input.path} removes original ${input.kind} behavior (\`${unpreserved}\`) instead of preserving it behind the demo gate.`,
   };
+}
+
+/**
+ * Data manifests such as package.json execute nothing, and TypeScript
+ * declaration files are erased before runtime, so demanding a demo-gate
+ * conditional inside them is structurally unsatisfiable steering; their demo
+ * adaptations are held to the additive-only preservation rule instead.
+ * Stylesheets and markup stay in the strict lane: they also cannot carry a
+ * conditional, but their correct demo adaptation is a gated wrap at the
+ * source level, never an ungated presentation edit.
+ */
+function isGateExemptDataPath(path: string) {
+  return /\.(?:json[5c]?|d\.[cm]?ts)$/i.test(path);
 }
 
 function readInvalidRepairPaths(input: {

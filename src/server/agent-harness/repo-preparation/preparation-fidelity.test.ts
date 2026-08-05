@@ -992,6 +992,82 @@ describe("validatePreparationFidelity", () => {
     );
   });
 
+  it("allows an additive demo change to a manifest that cannot carry the demo gate", () => {
+    // A JSON manifest executes nothing, so demanding a demo-gate conditional
+    // inside it is structurally unsatisfiable steering; additive entries are
+    // the only demo adaptation such a file can express.
+    const manifestPath = "app/package.json";
+    const report = validateDiff({
+      createdFiles: ["src/utils/demo-mode.ts"],
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [manifestPath],
+      patch: [
+        `diff --git a/${manifestPath} b/${manifestPath}`,
+        '+    "dev:demo": "vite --mode demo",',
+        "diff --git a/src/utils/demo-mode.ts b/src/utils/demo-mode.ts",
+        "new file mode 100644",
+        '+export const isDemoMode = process.env.MAKEADEMO_DEMO === "true";',
+      ].join("\n"),
+      sourceFiles: {
+        [manifestPath]: '{\n  "scripts": {\n    "dev": "vite"\n  }\n}\n',
+      },
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("allows an additive type declaration that cannot carry the demo gate", () => {
+    // Declaration files are erased before runtime; a conditional demo gate
+    // cannot exist there, so an additive env-type declaration must pass.
+    const declarationPath = "excalidraw-app/vite-env.d.ts";
+    const report = validateDiff({
+      createdFiles: ["src/utils/demo-mode.ts"],
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [declarationPath],
+      patch: [
+        `diff --git a/${declarationPath} b/${declarationPath}`,
+        "+  readonly VITE_APP_API_URL: string;",
+        "+  readonly MAKEADEMO_DEMO: string;",
+        "diff --git a/src/utils/demo-mode.ts b/src/utils/demo-mode.ts",
+        "new file mode 100644",
+        '+export const isDemoMode = process.env.MAKEADEMO_DEMO === "true";',
+      ].join("\n"),
+      sourceFiles: {
+        [declarationPath]:
+          "interface ImportMetaEnv {\n  readonly VITE_APP_PORTAL_URL: string;\n}\n",
+      },
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("names the additive-only rule when a gate-incapable file removes original entries", () => {
+    const manifestPath = "app/package.json";
+    const report = validateDiff({
+      createdFiles: ["src/utils/demo-mode.ts"],
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [manifestPath],
+      patch: [
+        `diff --git a/${manifestPath} b/${manifestPath}`,
+        '-    "build": "vite build && tsc --noEmit",',
+        '+    "dev:demo": "vite --mode demo",',
+        "diff --git a/src/utils/demo-mode.ts b/src/utils/demo-mode.ts",
+        "new file mode 100644",
+        '+export const isDemoMode = process.env.MAKEADEMO_DEMO === "true";',
+      ].join("\n"),
+      sourceFiles: {
+        [manifestPath]:
+          '{\n  "scripts": {\n    "build": "vite build && tsc --noEmit",\n    "dev": "vite"\n  }\n}\n',
+      },
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(
+      "cannot carry the demo gate, so demo adaptations there must be additive",
+    );
+    expect(report.logsSummary).not.toContain("behind the demo gate");
+  });
+
   it("rejects an ungated re-arrangement of original markup", () => {
     const layoutPath = "apps/dashboard/src/app/layout.tsx";
     const report = validateDiff({
