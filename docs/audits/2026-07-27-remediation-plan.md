@@ -1969,6 +1969,83 @@ frontier items), outline clears install, excalidraw clears preflight and
 tests N36's grounding on a canvas app, cyberchef re-tests it on the
 operations catalog; homer must stay green.
 
+## Addendum (2026-08-05, second 11-repo matrix — N32–N37 validated; hollow regression N38; N39–N44)
+
+Run `terminal-2026-08-05T00-57-36-128Z` … `…03-18-14-356Z` (~2h27m). **Every
+one of the six fixes moved its repo at least one stage**; the frontier is now
+flow planning, fidelity policy, and deep-repo preparation. Homer passed
+(425s). Evidence row in the audit doc.
+
+**N38 — hollow regression (midday), highest priority.** Midday "passed" with
+a skeleton video: the N36 aria enrichment lifted the empty data tables'
+*column headers* into route text, they counted as route-distinct content,
+and the feature grounded on an `'Invoice no.'` assert. Fix at the evidence
+layer: the generated script's empty-table walk must also collect those
+tables' header texts, and header texts of *empty* tables must be excluded
+from route-distinct content (and from the aria candidate push), so a
+header-only route reverts to chrome-only and the N26c empty-table steering
+fires as designed. Regression test shaped exactly like this run. The N36
+win for genuinely content-bearing tool UIs is unaffected.
+
+**N39 — flow-spec satisfiability gate (conduit).** Exploration grounds a
+feature on exercised-evidence alone, but FlowSpec demands an interaction AND
+a visible assertion — `article-comments` had no tagged assert, so flow
+planning was unsatisfiable from attempt 1 and burned its budget on a
+structurally impossible task. Extend the N22a lane: a requested feature
+whose catalog tagging lacks either kind fails exploration with
+repo-preparation steering naming what is missing.
+
+**N40 — flow-spec rejections must name qualifying ids (cyberchef).** The
+catalog offered a tagged assert and click, but "must select both an
+interaction and visible assertion" and "action X is not grounded for
+feature Y" never enumerate the feature's tagged action ids; three attempts
+guessed wrong. Append the qualifying interaction/assert ids per feature to
+both rejections (N25a pattern at the flow seam).
+
+**N41 — exempt the agent tool's own paths from stage diffs (cal.com).**
+Runtime Target Selection was killed for `/workspace/repo/.opencode/.gitignore`
+— OpenCode's own bookkeeping. Read-only stage checks (and workspace diffs)
+must ignore `.opencode/` the way they ignore `.git/`.
+
+**N42 — the N35 pnpm remedy is denied by our own install gate (directus).**
+`ERR_PNPM_UNSUPPORTED_ENGINE` fired the engine retry, whose
+`--config.engine-strict=false` is not in the install-gate allowlist — the
+deterministic remedy was gated off and the failure reported under the
+original command. Add the flag to the allowlist and add a seam test that
+every `planEngineMismatchRetry`/reconciliation output passes
+`evaluateDependencyInstallCommand`.
+
+**N43 — fidelity's gated-adaptation demand misapplies to non-executable
+files (directus, excalidraw).** Vetoes demanded that `app/package.json`,
+`vite-env.d.ts`, and `app_constants.ts` "conditionally use the demo gate" —
+manifests and type declarations cannot carry runtime conditionals, so the
+veto is unsatisfiable as steered and burned both repos' budgets. Decide the
+lane: config/declaration files need either an exemption with their own
+minimal-diff rule or at minimum a truthful message naming what adaptation
+is actually permitted there.
+
+**N44 — profile task-runner run targets (twenty).** `packages/twenty-front`
+carries only a `build` script; its serve targets live in nx `project.json`.
+The candidate list therefore held only the marketing site and a test
+fixture, and the 5.7 role-safety escalation fired on an honest but wrong
+premise. Harvest nx (and similar task-runner) project targets as runtime
+scripts so nx-managed products become candidates.
+
+**Frontier, no code change:** ghost (serial inventory-contract lessons on a
+giant multi-app repo — check whether the inventory validator can batch all
+violations per attempt while implementing N39/N40); outline (engine retry
+validated; `yarn run dev` executes unbuilt `build/server/index.js` —
+multi-service app with DB dependencies; the dev-script no-build heuristic
+has a known nuance here); excalidraw exploration (canvas apps cannot
+text-match feature wording — the N36 limitation, needs its own evidence
+design eventually); ghostfolio (two consecutive 300s no-output kills in
+repair — N24/N27 infra watchdog class, watch for recurrence).
+
+**Recommended order:** N38 first (a false-positive pass is the worst outcome
+class) → N42 (one-line allowlist + seam test) → N41 (path exemption) →
+N40 → N39 (same seam, land together) → N43 (policy decision) → N44
+(feature-sized). Then rerun the matrix.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
