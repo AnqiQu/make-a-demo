@@ -2163,6 +2163,29 @@ cyberchef) → rerun midday, directus, cyberchef plus the five network
 casualties. Phase 7 is orthogonal consolidation and can proceed immediately
 after N45–N47 land.
 
+**Landed (2026-08-05, same day).** `3e38633` (N45 — grounding vetoes a
+zero-row data-table route as content-bearing for a requested feature; when
+every missing requested feature failed only on the veto, the run fails as
+`empty/unmeaningful app state` with a per-feature sentence naming the shown
+distinct content and the N26c fixture-shape steering; the veto is scoped to
+requested features and per route — a second tagged route without an empty
+table still grounds). `9a1e579` (N47 primary — the script's table walk now
+also harvests the first populated rows' leading cell text into route text
+and reports a `populatedDataTables` count per route; a populated table
+lifts the N45 veto since the data surface demonstrably renders rows;
+real-browser test shaped like the directus admin page — junk-rich selector
+harvest, title outside h1–h3, rows only in cells). `edb0534` (N47
+secondary — the thin-harvest trigger discounts strings already harvested on
+previously-visited routes, so icon-ligature/skip-link chrome cannot make a
+thin harvest look rich and suppress the aria fallback; real-browser
+two-route test). `8fff663` (N46 — every feature tagged to a headingless
+route gets at least one verified text whose semantic tokens match it,
+beyond the cap-3 distinct-first slots (shared token recipe extracted as
+`featureSemanticTokens`); the N39 flow-evidence gap message names the shown
+distinct labels and steers featureInventory wording alignment when the
+tagged routes are content-bearing). Full gauntlet per commit; 820 tests
+green, including the previously-flaky remotion browser test.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
