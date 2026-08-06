@@ -3,6 +3,7 @@ import {
   AgentHarnessArtifactTransferError,
   AgentHarnessCommandTimeoutError,
   AgentHarnessSandboxUnavailableError,
+  isAgentHarnessInfrastructureError,
 } from "../daytona/workspace.interface";
 import { createFakeAgentHarnessWorkspace } from "../daytona/workspace.test-helpers";
 import { DEMO_SCRIPT_OUTPUT_PATH } from "../schemas/artifacts";
@@ -319,6 +320,27 @@ describe("runAgentHarnessPipeline", () => {
 
     expect(result.status).toBe("passed");
     expect(repairClassifications).toEqual(["script modified app source"]);
+  });
+
+  it("stops the run with a classified timeout once the job wall-clock budget is spent", async () => {
+    // One wall-clock budget bounds the whole job: a repair spiral converts
+    // into a classified infrastructure timeout carrying the accumulated
+    // stage evidence instead of a many-hour hang.
+    const error: unknown = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_deadline" }),
+      stubPipelineDependencies({
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+      }),
+      { jobDeadlineMs: 0 },
+    ).then(
+      () => undefined,
+      (thrown: unknown) => thrown,
+    );
+
+    expect(String(error)).toMatch(/wall-clock budget/i);
+    expect(isAgentHarnessInfrastructureError(error)).toBe(true);
   });
 
   it("records async stage failures after the stage promise rejects", async () => {

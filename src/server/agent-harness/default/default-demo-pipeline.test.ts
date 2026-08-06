@@ -269,6 +269,7 @@ describe("runDefaultDemoPipeline", () => {
           calls.push(`harness:${input.repoUrl}:${input.runId}`);
           expect(harnessOptions).toEqual({
             destroyWorkspaceOnCompletion: false,
+            jobDeadlineMs: 90 * 60_000,
             repoPreparationRepairLimit: 2,
             scriptRepairLimit: 1,
           });

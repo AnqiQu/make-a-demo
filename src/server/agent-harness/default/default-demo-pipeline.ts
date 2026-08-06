@@ -206,6 +206,7 @@ export async function runDefaultDemoPipeline(
       harnessDependencies.dependencies,
       {
         destroyWorkspaceOnCompletion: false,
+        jobDeadlineMs: retryPolicy.jobDeadlineMinutes * 60_000,
         repoPreparationRepairLimit: retryPolicy.repoPreparationRepairs,
         scriptRepairLimit: retryPolicy.scriptRepairs,
       },

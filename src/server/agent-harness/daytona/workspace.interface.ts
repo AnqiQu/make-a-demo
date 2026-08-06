@@ -24,6 +24,24 @@ export class AgentHarnessCommandTimeoutError extends Error {
 }
 
 /**
+ * Signals that the whole pipeline job exceeded its wall-clock budget. The
+ * orchestrator throws this at stage-loop boundaries so a repair spiral ends
+ * as one classified timeout with the accumulated stage evidence instead of a
+ * many-hour hang; it must never be converted into agent retry feedback.
+ */
+export class AgentHarnessJobDeadlineError extends Error {
+  readonly jobDeadlineMs: number;
+
+  constructor(jobDeadlineMs: number) {
+    super(
+      `Agent harness job exceeded its ${Math.round(jobDeadlineMs / 60_000)}-minute wall-clock budget.`,
+    );
+    this.name = "AgentHarnessJobDeadlineError";
+    this.jobDeadlineMs = jobDeadlineMs;
+  }
+}
+
+/**
  * Signals that an OpenCode agent command exited nonzero without emitting any
  * output of its own — only PTY bootstrap echo. The agent runtime never spoke,
  * so the failure belongs to the sandbox/PTY/runner infrastructure seam and
@@ -65,11 +83,13 @@ export function isAgentHarnessInfrastructureError(
   | AgentHarnessAgentLaunchError
   | AgentHarnessArtifactTransferError
   | AgentHarnessCommandTimeoutError
+  | AgentHarnessJobDeadlineError
   | AgentHarnessSandboxUnavailableError {
   return (
     error instanceof AgentHarnessAgentLaunchError ||
     error instanceof AgentHarnessArtifactTransferError ||
     error instanceof AgentHarnessCommandTimeoutError ||
+    error instanceof AgentHarnessJobDeadlineError ||
     error instanceof AgentHarnessSandboxUnavailableError
   );
 }

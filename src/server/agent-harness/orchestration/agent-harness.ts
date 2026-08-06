@@ -1,5 +1,6 @@
 import type { SubmittedAppExplorationResult } from "../app-explorer/submitted-app-explorer";
 import {
+  AgentHarnessJobDeadlineError,
   type AgentHarnessWorkspace,
   isAgentHarnessInfrastructureError,
 } from "../daytona/workspace.interface";
@@ -222,6 +223,8 @@ export type AgentHarnessPipelineResult = {
 
 export type AgentHarnessPipelineOptions = {
   destroyWorkspaceOnCompletion?: boolean;
+  /** Wall-clock budget for the whole job; default 90 minutes. */
+  jobDeadlineMs?: number;
   /** Maximum Repo Preparation repairs allowed across the complete pipeline. */
   repoPreparationRepairLimit?: number;
   /** Maximum Script repairs allowed independently per failing validation stage. */
@@ -252,6 +255,16 @@ export async function runAgentHarnessPipeline(
       );
     }
   }
+  // One wall-clock budget bounds the whole job. Checked at every stage-loop
+  // boundary so a repair spiral ends as one classified infrastructure
+  // timeout with the accumulated stage evidence, never a many-hour hang.
+  const jobDeadlineMs = options.jobDeadlineMs ?? 90 * 60_000;
+  const jobDeadlineAtMs = Date.now() + jobDeadlineMs;
+  const assertJobWithinDeadline = () => {
+    if (Date.now() >= jobDeadlineAtMs) {
+      throw new AgentHarnessJobDeadlineError(jobDeadlineMs);
+    }
+  };
   const stageStatuses: Record<
     string,
     | PipelineRunManifest["finalStatus"]
@@ -434,6 +447,7 @@ export async function runAgentHarnessPipeline(
     const scriptRepairLimit = options.scriptRepairLimit ?? 3;
     const validationAttemptCounts: Record<string, number> = {};
     const preparationState = await ensureValidPreparation({
+      assertJobWithinDeadline,
       capturePreparationWorkspaceDiff,
       dependencies,
       input,
@@ -458,6 +472,7 @@ export async function runAgentHarnessPipeline(
     const revalidatePreparation = async (initialFailure: ValidationReport) => {
       const revalidatedState = await ensureValidPreparation({
         ...(acceptedPreparation === undefined ? {} : { acceptedPreparation }),
+        assertJobWithinDeadline,
         capturePreparationWorkspaceDiff,
         dependencies,
         initialFailure,
@@ -506,6 +521,7 @@ export async function runAgentHarnessPipeline(
     };
     pipelineAttempt: for (;;) {
       for (;;) {
+        assertJobWithinDeadline();
         const exploration = await runAsyncStage(
           "app-exploration",
           stageStatuses,
@@ -630,6 +646,7 @@ export async function runAgentHarnessPipeline(
 
       let transientCaptureRetries = 0;
       for (;;) {
+        assertJobWithinDeadline();
         const staticRepairAttempts =
           scriptRepairAttemptsByPhase["static-script-contract-validation"] ?? 0;
         const boundaryViolations = readDisallowedScriptWritingChanges(
@@ -1246,6 +1263,7 @@ type PreparationRepairBudget = {
 
 async function ensureValidPreparation(input: {
   acceptedPreparation?: AcceptedPreparationCandidate;
+  assertJobWithinDeadline: () => void;
   capturePreparationWorkspaceDiff: () => Promise<PreparationWorkspaceDiff>;
   dependencies: AgentHarnessPipelineDependencies;
   initialFailure?: ValidationReport;
@@ -1280,6 +1298,7 @@ async function ensureValidPreparation(input: {
   attemptedInstallScopes.add(input.preparationManifest.installCommandUsed);
 
   for (;;) {
+    input.assertJobWithinDeadline();
     if (failure !== undefined) {
       const expandedPreparation =
         expandPreparationInstallScopeForMissingWorkspace({
