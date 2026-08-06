@@ -1851,6 +1851,7 @@ try {
     { featureIds: [], requestedPath: new URL(baseUrl).pathname, url: new URL(baseUrl).toString() },
   ];
   const seen = new Set();
+  const harvestedOnEarlierRoutes = new Set();
   const maxRoutes = Math.min(30, featureEntryTargets.length + 9);
   await mkdir(outputDirectory, { recursive: true });
   while (queue.length > 0 && seen.size < maxRoutes && Date.now() < deadlineAtMs) {
@@ -1998,7 +1999,11 @@ try {
         };
       }));
       const routeNavNames = new Set([...observed.primaryNavigation, ...observed.links.map((link) => link.name)].filter(Boolean));
-      const distinctHarvestCount = [...new Set([...observed.headings, ...observed.text])].filter((value) => value && !routeNavNames.has(value)).length;
+      // Strings repeated from previously-visited routes are site chrome —
+      // icon ligatures, skip links, rail labels — even when they escape the
+      // nav selectors: they must not make a thin harvest look rich, or the
+      // accessibility-tree fallback never fires on data pages.
+      const distinctHarvestCount = [...new Set([...observed.headings, ...observed.text])].filter((value) => value && !routeNavNames.has(value) && !harvestedOnEarlierRoutes.has(value)).length;
       if (distinctHarvestCount < 8) {
         // Routes whose selector harvest stays thin beyond their own nav and
         // link names — display-only dashboards, data tables outside the
@@ -2021,6 +2026,9 @@ try {
           ])].filter((candidate) => !observed.text.includes(candidate) && !observed.headings.includes(candidate) && !isEmptyTableStructure(candidate)).slice(0, 24);
           observed.text.push(...ariaTextCandidates);
         } catch {}
+      }
+      for (const value of [...observed.headings, ...observed.text]) {
+        if (value) harvestedOnEarlierRoutes.add(value);
       }
       observed.textLocatorEvidence = await Promise.all(observed.text.map((text) =>
         createVerifiedDirectLocatorEvidence({

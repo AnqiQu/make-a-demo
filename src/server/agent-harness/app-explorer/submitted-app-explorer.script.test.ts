@@ -397,6 +397,70 @@ describe("generated exploration script", () => {
     }
   }, 30_000);
 
+  it("discounts strings repeated from earlier routes when deciding a thin harvest", async () => {
+    // Icon-ligature and skip-link strings escape the nav selectors and
+    // repeat on every route. On later routes they must not make a thin
+    // harvest look rich, or the accessibility-tree fallback never fires and
+    // a data page's real content (here, text in a plain div) goes unseen.
+    const junk =
+      "<ul><li>people_alt</li><li>folder</li><li>insights</li><li>bookmark</li><li>translate</li><li>public</li><li>storage</li><li>tune</li></ul>";
+    const navigation =
+      '<nav><a href="/">Home</a> <a href="/policies">Policies</a></nav>';
+    const homePage = `<!doctype html><html><head><title>Admin App</title></head><body>
+<main>${navigation}${junk}</main>
+</body></html>`;
+    const policiesPage = `<!doctype html><html><head><title>Admin App</title></head><body>
+<main>${navigation}${junk}
+<div>Pending approvals overview</div>
+</main>
+</body></html>`;
+    const server = createServer((request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(
+        request.url?.startsWith("/policies") ? policiesPage : homePage,
+      );
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-repeats-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        routes: Array<{ path: string; text: string[] }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      const policies = result.routes.find((route) =>
+        route.path.startsWith("/policies"),
+      );
+      expect(policies).toBeDefined();
+      expect(policies?.text).toContain("Pending approvals overview");
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
   it("keeps stylesheet text out of harvested headings", async () => {
     const styledHeadingPage = `<!doctype html><html><head><title>Styled App</title></head><body>
 <div role="heading" aria-level="1"><style>.decor{color:red}</style>Quarterly report</div>
