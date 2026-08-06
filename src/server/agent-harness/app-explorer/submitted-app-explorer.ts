@@ -408,25 +408,11 @@ function createExplorationArtifacts(input: {
   const distinctContentByRoute = readRouteDistinctContent(
     input.observation.routes,
   );
-  // One traversal accumulates every route-derived AppMap field; the observed
-  // per-route order is what keeps the deduplicated aggregates stable.
   const routes: Array<Record<string, unknown>> = [];
   const loginOrAuthWalls: string[] = [];
-  const accessibilitySnapshots: string[] = [];
-  const buttons: string[] = [];
-  const candidateFlows: string[] = [];
-  const forms: string[] = [];
-  const inputs: string[] = [];
-  const links: string[] = [];
-  const primaryNavigation: string[] = [];
-  const routeTitles: Record<string, string> = {};
-  const screenshots: string[] = [];
-  const stableLocatorCandidates: string[] = [];
   const emptyDataTablesByRoute = new Map<string, number>();
   const populatedTableRoutes = new Set<string>();
   for (const route of input.observation.routes) {
-    const routeLocatorCandidates = createRouteLocatorCandidates(route);
-    const linkHrefs = route.links.map((link) => link.href);
     routes.push({
       buttons: route.buttons,
       ...(route.featureIds === undefined
@@ -435,7 +421,7 @@ function createExplorationArtifacts(input: {
       forms: route.forms,
       headings: route.headings,
       inputs: route.inputs,
-      links: linkHrefs,
+      links: route.links.map((link) => link.href),
       path: route.path,
       primaryNavigation: route.primaryNavigation,
       ...(route.requestedPath === undefined
@@ -443,30 +429,12 @@ function createExplorationArtifacts(input: {
         : { requestedPath: route.requestedPath }),
       screenshots: [route.screenshot],
       snapshotPath: route.snapshot,
-      stableLocatorCandidates: routeLocatorCandidates,
       text: route.text,
       title: route.title,
     });
     if (isAuthWall(route)) {
       loginOrAuthWalls.push(route.path);
     }
-    accessibilitySnapshots.push(route.snapshot);
-    buttons.push(...route.buttons);
-    candidateFlows.push(
-      ...route.buttons,
-      ...route.forms,
-      ...route.inputs,
-      ...route.links
-        .filter((link) => link.sameOrigin !== false)
-        .map((link) => link.name),
-    );
-    forms.push(...route.forms);
-    inputs.push(...route.inputs);
-    links.push(...linkHrefs);
-    primaryNavigation.push(...route.primaryNavigation);
-    routeTitles[route.path] = route.title;
-    screenshots.push(route.screenshot);
-    stableLocatorCandidates.push(...routeLocatorCandidates);
     if ((route.emptyDataTables?.length ?? 0) > 0) {
       emptyDataTablesByRoute.set(
         route.path,
@@ -478,26 +446,15 @@ function createExplorationArtifacts(input: {
     }
   }
   const appMap = readAppMap({
-    accessibilitySnapshots,
     actionCatalogId,
-    appStateAssumptions: [],
     baseUrl: input.baseUrl,
     blockedNetworkAttempts: networkAttempts,
-    buttons: unique(buttons),
-    candidateFlows: unique(candidateFlows),
     consoleErrors: unique(input.observation.consoleErrors),
     discoveredRoutes: routes,
-    forms: unique(forms),
     id: appMapId,
-    inputs: unique(inputs),
-    links: unique(links),
     loginOrAuthWalls,
     networkAttempts,
     pageErrors: unique(input.observation.pageErrors),
-    primaryNavigation: unique(primaryNavigation),
-    routeTitles,
-    screenshots,
-    stableLocatorCandidates: unique(stableLocatorCandidates),
   });
   const actionCatalog = readActionCatalog({
     actions: createActions(
@@ -1012,12 +969,17 @@ function createExplorationValidationReport(input: {
   const actionableConsoleErrors = input.appMap.consoleErrors.filter(
     isActionableBrowserConsoleError,
   );
+  const routeScreenshots = input.appMap.discoveredRoutes.flatMap(
+    (route) => route.screenshots,
+  );
   return readValidationReport({
     artifactReferences: [
       "/workspace/.makeademo/app-map.json",
       "/workspace/.makeademo/action-catalog.json",
-      ...input.appMap.accessibilitySnapshots,
-      ...(input.appMap.screenshots ?? []),
+      ...input.appMap.discoveredRoutes.flatMap((route) =>
+        route.snapshotPath === undefined ? [] : [route.snapshotPath],
+      ),
+      ...routeScreenshots,
     ],
     blockedNetworkAttempts: input.networkAttempts,
     browserObservations: [
@@ -1039,7 +1001,7 @@ function createExplorationValidationReport(input: {
     networkAttempts: input.networkAttempts,
     pageErrors: input.appMap.pageErrors,
     retryCount: 0,
-    screenshots: input.appMap.screenshots ?? [],
+    screenshots: routeScreenshots,
     stage: "app-exploration",
     status: failure === undefined ? "passed" : "failed",
     stderrExcerpts: [],
@@ -1559,22 +1521,6 @@ function readObservedNetworkAttempts(
       }),
     ),
   );
-}
-
-function createRouteLocatorCandidates(route: ObservedRoute): string[] {
-  return unique([
-    ...route.headings.map(
-      (name) => `role=heading[name=${JSON.stringify(name)}]`,
-    ),
-    ...route.buttons.map((name) => `role=button[name=${JSON.stringify(name)}]`),
-    ...route.links
-      .filter((link) => link.name.length > 0)
-      .map((link) => `role=link[name=${JSON.stringify(link.name)}]`),
-    ...(route.inputLocators ?? []).map(
-      (input) =>
-        `${input.locator.strategy}=${JSON.stringify(input.locator.value)}`,
-    ),
-  ]);
 }
 
 function isAuthWall(route: {

@@ -87,12 +87,14 @@ describe("exploreSubmittedApp", () => {
     expect(artifacts.validationReport.status).toBe("passed");
     expect(artifacts.appMap).toMatchObject({
       baseUrl,
-      candidateFlows: expect.arrayContaining(["Search"]),
       discoveredRoutes: [
-        expect.objectContaining({ path: "/", title: "Example App" }),
+        expect.objectContaining({
+          inputs: expect.arrayContaining(["Search"]),
+          path: "/",
+          title: "Example App",
+        }),
       ],
       loginOrAuthWalls: [],
-      stableLocatorCandidates: expect.arrayContaining(['placeholder="Search"']),
     });
     expect(artifacts.actionCatalog.actions).toEqual(
       expect.arrayContaining([

@@ -705,7 +705,6 @@ describe("createDefaultAgentHarnessDependencies", () => {
       title: "Sign in",
     }));
     authMap.loginOrAuthWalls = ["/login"];
-    authMap.routeTitles = { "/login": "Sign in" };
     const catalog = actionCatalog();
     catalog.actions = catalog.actions.map((action) =>
       action.featureIds?.includes("dashboard")
@@ -4719,12 +4718,8 @@ describe("createDefaultAgentHarnessDependencies", () => {
 
 function appMap(): AppMap {
   return {
-    accessibilitySnapshots: ["snapshot.yml"],
-    appStateAssumptions: [],
     baseUrl: "http://127.0.0.1:3000",
     blockedNetworkAttempts: [],
-    buttons: ["Dashboard"],
-    candidateFlows: ["Dashboard"],
     consoleErrors: [],
     discoveredRoutes: [
       {
@@ -4738,15 +4733,9 @@ function appMap(): AppMap {
         text: ["Welcome"],
       },
     ],
-    forms: [],
     id: "app_map",
-    inputs: [],
-    links: [],
     loginOrAuthWalls: [],
     pageErrors: [],
-    primaryNavigation: [],
-    routeTitles: { "/": "Home" },
-    stableLocatorCandidates: ["role=heading[name=Welcome]"],
   };
 }
 

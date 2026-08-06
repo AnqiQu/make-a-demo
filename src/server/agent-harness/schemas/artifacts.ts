@@ -233,7 +233,6 @@ type AppMapRoute = {
   links: string[];
   forms: string[];
   inputs: string[];
-  stableLocatorCandidates?: string[];
   screenshots: string[];
   snapshotPath?: string;
 };
@@ -242,22 +241,11 @@ export type AppMap = {
   id: string;
   baseUrl: string;
   discoveredRoutes: AppMapRoute[];
-  routeTitles: Record<string, string>;
-  primaryNavigation: string[];
-  buttons: string[];
-  links: string[];
-  forms: string[];
-  inputs: string[];
-  stableLocatorCandidates: string[];
-  appStateAssumptions: string[];
   loginOrAuthWalls: string[];
   consoleErrors: string[];
   pageErrors: string[];
   networkAttempts?: NetworkAttempt[];
   blockedNetworkAttempts: NetworkAttempt[];
-  screenshots?: string[];
-  accessibilitySnapshots: string[];
-  candidateFlows: string[];
   actionCatalogId?: string;
 };
 
@@ -826,33 +814,20 @@ function readRuntimeProcessObservation(
 export function readAppMap(value: unknown): AppMap {
   const record = assertRecord(value, "AppMap");
   return {
-    accessibilitySnapshots: readStringArray(record, "accessibilitySnapshots"),
     ...optionalKey(record, "actionCatalogId", readNonEmptyString),
-    appStateAssumptions: readStringArray(record, "appStateAssumptions"),
     baseUrl: readLocalHttpUrl(record, "baseUrl"),
     blockedNetworkAttempts: readNetworkAttempts(
       record,
       "blockedNetworkAttempts",
     ),
-    buttons: readStringArray(record, "buttons"),
-    candidateFlows: readStringArray(record, "candidateFlows"),
     consoleErrors: readStringArray(record, "consoleErrors"),
     discoveredRoutes: readRoutes(record.discoveredRoutes),
-    forms: readStringArray(record, "forms"),
     id: readNonEmptyString(record, "id"),
-    inputs: readStringArray(record, "inputs"),
-    links: readStringArray(record, "links"),
     loginOrAuthWalls: readStringArray(record, "loginOrAuthWalls"),
     ...(record.networkAttempts === undefined
       ? {}
       : { networkAttempts: readNetworkAttempts(record, "networkAttempts") }),
     pageErrors: readStringArray(record, "pageErrors"),
-    primaryNavigation: readStringArray(record, "primaryNavigation"),
-    routeTitles: readStringRecord(record, "routeTitles"),
-    ...(record.screenshots === undefined
-      ? {}
-      : { screenshots: readStringArray(record, "screenshots") }),
-    stableLocatorCandidates: readStringArray(record, "stableLocatorCandidates"),
   };
 }
 
@@ -1016,15 +991,6 @@ function readRoutes(value: unknown): AppMapRoute[] {
       ...(record.snapshotPath === undefined
         ? {}
         : { snapshotPath: readNonEmptyString(record, "snapshotPath", path) }),
-      ...(record.stableLocatorCandidates === undefined
-        ? {}
-        : {
-            stableLocatorCandidates: readStringArray(
-              record,
-              "stableLocatorCandidates",
-              path,
-            ),
-          }),
       text: readStringArray(record, "text", path),
       ...(record.title === undefined
         ? {}
