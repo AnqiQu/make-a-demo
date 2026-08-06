@@ -1430,6 +1430,103 @@ describe("exploreSubmittedApp", () => {
     ]);
   });
 
+  it("fails a requested feature grounded only over a zero-row data table", async () => {
+    // Hollow pass #3: the invoices route rendered populated summary cards
+    // while its data table stayed at zero rows, and grounding accepted the
+    // card text as content. The table is the feature's data surface — cards
+    // and tab labels render from separate queries in hollow and healthy apps
+    // alike — so a requested feature's tagged route with a zero-row table
+    // must not count as content-bearing for that feature.
+    const invoicing = preparedFeature({
+      description: "Demonstrate invoicing",
+      entryPaths: ["/en/invoices"],
+      id: "invoicing",
+      label: "Invoices",
+      requestedFeature: "invoicing",
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [invoicing],
+      routes: [
+        observedRoute({
+          emptyDataTables: [
+            {
+              columnHeaders: 9,
+              headerTexts: ["Invoice no.", "Due date", "Amount"],
+            },
+          ],
+          featureIds: ["invoicing"],
+          interactions: [
+            {
+              kind: "fill",
+              locator: { strategy: "placeholder", value: "Search invoices..." },
+              name: "Search invoices...",
+              outcome: "The field contained the observed demo value",
+            },
+          ],
+          path: "/en/invoices",
+          primaryNavigation: ["Overview"],
+          requestedPath: "/en/invoices",
+          text: ["Open $4,200", "Paid $1,800", "Payment score Good"],
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "empty/unmeaningful app state",
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain(
+      "zero-row data table as the feature's data surface",
+    );
+    expect(result.validationReport.logsSummary).toContain(
+      "column headers, zero data rows",
+    );
+    expect(result.validationReport.logsSummary).toContain(
+      "align the fixture shape",
+    );
+  });
+
+  it("grounds a requested feature whose second tagged route renders content without an empty table", async () => {
+    // The zero-row veto is per route, not per feature: a detail route that
+    // renders the feature's data keeps the feature demonstrable even when
+    // the index route's table is empty.
+    const invoicing = preparedFeature({
+      description: "Demonstrate invoicing",
+      entryPaths: ["/en/invoices"],
+      id: "invoicing",
+      label: "Invoices",
+      requestedFeature: "invoicing",
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [invoicing],
+      routes: [
+        observedRoute({
+          emptyDataTables: [
+            {
+              columnHeaders: 9,
+              headerTexts: ["Invoice no.", "Due date", "Amount"],
+            },
+          ],
+          featureIds: ["invoicing"],
+          path: "/en/invoices",
+          primaryNavigation: ["Overview"],
+          requestedPath: "/en/invoices",
+          text: ["Open $4,200"],
+        }),
+        observedRoute({
+          featureIds: ["invoicing"],
+          headings: ["Invoice INV-001 for Aperture Labs"],
+          path: "/en/invoices/inv-001",
+          primaryNavigation: ["Overview"],
+          requestedPath: "/en/invoices/inv-001",
+          text: ["Due in 14 days"],
+        }),
+      ],
+    });
+
+    requireArtifacts(result);
+  });
+
   it("fails a requested feature whose catalog tagging cannot satisfy flow planning", async () => {
     // Exploration grounds a feature on exercised evidence alone, but flow
     // planning demands an interaction AND a visible assertion. A requested

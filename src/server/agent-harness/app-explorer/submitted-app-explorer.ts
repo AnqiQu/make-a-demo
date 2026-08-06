@@ -1147,6 +1147,15 @@ function readExplorationFailure(
       )}`,
     };
   };
+  // A zero-row data table is the feature's data surface rendering empty:
+  // for a requested feature it vetoes the route's other distinct strings
+  // (summary cards, tab labels), which render from separate queries in
+  // hollow and healthy apps alike. Non-requested features keep the plain
+  // content rule so the default demo can still select around such routes.
+  const demonstrableRoute = (feature: PreparedDemoFeature, route: string) =>
+    contentRoutePaths.has(route) &&
+    (feature.requestedFeature === undefined ||
+      !emptyDataTablesByRoute.has(route));
   const groundedFeatureIds = new Set(
     featureInventory
       .filter((feature) => {
@@ -1164,7 +1173,7 @@ function readExplorationFailure(
                 action.kind === "assert" &&
                 assertEvidenceMatchesFeature(action, feature),
             )) &&
-          actions.some((action) => contentRoutePaths.has(action.route))
+          actions.some((action) => demonstrableRoute(feature, action.route))
         );
       })
       .map((feature) => feature.id),
@@ -1228,47 +1237,90 @@ function readExplorationFailure(
     // Naming what the feature's routes actually showed turns "no evidence"
     // into actionable steering: a chrome-only route means the data path is
     // broken, which the repair agent cannot see from the feature name alone.
-    const chromeOnlyRouteEvidence = missingRequestedFeatures
-      .map((feature) => {
-        const taggedRoutes = unique(
-          (actionsByFeatureId.get(feature.id) ?? []).map(
-            (action) => action.route,
-          ),
+    const featureEvidence = missingRequestedFeatures.map((feature) => {
+      const tagged = actionsByFeatureId.get(feature.id) ?? [];
+      const taggedRoutes = unique(tagged.map((action) => action.route));
+      const routes =
+        taggedRoutes.length > 0 ? taggedRoutes : feature.entryPaths;
+      if (routes.length === 0) {
+        return { sentence: "", vetoedByEmptyTable: false };
+      }
+      const contentRoutes = routes.filter((route) =>
+        contentRoutePaths.has(route),
+      );
+      // Matching evidence on a content-bearing route means the only blocker
+      // was the zero-row veto: steer the repair at the fixture shape, not at
+      // wording or the whole data path.
+      const hasMatchingEvidence =
+        tagged.some((action) => action.exercised === true) ||
+        tagged.some(
+          (action) =>
+            action.kind === "assert" &&
+            assertEvidenceMatchesFeature(action, feature),
         );
-        const routes =
-          taggedRoutes.length > 0 ? taggedRoutes : feature.entryPaths;
-        if (routes.length === 0) {
-          return "";
-        }
-        // A content-bearing route means rendering is fine and the lexical
-        // evidence match failed: without naming what the route showed, the
-        // repair agent is steered at the data path it cannot improve.
-        if (routes.some((route) => contentRoutePaths.has(route))) {
-          const shownContent = unique(
-            routes.flatMap((route) => distinctContentByRoute.get(route) ?? []),
-          ).slice(0, 4);
-          return ` Requested feature "${feature.requestedFeature}" is tagged to routes ${routes
+      if (hasMatchingEvidence && contentRoutes.length > 0) {
+        const shownContent = unique(
+          contentRoutes.flatMap(
+            (route) => distinctContentByRoute.get(route) ?? [],
+          ),
+        ).slice(0, 4);
+        return {
+          sentence: ` Requested feature "${feature.requestedFeature}" is tagged to routes ${routes
+            .slice(0, 4)
+            .join(
+              ", ",
+            )}, which rendered distinct content (${shownContent.join(", ")}) but a zero-row data table as the feature's data surface — an empty table cannot demonstrate the feature.${emptyTableEvidence(
+            contentRoutes,
+          )}`,
+          vetoedByEmptyTable: true,
+        };
+      }
+      // A content-bearing route means rendering is fine and the lexical
+      // evidence match failed: without naming what the route showed, the
+      // repair agent is steered at the data path it cannot improve.
+      if (contentRoutes.length > 0) {
+        const shownContent = unique(
+          contentRoutes.flatMap(
+            (route) => distinctContentByRoute.get(route) ?? [],
+          ),
+        ).slice(0, 4);
+        return {
+          sentence: ` Requested feature "${feature.requestedFeature}" is tagged to routes ${routes
             .slice(0, 4)
             .join(", ")}, which rendered distinct content (${shownContent.join(
             ", ",
-          )}) — but no exercised interaction or visible-text assert matched the feature's wording; align the featureInventory wording with the on-screen labels or point entryPaths at the feature's own UI.`;
-        }
-        return ` Requested feature "${feature.requestedFeature}" routes ${routes
+          )}) — but no exercised interaction or visible-text assert matched the feature's wording; align the featureInventory wording with the on-screen labels or point entryPaths at the feature's own UI.`,
+          vetoedByEmptyTable: false,
+        };
+      }
+      return {
+        sentence: ` Requested feature "${feature.requestedFeature}" routes ${routes
           .slice(0, 4)
           .join(", ")} ${chromeOnlyExplanation(
           `; repair the prepared app's data path for these routes.${emptyTableEvidence(
             routes,
           )}`,
-        )}`;
-      })
+        )}`,
+        vetoedByEmptyTable: false,
+      };
+    });
+    const routeEvidence = featureEvidence
+      .map(({ sentence }) => sentence)
       .join("");
+    const requestedFeatureNames = missingRequestedFeatures
+      .map((feature) => feature.requestedFeature as string)
+      .join(", ");
     return (
-      hollowFailure(missingRequestedFeatures) ?? {
-        classification: "requested feature not observable",
-        message: `App Exploration found no browser evidence for requested features: ${missingRequestedFeatures
-          .map((feature) => feature.requestedFeature as string)
-          .join(", ")}.${chromeOnlyRouteEvidence}`,
-      }
+      hollowFailure(missingRequestedFeatures) ??
+      (featureEvidence.every(({ vetoedByEmptyTable }) => vetoedByEmptyTable)
+        ? {
+            classification: "empty/unmeaningful app state",
+            message: `Every requested feature's data surface rendered as a zero-row table: ${requestedFeatureNames}.${routeEvidence}`,
+          }
+        : {
+            classification: "requested feature not observable",
+            message: `App Exploration found no browser evidence for requested features: ${requestedFeatureNames}.${routeEvidence}`,
+          })
     );
   }
   // Exploration grounds a feature on exercised evidence alone, but flow
