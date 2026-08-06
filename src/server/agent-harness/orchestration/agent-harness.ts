@@ -23,6 +23,7 @@ import {
   expandPreparationInstallScopeForMissingWorkspace,
   resolvePreparationRuntime,
 } from "../run-planner/runtime-target-resolution";
+import { makeADemoArtifactPaths } from "../schemas/artifact-paths";
 import {
   type ActionCatalog,
   type AppMap,
@@ -234,40 +235,7 @@ export type AgentHarnessPipelineOptions = {
  */
 const transientCaptureRetryLimit = 2;
 
-const artifactPaths = {
-  actionCatalog: "/workspace/.makeademo/action-catalog.json",
-  agentArtifactAttempts: "/workspace/.makeademo/agent-artifact-attempts",
-  appMap: "/workspace/.makeademo/app-map.json",
-  appExplorationValidation:
-    "/workspace/.makeademo/app-exploration-validation-report.json",
-  capturePathValidation:
-    "/workspace/.makeademo/capture-path-validation-report.json",
-  capturePathPreflight:
-    "/workspace/.makeademo/capture-path-preflight-validation-report.json",
-  captureRuntimeReset:
-    "/workspace/.makeademo/capture-runtime-reset-validation-report.json",
-  demoScript: DEMO_SCRIPT_OUTPUT_PATH,
-  externalResourceHydrationReport:
-    "/workspace/.makeademo/external-resource-hydration-report.json",
-  externalResourceManifest:
-    "/workspace/.makeademo/external-resource-manifest.json",
-  flowSpec: "/workspace/.makeademo/flow-spec.json",
-  pipelineRunManifest: "/workspace/.makeademo/pipeline-run-manifest.json",
-  preparationFallback: "/workspace/.makeademo/preparation-fallback.json",
-  preparationFidelity:
-    "/workspace/.makeademo/preparation-fidelity-validation-report.json",
-  preparationManifest: "/workspace/.makeademo/preparation-manifest.json",
-  preparationWorkspaceDiff:
-    "/workspace/.makeademo/preparation-workspace-diff.json",
-  preparationPreflight:
-    "/workspace/.makeademo/preparation-preflight-validation-report.json",
-  repoProfile: "/workspace/.makeademo/repo-profile.json",
-  runPlan: "/workspace/.makeademo/run-plan.json",
-  scriptCandidate: "/workspace/.makeademo/script-candidate.json",
-  staticScriptContract:
-    "/workspace/.makeademo/static-script-contract-validation.json",
-  validationAttempts: "/workspace/.makeademo/validation-attempts",
-};
+const artifactPaths = makeADemoArtifactPaths;
 
 export async function runAgentHarnessPipeline(
   input: AgentHarnessPipelineInput,

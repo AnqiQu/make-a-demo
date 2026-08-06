@@ -1,5 +1,9 @@
 import path from "node:path/posix";
 import { shellQuote } from "../../shared/shell/shell-quote";
+import {
+  makeADemoDirectory,
+  stageWriteableArtifactPaths,
+} from "../schemas/artifact-paths";
 import type {
   OpenCodeHarnessRunInput,
   OpenCodeHarnessRunResult,
@@ -112,8 +116,8 @@ function createStageEditPermissions(
   stage: OpenCodeHarnessRunInput["stage"],
   workingDirectory: string,
 ) {
-  const artifactPaths = readStageArtifactPaths(stage);
-  const artifactDirectory = "/workspace/.makeademo";
+  const artifactPaths = stageWriteableArtifactPaths(stage);
+  const artifactDirectory = makeADemoDirectory;
   const canMutateRepo =
     stage === "repo-preparation" || stage === "repo-preparation-repair";
   // Every artifact rule is registered under both its workingDirectory-relative
@@ -135,26 +139,6 @@ function createStageEditPermissions(
       [artifactPath, "allow"],
     ]),
   ]);
-}
-
-function readStageArtifactPaths(stage: OpenCodeHarnessRunInput["stage"]) {
-  switch (stage) {
-    case "repo-preparation":
-    case "repo-preparation-repair":
-      return ["/workspace/.makeademo/preparation-manifest.json"];
-    case "app-exploration":
-      return [
-        "/workspace/.makeademo/action-catalog.json",
-        "/workspace/.makeademo/app-map.json",
-      ];
-    case "flow-planning":
-      return ["/workspace/.makeademo/flow-spec.json"];
-    case "runtime-target-selection":
-      return ["/workspace/.makeademo/runtime-target-selection.json"];
-    case "script-repair":
-    case "script-writing":
-      return ["/workspace/.makeademo/demo-script.json"];
-  }
 }
 
 function readSessionId(result: {

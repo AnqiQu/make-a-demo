@@ -77,6 +77,10 @@ import {
   readModelRuntimeTargetSelection,
 } from "../run-planner/runtime-target-selection";
 import {
+  makeADemoArtifactPaths,
+  makeADemoDirectory,
+} from "../schemas/artifact-paths";
+import {
   type ActionCatalog,
   type AppMap,
   DEMO_SCRIPT_OUTPUT_PATH,
@@ -163,7 +167,6 @@ export type DefaultHarnessDependencies = {
 };
 
 const workspaceRepoDirectory = "/workspace/repo";
-const makeADemoDirectory = "/workspace/.makeademo";
 const misplacedPreparationManifestPath =
   "/workspace/repo/.makeademo/preparation-manifest.json";
 const openCodeConfigDirectory = "/tmp/makeademo/opencode";
@@ -172,40 +175,7 @@ const preparationDiffCommandTimeoutMs = 60_000;
 const preparationHashMarker = "\0MAKEADEMO_HASHES\0";
 const preparationPatchMarker = "\0MAKEADEMO_PATCH\0";
 
-const artifactPaths = {
-  actionCatalog: "/workspace/.makeademo/action-catalog.json",
-  agentArtifactAttempts: "/workspace/.makeademo/agent-artifact-attempts",
-  appMap: "/workspace/.makeademo/app-map.json",
-  appExplorationValidation:
-    "/workspace/.makeademo/app-exploration-validation-report.json",
-  capturePathValidation:
-    "/workspace/.makeademo/capture-path-validation-report.json",
-  captureSdkContract: "/workspace/.makeademo/capture-sdk-contract.json",
-  demoBrief: "/workspace/.makeademo/demo-brief.json",
-  demoScript: DEMO_SCRIPT_OUTPUT_PATH,
-  demoScriptContract: "/workspace/.makeademo/demo-script-contract.json",
-  externalResourceManifest:
-    "/workspace/.makeademo/external-resource-manifest.json",
-  externalResourceHydrationReport:
-    "/workspace/.makeademo/external-resource-hydration-report.json",
-  flowSpec: "/workspace/.makeademo/flow-spec.json",
-  flowSpecContract: "/workspace/.makeademo/flow-spec-contract.json",
-  preparationFidelity:
-    "/workspace/.makeademo/preparation-fidelity-validation-report.json",
-  preparationManifest: "/workspace/.makeademo/preparation-manifest.json",
-  preparationManifestContract:
-    "/workspace/.makeademo/preparation-manifest-contract.json",
-  preparationManifestTemplate:
-    "/workspace/.makeademo/preparation-manifest-template.json",
-  preparationPreflight:
-    "/workspace/.makeademo/preparation-preflight-validation-report.json",
-  repoProfile: "/workspace/.makeademo/repo-profile.json",
-  runPlan: "/workspace/.makeademo/run-plan.json",
-  runtimeTargetSelection: "/workspace/.makeademo/runtime-target-selection.json",
-  runtimeTargetSelectionContract:
-    "/workspace/.makeademo/runtime-target-selection-contract.json",
-  supportingDocuments: "/workspace/.makeademo/supporting-documents.json",
-};
+const artifactPaths = makeADemoArtifactPaths;
 
 export async function createDefaultAgentHarnessDependencies(
   options: DefaultHarnessDependenciesOptions,
@@ -1199,7 +1169,7 @@ export async function createDefaultAgentHarnessDependencies(
         workspace,
         failureReport.stage === "capture-path-validation"
           ? artifactPaths.capturePathValidation
-          : "/workspace/.makeademo/static-script-contract-validation.json",
+          : artifactPaths.staticScriptContract,
         failureReport,
       );
       scriptWritingBaseline = await readWorkspaceContentSnapshot(workspace, {
@@ -3979,7 +3949,7 @@ function createScriptRepairPrompt(input: {
       artifactPaths.captureSdkContract,
       input.failureReport.stage === "capture-path-validation"
         ? artifactPaths.capturePathValidation
-        : "/workspace/.makeademo/static-script-contract-validation.json",
+        : artifactPaths.staticScriptContract,
       artifactPaths.demoScript,
     ],
     instructions: [
