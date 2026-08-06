@@ -2077,6 +2077,92 @@ local `remotion-video-renderer` browser test began failing environmentally
 mid-session (root-component load timeout, reproducible at clean HEAD in a
 fresh worktree) — unrelated to these changes and tracked outside this plan.
 
+## Addendum (2026-08-05, third 11-repo matrix — N38/N39/N42/N43 validated; hollow pass N45; N46–N47; network incident)
+
+Run `terminal-2026-08-05T18-58-32-101Z` … `terminal-2026-08-06T01-52-44-555Z`
+(~7h, degraded network for the back half). Homer passed (578s). **Five of the
+ten non-homer entries failed on network, not pipeline logic** (see incident
+note). Evidence row in the audit doc.
+
+**N45 — hollow pass #3 (midday), highest priority.** Midday "passed" again
+(3365s). The N38 exclusion held — no header text reached route text, and
+`emptyDataTables` recorded header texts on both feature routes — but
+**grounding never consults the empty-table evidence**: invoicing grounded on
+the "Good" payment-score card and transactions on the "Review" tab label
+while both data tables rendered zero rows (frames extracted from
+`final-video.mp4`: /invoices shows an empty 9-column table under populated
+summary cards — $4,200 open, $1,800 paid, so widget queries now resolve —
+and /transactions shows permanent skeleton rows). The script's search fills
+("Juniper", "Figma") were fixture-backed; the table query path alone stays
+broken (browser-side `@supabase/ssr` `createClient` throws "URL and API key
+are required" in mounted components; the table queries never resolve). Fix
+at the grounding layer: a requested feature's tagged route that renders a
+zero-row data table must not count as content-bearing for grounding that
+feature — fail with the N26c fixture-shape steering. Trade recorded: a page
+whose data surface is a zero-row table is not demonstrable for a data
+feature even when the empty state is honest; the steering demands rows,
+which the repair agent can seed.
+
+**N46 — assert candidates are not feature-aware (cyberchef).** N39 fired as
+designed on attempt 3, but its demand was structurally unsatisfiable *by
+the catalog*: the route's three text-assert candidates (cap 3,
+distinct-first, otherwise harvest order) were "Download CyberChef
+file_download", "Options settings", "About / Support help" — matching no
+feature — while the operation labels that could token-match sat past the
+cap. Preparation cannot influence which texts become asserts, so five
+attempts burned on an impossible task (the class N39 exists to prevent).
+Fix at the catalog: candidate selection must be per-feature aware — for
+each feature tagged to the route, include at least one verified text whose
+tokens match that feature, beyond the distinct-first slots — and the N39
+message should reuse the N36 sentence when tagged routes are
+content-bearing: name the shown labels and steer featureInventory wording
+alignment.
+
+**N47 — populated data-table rows are invisible to harvest (directus
+false-negative).** Directus cleared install (N42 validated) and reached
+exploration, then failed "rendered only globally-repeated navigation
+chrome" for /admin/settings/policies and /admin/settings/roles — but the
+persisted screenshot shows a fully rendered, data-bearing page ("Access
+Policies", populated row "Article API Access"). Cell text sits outside
+every harvest selector, the page title is not an h1–h3, and the aria
+fallback was suppressed because skip-links and icon-ligature strings
+("people_alt", "folder", "insights") pushed the thin-harvest count past 8.
+Fix: harvest visible populated data-table row text (first few rows) into
+route text — the canonical data surface becomes content evidence, which is
+also the honest grounding midday needs once N45 lands; secondarily, the
+thin-harvest trigger should discount strings already seen on
+previously-visited routes (the script explores serially and can track
+cross-route repeats), so classifier-chrome cannot suppress the aria
+fallback.
+
+**Network incident (5 entries, no code change).** calcom and outline died
+on "socket connection was closed unexpectedly" mid-upload; twenty's `git
+clone` from GitHub timed out at 300s (proving the degradation was the local
+network path, not Daytona); ghostfolio failed sandbox create at 300s; ghost
+hit a 900s Daytona command timeout inside a 2h04m run that ended in a
+runtime-repair validation failure. Measured during calcom's upload:
+~130KB/s sustained with 6.5MB of TCP retransmits to the Daytona endpoint —
+the same 213MB upload took ~2 minutes the prior night. Rerun these five
+under a healthy network before drawing pipeline conclusions. Watch item: a
+resumable or retried archive upload if this recurs.
+
+**Validated this run:** N38 (header texts excluded, recorded with
+`headerTexts`), N42 (directus install cleared, +2 stages), N39 (fired with
+steering — exposing N46), N37 (conduit surfaced the seeding remedy; the
+agent could not seed a session within its remaining budget after spending
+three attempts on the feature-free min-3 rule — frontier), N43 (no
+gate-incapable vetoes recurred). N41 and N44 remain unvalidated: calcom and
+twenty died on network before reaching those seams. Excalidraw remains the
+known canvas-evidence limitation, now with truthful wording-alignment
+steering.
+
+**Recommended order:** N45 first (a false-positive pass is the worst
+outcome class; third hollow video) → N47 (supplies the honest row evidence
+N45 will demand; unblocks directus) → N46 (same catalog seam; unblocks
+cyberchef) → rerun midday, directus, cyberchef plus the five network
+casualties. Phase 7 is orthogonal consolidation and can proceed immediately
+after N45–N47 land.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
