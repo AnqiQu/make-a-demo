@@ -22,7 +22,6 @@ import { prepareStylizedPlaywrightScript } from "../../pipeline/06-footage-captu
 import type { ExternalResourceManifest } from "../../shared/external-resources/external-resource-manifest.schema";
 import { shellQuote } from "../../shared/shell/shell-quote";
 import { uploadSubmittedCodeArchive } from "../daytona/submitted-code-artifact-archive";
-import { executeSubmittedCode } from "../daytona/submitted-code-execution";
 import type { AgentHarnessWorkspaceHandle } from "../daytona/workspace.interface";
 
 export type PreparedWorkspaceCapturePathResult = {
@@ -120,8 +119,7 @@ export async function validatePreparedWorkspaceCapturePath(input: {
           ),
         );
   const result = await runObservedCommand(input, "script-execution", () =>
-    executeSubmittedCode(
-      workspace,
+    workspace.executeSubmittedCode(
       `cd ${shellQuote(remoteRunDirectory)} && NODE_PATH="$(npm root -g)" timeout -k ${CAPTURE_COMMAND_SHUTDOWN_GRACE_SECONDS}s ${scriptTimeoutSeconds}s bun ${shellQuote(remoteScriptPath)}`,
       {
         timeoutMs:

@@ -1,7 +1,6 @@
 import { createBrowserRuntimeNetworkPolicySource } from "../../shared/external-resources/browser-runtime-network-policy";
 import type { ExternalResourceManifest } from "../../shared/external-resources/external-resource-manifest.schema";
 import { shellQuote } from "../../shared/shell/shell-quote";
-import { executeSubmittedCode } from "../daytona/submitted-code-execution";
 import {
   AgentHarnessCommandTimeoutError,
   type AgentHarnessSubmittedCodeAppStatus,
@@ -202,11 +201,12 @@ export async function exploreSubmittedApp(input: {
       evidence,
     });
   };
-  let result: Awaited<ReturnType<typeof executeSubmittedCode>>;
+  let result: Awaited<
+    ReturnType<AgentHarnessWorkspace["executeSubmittedCode"]>
+  >;
   let recoveredObservation: BrowserExplorationProtocol | undefined;
   try {
-    result = await executeSubmittedCode(
-      input.workspace,
+    result = await input.workspace.executeSubmittedCode(
       [
         `mkdir -p ${explorerRuntimeDirectory}`,
         `rm -f ${explorerDirectory}/exploration.json`,
@@ -298,8 +298,7 @@ async function readWorkspaceCapacityEvidence(
   workspace: AgentHarnessWorkspace,
 ): Promise<SandboxCapacityEvidence | undefined> {
   try {
-    const result = await executeSubmittedCode(
-      workspace,
+    const result = await workspace.executeSubmittedCode(
       sandboxCapacityProbeCommand,
       { timeoutMs: 30_000 },
     );
@@ -1671,8 +1670,7 @@ async function readExplorationProtocolFile(
   workspace: AgentHarnessWorkspace,
 ): Promise<BrowserExplorationProtocol | undefined> {
   try {
-    const result = await executeSubmittedCode(
-      workspace,
+    const result = await workspace.executeSubmittedCode(
       `cat ${explorerDirectory}/exploration.json`,
     );
     return result.exitCode === 0

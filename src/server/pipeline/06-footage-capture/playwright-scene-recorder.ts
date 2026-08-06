@@ -5,7 +5,6 @@ import {
   downloadSubmittedCodeArchive,
   uploadSubmittedCodeArchive,
 } from "../../agent-harness/daytona/submitted-code-artifact-archive";
-import { executeSubmittedCode } from "../../agent-harness/daytona/submitted-code-execution";
 import { uploadSubmittedCodeExternalResourceCache } from "../../agent-harness/daytona/submitted-code-external-resource-cache";
 import type {
   AgentHarnessWorkspace,
@@ -139,12 +138,10 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
 
     // A retried capture must never inherit a prior attempt's scratch: a stale
     // Playwright video would make the single-take lookup ambiguous.
-    await executeSubmittedCode(
-      workspace,
+    await workspace.executeSubmittedCode(
       `rm -rf ${shellQuote(remoteRunDirectory)}`,
     );
-    await executeSubmittedCode(
-      workspace,
+    await workspace.executeSubmittedCode(
       `mkdir -p ${shellQuote(remoteSceneWorkspace)} ${shellQuote(remoteVideoScratchDirectory)} ${shellQuote(remoteRawScenesDirectory)}`,
     );
     await uploadSubmittedCodeArchive({
@@ -161,8 +158,7 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
       workspace,
     });
 
-    const result = await executeSubmittedCode(
-      workspace,
+    const result = await workspace.executeSubmittedCode(
       `cd ${shellQuote(remoteSceneWorkspace)} && NODE_PATH="$(npm root -g)" timeout -k 10s ${Math.ceil(captureTimeoutMs / 1000)}s bun ${shellQuote(remoteScenePath)}`,
       {
         timeoutMs:
@@ -203,8 +199,7 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
       directory: remoteVideoScratchDirectory,
       workspace,
     });
-    await executeSubmittedCode(
-      workspace,
+    await workspace.executeSubmittedCode(
       `rm -f ${shellQuote(remoteRawTakePath)} && mv ${shellQuote(remoteRecordedVideoPath)} ${shellQuote(remoteRawTakePath)}`,
     );
 
@@ -501,8 +496,7 @@ async function findSingleRemoteVideo(input: {
   directory: string;
   workspace: AgentHarnessWorkspace;
 }) {
-  const result = await executeSubmittedCode(
-    input.workspace,
+  const result = await input.workspace.executeSubmittedCode(
     `find ${shellQuote(input.directory)} -type f -name '*.webm' | sort`,
   );
   if (result.exitCode !== 0) {

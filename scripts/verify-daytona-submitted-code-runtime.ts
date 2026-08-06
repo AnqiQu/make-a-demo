@@ -2,7 +2,6 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { uploadSubmittedCodeArchive } from "../src/server/agent-harness/daytona/submitted-code-artifact-archive";
-import { executeSubmittedCode } from "../src/server/agent-harness/daytona/submitted-code-execution";
 import type { AgentHarnessWorkspace } from "../src/server/agent-harness/daytona/workspace.interface";
 import { compileBrowserActionPlan } from "../src/server/pipeline/06-footage-capture/browser-action-plan";
 import {
@@ -67,8 +66,7 @@ export async function verifyDaytonaSubmittedCodeRuntime(
       workspace,
     });
 
-    const result = await executeSubmittedCode(
-      workspace,
+    const result = await workspace.executeSubmittedCode(
       createRuntimeVerificationCommand(),
       { timeoutMs: 45_000 },
     );

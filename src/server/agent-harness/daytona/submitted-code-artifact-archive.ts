@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { shellQuote } from "../../shared/shell/shell-quote";
-import { executeSubmittedCode } from "./submitted-code-execution";
 import type { AgentHarnessWorkspace } from "./workspace.interface";
 
 const archiveTransferCommandTimeoutMs = 30_000;
@@ -31,8 +30,7 @@ export async function uploadSubmittedCodeArchive(input: {
       directory: input.localDirectory,
       entries: input.entries,
     });
-    const directoryCreation = await executeSubmittedCode(
-      input.workspace,
+    const directoryCreation = await input.workspace.executeSubmittedCode(
       `mkdir -p ${shellQuote(input.remoteDirectory)}`,
       { timeoutMs: archiveTransferCommandTimeoutMs },
     );
@@ -45,8 +43,7 @@ export async function uploadSubmittedCodeArchive(input: {
     await input.workspace.uploadSubmittedCodeFiles([
       { destinationPath: remoteArchivePath, sourcePath: localArchivePath },
     ]);
-    const extraction = await executeSubmittedCode(
-      input.workspace,
+    const extraction = await input.workspace.executeSubmittedCode(
       [
         `tar ${input.compression === "none" ? "-xf" : "-xzf"} ${shellQuote(remoteArchivePath)} -C ${shellQuote(input.remoteDirectory)}`,
         `rm -f ${shellQuote(remoteArchivePath)}`,
@@ -64,8 +61,7 @@ export async function uploadSubmittedCodeArchive(input: {
       rm(localArchivePath, { force: true }),
       ...(remoteArchiveMayExist
         ? [
-            executeSubmittedCode(
-              input.workspace,
+            input.workspace.executeSubmittedCode(
               `rm -f ${shellQuote(remoteArchivePath)}`,
               { timeoutMs: archiveTransferCommandTimeoutMs },
             ),
@@ -92,8 +88,7 @@ export async function downloadSubmittedCodeArchive(input: {
   await mkdir(input.localDirectory, { recursive: true });
   const localArchivePath = join(input.localDirectory, input.archiveName);
   const remoteArchivePath = `${input.remoteDirectory}/${input.archiveName}`;
-  const creation = await executeSubmittedCode(
-    input.workspace,
+  const creation = await input.workspace.executeSubmittedCode(
     [
       `rm -f ${shellQuote(remoteArchivePath)}`,
       `tar ${input.compression === "none" ? "-cf" : "-czf"} ${shellQuote(remoteArchivePath)} -C ${shellQuote(input.remoteDirectory)} -- ${input.entries.map(shellQuote).join(" ")}`,
@@ -114,8 +109,7 @@ export async function downloadSubmittedCodeArchive(input: {
     directory: input.localDirectory,
   });
   await rm(localArchivePath, { force: true });
-  await executeSubmittedCode(
-    input.workspace,
+  await input.workspace.executeSubmittedCode(
     `rm -f ${shellQuote(remoteArchivePath)}`,
     { timeoutMs: archiveTransferCommandTimeoutMs },
   );

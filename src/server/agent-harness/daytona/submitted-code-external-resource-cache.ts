@@ -9,7 +9,6 @@ import {
 } from "../../shared/external-resources/external-resource-manifest.schema";
 import { shellQuote } from "../../shared/shell/shell-quote";
 import { uploadSubmittedCodeArchive } from "./submitted-code-artifact-archive";
-import { executeSubmittedCode } from "./submitted-code-execution";
 import type { AgentHarnessWorkspace } from "./workspace.interface";
 
 /** Uploads a verified resource cache into the sealed submitted-code sandbox. */
@@ -61,8 +60,7 @@ export async function uploadSubmittedCodeExternalResourceCache(input: {
     ),
   ].join("\n");
   const encodedChecksums = Buffer.from(`${checksums}\n`).toString("base64");
-  const verification = await executeSubmittedCode(
-    input.workspace,
+  const verification = await input.workspace.executeSubmittedCode(
     `cd ${shellQuote(externalResourceReplayRoot)} && printf %s ${shellQuote(encodedChecksums)} | base64 -d | sha256sum -c -`,
   );
   if (verification.exitCode !== 0) {
