@@ -1,7 +1,11 @@
-const allowedMakeADemoFiles = new Set([
-  "/workspace/.makeademo/demo-script.json",
-  "/workspace/.makeademo/script-candidate.json",
-  "/workspace/.makeademo/static-script-contract-validation.json",
+import { makeADemoArtifactPaths } from "../schemas/artifact-paths";
+
+// Script Writing may change its own artifacts (agent-written demo script,
+// backend-written candidate and static-contract report) and nothing else.
+const allowedMakeADemoFiles = new Set<string>([
+  makeADemoArtifactPaths.demoScript,
+  makeADemoArtifactPaths.scriptCandidate,
+  makeADemoArtifactPaths.staticScriptContract,
 ]);
 
 /**
