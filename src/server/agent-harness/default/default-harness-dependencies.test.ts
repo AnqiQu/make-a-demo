@@ -1795,6 +1795,53 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(runs).toBe(2);
   });
 
+  it("clears the session and discloses the kill when Repo Preparation times out", async () => {
+    // Resuming a killed session replays the hung transcript; the repair
+    // attempt after a timed-out preparation must start a fresh session and
+    // hear that the workspace may hold the dead attempt's unfinished edits.
+    const workspace = repairableRepoPreparationWorkspace();
+    const prompts: string[] = [];
+    const sessions: Array<string | undefined> = [];
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(input) {
+          prompts.push(input.prompt);
+          sessions.push(input.sessionId);
+          if (prompts.length === 1) {
+            return {
+              exitCode: 124,
+              sessionId: "ses_prep_hung",
+              stderr: "",
+              stdout: "",
+              timeoutError: new AgentHarnessCommandTimeoutError(
+                1_200_000,
+                "inactivity",
+              ),
+            };
+          }
+          workspace.writePreparationManifest();
+          return { exitCode: 0, stderr: "", stdout: "prepared" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.prepareRepo({
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        normalizedSupportingDocuments: undefined,
+        repoProfile: repoProfile(),
+        repoSourcePaths: ["package.json", "src/App.tsx"],
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).resolves.toMatchObject({ manifest: expect.anything() });
+    expect(sessions).toEqual([undefined, undefined]);
+    expect(prompts[1]).toContain("killed mid-work");
+  });
+
   it("recovers when the relaunch after a zero-output exit succeeds", async () => {
     const workspace = repairableRepoPreparationWorkspace();
     let runs = 0;

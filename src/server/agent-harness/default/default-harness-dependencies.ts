@@ -955,6 +955,11 @@ export async function createDefaultAgentHarnessDependencies(
         }
         primaryAgentTimeout ??= result.timeoutError;
         opencodeSessionId = result.sessionId ?? opencodeSessionId;
+        if (result.timeoutError !== undefined) {
+          // Resuming a killed session replays the hung transcript; the
+          // repair attempt must start a fresh session.
+          opencodeSessionId = undefined;
+        }
         previousResult = result;
         const candidateManifest = await tryReadPreparationManifest(
           workspace,
@@ -1038,6 +1043,9 @@ export async function createDefaultAgentHarnessDependencies(
           };
         }
         readError = formatPreparationManifestReadError(persistedManifestResult);
+        if (result.timeoutError !== undefined) {
+          readError = `${readError} The previous attempt was killed mid-work; the workspace may contain its unfinished edits — review them before finishing.`;
+        }
         if (persistedManifestResult.failureClassification === "missing") {
           throwIfRequiredArtifactWriteWasDenied({
             artifactError: readError,
