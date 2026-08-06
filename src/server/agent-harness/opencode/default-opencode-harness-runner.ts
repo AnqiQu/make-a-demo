@@ -12,11 +12,16 @@ import type {
 
 export class DefaultOpenCodeHarnessRunner implements OpenCodeHarnessRunner {
   async run(input: OpenCodeHarnessRunInput): Promise<OpenCodeHarnessRunResult> {
+    // The prompt travels by file: a single-line shell argument would pass
+    // through the sandbox PTY's canonical line discipline, which truncates
+    // lines around 4KB (MAX_CANON) and silently corrupts large prompts.
+    const promptPath = `${input.configDir}/prompt-${input.stage}.txt`;
+    await input.workspace.writeTextFile(promptPath, input.prompt);
     const result = await input.workspace.execute(
       createOpenCodeRunCommand({
         configDir: input.configDir,
         model: input.model,
-        prompt: input.prompt,
+        promptPath,
         ...(input.sessionId === undefined
           ? {}
           : { sessionId: input.sessionId }),
@@ -50,7 +55,7 @@ export class DefaultOpenCodeHarnessRunner implements OpenCodeHarnessRunner {
 function createOpenCodeRunCommand(input: {
   configDir: string;
   model: string;
-  prompt: string;
+  promptPath: string;
   sessionId?: string;
   workingDirectory: string;
 }): string {
@@ -65,7 +70,7 @@ function createOpenCodeRunCommand(input: {
       ? []
       : [`--session ${shellQuote(input.sessionId)}`]),
     `--model ${shellQuote(input.model)}`,
-    shellQuote(input.prompt),
+    `"$(cat ${shellQuote(input.promptPath)})"`,
   ].join(" ");
 }
 

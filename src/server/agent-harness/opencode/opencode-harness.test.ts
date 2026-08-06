@@ -131,6 +131,46 @@ describe("OpenCode harness seam", () => {
     expect(stderr).toEqual(["warning\n"]);
   });
 
+  it("transports the prompt by file instead of a shell argument", async () => {
+    // A single-line shell argument travels through the sandbox PTY's
+    // canonical line discipline, which truncates lines around 4KB
+    // (MAX_CANON) — silently corrupting large stage prompts. The prompt must
+    // reach OpenCode through a file the command reads back, keeping the
+    // command line small regardless of prompt size.
+    const runner = new DefaultOpenCodeHarnessRunner();
+    const prompt = `Write the FlowSpec.\n${"evidence line\n".repeat(400)}`;
+    const events: string[] = [];
+    const writes: Array<{ contents: string; path: string }> = [];
+    let command = "";
+
+    await runner.run({
+      availableTools: ["read", "write"],
+      configDir: "/tmp/makeademo/opencode",
+      model: "openai/gpt-5",
+      prompt,
+      stage: "flow-planning",
+      timeoutMs: 1000,
+      workingDirectory: "/workspace/repo",
+      workspace: createFakeAgentHarnessWorkspace({
+        async execute(receivedCommand) {
+          events.push("execute");
+          command = receivedCommand;
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async writeTextFile(path, contents) {
+          events.push("write");
+          writes.push({ contents, path });
+        },
+      }),
+    });
+
+    const promptWrite = writes.find((write) => write.contents === prompt);
+    expect(promptWrite).toBeDefined();
+    expect(events[0]).toBe("write");
+    expect(command).toContain(promptWrite?.path ?? "");
+    expect(command).not.toContain("evidence line");
+  });
+
   it("starts a new OpenCode session without resuming a made-up session", async () => {
     const runner = new DefaultOpenCodeHarnessRunner();
 
