@@ -1,4 +1,5 @@
 import type { DemoScript } from "../../pipeline/06-footage-capture/demo-script.schema";
+import { escapeRegExp } from "../../shared/text/escape-regexp";
 
 const meaningfulInteractionPatterns = [
   /\banimatedClick\s*\(/,
@@ -129,8 +130,4 @@ function readSceneCallbackSource(
     match.index,
     match.index + match[0].length + nextSceneIndex,
   );
-}
-
-function escapeRegExp(value: string): string {
-  return value.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

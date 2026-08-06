@@ -1,3 +1,4 @@
+import { escapeRegExp } from "../../shared/text/escape-regexp";
 import { isEnvironmentSecretFileName } from "../repo-security/secret-predicates";
 import type {
   PreparationManifest,
@@ -681,10 +682,6 @@ function isConditionalUse(source: string, token: string) {
     `(?:${conditional}[^;]{0,160}${reference}|${reference}[^;]{0,160}${conditional})`,
     "m",
   ).test(source);
-}
-
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function isExecutableSourcePath(path: string) {
