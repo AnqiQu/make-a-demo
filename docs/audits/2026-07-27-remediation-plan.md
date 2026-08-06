@@ -2186,6 +2186,61 @@ distinct labels and steers featureInventory wording alignment when the
 tagged routes are content-bearing). Full gauntlet per commit; 820 tests
 green, including the previously-flaky remotion browser test.
 
+## Phase 7 landed (2026-08-05, same day as N45–N47)
+
+**7.3** `a152425` (+`b25cbf3` graphs) — one stage→artifact-path map:
+`schemas/artifact-paths.ts` exports `makeADemoArtifactPaths` and
+`stageWriteableArtifactPaths`; the runner's permission table, both
+divergent `artifactPaths` consts, and the hardcoded
+static-script-contract literals now read from it. **7.2** `99b9d38` —
+prompts travel by file: the runner writes the prompt via
+`workspace.writeTextFile` and the command reads it back with
+`"$(cat …)"`, so prompt bytes never cross the PTY line discipline; the
+planned >4KB probe is subsumed (the contract test's end-of-prompt nonce
+proves intactness end-to-end). **7.1** `51ff947` — `runAgentArtifactStage`
+replaces the four artifact-only loops (flow-planning,
+runtime-target-selection, script-writing, script-repair) with uniform
+semantics: the artifact is read regardless of exit code and accepted when
+valid and changed from the pre-loop baseline fingerprint (a crashed agent
+whose FlowSpec landed now succeeds; a crashed repair leaving the script
+untouched still fails — both pinned by tests); malformed JSON is
+preserved as `invalid-<artifact>-attempt-N.json` and cleared for a fresh
+rewrite; a timeout clears the OpenCode session and retries once with the
+kill disclosed; denial detection stays gated on an unreadable artifact.
+Scoping decision: prepareRepo/repairPreparation keep their richer native
+loops — they already pioneered these semantics plus manifest-specific
+machinery (misplaced-path recovery, template reset, unchanged-fingerprint
+guard, dependency-repair short-circuit, infra-error chaining) that would
+bloat the shared helper into a hook farm. Their one uniformity gap closed
+separately: `4c713b2` — prepareRepo now starts a fresh session after a
+timed-out attempt and disclosures the kill. **7.5** `0467c9f` — one
+wall-clock budget (`MAKEADEMO_JOB_DEADLINE_MINUTES`, default 90, max 600)
+checked at every orchestrator stage-loop boundary; breach throws
+`AgentHarnessJobDeadlineError`, classified as infrastructure so the failed
+run manifest carries the accumulated evidence without a preparation
+fallback wrap. **7.6** `bd21937` — the drifting appDir/envUsed/
+Scene-description/presentation-defaults prompt lines deduped into shared
+instruction constants beside `offCameraAuthenticationInstruction`.
+**7.4** `67faa37` — opt-in real-OpenCode contract test
+(`MAKEADEMO_OPENCODE_CONTRACT=1`, needs a local `opencode` credential; one
+model call, ~$0.002). Findings from live probes (OpenCode 1.17.19):
+`--dangerously-skip-permissions` does NOT defeat the explicit permission
+table — it only suppresses interactive prompting, so the flag stays; a
+denied write surfaces "specified a rule which prevents you from using
+this specific tool call" on a line naming the file, exactly what
+`throwIfRequiredArtifactWriteWasDenied` matches; `--format json` event
+lines carry a recoverable `sessionID`; `opencode run` under a piped stdin
+waits for EOF (the runner's PTY transport is unaffected; relevant if the
+execute seam changes). Watch item: exact-string edit-permission globs are
+sensitive to OpenCode's project-root discovery (a bare relative rule and
+a symlink-resolved absolute rule both failed on a macOS tmpdir while
+`**/name.json` matched everywhere); the production /workspace spellings
+are validated by real runs, but if a sandbox artifact-write denial ever
+recurs, try globstar spellings before anything else. Full gauntlet per
+commit; 828 tests green except the known environmental
+remotion-video-renderer failure, which recurred intermittently and still
+reproduces at clean HEAD.
+
 ## Open decisions to confirm before Phase 4/7
 
 1. **Lifecycle scripts** (4.4): suppress-always is the minimal safe default, but some apps need
