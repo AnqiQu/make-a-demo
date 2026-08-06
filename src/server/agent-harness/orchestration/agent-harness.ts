@@ -63,10 +63,6 @@ export type AgentHarnessPipelineInput = {
   };
   files: Array<{ path: string; symlinkTarget?: string; text?: string }>;
   normalizedSupportingDocuments?: Array<Record<string, unknown>>;
-  repoStats: {
-    fileCount: number;
-    sizeBytes: number;
-  };
   repoUrl: string;
   rootDir?: string;
   runId: string;
@@ -306,7 +302,6 @@ export async function runAgentHarnessPipeline(
     () =>
       screenStaticRepoSecurity({
         files: input.files,
-        repoStats: input.repoStats,
         ...(input.secretQuarantineManifest === undefined
           ? {}
           : { secretQuarantineManifest: input.secretQuarantineManifest }),

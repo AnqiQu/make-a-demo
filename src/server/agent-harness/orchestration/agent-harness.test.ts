@@ -55,7 +55,6 @@ describe("runAgentHarnessPipeline", () => {
         { path: "package.json", text: "{}" },
         { path: "src/page.tsx", text: "export default 1" },
       ],
-      repoStats: { fileCount: 2, sizeBytes: 200 },
       repoUrl: "https://github.com/example/app",
       runId: "run_missing_diff_capture",
     };
@@ -136,7 +135,6 @@ describe("runAgentHarnessPipeline", () => {
           { path: "apps/dashboard/src/page.tsx", text: "export default 1" },
           { path: "bun.lock", text: "" },
         ],
-        repoStats: { fileCount: 4, sizeBytes: 400 },
         runId: "run_001",
       }),
       {
@@ -411,7 +409,6 @@ describe("runAgentHarnessPipeline", () => {
     await expect(
       runAgentHarnessPipeline(
         pipelineInput({
-          repoStats: { fileCount: 3, sizeBytes: 300 },
           runId: "run_repair_inventory_backstop",
         }),
         stubPipelineDependencies({
@@ -482,7 +479,6 @@ describe("runAgentHarnessPipeline", () => {
         await runAgentHarnessPipeline(
           pipelineInput({
             files: [{ path: "package.json", text: "{}" }],
-            repoStats: { fileCount: 1, sizeBytes: 2 },
             runId: "run_infrastructure_failure",
           }),
           failingPreparationDependencies(failure, artifacts),
@@ -514,7 +510,6 @@ describe("runAgentHarnessPipeline", () => {
       await runAgentHarnessPipeline(
         pipelineInput({
           files: [{ path: "package.json", text: "{}" }],
-          repoStats: { fileCount: 1, sizeBytes: 2 },
           runId: "run_failure_diff",
         }),
         {
@@ -544,7 +539,6 @@ describe("runAgentHarnessPipeline", () => {
       await runAgentHarnessPipeline(
         pipelineInput({
           files: [{ path: "package.json", text: "{}" }],
-          repoStats: { fileCount: 1, sizeBytes: 2 },
           runId: "run_teardown_failure",
         }),
         stubPipelineDependencies({
@@ -1064,7 +1058,6 @@ describe("runAgentHarnessPipeline", () => {
           },
           { path: "bun.lock", text: "" },
         ],
-        repoStats: { fileCount: 8, sizeBytes: 800 },
         runId: "run_workspace_scope_recovery",
       }),
       stubPipelineDependencies({
@@ -1160,7 +1153,6 @@ describe("runAgentHarnessPipeline", () => {
             },
             { path: "bun.lock", text: "" },
           ],
-          repoStats: { fileCount: 5, sizeBytes: 500 },
           runId: "run_expansion_budget",
         }),
         stubPipelineDependencies({
@@ -1381,7 +1373,6 @@ describe("runAgentHarnessPipeline", () => {
           { path: "src/page.tsx", text: "export default 1" },
           { path: "src/service/export.ts", text: "export const value = 1" },
         ],
-        repoStats: { fileCount: 3, sizeBytes: 300 },
         runId: "run_transactional_install_repair",
       }),
       stubPipelineDependencies({
@@ -1518,7 +1509,6 @@ describe("runAgentHarnessPipeline", () => {
           { path: "src/page.tsx", text: "export default 1" },
           { path: "src/feature.ts", text: "export const feature = true" },
         ],
-        repoStats: { fileCount: 3, sizeBytes: 200 },
         runId: "run_rejected_repair_hint",
       }),
       stubPipelineDependencies({
@@ -1843,7 +1833,6 @@ describe("runAgentHarnessPipeline", () => {
             { path: "package.json", text: "{}" },
             { path: "src/page.tsx", text: "export default 1" },
           ],
-          repoStats: { fileCount: 1, sizeBytes: 100 },
           runId: "run_noisy_repeated_failure",
         }),
         stubPipelineDependencies({
@@ -1888,7 +1877,6 @@ describe("runAgentHarnessPipeline", () => {
             { path: "package.json", text: "{}" },
             { path: "src/page.tsx", text: "export default 1" },
           ],
-          repoStats: { fileCount: 1, sizeBytes: 100 },
           runId: "run_repeated_failure_budget",
         }),
         stubPipelineDependencies({
@@ -1935,7 +1923,6 @@ describe("runAgentHarnessPipeline", () => {
             { path: "src/page.tsx", text: "export default 1" },
             { path: "src/service/export.ts", text: "export const value = 1" },
           ],
-          repoStats: { fileCount: 3, sizeBytes: 300 },
           runId: "run_terminal_preparation_stage",
         }),
         {
@@ -2388,7 +2375,6 @@ function pipelineInput(
       { path: "src/page.tsx", text: "export default 1" },
       { path: "bun.lock", text: "" },
     ],
-    repoStats: { fileCount: 2, sizeBytes: 200 },
     repoUrl: "https://github.com/example/app",
     runId: "run_default",
     ...overrides,

@@ -198,7 +198,6 @@ export async function runDefaultDemoPipeline(
               normalizedSupportingDocuments:
                 input.normalizedSupportingDocuments,
             }),
-        repoStats: repoSnapshot.repoStats,
         repoUrl: input.repoUrl,
         runId,
         secretQuarantineManifest: repoSnapshot.secretQuarantineManifest,

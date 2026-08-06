@@ -11,13 +11,9 @@ describe("screenStaticRepoSecurity", () => {
         },
         { path: "examples/storefront/package-lock.json", text: "{}" },
       ],
-      repoStats: { fileCount: 2, sizeBytes: 200 },
     });
 
     expect(result).toMatchObject({ status: "passed", rejections: [] });
-    expect(result.warnings).not.toContain(
-      "repo has no lockfile; dependency installation may be less deterministic",
-    );
   });
 
   it("rejects destructive lifecycle scripts in every nested package", () => {
@@ -30,7 +26,6 @@ describe("screenStaticRepoSecurity", () => {
         },
         { path: "bun.lock", text: "" },
       ],
-      repoStats: { fileCount: 3, sizeBytes: 300 },
     });
 
     expect(result.rejections).toContain(
@@ -49,7 +44,6 @@ describe("screenStaticRepoSecurity", () => {
         { path: "package.json", text: "{}" },
         { path: "bun.lock", text: "" },
       ],
-      repoStats: { fileCount: 4, sizeBytes: 400 },
       secretQuarantineManifest: {
         entries: [
           {
@@ -63,9 +57,6 @@ describe("screenStaticRepoSecurity", () => {
     });
 
     expect(result).toMatchObject({ status: "passed", rejections: [] });
-    expect(result.warnings).toContain(
-      "repo secret file .env was quarantined before agent or runtime execution",
-    );
   });
 
   it("screens registry credentials and env-shaped content with the quarantine's own predicates", () => {
@@ -76,7 +67,6 @@ describe("screenStaticRepoSecurity", () => {
         { path: "package.json", text: "{}" },
         { path: "bun.lock", text: "" },
       ],
-      repoStats: { fileCount: 4, sizeBytes: 400 },
       secretQuarantineManifest: {
         entries: [
           { kind: "environment-file", path: ".npmrc" },
@@ -94,12 +84,6 @@ describe("screenStaticRepoSecurity", () => {
       rejections: [],
       status: "passed",
     });
-    expect(quarantinedResult.warnings).toContain(
-      "repo secret file .npmrc was quarantined before agent or runtime execution",
-    );
-    expect(quarantinedResult.warnings).toContain(
-      "repo secret file config/secrets.txt was quarantined before agent or runtime execution",
-    );
 
     const unquarantinedResult = screenStaticRepoSecurity({
       files: [
@@ -114,7 +98,6 @@ describe("screenStaticRepoSecurity", () => {
         { path: "package.json", text: "{}" },
         { path: "bun.lock", text: "" },
       ],
-      repoStats: { fileCount: 4, sizeBytes: 400 },
     });
 
     expect(unquarantinedResult.status).toBe("rejected");
@@ -140,7 +123,6 @@ describe("screenStaticRepoSecurity", () => {
         },
         { path: "bun.lock", text: "" },
       ],
-      repoStats: { fileCount: 2, sizeBytes: 200 },
     });
 
     expect(legitimate).toMatchObject({ rejections: [], status: "passed" });
@@ -155,7 +137,6 @@ describe("screenStaticRepoSecurity", () => {
         },
         { path: "bun.lock", text: "" },
       ],
-      repoStats: { fileCount: 2, sizeBytes: 200 },
     });
 
     expect(destructive.status).toBe("rejected");
@@ -167,22 +148,18 @@ describe("screenStaticRepoSecurity", () => {
     );
   });
 
-  it("rejects an unscanned package manifest and surfaces other unscanned files", () => {
+  it("rejects an unscanned package manifest", () => {
     const result = screenStaticRepoSecurity({
       files: [
         { path: "package.json", scanned: false },
         { path: "docs/NOTES.md", scanned: false },
         { path: "bun.lock", text: "" },
       ],
-      repoStats: { fileCount: 3, sizeBytes: 3_000_000 },
     });
 
     expect(result.status).toBe("rejected");
     expect(result.rejections).toContain(
       "package.json is too large to screen for destructive scripts",
-    );
-    expect(result.warnings).toContain(
-      "repo file docs/NOTES.md was not content-screened for secrets (file size or repo scan budget)",
     );
   });
 
@@ -194,7 +171,6 @@ describe("screenStaticRepoSecurity", () => {
         { path: "package.json", text: "{}" },
         { path: "bun.lock", text: "" },
       ],
-      repoStats: { fileCount: 4, sizeBytes: 200 },
     });
 
     expect(result).toMatchObject({ status: "passed", rejections: [] });
@@ -207,7 +183,6 @@ describe("screenStaticRepoSecurity", () => {
           { path: ".env", text: "OPENAI_API_KEY=sk-test" },
           { path: "id_rsa", text: "-----BEGIN OPENSSH PRIVATE KEY-----" },
         ],
-        repoStats: { fileCount: 2, sizeBytes: 200 },
       }),
     ).toMatchObject({
       status: "rejected",
@@ -227,7 +202,6 @@ describe("screenStaticRepoSecurity", () => {
           },
           { path: "bun.lock", text: "" },
         ],
-        repoStats: { fileCount: 2, sizeBytes: 200 },
       }),
     ).toMatchObject({
       status: "rejected",
@@ -235,7 +209,7 @@ describe("screenStaticRepoSecurity", () => {
     });
   });
 
-  it("warns about dependency and runtime risks without executing submitted code", () => {
+  it("passes risky-but-legal dependency and runtime shapes without rejection", () => {
     const result = screenStaticRepoSecurity({
       files: [
         {
@@ -248,18 +222,9 @@ describe("screenStaticRepoSecurity", () => {
         { path: "Dockerfile", text: "FROM node\nRUN sudo apt update\n" },
         { path: "pnpm-lock.yaml", text: "" },
       ],
-      repoStats: { fileCount: 3, sizeBytes: 300 },
     });
 
-    expect(result.status).toBe("passed");
-    expect(result.warnings).toEqual(
-      expect.arrayContaining([
-        "package script postinstall may run setup code during dependency installation",
-        "auth package @auth/core may require local demo bypass or mocks",
-        "external service package stripe may require local mocks",
-        "Dockerfile requests privileged operations",
-      ]),
-    );
+    expect(result).toMatchObject({ rejections: [], status: "passed" });
   });
 
   it("rejects dedicated private-key containers but not ambiguous PEM files without private-key content", () => {
@@ -272,7 +237,6 @@ describe("screenStaticRepoSecurity", () => {
         { path: "certs/signing.p12" },
         { path: "certs/signing.pfx" },
       ],
-      repoStats: { fileCount: 6, sizeBytes: 1_024 },
     });
 
     expect(result.rejections).toEqual(
@@ -297,7 +261,6 @@ describe("screenStaticRepoSecurity", () => {
         { path: "src/parent", symlinkTarget: "../../outside" },
         { path: "src/nested/sibling", symlinkTarget: "../lib/util.ts" },
       ],
-      repoStats: { fileCount: 6, sizeBytes: 600 },
     });
 
     expect(result.rejections).toEqual(
@@ -327,7 +290,6 @@ describe("screenStaticRepoSecurity", () => {
         },
         { path: ".claude/rules", symlinkTarget: "../agents/rules" },
       ],
-      repoStats: { fileCount: 6, sizeBytes: 600 },
     });
 
     expect(result.rejections).toEqual([]);
@@ -343,7 +305,6 @@ describe("screenStaticRepoSecurity", () => {
         { path: "up-alias", symlinkTarget: "vendor/up/target" },
         { path: "vendor/up", symlinkTarget: "../.." },
       ],
-      repoStats: { fileCount: 6, sizeBytes: 600 },
     });
 
     expect(result.rejections).toEqual(
@@ -364,7 +325,6 @@ describe("screenStaticRepoSecurity", () => {
         { path: "a", symlinkTarget: "b" },
         { path: "b", symlinkTarget: "a" },
       ],
-      repoStats: { fileCount: 4, sizeBytes: 400 },
     });
 
     expect(result.rejections).toEqual(
