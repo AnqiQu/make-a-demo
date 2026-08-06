@@ -2256,3 +2256,51 @@ reproduces at clean HEAD.
    exists, should fidelity permit a minimal import + call-site swap (the fix rejected in
    Midday attempt 6)? Default **no** — fidelity stays strict; Midday itself does not need
    it (`node-xlsx@0.22.0` exists). Revisit only on a repo where no version escape exists.
+
+## Phase 8 landed (2026-08-06)
+
+Every deletion-table row was re-verified against HEAD before acting — Phases
+1–7 had already absorbed more of the table than the plan text assumed.
+**Deleted/consolidated:** `649d455` inlines the `executeSubmittedCode`
+pass-through at its 14 call sites and deletes the module plus its
+tautological test; `24b6f31` dedupes the two `escapeRegExp` copies into
+`shared/text/escape-regexp.ts`; `1ebc7d6` drops the AppMap's flattened
+top-level aggregates (`buttons`/`links`/`forms`/`inputs`/`primaryNavigation`/
+`routeTitles`/`screenshots`/`accessibilitySnapshots`/`candidateFlows`/
+`stableLocatorCandidates`/always-empty `appStateAssumptions`) and the
+invalid-dialect `createRouteLocatorCandidates` — none had a server reader or
+prompt mention, per-route fields carry the same data, and old persisted
+app-maps still replay because unknown keys are ignored; `fd8935a` points the
+Script Writing allowlist at the shared artifact-path map; `6a7a33c` deletes
+the security screen's produced-but-discarded `warnings` surface (sole caller
+reads only `status`/`rejections`; the useful signals — postinstall risk,
+lockfile absence — are independently recomputed by the profiler) along with
+the screen's now-unused `repoStats` input and the harness input field that
+fed it. `0140765` regenerates the graphs.
+
+**Verified already resolved (no commit):** the dead recorder + 729-line
+test, `getPreviewUrl`/`downloadFiles` interface members (today's
+`downloadFiles` is the live Daytona SDK method), `cancelActiveCommands`
+(private), the `readSuccessfulCaptureProtocol` twin, `mergeRuntimeMarkers`,
+`qualityFindings`, the `terminal-demo-runner` pass-through (today's module is
+real input-collection logic consumed by `run-demo-pipeline.mts`), the
+fonts/music triplicate (single source in `demo-script.schema.ts`; all ten
+font files referenced — eight by compositing, Exo/Honk by the web app UI),
+and the workspace-interface optionals (all methods required; remaining `?:`
+model genuinely absent values).
+
+**Kept deliberately:** the three trailing "retry loop exited early" throws —
+they are typing-required fall-through guards on bounded paid retry loops, and
+replacing them with `for (;;)` would turn a future early-`continue` bug into
+an unbounded paid spin instead of a loud error; `contractVersion` — a real
+cross-boundary pin: `readScriptCandidate` runs on persisted candidates in the
+replay path. **Deferred:** gating `knip --production` — the advisory
+`knip:prod` script already exists, but making it a gate first needs a
+production-entries audit of the web/API/persistence surface it currently
+flags as unused (24 files, including live `app.ts`); the four
+production-unused agent-harness exports it names
+(`normalizeCrawlUrl`, `resolveRuntimeTarget`,
+`evaluateDependencyInstallCommand`, `defaultRepoSnapshotGit`) are deliberate
+test seams. Net for the series: −280 source lines. Full gauntlet per commit;
+826 tests green (one full-suite browser-contention flake of the capture-path
+validator did not reproduce on rerun or in isolation).
