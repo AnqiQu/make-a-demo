@@ -53,6 +53,7 @@ import {
   type OpenCodeHarnessRunInput,
   type OpenCodeHarnessRunResult,
   type OpenCodeHarnessRunner,
+  type OpenCodeHarnessStage,
   createStagePrompt,
 } from "../opencode/opencode-harness";
 import type {
@@ -244,6 +245,137 @@ export async function createDefaultAgentHarnessDependencies(
       }
     }
     return result;
+  };
+  /**
+   * Uniform attempt loop for every OpenCode stage whose contract is one
+   * durable JSON artifact. Each attempt runs OpenCode, then reads the
+   * artifact regardless of the exit code: the exit code is untrustworthy
+   * evidence of completion, while a valid artifact that differs from the
+   * pre-loop baseline proves the agent finished its write before dying. A
+   * malformed artifact is preserved as attempt evidence and removed so the
+   * next attempt rewrites it instead of patching; a timeout clears the
+   * OpenCode session (resuming a killed session replays the hung
+   * transcript) and retries once with the kill disclosed to the agent.
+   */
+  const runAgentArtifactStage = async <T>(stageInput: {
+    artifactPath: string;
+    displayName: (attempt: number) => string;
+    initialArtifactError: string;
+    /** Errors that must abort the stage instead of feeding the next attempt. */
+    isFatalParseError?: (error: unknown) => boolean;
+    onAttemptRejected?: (rejected: {
+      artifactError: string;
+      attempt: number;
+    }) => Promise<void>;
+    onResult?: (result: OpenCodeHarnessRunResult) => Promise<void>;
+    parse: (value: unknown) => Promise<T> | T;
+    parseErrorLabel: string;
+    prompt: (attempt: number, artifactError: string | undefined) => string;
+    stageForAttempt: (attempt: number) => OpenCodeHarnessStage;
+    timeoutMsForAttempt: (attempt: number) => number;
+    workspace: AgentHarnessWorkspace;
+  }): Promise<T> => {
+    const attempts = retryPolicy.agentArtifactAttempts;
+    const baseline = await tryReadWorkspaceJson(
+      stageInput.workspace,
+      stageInput.artifactPath,
+    );
+    const baselineFingerprint =
+      baseline.ok || baseline.failureClassification === "invalid-json"
+        ? baseline.candidateFingerprint
+        : undefined;
+    let artifactError = stageInput.initialArtifactError;
+    let timeoutRetryUsed = false;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      const result = await runOpenCode({
+        availableTools: ["read", "write"],
+        configDir: openCodeConfigDirectory,
+        model: `${providerID}/${modelID}`,
+        prompt: stageInput.prompt(
+          attempt,
+          attempt === 1 ? undefined : artifactError,
+        ),
+        ...optionalSessionId(opencodeSessionId),
+        stage: stageInput.stageForAttempt(attempt),
+        timeoutMs: stageInput.timeoutMsForAttempt(attempt),
+        workingDirectory: workspaceRepoDirectory,
+        workspace: stageInput.workspace,
+      });
+      opencodeSessionId = result.sessionId ?? opencodeSessionId;
+      await stageInput.onResult?.(result);
+      const readResult = await tryReadWorkspaceJson(
+        stageInput.workspace,
+        stageInput.artifactPath,
+      );
+      if (
+        readResult.ok &&
+        (result.exitCode === 0 ||
+          readResult.candidateFingerprint !== baselineFingerprint)
+      ) {
+        try {
+          return await stageInput.parse(readResult.value);
+        } catch (error) {
+          if (stageInput.isFatalParseError?.(error) === true) {
+            throw error;
+          }
+          artifactError = `Invalid ${stageInput.parseErrorLabel}: ${readErrorMessage(error)}`;
+        }
+      } else if (
+        !readResult.ok &&
+        readResult.failureClassification === "invalid-json"
+      ) {
+        artifactError = readResult.error;
+        if (readResult.rawCandidate !== undefined && attempt < attempts) {
+          const artifactName = stageInput.artifactPath
+            .slice(stageInput.artifactPath.lastIndexOf("/") + 1)
+            .replace(/\.json$/, "");
+          await writeWorkspaceText(
+            stageInput.workspace,
+            `${makeADemoDirectory}/invalid-${artifactName}-attempt-${attempt}.json`,
+            readResult.rawCandidate,
+          );
+          await stageInput.workspace.execute(
+            `rm -f ${shellQuote(stageInput.artifactPath)}`,
+          );
+        }
+      } else if (result.exitCode !== 0) {
+        artifactError = formatAgentCommandFailure(result);
+      } else if (!readResult.ok) {
+        artifactError = readResult.error;
+      }
+      if (result.timeoutError !== undefined) {
+        if (timeoutRetryUsed || attempt === attempts) {
+          throw result.timeoutError;
+        }
+        timeoutRetryUsed = true;
+        opencodeSessionId = undefined;
+        artifactError = `${artifactError} The previous attempt was killed mid-work; the workspace may contain its unfinished edits — review them before finishing.`;
+        await stageInput.onAttemptRejected?.({ artifactError, attempt });
+        continue;
+      }
+      await stageInput.onAttemptRejected?.({ artifactError, attempt });
+      if (!readResult.ok) {
+        throwIfRequiredArtifactWriteWasDenied({
+          artifactError,
+          path: stageInput.artifactPath,
+          result,
+          stage: stageInput.displayName(attempt),
+        });
+      }
+      if (attempt === attempts) {
+        throw new Error(
+          formatOpenCodeArtifactContractError({
+            path: stageInput.artifactPath,
+            readError: artifactError,
+            result,
+            stage: stageInput.displayName(attempt),
+          }),
+        );
+      }
+    }
+    throw new Error(
+      `${stageInput.displayName(attempts)} artifact retry loop exited early.`,
+    );
   };
   const ensureRepoMaterialized = async (
     repoProfile: RepoProfile,
@@ -698,80 +830,40 @@ export async function createDefaultAgentHarnessDependencies(
         artifactPaths.flowSpecContract,
         createFlowSpecContract(),
       );
-      let artifactError = "FlowSpec was not produced.";
-      for (
-        let attempt = 1;
-        attempt <= retryPolicy.agentArtifactAttempts;
-        attempt += 1
-      ) {
-        const result = await runOpenCode({
-          availableTools: ["read", "write"],
-          configDir: openCodeConfigDirectory,
-          model: `${providerID}/${modelID}`,
-          prompt: createFlowPlanningPrompt(
-            attempt === 1 ? undefined : artifactError,
-          ),
-          ...optionalSessionId(opencodeSessionId),
-          stage: "flow-planning",
-          timeoutMs: 10 * 60_000,
-          workingDirectory: workspaceRepoDirectory,
-          workspace,
-        });
-        opencodeSessionId = result.sessionId ?? opencodeSessionId;
-        const flowSpecResult =
-          result.exitCode === 0
-            ? await tryReadWorkspaceJson(workspace, artifactPaths.flowSpec)
-            : {
-                error: formatAgentCommandFailure(result),
-                ok: false as const,
-              };
-        if (flowSpecResult.ok) {
-          try {
-            const flowSpec = readFlowSpec(flowSpecResult.value);
-            assertFlowSpecGrounded({
-              actionCatalog,
-              appMap,
-              demoBrief,
-              flowSpec,
-              preparationManifest,
-            });
-            return flowSpec;
-          } catch (error) {
-            artifactError = `Invalid FlowSpec: ${readErrorMessage(error)}`;
-          }
-        } else {
-          artifactError = flowSpecResult.error;
-        }
-        await options.artifactStore.writeJson(
-          `${artifactPaths.agentArtifactAttempts}/flow-planning/attempt-${attempt}.json`,
-          {
-            attempt,
-            error: artifactError,
-            ...(opencodeSessionId === undefined ? {} : { opencodeSessionId }),
-            route: "flow-planning",
-            status: "failed",
-          },
-        );
-        if (!flowSpecResult.ok) {
-          throwIfRequiredArtifactWriteWasDenied({
-            artifactError,
-            path: artifactPaths.flowSpec,
-            result,
-            stage: "Flow Planning",
-          });
-        }
-        if (attempt === retryPolicy.agentArtifactAttempts) {
-          throw new Error(
-            formatOpenCodeArtifactContractError({
-              path: artifactPaths.flowSpec,
-              readError: artifactError,
-              result,
-              stage: "Flow Planning",
-            }),
+      return await runAgentArtifactStage({
+        artifactPath: artifactPaths.flowSpec,
+        displayName: () => "Flow Planning",
+        initialArtifactError: "FlowSpec was not produced.",
+        onAttemptRejected: async ({ artifactError, attempt }) => {
+          await options.artifactStore.writeJson(
+            `${artifactPaths.agentArtifactAttempts}/flow-planning/attempt-${attempt}.json`,
+            {
+              attempt,
+              error: artifactError,
+              ...(opencodeSessionId === undefined ? {} : { opencodeSessionId }),
+              route: "flow-planning",
+              status: "failed",
+            },
           );
-        }
-      }
-      throw new Error("Flow Planning artifact retry loop exited early.");
+        },
+        parse: (value) => {
+          const flowSpec = readFlowSpec(value);
+          assertFlowSpecGrounded({
+            actionCatalog,
+            appMap,
+            demoBrief,
+            flowSpec,
+            preparationManifest,
+          });
+          return flowSpec;
+        },
+        parseErrorLabel: "FlowSpec",
+        prompt: (_attempt, artifactError) =>
+          createFlowPlanningPrompt(artifactError),
+        stageForAttempt: () => "flow-planning",
+        timeoutMsForAttempt: () => 10 * 60_000,
+        workspace,
+      });
     },
     async prepareRepo({
       demoBrief,
@@ -1175,63 +1267,29 @@ export async function createDefaultAgentHarnessDependencies(
       scriptWritingBaseline = await readWorkspaceContentSnapshot(workspace, {
         includeMakeADemoArtifacts: false,
       });
-      let artifactError: string | undefined;
-      for (
-        let attempt = 1;
-        attempt <= retryPolicy.agentArtifactAttempts;
-        attempt += 1
-      ) {
-        const result = await runOpenCode({
-          availableTools: ["read", "write"],
-          configDir: openCodeConfigDirectory,
-          model: `${providerID}/${modelID}`,
-          prompt: createScriptRepairPrompt({
+      const demoScript = await runAgentArtifactStage({
+        artifactPath: DEMO_SCRIPT_OUTPUT_PATH,
+        displayName: () => "Script Repair",
+        initialArtifactError: "Demo Script was not produced.",
+        parse: (value) => value,
+        parseErrorLabel: "Demo Script",
+        prompt: (_attempt, artifactError) =>
+          createScriptRepairPrompt({
             ...(artifactError === undefined ? {} : { artifactError }),
             failureReport,
           }),
-          ...optionalSessionId(opencodeSessionId),
-          stage: "script-repair",
-          timeoutMs: 10 * 60_000,
-          workingDirectory: workspaceRepoDirectory,
-          workspace,
-        });
-        opencodeSessionId = result.sessionId ?? opencodeSessionId;
-        const demoScriptResult =
-          result.exitCode === 0
-            ? await tryReadWorkspaceJson(workspace, DEMO_SCRIPT_OUTPUT_PATH)
-            : {
-                error: formatAgentCommandFailure(result),
-                ok: false as const,
-              };
-        if (demoScriptResult.ok) {
-          return createScriptCandidate({
-            actionCatalog,
-            appMap,
-            demoScript: demoScriptResult.value,
-            flowSpec,
-            preparationManifest,
-            trustedStaticImageAssetIds,
-          });
-        }
-        artifactError = demoScriptResult.error;
-        throwIfRequiredArtifactWriteWasDenied({
-          artifactError,
-          path: DEMO_SCRIPT_OUTPUT_PATH,
-          result,
-          stage: "Script Repair",
-        });
-        if (attempt === retryPolicy.agentArtifactAttempts) {
-          throw new Error(
-            formatOpenCodeArtifactContractError({
-              path: DEMO_SCRIPT_OUTPUT_PATH,
-              readError: artifactError,
-              result,
-              stage: "Script Repair",
-            }),
-          );
-        }
-      }
-      throw new Error("Script Repair artifact retry loop exited early.");
+        stageForAttempt: () => "script-repair",
+        timeoutMsForAttempt: () => 10 * 60_000,
+        workspace,
+      });
+      return createScriptCandidate({
+        actionCatalog,
+        appMap,
+        demoScript,
+        flowSpec,
+        preparationManifest,
+        trustedStaticImageAssetIds,
+      });
     },
     async resetCaptureRuntime({
       preparationManifest,
@@ -1285,78 +1343,32 @@ export async function createDefaultAgentHarnessDependencies(
         artifactPaths.supportingDocuments,
         normalizedSupportingDocuments ?? [],
       );
-      let artifactError = "Runtime target selection was not produced.";
-      for (
-        let attempt = 1;
-        attempt <= retryPolicy.agentArtifactAttempts;
-        attempt += 1
-      ) {
-        const result = await runOpenCode({
-          availableTools: ["read", "write"],
-          configDir: openCodeConfigDirectory,
-          model: `${providerID}/${modelID}`,
-          prompt: createRuntimeTargetSelectionPrompt(
-            attempt === 1 ? undefined : artifactError,
-          ),
-          ...optionalSessionId(opencodeSessionId),
-          stage: "runtime-target-selection",
-          timeoutMs: 5 * 60_000,
-          workingDirectory: workspaceRepoDirectory,
-          workspace,
-        });
-        opencodeSessionId = result.sessionId ?? opencodeSessionId;
-        const diff = await readPreparationWorkspaceDiff(workspace);
-        if (diff.changedPaths.length > 0) {
-          throw new Error(
-            `Runtime Target Selection must be read-only; changed: ${diff.changedPaths.join(", ")}.`,
-          );
-        }
-        const selectionResult =
-          result.exitCode === 0
-            ? await tryReadWorkspaceJson(
-                workspace,
-                artifactPaths.runtimeTargetSelection,
-              )
-            : {
-                error: formatAgentCommandFailure(result),
-                ok: false as const,
-              };
-        if (selectionResult.ok) {
-          try {
-            return synthesizeRunPlan(
-              repoProfile,
-              readModelRuntimeTargetSelection(
-                selectionResult.value,
-                repoProfile,
-              ),
+      return await runAgentArtifactStage({
+        artifactPath: artifactPaths.runtimeTargetSelection,
+        displayName: () => "Runtime Target Selection",
+        initialArtifactError: "Runtime target selection was not produced.",
+        isFatalParseError: (error) =>
+          error instanceof RuntimeTargetSelectionRequiredError,
+        onResult: async () => {
+          const diff = await readPreparationWorkspaceDiff(workspace);
+          if (diff.changedPaths.length > 0) {
+            throw new Error(
+              `Runtime Target Selection must be read-only; changed: ${diff.changedPaths.join(", ")}.`,
             );
-          } catch (error) {
-            if (error instanceof RuntimeTargetSelectionRequiredError) {
-              throw error;
-            }
-            artifactError = `Invalid runtime target selection: ${readErrorMessage(error)}`;
           }
-        } else {
-          artifactError = selectionResult.error;
-          throwIfRequiredArtifactWriteWasDenied({
-            artifactError,
-            path: artifactPaths.runtimeTargetSelection,
-            result,
-            stage: "Runtime Target Selection",
-          });
-        }
-        if (attempt === retryPolicy.agentArtifactAttempts) {
-          throw new Error(
-            formatOpenCodeArtifactContractError({
-              path: artifactPaths.runtimeTargetSelection,
-              readError: artifactError,
-              result,
-              stage: "Runtime Target Selection",
-            }),
-          );
-        }
-      }
-      throw new Error("Runtime Target Selection retry loop exited early.");
+        },
+        parse: (value) =>
+          synthesizeRunPlan(
+            repoProfile,
+            readModelRuntimeTargetSelection(value, repoProfile),
+          ),
+        parseErrorLabel: "runtime target selection",
+        prompt: (_attempt, artifactError) =>
+          createRuntimeTargetSelectionPrompt(artifactError),
+        stageForAttempt: () => "runtime-target-selection",
+        timeoutMsForAttempt: () => 5 * 60_000,
+        workspace,
+      });
     },
     async validateCapturePath({ preparationManifest, scriptCandidate }) {
       const handle = requireWorkspaceHandle(workspaceHandle);
@@ -1518,70 +1530,34 @@ export async function createDefaultAgentHarnessDependencies(
       scriptWritingBaseline = await readWorkspaceContentSnapshot(workspace, {
         includeMakeADemoArtifacts: false,
       });
-      let artifactError = "Demo Script was not produced.";
-      for (
-        let attempt = 1;
-        attempt <= retryPolicy.agentArtifactAttempts;
-        attempt += 1
-      ) {
-        const stage = attempt === 1 ? "script-writing" : "script-repair";
-        const result = await runOpenCode({
-          availableTools: ["read", "write"],
-          configDir: openCodeConfigDirectory,
-          model: `${providerID}/${modelID}`,
-          prompt:
-            attempt === 1
-              ? createScriptWritingPrompt({
-                  demoBrief,
-                })
-              : createScriptArtifactRepairPrompt({
-                  artifactError,
-                  demoBrief,
-                }),
-          ...optionalSessionId(opencodeSessionId),
-          stage,
-          timeoutMs: attempt === 1 ? 15 * 60_000 : 10 * 60_000,
-          workingDirectory: workspaceRepoDirectory,
-          workspace,
-        });
-        opencodeSessionId = result.sessionId ?? opencodeSessionId;
-        const demoScriptResult =
-          result.exitCode === 0
-            ? await tryReadWorkspaceJson(workspace, DEMO_SCRIPT_OUTPUT_PATH)
-            : {
-                error: formatAgentCommandFailure(result),
-                ok: false as const,
-              };
-        if (demoScriptResult.ok) {
-          return createScriptCandidate({
-            actionCatalog,
-            appMap,
-            demoScript: demoScriptResult.value,
-            flowSpec,
-            preparationManifest,
-            trustedStaticImageAssetIds,
-          });
-        }
-        artifactError = demoScriptResult.error;
-        throwIfRequiredArtifactWriteWasDenied({
-          artifactError,
-          path: DEMO_SCRIPT_OUTPUT_PATH,
-          result,
-          stage:
-            stage === "script-writing" ? "Script Writing" : "Script Repair",
-        });
-        if (attempt === retryPolicy.agentArtifactAttempts) {
-          throw new Error(
-            formatOpenCodeArtifactContractError({
-              path: DEMO_SCRIPT_OUTPUT_PATH,
-              readError: artifactError,
-              result,
-              stage: "Script Repair",
-            }),
-          );
-        }
-      }
-      throw new Error("Script Writing artifact retry loop exited early.");
+      const demoScript = await runAgentArtifactStage({
+        artifactPath: DEMO_SCRIPT_OUTPUT_PATH,
+        displayName: (attempt) =>
+          attempt === 1 ? "Script Writing" : "Script Repair",
+        initialArtifactError: "Demo Script was not produced.",
+        parse: (value) => value,
+        parseErrorLabel: "Demo Script",
+        prompt: (attempt, artifactError) =>
+          attempt === 1
+            ? createScriptWritingPrompt({ demoBrief })
+            : createScriptArtifactRepairPrompt({
+                artifactError: artifactError ?? "Demo Script was not produced.",
+                demoBrief,
+              }),
+        stageForAttempt: (attempt) =>
+          attempt === 1 ? "script-writing" : "script-repair",
+        timeoutMsForAttempt: (attempt) =>
+          attempt === 1 ? 15 * 60_000 : 10 * 60_000,
+        workspace,
+      });
+      return createScriptCandidate({
+        actionCatalog,
+        appMap,
+        demoScript,
+        flowSpec,
+        preparationManifest,
+        trustedStaticImageAssetIds,
+      });
     },
   };
 

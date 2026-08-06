@@ -909,6 +909,185 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(attempts).toBe(1);
   });
 
+  it("accepts a FlowSpec the agent wrote before its command crashed", async () => {
+    // A stage can write its artifact and then die — network drop, OOM kill,
+    // transport error. The durable artifact is the contract: a nonzero exit
+    // code must not discard a new, valid artifact that already landed.
+    let opencodeRuns = 0;
+    const workspace = createFakeAgentHarnessWorkspace({
+      async execute(command) {
+        if (command === "cat '/workspace/.makeademo/flow-spec.json'") {
+          return opencodeRuns === 0
+            ? {
+                exitCode: 1,
+                stderr: "cat: can't open flow-spec.json",
+                stdout: "",
+              }
+            : { exitCode: 0, stderr: "", stdout: JSON.stringify(flowSpec()) };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run() {
+          opencodeRuns += 1;
+          return {
+            exitCode: 1,
+            stderr: "transport error: connection reset by peer",
+            stdout: "",
+          };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+      workspaceProvider: {
+        async create() {
+          return { async destroy() {}, id: "workspace", workspace };
+        },
+      },
+    });
+    await harness.dependencies.createWorkspace({ repoProfile: repoProfile() });
+
+    await expect(
+      harness.dependencies.planFlow({
+        actionCatalog: actionCatalog(),
+        appMap: appMap(),
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+      }),
+    ).resolves.toMatchObject({ id: "flow" });
+    expect(opencodeRuns).toBe(1);
+  });
+
+  it("starts a fresh session after a Flow Planning timeout and discloses the kill", async () => {
+    // Resuming a killed session replays the hung transcript; the retry must
+    // start clean and must be told the previous attempt died mid-work.
+    let opencodeRuns = 0;
+    const prompts: string[] = [];
+    const sessions: Array<string | undefined> = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async execute(command) {
+        if (command === "cat '/workspace/.makeademo/flow-spec.json'") {
+          return opencodeRuns < 2
+            ? {
+                exitCode: 1,
+                stderr: "cat: can't open flow-spec.json",
+                stdout: "",
+              }
+            : { exitCode: 0, stderr: "", stdout: JSON.stringify(flowSpec()) };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(input) {
+          opencodeRuns += 1;
+          prompts.push(input.prompt);
+          sessions.push(input.sessionId);
+          if (opencodeRuns === 1) {
+            return {
+              exitCode: 124,
+              sessionId: "ses_hung",
+              stderr: "",
+              stdout: "",
+              timeoutError: new AgentHarnessCommandTimeoutError(
+                600_000,
+                "inactivity",
+              ),
+            };
+          }
+          return { exitCode: 0, stderr: "", stdout: "planned" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+      workspaceProvider: {
+        async create() {
+          return { async destroy() {}, id: "workspace", workspace };
+        },
+      },
+    });
+    await harness.dependencies.createWorkspace({ repoProfile: repoProfile() });
+
+    await expect(
+      harness.dependencies.planFlow({
+        actionCatalog: actionCatalog(),
+        appMap: appMap(),
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+      }),
+    ).resolves.toMatchObject({ id: "flow" });
+    expect(sessions).toEqual([undefined, undefined]);
+    expect(prompts[1]).toContain("killed mid-work");
+  });
+
+  it("rejects an unchanged Demo Script from a crashed Script Repair", async () => {
+    // The script being repaired already sits at the artifact path as valid
+    // JSON. A crashed repair must not "succeed" by leaving it untouched:
+    // acceptance on a failed command requires an artifact that changed.
+    const staleScript = { scriptId: "script_stale" };
+    const workspace = createFakeAgentHarnessWorkspace({
+      async execute(command) {
+        if (command === "cat '/workspace/.makeademo/demo-script.json'") {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: JSON.stringify(staleScript),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run() {
+          return {
+            exitCode: 1,
+            stderr: "transport error: connection reset by peer",
+            stdout: "",
+          };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.repairScript?.({
+        actionCatalog: actionCatalog(),
+        appMap: appMap(),
+        failureReport: validationReport("capture-path-validation", "failed"),
+        flowSpec: flowSpec(),
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+        scriptCandidate: {
+          assumptions: [],
+          browserActionCompilerVersion: "1",
+          bunRuntimeVersion: "1",
+          captureSdkVersion: "1",
+          conformanceResult: validationReport("script-generation", "passed"),
+          contractVersion: "1",
+          outputPath: "/workspace/.makeademo/demo-script.json",
+          playwrightRuntimeVersion: "1",
+          scriptJsonContent: staleScript,
+          sourceAppMapId: "app_map",
+          sourceFlowSpecId: "flow",
+          sourcePreparationManifestId: "prep_001",
+          unsupportedPieces: [],
+          validationArtifacts: [],
+        },
+        workspace,
+      }),
+    ).rejects.toThrow(/did not produce valid required artifact/);
+  });
+
   it("writes a complete Preparation Manifest contract when no features were supplied", async () => {
     const textFiles: Array<{ contents: string; path: string }> = [];
     const workspace = createFakeAgentHarnessWorkspace({
