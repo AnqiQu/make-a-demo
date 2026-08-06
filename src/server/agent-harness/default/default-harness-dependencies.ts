@@ -3628,6 +3628,18 @@ const offCameraAuthenticationInstruction =
 const offlineFeatureStateInstruction =
   "Follow every selected feature beyond authentication through its API, RPC, GraphQL, client, repository, database, and service calls. Add deterministic local adapters or fixtures at existing seams, conditionally select them with the same source-backed demo gate, and retain the normal adapter when it is off; a feature that still requires an external API or database is not prepared under Runtime Network Lockdown. Server-side demo adapters must invoke fixtures or local service code directly, never send HTTP back through the prepared app's own baseUrl or listening port; browser clients may use relative same-origin routes only in code that never executes during server-side rendering — a data-fetching layer shared with SSR cannot fetch a relative URL, so gate it to run client-side only or invoke the fixture module directly on the server — and a truly separate local service must use its own declared port.";
 
+const appDirShapeInstruction =
+  'appDir must be relative to /workspace/repo: use "." for the repo root or a path such as "frontend"; never use an absolute path.';
+
+const envUsedShapeInstruction =
+  'envUsed must be a flat JSON object whose keys and values are strings, such as {"NODE_ENV":"development","MAKEADEMO_DEMO":"true"}; use {} when no environment values are used. Nested values, arrays, and descriptive objects are invalid.';
+
+const sceneDescriptionOptionalInstruction =
+  "Scene description is optional human-readable metadata and is not required for capture or validation.";
+
+const scenePresentationDefaultsInstruction =
+  "presentation.music, presentation.textOverlays, and presentation.transitions are optional; when omitted they default to disabled music, no overlays, and direct back-to-back Scene playback.";
+
 function createRepoPreparationPrompt(input: {
   demoBrief: AgentHarnessPipelineInput["demoBrief"];
   repoProfile: RepoProfile;
@@ -3672,8 +3684,8 @@ function createRepoPreparationPrompt(input: {
       "Start by copying /workspace/.makeademo/preparation-manifest-template.json; preserve every field type and replace or enrich its values.",
       "Complete all inspection, edits, and checks before the final manifest write. Writing /workspace/.makeademo/preparation-manifest.json is the terminal action: after writing it, do not call another tool; return a concise completion response immediately.",
       "The manifest must include every field required by the backend-owned contract. Changed files and validation evidence are recorded by the backend, not authored in the manifest.",
-      'appDir must be relative to /workspace/repo: use "." for the repo root or a path such as "frontend"; never use an absolute path.',
-      'envUsed must be a flat JSON object whose keys and values are strings, such as {"NODE_ENV":"development"}; use {} when no environment values are used. Do not put arrays or nested objects under envUsed.',
+      appDirShapeInstruction,
+      envUsedShapeInstruction,
       `Demo brief: ${JSON.stringify(input.demoBrief)}`,
       `Repo profile: ${JSON.stringify(input.repoProfile)}`,
     ].join("\n"),
@@ -3717,8 +3729,8 @@ function createRepoPreparationRepairPrompt(input: {
       `Use this install command unless you have a stronger repo-specific reason: ${input.runPlan.installCommand}`,
       `Use this start command unless you have a stronger repo-specific reason: ${input.runPlan.startCommand}`,
       "The manifest must include every field required by the backend-owned contract. Changed files and validation evidence are recorded by the backend, not authored in the manifest.",
-      'appDir must be relative to /workspace/repo: use "." for the repo root or a path such as "frontend"; never use an absolute path.',
-      'envUsed must be a flat JSON object whose keys and values are strings, such as {"NODE_ENV":"development"}; use {} when no environment values are used. Do not put arrays or nested objects under envUsed.',
+      appDirShapeInstruction,
+      envUsedShapeInstruction,
       `Previous OpenCode output excerpt:\n${formatOpenCodeOutputExcerpt(
         input.previousResult,
       )}`,
@@ -3798,8 +3810,8 @@ function createRuntimePreparationRepairPrompt(input: {
       offlineFeatureStateInstruction,
       "Read /workspace/.makeademo/preparation-manifest-contract.json and use /workspace/.makeademo/preparation-manifest-template.json as the canonical shape.",
       "Do not patch only the reported failure. Revalidate the complete manifest and every productContext.featureInventory entry before finishing.",
-      'appDir must remain relative to /workspace/repo: use "." for the repo root or a path such as "frontend"; never use an absolute path.',
-      'envUsed must remain a flat string-to-string object such as {"NODE_ENV":"development","MAKEADEMO_DEMO":"true"}; nested values, arrays, and descriptive objects are invalid.',
+      appDirShapeInstruction,
+      envUsedShapeInstruction,
       ...(rebuildFromScreenedSource
         ? []
         : [`Current manifest: ${JSON.stringify(input.preparationManifest)}`]),
@@ -3878,8 +3890,8 @@ function createScriptWritingPrompt(input: {
       "Every playwright-recording Scene requires typed actions and expectedVisibleOutcome. Each locator action must copy one browser-verified ActionCatalog locator exactly and include its locatorCandidateId; sourceActionId must reference ActionCatalog evidence selected by FlowSpec.",
       "The prepared runtime already owns authentication prerequisites. Use setupActions only for grounded off-camera browser state such as navigation or seeded UI setup. Every setup action must include a sourceActionId grounded in ActionCatalog. Put authentication in a Scene only when FlowSpec explicitly selected it as a maker-requested feature; keep all other product demonstration inside Scene actions.",
       "Do not author full-screen-text or static-image narrative cards; they are backend-owned.",
-      "Scene description is optional human-readable metadata.",
-      "presentation.music, presentation.textOverlays, and presentation.transitions are optional. When omitted they default to disabled music, no overlays, and direct back-to-back Scene playback.",
+      sceneDescriptionOptionalInstruction,
+      scenePresentationDefaultsInstruction,
       "Each browser Scene must end with assert-visible or assert-text; the compiler emits explicit Playwright visibility proof.",
       "When optional textOverlays or transitions are present, their Scene IDs must match adjacent declared Scenes.",
       `Target demo length seconds: ${input.demoBrief.demoLengthSeconds ?? 30}`,
@@ -3910,8 +3922,9 @@ function createScriptArtifactRepairPrompt(input: {
       "Repair only the Demo Script artifact at that exact path. Do not edit app source or preparation files.",
       "The JSON must include version, scriptId, title, format, scenes, and presentation. Do not add demoPlaywrightScript.",
       "Use only playwright-recording Scenes. Every Scene must carry a FlowSpec featureId, and every FlowSpec feature must retain at least one Scene.",
-      "Scene description is optional; do not spend a repair attempt adding one when id and expectedVisibleOutcome are already valid.",
-      "presentation.music, presentation.textOverlays, and presentation.transitions may be omitted; the backend supplies safe defaults.",
+      sceneDescriptionOptionalInstruction,
+      "Do not spend a repair attempt adding a Scene description when id and expectedVisibleOutcome are already valid.",
+      scenePresentationDefaultsInstruction,
       "Every playwright-recording Scene must use supported typed actions, an explicit visibility assertion action, sourceActionId references grounded in AppMap, ActionCatalog, and FlowSpec evidence, and locatorCandidateId references for every locator action.",
       `Demo brief: ${JSON.stringify(input.demoBrief)}`,
     ].join("\n"),
@@ -3950,8 +3963,8 @@ function createScriptRepairPrompt(input: {
       `Blocked network attempts: ${JSON.stringify(input.failureReport.blockedNetworkAttempts)}`,
       `stderr evidence: ${JSON.stringify(input.failureReport.stderrExcerpts)}`,
       `Suggested repair hints: ${JSON.stringify(input.failureReport.suggestedRepairHints)}`,
-      "Scene description is optional human-readable metadata and is not required for capture or validation.",
-      "presentation.music, presentation.textOverlays, and presentation.transitions are optional and default to disabled music, no overlays, and direct back-to-back Scene playback when omitted.",
+      sceneDescriptionOptionalInstruction,
+      scenePresentationDefaultsInstruction,
       ...(input.artifactError === undefined
         ? []
         : [
