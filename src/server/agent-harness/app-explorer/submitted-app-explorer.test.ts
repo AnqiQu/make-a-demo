@@ -1486,6 +1486,52 @@ describe("exploreSubmittedApp", () => {
     );
   });
 
+  it("keeps a requested feature grounded when its route also renders a populated data table", async () => {
+    // The zero-row veto reads "the data surface rendered empty", so a route
+    // whose tables include a populated one — an incidental empty secondary
+    // table beside the feature's populated primary table — stays
+    // demonstrable: its rows are the honest content evidence.
+    const invoicing = preparedFeature({
+      description: "Demonstrate invoicing",
+      entryPaths: ["/en/invoices"],
+      id: "invoicing",
+      label: "Invoices",
+      requestedFeature: "invoicing",
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [invoicing],
+      routes: [
+        observedRoute({
+          emptyDataTables: [
+            {
+              columnHeaders: 4,
+              headerTexts: ["Draft no.", "Customer", "Amount", "Status"],
+            },
+          ],
+          featureIds: ["invoicing"],
+          interactions: [
+            {
+              kind: "fill",
+              locator: { strategy: "placeholder", value: "Search invoices..." },
+              name: "Search invoices...",
+              outcome: "The field contained the observed demo value",
+            },
+          ],
+          path: "/en/invoices",
+          populatedDataTables: 1,
+          primaryNavigation: ["Overview"],
+          requestedPath: "/en/invoices",
+          text: ["INV-001 Aperture Labs $4,200", "INV-002 Cedar & Co. $1,800"],
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "none",
+      status: "passed",
+    });
+  });
+
   it("grounds a requested feature whose second tagged route renders content without an empty table", async () => {
     // The zero-row veto is per route, not per feature: a detail route that
     // renders the feature's data keeps the feature demonstrable even when
@@ -1524,7 +1570,10 @@ describe("exploreSubmittedApp", () => {
       ],
     });
 
-    requireArtifacts(result);
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "none",
+      status: "passed",
+    });
   });
 
   it("fails a requested feature whose catalog tagging cannot satisfy flow planning", async () => {

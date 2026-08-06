@@ -87,6 +87,14 @@ type ObservedRoute = {
   emptyDataTables?: Array<{ columnHeaders: number; headerTexts?: string[] }>;
   forms: string[];
   featureIds?: string[];
+  /**
+   * Count of visible data tables/grids with at least one populated body row.
+   * A populated table proves the route's data surface renders rows, so the
+   * zero-row grounding veto must not fire there even when a secondary table
+   * on the same route is empty. The rows themselves are harvested into
+   * `text`, where they ground features as ordinary route content.
+   */
+  populatedDataTables?: number;
   headings: string[];
   headingLocatorEvidence?: Array<ObservedLocatorEvidence | null>;
   inputLocators?: ObservedInputLocator[];
@@ -416,6 +424,7 @@ function createExplorationArtifacts(input: {
   const screenshots: string[] = [];
   const stableLocatorCandidates: string[] = [];
   const emptyDataTablesByRoute = new Map<string, number>();
+  const populatedTableRoutes = new Set<string>();
   for (const route of input.observation.routes) {
     const routeLocatorCandidates = createRouteLocatorCandidates(route);
     const linkHrefs = route.links.map((link) => link.href);
@@ -465,6 +474,9 @@ function createExplorationArtifacts(input: {
         route.emptyDataTables?.[0]?.columnHeaders ?? 0,
       );
     }
+    if ((route.populatedDataTables ?? 0) > 0) {
+      populatedTableRoutes.add(route.path);
+    }
   }
   const appMap = readAppMap({
     accessibilitySnapshots,
@@ -506,6 +518,7 @@ function createExplorationArtifacts(input: {
     explicitAuthenticationFeatureIds,
     featureInventory: input.featureInventory,
     networkAttempts,
+    populatedTableRoutes,
     unreachableRoutes: input.observation.unreachableRoutes ?? [],
   });
 
@@ -943,6 +956,7 @@ function createExplorationValidationReport(input: {
   explicitAuthenticationFeatureIds: ReadonlySet<string>;
   featureInventory: PreparedDemoFeature[];
   networkAttempts: NetworkAttempt[];
+  populatedTableRoutes?: ReadonlySet<string>;
   unreachableRoutes: UnreachableRoute[];
 }): ValidationReport {
   const groundingFailure = readExplorationFailure(
@@ -953,6 +967,7 @@ function createExplorationValidationReport(input: {
     input.unreachableRoutes,
     input.emptyDataTablesByRoute ?? new Map(),
     input.distinctContentByRoute,
+    input.populatedTableRoutes ?? new Set(),
   );
   // Load-breaking runtime evidence outranks grounding counts: a route that
   // crashes before rendering cannot ground anything, and only the dependency
@@ -1038,6 +1053,7 @@ function readExplorationFailure(
   unreachableRoutes: UnreachableRoute[],
   emptyDataTablesByRoute: ReadonlyMap<string, number>,
   distinctContentByRoute: ReadonlyMap<string, string[]>,
+  populatedTableRoutes: ReadonlySet<string>,
 ): { classification: string; message: string } | undefined {
   const unreachableFailure = (features: PreparedDemoFeature[]) => {
     const featureIds = new Set(features.map(({ id }) => id));
@@ -1150,12 +1166,15 @@ function readExplorationFailure(
   // A zero-row data table is the feature's data surface rendering empty:
   // for a requested feature it vetoes the route's other distinct strings
   // (summary cards, tab labels), which render from separate queries in
-  // hollow and healthy apps alike. Non-requested features keep the plain
-  // content rule so the default demo can still select around such routes.
+  // hollow and healthy apps alike. A populated table on the same route
+  // lifts the veto — the data surface demonstrably renders rows — and
+  // non-requested features keep the plain content rule so the default demo
+  // can still select around such routes.
   const demonstrableRoute = (feature: PreparedDemoFeature, route: string) =>
     contentRoutePaths.has(route) &&
     (feature.requestedFeature === undefined ||
-      !emptyDataTablesByRoute.has(route));
+      !emptyDataTablesByRoute.has(route) ||
+      populatedTableRoutes.has(route));
   const groundedFeatureIds = new Set(
     featureInventory
       .filter((feature) => {
@@ -1904,15 +1923,26 @@ try {
               position: "bottom",
             }]
           : [];
-        const emptyDataTables = Array.from(document.querySelectorAll("table, [role=table], [role=grid]")).filter(visible).flatMap((table) => {
+        const dataTables = Array.from(document.querySelectorAll("table, [role=table], [role=grid]")).filter(visible).map((table) => {
           const headerCells = Array.from(table.querySelectorAll("th, [role=columnheader]")).filter(visible);
-          if (headerCells.length === 0) return [];
-          const populatedRows = Array.from(table.querySelectorAll("tbody tr, [role=row]")).filter((row) =>
+          const populatedRows = headerCells.length === 0 ? [] : Array.from(table.querySelectorAll("tbody tr, [role=row]")).filter((row) =>
             row.querySelector("th, [role=columnheader]") == null && clean(row.innerText) !== "");
-          return populatedRows.length === 0
-            ? [{ columnHeaders: headerCells.length, headerTexts: headerCells.map((cell) => clean(cell.innerText)).filter(Boolean).slice(0, 24) }]
-            : [];
-        }).slice(0, 4);
+          return { headerCells, populatedRows };
+        }).filter(({ headerCells }) => headerCells.length > 0);
+        const emptyDataTables = dataTables.filter(({ populatedRows }) => populatedRows.length === 0)
+          .map(({ headerCells }) => ({ columnHeaders: headerCells.length, headerTexts: headerCells.map((cell) => clean(cell.innerText)).filter(Boolean).slice(0, 24) }))
+          .slice(0, 4);
+        const populatedTables = dataTables.filter(({ populatedRows }) => populatedRows.length > 0);
+        // Table rows are the canonical data surface of an admin or ledger
+        // page, but cell text sits outside every paragraph/list selector, so
+        // the first rows are harvested into route text directly. The leading
+        // non-empty cell usually names the row's entity, which makes it both
+        // honest content evidence and a verifiable assert target.
+        const dataTableRowTexts = [...new Set(populatedTables.flatMap(({ populatedRows }) => populatedRows.slice(0, 3).map((row) => {
+          const cellTexts = Array.from(row.querySelectorAll("td, [role=cell], [role=gridcell]")).filter(visible).map((cell) => clean(cell.innerText)).filter(Boolean);
+          return cellTexts[0] || clean(row.innerText);
+        })))].filter((value) => value.length >= 2 && value.length <= 80).slice(0, 9);
+        const paragraphTexts = Array.from(document.querySelectorAll("main p, main li, article p, [role=main] p")).filter(visible).map((element) => clean(element.innerText)).filter(Boolean).slice(0, 80);
         return {
           buttons: texts("button, [role=button]", 16),
           emptyDataTables,
@@ -1921,9 +1951,10 @@ try {
           inputLocators,
           inputs,
           links,
+          populatedDataTables: populatedTables.length,
           primaryNavigation: texts("nav a, [role=navigation] a"),
           scrollTargets,
-          text: Array.from(document.querySelectorAll("main p, main li, article p, [role=main] p")).filter(visible).map((element) => clean(element.innerText)).filter(Boolean).slice(0, 80),
+          text: [...paragraphTexts, ...dataTableRowTexts.filter((value) => !paragraphTexts.includes(value))],
           title: document.title || clean(document.querySelector("h1")?.textContent) || location.pathname,
         };
       });

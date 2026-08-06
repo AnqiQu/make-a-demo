@@ -276,6 +276,70 @@ describe("generated exploration script", () => {
     }
   }, 30_000);
 
+  it("harvests populated data-table row text even when the selector harvest is rich", async () => {
+    // The canonical data surface of an admin page is its table rows, but
+    // cell text sits outside every paragraph/list selector and the page
+    // title is not an h1-h3. When icon-ligature and skip-link junk makes
+    // the selector harvest look rich, the aria fallback never fires — so
+    // populated rows must be harvested directly, not via the fallback.
+    const adminTablePage = `<!doctype html><html><head><title>Admin App</title></head><body>
+<main>
+<nav><ul><li><a href="/">Settings</a></li></ul></nav>
+<ul><li>people_alt</li><li>folder</li><li>insights</li><li>bookmark</li><li>translate</li><li>public</li><li>storage</li><li>tune</li></ul>
+<div class="title">Access Policies</div>
+<table><thead><tr><th>Name</th><th>Roles</th></tr></thead>
+<tbody><tr><td>Article API Access</td><td>1 role</td></tr><tr><td>Editors</td><td>3 roles</td></tr></tbody></table>
+</main>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(adminTablePage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-rows-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        routes: Array<{
+          emptyDataTables?: Array<{ columnHeaders: number }>;
+          populatedDataTables?: number;
+          text: string[];
+        }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      const route = result.routes[0];
+      expect(route?.text).toContain("Article API Access");
+      expect(route?.text).toContain("Editors");
+      expect(route?.populatedDataTables).toBe(1);
+      expect(route?.emptyDataTables).toEqual([]);
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
   it("keeps empty-table header text out of the accessibility-tree harvest", async () => {
     // A zero-row table still exposes its column headers to the aria tree —
     // as individual header cells and as the combined header-row name. Neither
