@@ -741,6 +741,26 @@ function createActions(
         ...verifiedTexts.filter(({ text }) => distinct.has(text.trim())),
         ...verifiedTexts.filter(({ text }) => !distinct.has(text.trim())),
       ].slice(0, 3);
+      // The shared slots can all go to strings matching no feature while
+      // the texts that could token-match one sit past the cap. Preparation
+      // cannot influence which texts become asserts, so each feature tagged
+      // to the route gets at least one verified text whose tokens match it.
+      for (const feature of featureInventory) {
+        if (!(route.featureIds ?? []).includes(feature.id)) continue;
+        const featureTokens = featureSemanticTokens(feature);
+        const matchesFeature = (candidate: { text: string }) =>
+          semanticTokens(candidate.text).some((token) =>
+            featureTokens.includes(token),
+          );
+        if (textCandidates.some(matchesFeature)) continue;
+        const extra = verifiedTexts.find(
+          (candidate) =>
+            !textCandidates.includes(candidate) && matchesFeature(candidate),
+        );
+        if (extra !== undefined) {
+          textCandidates.push(extra);
+        }
+      }
       textCandidates.forEach(
         ({ index: textIndex, text: visibleText }, order) => {
           const id =
@@ -899,14 +919,21 @@ function matchActionFeatureIds(
     .filter((feature) => routeFeatureIds.includes(feature.id))
     .map((feature) => ({
       id: feature.id,
-      score: semanticTokens(
-        `${feature.id} ${feature.label} ${feature.requestedFeature ?? ""} ${feature.description}`,
-      ).filter((token) => actionTokens.includes(token)).length,
+      score: featureSemanticTokens(feature).filter((token) =>
+        actionTokens.includes(token),
+      ).length,
     }));
   const bestScore = Math.max(0, ...matches.map(({ score }) => score));
   return bestScore === 0
     ? []
     : matches.filter(({ score }) => score === bestScore).map(({ id }) => id);
+}
+
+/** The one token recipe for matching browser evidence against a feature. */
+function featureSemanticTokens(feature: PreparedDemoFeature): string[] {
+  return semanticTokens(
+    `${feature.id} ${feature.label} ${feature.requestedFeature ?? ""} ${feature.description}`,
+  );
 }
 
 function semanticTokens(value: string): string[] {
@@ -1365,9 +1392,24 @@ function readExplorationFailure(
           ? []
           : ["a visible-text assert"]),
       ];
-      return missing.length === 0
-        ? undefined
-        : `"${feature.requestedFeature}" lacks ${missing.join(" and ")}`;
+      if (missing.length === 0) {
+        return undefined;
+      }
+      // Content-bearing tagged routes mean the gap is a wording mismatch,
+      // not a rendering defect: naming the shown labels steers the repair
+      // at featureInventory wording instead of at a healthy data path.
+      const shownLabels = unique(
+        unique(tagged.map((action) => action.route))
+          .filter((route) => contentRoutePaths.has(route))
+          .flatMap((route) => distinctContentByRoute.get(route) ?? []),
+      ).slice(0, 4);
+      return `"${feature.requestedFeature}" lacks ${missing.join(" and ")}${
+        shownLabels.length === 0
+          ? ""
+          : ` (its routes rendered distinct content: ${shownLabels.join(
+              ", ",
+            )} — align the featureInventory wording with these on-screen labels)`
+      }`;
     })
     .filter((gap): gap is string => gap !== undefined);
   if (flowEvidenceGaps.length > 0) {
@@ -1436,9 +1478,7 @@ function assertEvidenceMatchesFeature(
   const locator = action.preferredLocator;
   const evidenceText =
     (locator.strategy === "text" ? locator.value : locator.name) ?? "";
-  const featureTokens = semanticTokens(
-    `${feature.id} ${feature.label} ${feature.requestedFeature ?? ""} ${feature.description}`,
-  );
+  const featureTokens = featureSemanticTokens(feature);
   return semanticTokens(evidenceText).some((token) =>
     featureTokens.includes(token),
   );

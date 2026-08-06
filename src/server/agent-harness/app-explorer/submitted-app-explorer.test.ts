@@ -1576,6 +1576,60 @@ describe("exploreSubmittedApp", () => {
     });
   });
 
+  it("adds a feature-matching assert candidate beyond the distinct-first cap", async () => {
+    // The cap-3 distinct-first slots can all go to strings matching no
+    // feature — download buttons, settings labels — while the texts that
+    // could token-match a feature sit past the cap. Preparation cannot
+    // influence which texts become asserts, so every feature tagged to the
+    // route gets at least one verified text whose tokens match it.
+    const base64 = preparedFeature({
+      description: "Encode text to Base64.",
+      entryPaths: ["/"],
+      id: "base64-encoding",
+      label: "Base64 encoding",
+      requestedFeature: "base64 encoding",
+    });
+    const hashing = preparedFeature({
+      description: "Produce an MD5 digest.",
+      entryPaths: ["/"],
+      id: "md5-hashing",
+      label: "MD5 hashing",
+      requestedFeature: "md5 hashing",
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [base64, hashing],
+      routes: [
+        observedRoute({
+          featureIds: ["base64-encoding", "md5-hashing"],
+          path: "/",
+          text: [
+            "Download CyberChef file_download",
+            "Options settings",
+            "About / Support help",
+            "To Base64",
+            "MD5 hashing",
+          ],
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    expect(artifacts.actionCatalog.actions).toContainEqual(
+      expect.objectContaining({
+        featureIds: ["base64-encoding"],
+        kind: "assert",
+        preferredLocator: { strategy: "text", value: "To Base64" },
+      }),
+    );
+    expect(artifacts.actionCatalog.actions).toContainEqual(
+      expect.objectContaining({
+        featureIds: ["md5-hashing"],
+        kind: "assert",
+        preferredLocator: { strategy: "text", value: "MD5 hashing" },
+      }),
+    );
+  });
+
   it("fails a requested feature whose catalog tagging cannot satisfy flow planning", async () => {
     // Exploration grounds a feature on exercised evidence alone, but flow
     // planning demands an interaction AND a visible assertion. A requested
@@ -1626,6 +1680,16 @@ describe("exploreSubmittedApp", () => {
     );
     expect(result.validationReport.logsSummary).toContain(
       "reselect featureInventory",
+    );
+    // The route is content-bearing, so the gap is a wording mismatch, not a
+    // rendering defect: the steering must name the shown labels so the
+    // repair aligns featureInventory wording instead of reworking the data
+    // path.
+    expect(result.validationReport.logsSummary).toContain(
+      "align the featureInventory wording",
+    );
+    expect(result.validationReport.logsSummary).toContain(
+      "Publish demo article",
     );
   });
 
