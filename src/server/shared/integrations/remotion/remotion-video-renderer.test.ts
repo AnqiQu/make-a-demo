@@ -23,6 +23,10 @@ describe("RemotionVideoRenderer", () => {
         "src/server/shared/integrations/remotion/remotion-entry.tsx",
       ),
       tempRoot: bundleDirectory,
+      // Remotion's default 30s delayRender timeout flakes when the headless
+      // browser loads the bundle on a machine saturated by parallel suite
+      // workers; give it headroom without giving up the real browser.
+      timeoutInMilliseconds: 120_000,
     });
 
     try {
@@ -62,5 +66,5 @@ describe("RemotionVideoRenderer", () => {
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
-  }, 60_000);
+  }, 300_000);
 });

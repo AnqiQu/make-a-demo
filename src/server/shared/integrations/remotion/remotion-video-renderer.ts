@@ -12,6 +12,7 @@ export type RemotionVideoRendererInput = {
   bundleRoot: string;
   entryPoint: string;
   tempRoot: string;
+  timeoutInMilliseconds?: number;
 };
 
 export class RemotionVideoRenderer implements VideoRenderer {
@@ -19,12 +20,14 @@ export class RemotionVideoRenderer implements VideoRenderer {
   private readonly bundleRoot: string;
   private readonly entryPoint: string;
   private readonly tempRoot: string;
+  private readonly timeoutInMilliseconds: number | undefined;
 
   constructor(input: RemotionVideoRendererInput) {
     this.browserExecutable = input.browserExecutable;
     this.bundleRoot = input.bundleRoot;
     this.entryPoint = input.entryPoint;
     this.tempRoot = input.tempRoot;
+    this.timeoutInMilliseconds = input.timeoutInMilliseconds;
   }
 
   async renderVideo(input: CompositingRenderPlan): Promise<void> {
@@ -45,6 +48,9 @@ export class RemotionVideoRenderer implements VideoRenderer {
         ...(this.browserExecutable === undefined
           ? {}
           : { browserExecutable: this.browserExecutable }),
+        ...(this.timeoutInMilliseconds === undefined
+          ? {}
+          : { timeoutInMilliseconds: this.timeoutInMilliseconds }),
         id: input.compositionId,
         inputProps: input,
         logLevel: "warn",
@@ -55,6 +61,9 @@ export class RemotionVideoRenderer implements VideoRenderer {
         ...(this.browserExecutable === undefined
           ? {}
           : { browserExecutable: this.browserExecutable }),
+        ...(this.timeoutInMilliseconds === undefined
+          ? {}
+          : { timeoutInMilliseconds: this.timeoutInMilliseconds }),
         codec: "h264",
         composition,
         inputProps: input,
