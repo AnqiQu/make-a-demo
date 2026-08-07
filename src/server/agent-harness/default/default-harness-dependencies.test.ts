@@ -789,6 +789,233 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(result).toEqual(exercised);
     expect(attempts).toBe(2);
     expect(prompts[1]).toContain("browser-exercised interaction");
+    expect(prompts[1]).toContain(
+      "browser-exercised candidates: filter-dashboard",
+    );
+  });
+
+  it("skips the unique-evidence rule when the catalog offers a feature nothing unique", async () => {
+    // The rule must never demand the impossible: when every action tagged
+    // to a feature is also referenced by its sibling features, enforcement
+    // would wedge the retry loop.
+    const catalog = actionCatalog();
+    catalog.actions = catalog.actions.filter(
+      (action) => !["reporting", "reporting-visible"].includes(action.id),
+    );
+    catalog.actions.push(
+      {
+        confidence: 0.9,
+        evidence: "Playwright",
+        exercised: true,
+        expectedResult: "Shared panel visible",
+        featureIds: ["reporting", "search"],
+        id: "shared-click",
+        kind: "click",
+        preferredLocator: {
+          name: "Open panel",
+          strategy: "role",
+          value: "button",
+        },
+        risks: [],
+        route: "/",
+      },
+      {
+        confidence: 0.9,
+        evidence: "Playwright",
+        expectedResult: "Shared panel visible",
+        featureIds: ["reporting", "search"],
+        id: "shared-visible",
+        kind: "assert",
+        preferredLocator: { name: "Panel", strategy: "role", value: "heading" },
+        risks: [],
+        route: "/",
+      },
+    );
+    const manifest = preparationManifest();
+    manifest.productContext.featureInventory.push(
+      {
+        authStrategy: "none",
+        description: "Reporting.",
+        entryPaths: ["/"],
+        fixtureNotes: [],
+        id: "reporting",
+        label: "Reporting",
+        requestedFeature: "reporting",
+        sourcePaths: ["src/App.tsx"],
+      },
+      {
+        authStrategy: "none",
+        description: "Search.",
+        entryPaths: ["/"],
+        fixtureNotes: [],
+        id: "search",
+        label: "Search",
+        requestedFeature: "search",
+        sourcePaths: ["src/App.tsx"],
+      },
+    );
+    const base = flowSpec().features[0];
+    if (base === undefined) throw new Error("fixture feature missing");
+    const sharedEverything: FlowSpec = {
+      ...flowSpec(),
+      features: [
+        base,
+        {
+          ...base,
+          expectedVisibleAssertions: ["Reporting visible"],
+          featureId: "reporting",
+          label: "Reporting",
+          referencedActionIds: ["shared-click", "shared-visible"],
+          requestedFeature: "reporting",
+        },
+        {
+          ...base,
+          expectedVisibleAssertions: ["Search results visible"],
+          featureId: "search",
+          label: "Search",
+          referencedActionIds: [
+            "shared-click",
+            "shared-visible",
+            "search",
+            "search-visible",
+          ],
+          requestedFeature: "search",
+        },
+      ],
+    };
+
+    const { attempts, result } = await runFlowPlanningScenario({
+      actionCatalog: catalog,
+      candidates: [sharedEverything],
+      demoBrief: { keyProductFeatures: ["dashboard", "reporting", "search"] },
+      preparationManifest: manifest,
+    });
+
+    expect(result).toEqual(sharedEverything);
+    expect(attempts).toBe(1);
+  });
+
+  it("collects every current FlowSpec violation into one planning retry", async () => {
+    // cyberchef (2026-08-07 matrix): three planning attempts each surfaced
+    // one new violation and the budget ran out. The whole constraint
+    // surface must arrive in a single rejection.
+    const catalog = actionCatalog();
+    catalog.actions.push(
+      {
+        confidence: 0.98,
+        evidence: "Playwright exercised the dashboard filter",
+        exercised: true,
+        expectedResult: "Filtered dashboard results became visible",
+        featureIds: ["dashboard"],
+        id: "filter-dashboard",
+        kind: "click",
+        preferredLocator: { name: "Filter", strategy: "role", value: "button" },
+        risks: [],
+        route: "/",
+      },
+      {
+        confidence: 0.9,
+        evidence: "Playwright",
+        exercised: true,
+        expectedResult: "Shared panel visible",
+        featureIds: ["reporting", "search"],
+        id: "shared-click",
+        kind: "click",
+        preferredLocator: {
+          name: "Open panel",
+          strategy: "role",
+          value: "button",
+        },
+        risks: [],
+        route: "/",
+      },
+      {
+        confidence: 0.9,
+        evidence: "Playwright",
+        expectedResult: "Shared panel visible",
+        featureIds: ["reporting", "search"],
+        id: "shared-visible",
+        kind: "assert",
+        preferredLocator: { name: "Panel", strategy: "role", value: "heading" },
+        risks: [],
+        route: "/",
+      },
+    );
+    const manifest = preparationManifest();
+    manifest.productContext.featureInventory.push(
+      {
+        authStrategy: "none",
+        description: "Reporting.",
+        entryPaths: ["/"],
+        fixtureNotes: [],
+        id: "reporting",
+        label: "Reporting",
+        requestedFeature: "reporting",
+        sourcePaths: ["src/App.tsx"],
+      },
+      {
+        authStrategy: "none",
+        description: "Search.",
+        entryPaths: ["/"],
+        fixtureNotes: [],
+        id: "search",
+        label: "Search",
+        requestedFeature: "search",
+        sourcePaths: ["src/App.tsx"],
+      },
+    );
+    const base = flowSpec().features[0];
+    if (base === undefined) throw new Error("fixture feature missing");
+    const threeFeatures = (
+      dashboardIds: string[],
+      reportingIds: string[],
+      searchIds: string[],
+    ): FlowSpec => ({
+      ...flowSpec(),
+      features: [
+        { ...base, referencedActionIds: dashboardIds },
+        {
+          ...base,
+          expectedVisibleAssertions: ["Reporting visible"],
+          featureId: "reporting",
+          label: "Reporting",
+          referencedActionIds: reportingIds,
+          requestedFeature: "reporting",
+        },
+        {
+          ...base,
+          expectedVisibleAssertions: ["Search results visible"],
+          featureId: "search",
+          label: "Search",
+          referencedActionIds: searchIds,
+          requestedFeature: "search",
+        },
+      ],
+    });
+    // dashboard ignores its exercised interaction; reporting's whole
+    // selection is shared with search, so it carries no unique evidence.
+    const invalid = threeFeatures(
+      ["open-dashboard", "dashboard"],
+      ["shared-click", "shared-visible"],
+      ["shared-click", "shared-visible", "search", "search-visible"],
+    );
+    const valid = threeFeatures(
+      ["open-dashboard", "dashboard", "filter-dashboard"],
+      ["reporting", "reporting-visible"],
+      ["search", "search-visible"],
+    );
+
+    const { attempts, prompts, result } = await runFlowPlanningScenario({
+      actionCatalog: catalog,
+      candidates: [invalid, valid],
+      demoBrief: { keyProductFeatures: ["dashboard", "reporting", "search"] },
+      preparationManifest: manifest,
+    });
+
+    expect(result).toEqual(valid);
+    expect(attempts).toBe(2);
+    expect(prompts[1]).toContain("browser-exercised interaction");
+    expect(prompts[1]).toContain("unique ActionCatalog evidence");
   });
 
   it("never accepts an auth wall as a navigation-only product feature", async () => {

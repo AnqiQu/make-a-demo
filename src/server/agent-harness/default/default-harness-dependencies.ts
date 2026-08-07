@@ -2694,6 +2694,12 @@ function assertFlowSpecGrounded(input: {
       (action) => action.kind === "assert",
     )}; tagged interactions: ${ids((action) => action.kind !== "assert")}.`;
   };
+  // Planner-repairable quality violations are collected and reported
+  // together: surfacing them one throw at a time made the planner discover
+  // the constraint surface serially, one retry per rule (cyberchef,
+  // 2026-08-07 matrix). Referential-integrity failures still throw
+  // immediately because later checks depend on the references resolving.
+  const violations: string[] = [];
   for (const feature of input.flowSpec.features) {
     const selectedActions: ActionCatalog["actions"] = [];
     const selectedActionKinds = new Set<
@@ -2764,7 +2770,7 @@ function assertFlowSpecGrounded(input: {
         action.featureIds?.includes(feature.featureId),
     );
     if (!selectedActionKinds.has("assert")) {
-      throw new Error(
+      violations.push(
         `FlowSpec feature ${feature.featureId} must select both an interaction and visible assertion from ActionCatalog. ${taggedActionSummary(feature.featureId)}`,
       );
     }
@@ -2781,7 +2787,7 @@ function assertFlowSpecGrounded(input: {
       qualifyingAsserts.length > 0 &&
       !selectedActions.some(isRouteDistinctAssert)
     ) {
-      throw new Error(
+      violations.push(
         `FlowSpec feature ${feature.featureId} asserts only globally-repeated navigation text. Select an assert targeting route-distinct visible content; qualifying ActionCatalog asserts: ${qualifyingAsserts
           .slice(0, 3)
           .map((action) => `${action.id} ("${assertTargetText(action)}")`)
@@ -2790,12 +2796,15 @@ function assertFlowSpecGrounded(input: {
     }
     if (exercisedActions.length > 0) {
       if (!selectedActions.some(({ exercised }) => exercised === true)) {
-        throw new Error(
-          `FlowSpec feature ${feature.featureId} must select a browser-exercised interaction when one is available`,
+        violations.push(
+          `FlowSpec feature ${feature.featureId} must select a browser-exercised interaction when one is available; browser-exercised candidates: ${exercisedActions
+            .slice(0, 3)
+            .map(({ id }) => id)
+            .join(", ")}`,
         );
       }
     } else if (!selectedActionKinds.has("navigate")) {
-      throw new Error(
+      violations.push(
         `FlowSpec feature ${feature.featureId} must select both an interaction and visible assertion from ActionCatalog. ${taggedActionSummary(feature.featureId)}`,
       );
     }
@@ -2811,14 +2820,36 @@ function assertFlowSpecGrounded(input: {
   }
   for (const feature of input.flowSpec.features) {
     if (
-      !feature.referencedActionIds.some(
+      feature.referencedActionIds.some(
         (actionId) => actionReferenceCounts.get(actionId) === 1,
       )
     ) {
-      throw new Error(
-        `FlowSpec feature ${feature.featureId} must include unique ActionCatalog evidence that distinguishes it from the other selected features`,
+      continue;
+    }
+    // Enforced only when the catalog offers this feature a tagged action no
+    // other selected feature referenced — the rule must never demand the
+    // impossible, and the retry prompt names the ids that satisfy it.
+    const otherFeatureReferences = new Set(
+      input.flowSpec.features
+        .filter((other) => other.featureId !== feature.featureId)
+        .flatMap((other) => other.referencedActionIds),
+    );
+    const uniqueCandidates = input.actionCatalog.actions.filter(
+      (action) =>
+        action.featureIds?.includes(feature.featureId) &&
+        !otherFeatureReferences.has(action.id),
+    );
+    if (uniqueCandidates.length > 0) {
+      violations.push(
+        `FlowSpec feature ${feature.featureId} must include unique ActionCatalog evidence that distinguishes it from the other selected features; qualifying unique actions: ${uniqueCandidates
+          .slice(0, 3)
+          .map(({ id }) => id)
+          .join(", ")}`,
       );
     }
+  }
+  if (violations.length > 0) {
+    throw new Error(violations.join("\n"));
   }
 
   const requestedFeatures = input.demoBrief.keyProductFeatures ?? [];
