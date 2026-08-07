@@ -22,7 +22,7 @@ const allowedInstallFlags = new Set([
   "--include=dev",
   "--legacy-peer-deps",
   "--lockfile-only",
-  "--mode=skip-builds",
+  "--mode=skip-build",
   "--mode=update-lockfile",
   "--no-audit",
   "--no-bin-links",
@@ -261,7 +261,7 @@ function withLifecycleScriptSuppression(command: string): string {
   const flag =
     parsed.packageManager === "yarn" &&
     readYarnInstallVariant(command) === "berry"
-      ? "--mode=skip-builds"
+      ? "--mode=skip-build"
       : "--ignore-scripts";
   return `${parsed.command} ${flag}`;
 }

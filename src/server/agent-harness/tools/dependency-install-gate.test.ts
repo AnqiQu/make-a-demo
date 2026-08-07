@@ -47,7 +47,7 @@ describe("dependency install gate", () => {
       ],
       [
         "yarn install --immutable",
-        "yarn install --immutable --mode=skip-builds",
+        "yarn install --immutable --mode=skip-build",
       ],
       [
         "yarn install --frozen-lockfile",
@@ -70,10 +70,32 @@ describe("dependency install gate", () => {
     }
   });
 
+  it("emits a suppressed berry install the gate's own allowlist accepts", async () => {
+    // The 2026-08-07 matrix killed every yarn-berry repo on
+    // `--mode=skip-builds`: the suppression branch and the flag allowlist
+    // agreed with each other on a value yarn rejects, so no gate-internal
+    // check could catch it. Pin yarn's actual contract value here.
+    const ran: string[] = [];
+    await runDependencyInstallThroughGate({
+      command: "yarn install --immutable",
+      closeNetwork: async () => {},
+      openNetwork: async () => {},
+      runCommand: async (executed) => {
+        ran.push(executed);
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+
+    expect(ran).toEqual(["yarn install --immutable --mode=skip-build"]);
+    expect(evaluateDependencyInstallCommand(ran[0] ?? "")).toMatchObject({
+      status: "allowed",
+    });
+  });
+
   it("does not duplicate a suppression flag the install command already carries", async () => {
     for (const command of [
       "bun install --frozen-lockfile --ignore-scripts",
-      "yarn install --immutable --mode=skip-builds",
+      "yarn install --immutable --mode=skip-build",
       "yarn install --mode=update-lockfile",
     ]) {
       const ran: string[] = [];
