@@ -110,6 +110,7 @@ import {
   findScriptWritingContentChanges,
 } from "../script-generation/read-only-boundary";
 import {
+  createOfflineLifecycleCommand,
   hasNetworkInstallFailureSignature,
   runDependencyInstallThroughGate,
 } from "../tools/dependency-install-gate";
@@ -2116,6 +2117,35 @@ async function validateResolvedSubmittedCodeRuntime(
         manifest,
         stage,
       });
+    }
+    // The gate installed with lifecycle scripts suppressed; now that the
+    // network is verifiably resealed, run the skipped lifecycle work offline
+    // so native builds and postinstall codegen exist before preflight.
+    const lifecycleCommand = createOfflineLifecycleCommand({
+      installCommand,
+      packageScripts: input.repoProfile.packageScripts,
+    });
+    if (lifecycleCommand !== undefined) {
+      const lifecycle = await executeSubmitted(
+        input.workspace,
+        commandInAppDirectory(
+          runtimeTarget?.install.cwd ?? manifest.appDir,
+          lifecycleCommand,
+        ),
+        { timeoutMs: dependencyInstallTimeoutMs },
+      );
+      if (lifecycle.exitCode !== 0) {
+        return failedPreparationValidation({
+          attemptedCommand: lifecycleCommand,
+          classification: "install failure",
+          exitCode: lifecycle.exitCode,
+          logsSummary: `Network-closed lifecycle scripts failed after the dependency install: ${lifecycle.stderr || lifecycle.stdout}`,
+          manifest,
+          stage,
+          stderr: lifecycle.stderr,
+          stdout: lifecycle.stdout,
+        });
+      }
     }
   }
 

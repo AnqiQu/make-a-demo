@@ -203,6 +203,51 @@ export function readYarnInstallVariant(command: string): "berry" | "classic" {
     : "berry";
 }
 
+/**
+ * Builds the network-closed counterpart of `withLifecycleScriptSuppression`:
+ * the command that runs the lifecycle work the gated install skipped, after
+ * the window is resealed. It rebuilds dependencies through the manager's own
+ * rebuild (which honors the repo's declared build allowlists) and runs the
+ * root `postinstall` when the repo declares one. Returns undefined when the
+ * manager offers neither — bun installs only run allowlisted trusted scripts,
+ * and classic yarn has no offline rebuild — so callers skip the pass instead
+ * of failing a working install. Callers must only run the result while the
+ * submitted-code network is closed.
+ */
+export function createOfflineLifecycleCommand(input: {
+  installCommand: string;
+  packageScripts: Record<string, string>;
+}): string | undefined {
+  const manager = parseInstallCommand(input.installCommand).packageManager;
+  if (manager === undefined) {
+    return undefined;
+  }
+  const rebuild =
+    manager === "npm"
+      ? "npm rebuild"
+      : manager === "pnpm"
+        ? "pnpm rebuild"
+        : manager === "yarn" &&
+            readYarnInstallVariant(input.installCommand) === "berry"
+          ? "yarn rebuild"
+          : undefined;
+  const declaresPostinstall =
+    (input.packageScripts.postinstall ?? "").trim().length > 0;
+  // --if-present keeps the run a no-op when the install directory is a
+  // workspace member whose own package.json lacks the root's postinstall.
+  const postinstall = !declaresPostinstall
+    ? undefined
+    : manager === "npm" || manager === "pnpm"
+      ? `${manager} run --if-present postinstall`
+      : manager === "yarn" || manager === "bun"
+        ? `${manager} run postinstall`
+        : undefined;
+  const parts = [rebuild, postinstall].filter(
+    (part): part is string => part !== undefined,
+  );
+  return parts.length === 0 ? undefined : parts.join(" && ");
+}
+
 function withLifecycleScriptSuppression(command: string): string {
   const parsed = parseInstallCommand(command);
   if (

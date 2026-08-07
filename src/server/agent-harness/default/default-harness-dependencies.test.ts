@@ -2577,6 +2577,129 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
   });
 
+  it("runs the manager's rebuild after the install window is resealed", async () => {
+    const commands: string[] = [];
+    const networkEnabledAtCommand: boolean[] = [];
+    let networkEnabled = false;
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        networkEnabledAtCommand.push(networkEnabled);
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async setSubmittedCodeNetworkAccess(enabled) {
+        networkEnabled = enabled;
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.validatePreparation({
+        preparationManifest: {
+          ...preparationManifest(),
+          installCommandUsed: "pnpm install --frozen-lockfile",
+        },
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).resolves.toMatchObject({ status: "passed" });
+
+    const installIndex = commands.findIndex((command) =>
+      command.includes("pnpm install --frozen-lockfile --ignore-scripts"),
+    );
+    const rebuildIndex = commands.findIndex((command) =>
+      command.includes("pnpm rebuild"),
+    );
+    expect(installIndex).toBeGreaterThanOrEqual(0);
+    expect(rebuildIndex).toBeGreaterThan(installIndex);
+    expect(commands[rebuildIndex]).not.toContain("--ignore-scripts");
+    expect(networkEnabledAtCommand[rebuildIndex]).toBe(false);
+  });
+
+  it("runs the declared root postinstall offline after an npm install", async () => {
+    const commands: string[] = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.validatePreparation({
+        preparationManifest: {
+          ...preparationManifest(),
+          installCommandUsed: "npm ci --no-audit",
+        },
+        repoProfile: {
+          ...repoProfile(),
+          packageScripts: { dev: "next dev", postinstall: "prisma generate" },
+        },
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).resolves.toMatchObject({ status: "passed" });
+
+    expect(commands).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(
+          "npm rebuild && npm run --if-present postinstall",
+        ),
+      ]),
+    );
+  });
+
+  it("classifies a failed offline lifecycle pass as an install failure with its output", async () => {
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("npm rebuild")) {
+          return {
+            exitCode: 1,
+            stderr: "gyp ERR! build error better_sqlite3",
+            stdout: "",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.validatePreparation({
+        preparationManifest: {
+          ...preparationManifest(),
+          installCommandUsed: "npm ci --no-audit",
+        },
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).resolves.toMatchObject({
+      failureClassification: "install failure",
+      logsSummary: expect.stringContaining(
+        "gyp ERR! build error better_sqlite3",
+      ),
+      status: "failed",
+    });
+  });
+
   it("fails closed when the dependency network window cannot be resealed", async () => {
     let windowOpened = false;
     const workspace = createFakeAgentHarnessWorkspace({
