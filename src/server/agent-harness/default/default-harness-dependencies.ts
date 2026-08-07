@@ -2275,19 +2275,20 @@ async function validateResolvedSubmittedCodeRuntime(
     .filter((value): value is string => value !== undefined)
     .join("\n");
 
+  const failureClassification = probeSucceeded
+    ? ("none" as const)
+    : probeExecutionFailed
+      ? ("harness/internal failure" as const)
+      : classifyPreparationRuntimeFailure(
+          preflightResult.runtimeProbe,
+          appOutput,
+          appStatus?.running === false,
+        );
   return validationReport({
     attemptedCommand: `curl ${preflightUrl}`,
     exitCode: preflightResult.exitCode,
     blockedNetworkAttempts: blockedRuntimeNetworkAttempts,
-    failureClassification: probeSucceeded
-      ? "none"
-      : probeExecutionFailed
-        ? "harness/internal failure"
-        : classifyPreparationRuntimeFailure(
-            preflightResult.runtimeProbe,
-            appOutput,
-            appStatus?.running === false,
-          ),
+    failureClassification,
     logsSummary: probeSucceeded
       ? blockedRuntimeNetworkAttempts.length === 0
         ? "Prepared submitted-code runtime responded successfully."
@@ -2303,6 +2304,14 @@ async function validateResolvedSubmittedCodeRuntime(
     stdoutExcerpts: preflightResult.stdout
       ? [redactSecretText(preflightResult.stdout.slice(-500))]
       : [],
+    ...(failureClassification === "listen failure" &&
+    appStatus?.running === true
+      ? {
+          suggestedRepairHints: [
+            "The process is alive but nothing listens on the probed port and the captured app output stopped changing — the bind failure or crash is already in that output (a supervisor such as nodemon may be keeping the parent alive after its child crashed). Fix the cause shown there instead of adjusting ports or probes.",
+          ],
+        }
+      : {}),
     urlChecked: preflightUrl,
   });
 }
@@ -2443,7 +2452,11 @@ function absoluteAppDirectory(appDir: string): string {
  * Cold monorepo dev servers routinely compile for 60–120s before binding, so
  * connection-refused probes back off exponentially until this budget elapses.
  * Every other failure mode (HTTP error, crashed process, probe execution
- * failure) still terminates the probe immediately.
+ * failure) still terminates the probe immediately. A running process whose
+ * port stays refused deliberately keeps the whole budget: from the outside a
+ * supervisor idling after its child crashed is indistinguishable from a
+ * compiler working silently, so the listen-failure repair hint — not an
+ * early exit — is what stops repeated identical rounds.
  */
 const runtimeReadinessBudgetMs = 180_000;
 const runtimeReadinessInitialDelayMs = 2_000;
@@ -2482,7 +2495,9 @@ async function probeSubmittedCodeRuntime(
       `curl -fsS --location --max-redirs 5 --connect-timeout 2 --max-time 90 --write-out ${shellQuote(`\n[makeademo:probe] {"httpStatus":%{http_code},"url":"%{url_effective}"}\n`)} ${shellQuote(url)} -o /tmp/makeademo/preflight.html`,
     );
     responseMetadata = readRuntimeProbeResponseMetadata(result.stdout);
-    const process = await readRuntimeProcessObservation(workspace);
+    const status = await readSubmittedCodeAppStatusSafely(workspace);
+    const process =
+      status === undefined ? undefined : runtimeProcessObservation(status);
     attempts.push({
       attempt,
       ...(result.stderr || result.stdout
@@ -2548,12 +2563,11 @@ function readRuntimeProbeResponseMetadata(
   }
 }
 
-async function readRuntimeProcessObservation(
+async function readSubmittedCodeAppStatusSafely(
   workspace: AgentHarnessWorkspace,
-): Promise<RuntimeProbeAttempt["process"] | undefined> {
+): Promise<AgentHarnessSubmittedCodeAppStatus | undefined> {
   try {
-    const status = await workspace.readSubmittedCodeAppStatus();
-    return runtimeProcessObservation(status);
+    return await workspace.readSubmittedCodeAppStatus();
   } catch {
     return undefined;
   }

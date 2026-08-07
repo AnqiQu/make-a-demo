@@ -2672,6 +2672,63 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
   });
 
+  it("steers a listen failure at the captured app output", async () => {
+    // Ghost's nodemon keeps the parent alive after the child crashes, so the
+    // process looks running while the port stays refused; the crash is
+    // already in the captured output and the repair hint must point there.
+    vi.useFakeTimers();
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (!command.includes("curl -")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        return {
+          exitCode: 7,
+          stderr:
+            "curl: (7) Failed to connect to 127.0.0.1 port 3000 after 0 ms: Couldn't connect to server",
+          stdout: "",
+        };
+      },
+      async readSubmittedCodeAppStatus() {
+        return {
+          running: true,
+          startedAt: "2026-08-06T00:00:00.000Z",
+          stderr:
+            "[nodemon] app crashed - waiting for file changes before starting...",
+          stdout: "",
+        };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    try {
+      const validation = harness.dependencies.validatePreparation({
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      });
+      await vi.advanceTimersByTimeAsync(200_000);
+      const report = await validation;
+
+      expect(report).toMatchObject({
+        failureClassification: "listen failure",
+        logsSummary: expect.stringContaining("app crashed"),
+        status: "failed",
+      });
+      expect(report.suggestedRepairHints.join("\n")).toContain(
+        "captured app output",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("runs the manager's rebuild after the install window is resealed", async () => {
     const commands: string[] = [];
     const networkEnabledAtCommand: boolean[] = [];
