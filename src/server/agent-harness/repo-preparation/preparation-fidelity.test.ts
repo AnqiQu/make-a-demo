@@ -436,6 +436,70 @@ describe("validatePreparationFidelity", () => {
     );
   });
 
+  it("accepts a demo adaptation whose gate lives in a changed caller file", () => {
+    // twenty (2026-08-06/07 matrices): the repair shuttled one gate between
+    // two files for six rounds — gating index.tsx left graphqlMocks.ts
+    // reading as unconditional, and vice versa. A changed file counts as
+    // gated when another changed file conditionally gates its reference.
+    const mocksPath = "src/graphql-mocks.ts";
+    const entryPath = "src/index.tsx";
+    const report = validateDiff({
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [mocksPath, entryPath],
+      patch: [
+        `diff --git a/${mocksPath} b/${mocksPath}`,
+        "+export function registerGraphqlMocks(server) {",
+        "+  server.use(demoInvoiceHandlers);",
+        "+}",
+        `diff --git a/${entryPath} b/${entryPath}`,
+        "+const isMakeADemoDemo = process.env.MAKEADEMO_DEMO === 'true';",
+        "+if (isMakeADemoDemo) {",
+        "+  const { registerGraphqlMocks } = await import('./graphql-mocks');",
+        "+  registerGraphqlMocks(server);",
+        "+}",
+      ].join("\n"),
+      sourceFiles: {
+        [entryPath]: "bootstrap();",
+        [mocksPath]: "export function registerGraphqlMocks(server) {}",
+      },
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("still rejects an ungated adaptation when no changed caller gates its reference", () => {
+    // The caller-side rescue demands a gated reference to this module — a
+    // gate that exists elsewhere in the diff without referencing the file
+    // must not count.
+    const mocksPath = "src/graphql-mocks.ts";
+    const entryPath = "src/index.tsx";
+    const report = validateDiff({
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [mocksPath, entryPath],
+      patch: [
+        `diff --git a/${mocksPath} b/${mocksPath}`,
+        "+export function registerGraphqlMocks(server) {",
+        "+  server.use(demoInvoiceHandlers);",
+        "+}",
+        `diff --git a/${entryPath} b/${entryPath}`,
+        "+const isMakeADemoDemo = process.env.MAKEADEMO_DEMO === 'true';",
+        "+if (isMakeADemoDemo) {",
+        "+  const { seedFixtures } = await import('./fixture-seed');",
+        "+  seedFixtures(server);",
+        "+}",
+      ].join("\n"),
+      sourceFiles: {
+        [entryPath]: "bootstrap();",
+        [mocksPath]: "export function registerGraphqlMocks(server) {}",
+      },
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(
+      `${mocksPath} does not conditionally use`,
+    );
+  });
+
   it("rejects a gate identifier the patched file neither imports nor declares", () => {
     const sessionPath = "src/auth/session.ts";
     const report = validateDiff({

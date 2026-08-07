@@ -94,6 +94,36 @@ export function validatePreparationFidelity(input: {
     input.workspaceDiff,
     filePatches,
   );
+  // A conditional gate in a changed caller counts for the module it
+  // references: demanding the conditional inside every changed file made
+  // repairs shuttle one gate between two files until the budget died
+  // (twenty, 2026-08-06/07 matrices). The other fidelity rungs — no new
+  // presentation, preserved removals — still apply to the referenced file.
+  const hasChangedCallerGate = (path: string): boolean => {
+    const stem = (path.split("/").at(-1) ?? path).replace(/\.[^.]+$/, "");
+    if (stem.length === 0) {
+      return false;
+    }
+    const reference = new RegExp(
+      `['"\`][^'"\`\\n]*${escapeRegExp(stem)}(?:\\.[a-z]+)?['"\`]`,
+    );
+    return input.workspaceDiff.changedPaths
+      .map(toRepoRelativePath)
+      .some((otherPath) => {
+        const otherPatch = filePatches.get(otherPath);
+        if (otherPath === path || otherPatch === undefined) {
+          return false;
+        }
+        return (
+          reference.test(stripComments(otherPatch.addedText)) &&
+          hasConditionalDemoGate(
+            otherPatch,
+            demoGate,
+            input.repoSourceFiles.get(otherPath) ?? "",
+          )
+        );
+      });
+  };
   for (const path of repairPaths) {
     violations.push({
       hint: repairHints.dependencyScope,
@@ -130,6 +160,7 @@ export function validatePreparationFidelity(input: {
     if (authenticationAdaptation || integrationAdaptation) {
       const violation = readGatedAdaptationViolation({
         addsPresentation,
+        changedCallerGate: hasChangedCallerGate(path),
         demoGate,
         kind: authenticationAdaptation ? "authentication" : "integration",
         originalSource,
@@ -153,6 +184,7 @@ export function validatePreparationFidelity(input: {
       if (!onlyLocalizesExternalAssets(patch)) {
         const violation = readGatedAdaptationViolation({
           addsPresentation,
+          changedCallerGate: hasChangedCallerGate(path),
           demoGate,
           kind: "presentation",
           originalSource,
@@ -250,6 +282,7 @@ export function validatePreparationFidelity(input: {
  */
 function readGatedAdaptationViolation(input: {
   addsPresentation: boolean;
+  changedCallerGate: boolean;
   demoGate: DemoGateEvidence;
   kind: "authentication" | "integration" | "presentation";
   originalSource: string;
@@ -263,7 +296,7 @@ function readGatedAdaptationViolation(input: {
     };
   }
   const gateExempt = isGateExemptDataPath(input.path);
-  if (!gateExempt) {
+  if (!gateExempt && !input.changedCallerGate) {
     const gateViolation = readDemoAdaptationViolation(
       input.demoGate,
       input.path,
