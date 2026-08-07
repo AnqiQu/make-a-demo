@@ -2883,23 +2883,28 @@ describe("createDefaultAgentHarnessDependencies", () => {
       repoSourceArchive: await repoSourceArchive(),
     });
 
-    await expect(
-      harness.dependencies.validatePreparation({
-        preparationManifest: {
-          ...preparationManifest(),
-          installCommandUsed: "npm ci --no-audit",
-        },
-        repoProfile: repoProfile(),
-        runPlan: runPlan(),
-        workspace,
-      }),
-    ).resolves.toMatchObject({
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
       failureClassification: "install failure",
       logsSummary: expect.stringContaining(
         "gyp ERR! build error better_sqlite3",
       ),
       status: "failed",
     });
+    // A local build error is repairable in-repo; the sealed-network hint
+    // must fire only for output that shows a download attempt.
+    expect(report.suggestedRepairHints.join("\n")).not.toContain(
+      "network stays sealed",
+    );
   });
 
   it("reports the gate-executed install command when the install fails", async () => {
@@ -2942,6 +2947,49 @@ describe("createDefaultAgentHarnessDependencies", () => {
       failureClassification: "install failure",
       status: "failed",
     });
+  });
+
+  it("steers a lifecycle download failure at removing the download", async () => {
+    // ghostfolio (2026-08-07 matrix): `prisma generate` fails on its engine
+    // download because the network is sealed by design — retrying can never
+    // fix it, but nothing told the repair agent that.
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("npm rebuild")) {
+          return {
+            exitCode: 1,
+            stderr:
+              "npm error command sh -c prisma generate\nnpm error Error: request to https://binaries.prisma.sh/all_commits/e922089b/debian-openssl-3.0.x/schema-engine.gz.sha256 failed, reason:",
+            stdout: "",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "install failure",
+      status: "failed",
+    });
+    expect(report.suggestedRepairHints.join("\n")).toContain(
+      "network stays sealed",
+    );
   });
 
   it("fails closed when the dependency network window cannot be resealed", async () => {

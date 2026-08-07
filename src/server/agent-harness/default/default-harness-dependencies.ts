@@ -2141,6 +2141,9 @@ async function validateResolvedSubmittedCodeRuntime(
         { timeoutMs: dependencyInstallTimeoutMs },
       );
       if (lifecycle.exitCode !== 0) {
+        const downloadFailure = isLifecycleDownloadFailure(
+          `${lifecycle.stderr}\n${lifecycle.stdout}`,
+        );
         return failedPreparationValidation({
           attemptedCommand: lifecycleCommand,
           classification: "install failure",
@@ -2150,6 +2153,13 @@ async function validateResolvedSubmittedCodeRuntime(
           stage,
           stderr: lifecycle.stderr,
           stdout: lifecycle.stdout,
+          ...(downloadFailure
+            ? {
+                suggestedRepairHints: [
+                  "This lifecycle step tries to download something, and the submitted-code network stays sealed after the install window closes — the download can never succeed, on any retry. Make the demo not need it: neutralize the downloading step for the demo, avoid the downloaded artifact at runtime, or vendor the artifact into the repo.",
+                ],
+              }
+            : {}),
         });
       }
     }
@@ -3440,6 +3450,18 @@ function createScriptCandidate(input: {
       trustedStaticImageAssetIds: input.trustedStaticImageAssetIds,
     }),
   };
+}
+
+/**
+ * True when a failed lifecycle script's output shows it tried to reach the
+ * network. The submitted-code sandbox stays sealed after the install window
+ * closes, so these failures are permanent by design — repairs must remove
+ * the need for the download instead of retrying it.
+ */
+function isLifecycleDownloadFailure(output: string): boolean {
+  return /request to https?:\/\/|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ETIMEDOUT|getaddrinfo|fetch failed|Couldn't connect to server|network is unreachable/i.test(
+    output,
+  );
 }
 
 function failedPreparationValidation(input: {
