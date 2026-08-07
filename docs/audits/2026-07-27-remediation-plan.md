@@ -2437,3 +2437,199 @@ error overlays and web-component content reach route text; pinned by a
 real-browser shadow-root test. Cosmetic `75ad0e7` — the matrix report
 appends the first informative continuation line when a failure's first
 line ends with a bare colon. Full gauntlet per commit; 835 tests green.
+
+## Addendum (2026-08-07, fifth 11-repo matrix — gate typo N53; N54–N57; two infra casualties)
+
+Run: `matrix-report-2026-08-07T08-01-15-338Z.json`. **2 passed** — homer
+(467s) and excalidraw's **first end-to-end video** (1166s). Nine failures,
+six root causes, two of them Daytona control-plane instability (conduit:
+502 on the first API call after runtime-target-selection, after a 15-minute
+sandbox provision; outline: "An operation is already in progress for this
+resource" at preflight's first sandbox operation — no code defect in
+either). The N48 batch demonstrably moved the frontier: cyberchef cleared
+install → build → preflight → exploration for the first time and died in
+flow planning; calcom cleared the N49 phantom-deletion abort and reached
+the suppressed install; ghost's repair rounds were correctly steered at
+the captured crash output by the N50 hint; directus's preflight now
+surfaces the exact Vite unresolved-import error (N51-class evidence);
+midday's prepared app hydrates (the HMR websocket handshakes in
+consoleErrors prove live client JS — the 08-06 hydration death is fixed).
+
+**N53 (Critical, bugfix) — the yarn-berry suppression flag is misspelled,
+killing every berry repo at install.** `withLifecycleScriptSuppression`
+appends `--mode=skip-builds`; yarn's valid values are `update-lockfile`
+and `skip-build` (yarn's own usage error names them). Both the suppression
+branch and the gate's flag allowlist carry the same plural, so the gate's
+tests agree with the wrong value and could not catch it. calcom burned all
+three preflight rounds on it; twenty two. Latent until this run because no
+berry repo had ever reached the suppressed install before. Rider:
+install-failure evidence records the pre-suppression `attemptedCommand`,
+so the repair agents saw `yarn install --immutable` blamed for a `--mode`
+flag they never passed — record the gate's executed command instead.
+
+**N54 (Critical, bugfix) — the N48 offline lifecycle pass is a silent
+no-op on pnpm and drops the engine bypass.** (a) After
+`pnpm install --ignore-scripts`, pnpm's pending-builds/approval model
+records nothing to rebuild, so the bare `pnpm rebuild` exits 0 having
+built nothing — ghost's own `allowBuilds: better-sqlite3: true` was
+honored in name only, the bindings never appeared, and nodemon kept the
+parent alive through three correctly-hinted but unfixable repair rounds
+(the agent's best in-repo guess was an `.npmrc` with `force=true`).
+Remedy direction: after the verified reseal, re-run the install offline
+without the suppression flag (manager-appropriate `--offline` form) so
+the manager's own approval policy governs which builds run; verify the
+semantics per manager. (b) The lifecycle command does not inherit the N42
+engine-bypass flag: directus's install passed only via the
+`--config.engine-strict=false` retry, then `pnpm rebuild` died with
+ERR_PNPM_UNSUPPORTED_ENGINE (sandbox Node 24 vs `engines.node: 22`),
+wasting one of three rounds. Verify while implementing: whether
+better-sqlite3 can build fully offline at all (prebuild-install download,
+node-gyp header cache) — if not, pre-cache node-gyp headers in the
+submitted-code snapshot.
+
+**N55 (High, feature) — network-needing lifecycle scripts need a
+by-design steering hint.** ghostfolio proved the N48 pass works: the
+offline `npm rebuild && npm run --if-present postinstall` ran and
+surfaced `prisma generate` failing on its engine download
+(binaries.prisma.sh) — a failure that is permanent by design and
+unrepairable by retry, but the evidence never says so. Key a hint on
+lifecycle-failure output containing a fetch/URL error: the sealed network
+will never open; remove the need for the download (neutralize the script
+for the demo, avoid the engine at runtime, or vendor the artifact).
+ghostfolio's repair then advanced to `Cannot find module
+dist/apps/api/main` — the declared start needs a build the run-plan never
+declared — before exhausting budget; the same missing-workspace-build
+class killed directus (`@directus/extensions/node` unresolved because the
+workspace package's `dist/node` is never built).
+
+**N56 (High, feature) — flow-planning rejections surface one violation
+per round and name no candidates.** cyberchef reached flow planning for
+the first time and spent its 3-attempt budget learning the constraint
+surface serially: one no-artifact flub, then "must include unique
+ActionCatalog evidence" and "must select a browser-exercised interaction
+when one is available" — neither rule names qualifying action ids, though
+the adjacent route-distinct rule does exactly that (N40). Remedy: collect
+all current violations per attempt into one rejection, and name
+qualifying candidate ids for both rules.
+
+**N57 (High, design) — two gates can squeeze the repair space to empty,
+and the loop never says so.** midday: hydration works, both feature
+tables render headers and search inputs, zero rows. The N45 message
+asserts "the data query resolved empty or mis-shaped — align the fixture
+shape" — but a virtualizer whose scroll container measures zero height
+renders zero rows with correct data present, and the classifier cannot
+discriminate the two. The repair agent evidently believed the virtualizer
+theory: it added an `isMakeADemoDemo`-gated non-virtualized row render to
+the two data-table components, and the per-file fidelity gate vetoed it
+as UI modification — five times, budget exhausted, with no prompt ever
+carrying both constraints together. Remedy package: (a) downgrade the
+N45 diagnosis to an observation naming both candidate causes
+(fixture shape; virtualized-container measurement); (b) livelock
+handling — a vetoed repair's next prompt must present the veto and the
+original failure as one constraint set steering at the intersection
+(fixture/data-path fixes), extending the existing
+`appendRepairRejection` seam; (c) the queued twenty item: fidelity gate
+reasoning over the repair's file set, not each file in isolation;
+(d) consoleErrors dedupe — all ten visible midday entries were one
+repeated HMR-handshake error (the 08-06 watch item is now load-bearing).
+
+## Loop economics and structural review (2026-08-07, N58–N64)
+
+Measured round cost this run: ghost ≈ 1.4m repair agent + 4m13s
+re-validation (~3m of it the readiness probe budget burning against an
+already-captured crash); midday ≈ 1.5m agent + 5m25s re-validation
+including a full re-exploration of every route. Already warm: the
+workspace sync excludes `node_modules` (installs across rounds are
+incremental) and broker passes within one validation skip reset/install.
+The waste is across rounds, and the biggest waste is rounds that should
+never have been spent (calcom: three rounds on N53; conduit/outline:
+infra; cyberchef: constraint discovery).
+
+**N58 (High, feature) — skip install + lifecycle on repair rounds whose
+diff leaves dependency inputs unchanged.** The round loop already
+computes `repairDelta.dependencyInputsChanged` (used only to trigger
+lockfile reconciliation); when it is false and the previous round's
+gated install succeeded in this same sandbox, pass
+`installDependencies: false`. Sound because the warm `node_modules` is
+the product of this sandbox's own gated install and unchanged inputs
+would reproduce it; record the reuse in the report
+("install reused from attempt N"). Saves 1–2 minutes on nearly every
+round; most repairs touch source and fixtures, not manifests.
+
+**N59 (Medium, feature) — scoped re-exploration on repair rounds, full
+pass before accept.** When exploration failed on named features/routes,
+re-explore only those and merge with the prior round's app map; any
+candidate that passes the scoped check must pass one full exploration
+before acceptance, so the false-pass guarantee stays authoritative.
+Saves 2–4 minutes per round on exploration loops (midday re-walked every
+route five times to re-learn that two tables were empty).
+
+**N60 (deferred; reopens N50 narrowly) — repeat-round stall-fingerprint
+probe early-exit.** Round 1 keeps its full probe budget: the
+cold-compile-vs-frozen ambiguity is settled and pinned. Rounds ≥ 2 hold
+evidence round 1 lacked — when the port stays refused, the managed
+output has stopped changing, AND its tail fingerprint equals the prior
+round's stall, exit the probe loop early. Only worth implementing if
+listen-failure loops persist after N54; the pinned N50 specs describe
+round 1 and stay untouched.
+
+**N61 (High, feature) — failure fixability taxonomy: infra faults must
+not consume repair budget or reach agent prompts.** Daytona
+control-plane errors killed conduit outright and, on outline, were
+serialized verbatim into `preparation-fallback.json` as a "blocker" for
+a future coding agent to "fix". Remedy: classify provider/control-plane
+errors as infra at the workspace seam; retry with bounded backoff (the
+creation-path connection retry exists — extend the same treatment to
+lifecycle operations such as `updateNetworkSettings`); when retries
+exhaust, fail the run as infra with no fallback prompt and no repair
+budget charge. Rider: outline's 57-second give-up preparation (zero
+changes, auth intact, knownLimitations admitting the demo URL cannot be
+served) passed manifest validation — add a manifest truthfulness check
+so a self-declared-unusable runtime fails fast with the declaration as
+evidence.
+
+**N62 (High, docs + feature) — specify the repair-evidence contract
+once; audit every gate against it.** The recurring failure class behind
+N29a/N50/N51/N52/N53-rider/N56/N57 is evidence distortion, fixed one
+symptom at a time. Write the contract down as the interface every
+validator owes the repair agent: (1) executed commands verbatim, never
+pre-transformation inputs; (2) bounded evidence channels deduped with
+per-class caps so one noisy class cannot saturate the budget; (3)
+observations separated from diagnoses — causal claims only when the
+validator can actually discriminate the cause; (4) all currently-known
+violations per attempt, not first-fault; (5) no infra errors in agent
+prompts. Then audit the existing gates against it in one pass instead of
+rediscovering violations one matrix run at a time.
+
+**N63 (Medium, prompt) — state the sealed-network world rules in the
+preparation prompt.** The prep agent currently learns the rules by
+failing: lifecycle downloads fail offline (prisma engines, prebuilds,
+node-gyp headers); workspace-package build outputs exist only if a
+declared build command produces them; the submitted-code sandbox is
+sealed while the agent's own sandbox is not, so "works in my sandbox"
+proves nothing about the demo runtime. Say all of it up front —
+prevention is cheaper than repair rounds. Prompt text carries no unit
+tests (policy); acceptance is behavioral via the matrix.
+
+**N64 (design, gated on N58/N59 outcomes) — mid-turn offline probe for
+repair agents.** The repair agent cannot reproduce sealed-sandbox
+failures in its own networked sandbox (`prisma generate` succeeds
+there), so today every hypothesis costs a 4–6 minute round. A bounded
+tool — run the gated install/boot/probe in the submitted-code sandbox
+now and return the report, hard-capped per turn, reseal verified before
+and after, reusing the existing gate code paths and introducing no new
+network states — converts cross-round iteration into intra-round
+iteration. Design only after N58/N59 land and only if boot-failure
+loops persist; the shared-sandbox reset semantics and window state
+machine must be specified before any implementation.
+
+**Process decision — matrix rotation.** Five remediation iterations have
+now been fit against the same eleven repos; the matrix is drifting from
+test set to training set. Before declaring the gate suite general, add
+two or three fresh repos of genuinely new shapes (a canvas/WebGL-heavy
+app, a non-JS backend with a JS frontend, a static-site generator) and
+keep the current eleven as regression.
+
+Recommended order: N53 → N54 → N55 (small, unblock four repos), N58
+(cheapest economics win), N56 → N57 (agent frontier), N61 → N62 → N63,
+then N59; N60 and N64 stay gated on the post-N54 matrix.
