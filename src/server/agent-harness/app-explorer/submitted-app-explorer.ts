@@ -1798,8 +1798,19 @@ try {
   const pushBounded = (list, value) => {
     if (list.length < 50) list.push(value);
   };
+  // One entry per error class: repeated dev-server noise (HMR websocket
+  // retries whose only difference is a ?id= token) can otherwise fill the
+  // whole bounded evidence channel. Query strings and long hex runs are the
+  // volatile parts; everything else distinguishes real error classes.
+  const seenConsoleErrorClasses = new Set();
+  const consoleErrorClass = (text) =>
+    text.replace(/\\?[^\\s'"()]*/g, "").replace(/[0-9a-f]{8,}/gi, "#");
   page.on("console", (message) => {
-    if (message.type() === "error") pushBounded(result.consoleErrors, page.url() + ": " + message.text());
+    if (message.type() !== "error") return;
+    const errorClass = consoleErrorClass(message.text());
+    if (seenConsoleErrorClasses.has(errorClass)) return;
+    seenConsoleErrorClasses.add(errorClass);
+    pushBounded(result.consoleErrors, page.url() + ": " + message.text());
   });
   page.on("pageerror", (error) => pushBounded(result.pageErrors, page.url() + ": " + error.message));
   // Chrome's "Failed to load resource" console message omits the resource

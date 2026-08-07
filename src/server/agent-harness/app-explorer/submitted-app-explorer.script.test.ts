@@ -632,6 +632,73 @@ describe("generated exploration script", () => {
     }
   }, 30_000);
 
+  it("keeps one console entry per repeated error class", async () => {
+    // midday (2026-08-07 matrix): all ten visible consoleErrors entries were
+    // the same HMR websocket handshake failure differing only in its ?id=
+    // query, drowning the bounded evidence channel. One entry per class is
+    // enough; genuinely different errors must still get through.
+    const noisyPage =
+      "<!doctype html><html><head><title>Noise</title></head><body>" +
+      "<h1>Publishing dashboard</h1><p>Draft queue and review status.</p>" +
+      "<script>" +
+      "for (let i = 0; i < 6; i += 1) {" +
+      '  console.error("WebSocket connection to \'ws://127.0.0.1:3001/_next/webpack-hmr?id=token" + i + "\' failed: handshake error");' +
+      "}" +
+      'console.error("Hydration mismatch in DataTable");' +
+      "</script></body></html>";
+    const server = createServer((request, response) => {
+      if (request.url === "/") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(noisyPage);
+        return;
+      }
+      response.writeHead(404, { "content-type": "text/plain" });
+      response.end("not found");
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        consoleErrors: string[];
+      };
+
+      const hmrEntries = result.consoleErrors.filter((entry) =>
+        entry.includes("webpack-hmr"),
+      );
+      expect(hmrEntries).toHaveLength(1);
+      expect(
+        result.consoleErrors.some((entry) =>
+          entry.includes("Hydration mismatch in DataTable"),
+        ),
+      ).toBe(true);
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
   it("harvests text that renders only inside an open shadow root", async () => {
     // Vite's error overlay is a custom element with an open shadow root, so
     // its import error is the page's only content while innerText sees
