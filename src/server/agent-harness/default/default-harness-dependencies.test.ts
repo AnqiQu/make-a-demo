@@ -2765,13 +2765,63 @@ describe("createDefaultAgentHarnessDependencies", () => {
     const installIndex = commands.findIndex((command) =>
       command.includes("pnpm install --frozen-lockfile --ignore-scripts"),
     );
+    // The rebuild must be recursive: a bare `pnpm rebuild` at a workspace
+    // root exits 0 having rebuilt nothing, because members' dependencies
+    // are outside the root project's scope (ghost, 2026-08-07 matrix).
     const rebuildIndex = commands.findIndex((command) =>
-      command.includes("pnpm rebuild"),
+      command.includes("pnpm rebuild -r"),
     );
     expect(installIndex).toBeGreaterThanOrEqual(0);
     expect(rebuildIndex).toBeGreaterThan(installIndex);
     expect(commands[rebuildIndex]).not.toContain("--ignore-scripts");
     expect(networkEnabledAtCommand[rebuildIndex]).toBe(false);
+  });
+
+  it("carries the engine-bypass flag from the retried install into the offline rebuild", async () => {
+    // directus (2026-08-07 matrix): the install passed only via the
+    // engine-strict bypass retry, then the bare `pnpm rebuild` died with
+    // ERR_PNPM_UNSUPPORTED_ENGINE and burned a repair round.
+    const commands: string[] = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        if (
+          command.includes("pnpm install") &&
+          !command.includes("--config.engine-strict=false")
+        ) {
+          return {
+            exitCode: 1,
+            stderr: "ERR_PNPM_UNSUPPORTED_ENGINE  Unsupported environment",
+            stdout: "",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.validatePreparation({
+        preparationManifest: {
+          ...preparationManifest(),
+          installCommandUsed: "pnpm install --frozen-lockfile",
+        },
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).resolves.toMatchObject({ status: "passed" });
+
+    expect(commands).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("pnpm rebuild -r --config.engine-strict=false"),
+      ]),
+    );
   });
 
   it("runs the declared root postinstall offline after an npm install", async () => {

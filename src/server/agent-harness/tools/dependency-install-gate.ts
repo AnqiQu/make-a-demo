@@ -222,15 +222,25 @@ export function createOfflineLifecycleCommand(input: {
   installCommand: string;
   packageScripts: Record<string, string>;
 }): string | undefined {
-  const manager = parseInstallCommand(input.installCommand).packageManager;
+  const parsed = parseInstallCommand(input.installCommand);
+  const manager = parsed.packageManager;
   if (manager === undefined) {
     return undefined;
   }
+  // An install that only passed via the engine-strict bypass retry leaves a
+  // repo whose engine check would kill the rebuild the same way.
+  const engineBypass = parsed.tokens.includes("--config.engine-strict=false")
+    ? " --config.engine-strict=false"
+    : "";
   const rebuild =
     manager === "npm"
       ? "npm rebuild"
       : manager === "pnpm"
-        ? "pnpm rebuild"
+        ? // Recursive: a bare `pnpm rebuild` at a workspace root exits 0
+          // having rebuilt nothing, because members' dependencies are
+          // outside the root project's scope. `-r` covers members and
+          // behaves identically in single-project repos.
+          `pnpm rebuild -r${engineBypass}`
         : manager === "yarn" &&
             readYarnInstallVariant(input.installCommand) === "berry"
           ? "yarn rebuild"

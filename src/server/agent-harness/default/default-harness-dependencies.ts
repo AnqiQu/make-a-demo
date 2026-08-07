@@ -2124,9 +2124,11 @@ async function validateResolvedSubmittedCodeRuntime(
     }
     // The gate installed with lifecycle scripts suppressed; now that the
     // network is verifiably resealed, run the skipped lifecycle work offline
-    // so native builds and postinstall codegen exist before preflight.
+    // so native builds and postinstall codegen exist before preflight. The
+    // executed command (not the manifest's) carries any retry flags the
+    // install needed, and the rebuild inherits them.
     const lifecycleCommand = createOfflineLifecycleCommand({
-      installCommand,
+      installCommand: result.executedCommand,
       packageScripts: input.repoProfile.packageScripts,
     });
     if (lifecycleCommand !== undefined) {
