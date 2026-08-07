@@ -2400,3 +2400,40 @@ external-origin marketing banner occluded by a modal at capture time
 (external-target links should not ground a feature's only interaction).
 Cosmetic: the matrix report's `detail` keeps only the first line, which is
 empty-suffixed for build failures whose output starts with a newline.
+
+### Landed (2026-08-06, same day)
+
+**N48** `f75e8ba` — `createOfflineLifecycleCommand` in the install gate
+builds the network-closed counterpart of the suppression flag: the
+manager's own rebuild (`npm rebuild` / `pnpm rebuild` / berry
+`yarn rebuild` — honoring the repo's declared build allowlists) plus the
+root `postinstall` when the repo declares one (`--if-present` for npm/pnpm
+so workspace-member install directories stay a no-op). The pass runs after
+the reseal is verified, in the install cwd, under the install timeout; a
+nonzero exit is a classified install failure carrying the real build
+error. bun (trusted-scripts model) and classic yarn (no offline rebuild)
+skip the dependency half by design. **N49** `e32739e` — the diff exemption
+is now `git reset -q HEAD -- .opencode` on the temporary index; a real-git
+regression test (committed `.opencode/skill` file + untracked session
+state + one genuine change) pins that only the genuine change is reported
+— the prior string-assertion-on-a-fake coverage is exactly how the
+phantom-deletion bug survived. **N50** `0424c66` — landed as steering
+only: the early-exit half was deliberately rejected because the pinned
+preflight specs encode that a running-but-frozen process is
+indistinguishable from a silently compiling cold start, so a refused port
+keeps the full readiness budget; listen failures with a live process now
+carry a hint pointing the repair agent at the captured app output (where
+ghost's crash already was, verbatim, three times). **N51** `4bd2d9d` —
+the explorer records request-level failures as
+`page: failed resource <url> (HTTP <status>|<errorText>)` in
+consoleErrors, deduped by resource, excluding guard blocks and
+ERR_ABORTED churn; pinned by a real-browser test whose entry module 404s.
+**N52** `bc31574` — the diagnosis sharpened during TDD: Playwright's aria
+snapshot already pierces open shadow roots and directus's overlay text was
+in the snapshot all along — the thin-harvest fallback's token regexes
+capped matches at 79 characters and dropped the one long text run. The
+fallback now accepts runs to 400 chars (unquoting, truncating to 120), so
+error overlays and web-component content reach route text; pinned by a
+real-browser shadow-root test. Cosmetic `75ad0e7` — the matrix report
+appends the first informative continuation line when a failure's first
+line ends with a bare colon. Full gauntlet per commit; 835 tests green.
