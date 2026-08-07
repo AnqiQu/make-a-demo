@@ -1575,6 +1575,12 @@ describe("runAgentHarnessPipeline", () => {
     expect(rejectionHint).toContain("src/demo/fixtures.ts");
     expect(rejectionHint).not.toContain("src/feature.ts");
     expect(rejectionHint).not.toContain("bun.lock");
+    // midday (2026-08-07 matrix): five repair rounds re-tried the vetoed
+    // kind of change because no prompt ever presented the original failure
+    // and the veto as one simultaneous constraint set.
+    expect((repairHintLists[1] ?? []).join("\n")).toContain(
+      "Both constraints hold at once",
+    );
     const thirdHints = repairHintLists[2] ?? [];
     expect(new Set(thirdHints).size).toBe(thirdHints.length);
   });

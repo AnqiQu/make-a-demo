@@ -1557,6 +1557,11 @@ function appendRepairRejection(
             : ""
         }.`;
   const vetoedCandidateHint = `The rejected candidate was reverted; the workspace matches the last accepted state again. Its full diff remains readable at ${artifactPaths.preparationWorkspaceDiff}. Only the files named in the rejection violated fidelity: fix those and re-apply the candidate's other changes unchanged.${preservedList}`;
+  // Two gates squeeze this repair: without naming both constraints in one
+  // prompt, agents re-try the vetoed kind of change until the budget dies
+  // (midday burned five rounds on it, 2026-08-07 matrix).
+  const intersectionHint =
+    "Both constraints hold at once: the original failure above must still be fixed AND the fidelity rules that vetoed the rejected files still apply, so repeating that kind of change will be rejected again. Prefer fixing the failure through fixtures, data paths, or demo configuration rather than modifying the vetoed product files.";
   return {
     ...originalFailure,
     artifactReferences: [
@@ -1571,10 +1576,13 @@ function appendRepairRejection(
         // A prior rejection's hint describes a stale candidate; replace it so
         // the file list always matches the diff artifact's current content.
         ...originalFailure.suggestedRepairHints.filter(
-          (hint) => !hint.includes(artifactPaths.preparationWorkspaceDiff),
+          (hint) =>
+            !hint.includes(artifactPaths.preparationWorkspaceDiff) &&
+            !hint.startsWith("Both constraints hold at once"),
         ),
         ...fidelityFailure.suggestedRepairHints,
         vetoedCandidateHint,
+        intersectionHint,
       ]),
     ],
   };
