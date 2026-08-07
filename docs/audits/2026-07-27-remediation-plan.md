@@ -2304,3 +2304,99 @@ production-unused agent-harness exports it names
 test seams. Net for the series: −280 source lines. Full gauntlet per commit;
 826 tests green (one full-suite browser-contention flake of the capture-path
 validator did not reproduce on rerun or in isolation).
+
+## Addendum (2026-08-06, fourth 11-repo matrix — N45–N47 validated; install-gate class N48; N49–N52)
+
+Run: `matrix-report-2026-08-06T20-41-04-831Z.json`. **2 passed** — homer
+(875s) and conduit's **first end-to-end video** (801s). Nine failures, six
+root causes, three of them one shared gate bug. No network incidents: the
+08-05 "network casualties" label was wrong — those runs died on the same
+install gate diagnosed below (ghost: ember-admin schema loop; ghostfolio:
+sandbox timeout; zero registry/timeout evidence in either day's logs).
+
+**N48 (Critical, feature) — the dependency-install gate's unconditional
+lifecycle-script suppression makes postinstall/native-build repos
+unrunnable.** `withLifecycleScriptSuppression` appends `--ignore-scripts`
+(or the manager's equivalent) to every install, and no repair can remove it
+— the flag is re-applied on every attempt. Three repos are structurally
+dead on it: ghost (better-sqlite3's binding never builds even though the
+repo's own `pnpm-workspace.yaml` allowlists it; Ghost binds :2368 then
+crashes on its first query), ghostfolio (`postinstall: prisma generate`
+never runs; 85 TS2305 errors; `dist/apps/api/main` never exists),
+cyberchef (`postinstall: grunt exec:fixCryptoApiImports` never runs;
+crypto-api's extensionless ESM imports die under Node 24; 0 modules
+found). This settles Open decision #1 with three fixtures. Remedy: keep
+suppression while the network window is open, then after reseal run a
+network-closed lifecycle pass (dependency rebuild + root postinstall) —
+same trust level as running the app itself, which already executes
+arbitrary repo code offline.
+
+**N49 (High, bugfix) — the N41 `.opencode` diff exemption manufactures
+phantom deletions when the repo commits `.opencode/`.** cal.com ships
+`.opencode/skill/**` as tracked files; `git rm -r --cached -- .opencode`
+on the temporary index turns them into ~49 deletions against HEAD, and the
+runtime-target-selection read-only gate aborts on attempt 1. Remedy: reset
+the `.opencode` subtree to HEAD in the temporary index — still drops
+untracked session state, fabricates nothing.
+
+**N50 (High, bugfix) — preflight burns its full probe budget when a
+supervisor keeps a crashed app's parent alive.** Ghost's nodemon survives
+the child crash, so `process.running` stays true and all three preflights
+polled 16 probes (~198s each; 743s = 47% of the run) against a
+byte-identical, already-captured crash log, classified "listen failure"
+with empty repair hints. Remedy: bail early when the port stays refused
+and the managed app produces no new output across consecutive probes, and
+give listen failures a hint pointing the repair agent at the captured
+output.
+
+**N51 (Medium, feature) — resource-load failures record the page URL, not
+the failing resource.** Outline's demo shell injected `/app/index.tsx`
+under Vite's `base: "/static/"`, the entry module 404'd twice per route,
+React never mounted (0-byte aria snapshots) — and the console evidence
+said only "Failed to load resource ... 404" prefixed with the page URL,
+so five repair rounds never learned which path 404'd. Remedy: capture
+request-level failures with the actual resource URL and status, deduped
+and bounded, excluding guard-blocked requests (those are already
+blockedNetworkAttempts).
+
+**N52 (Medium, feature) — the text harvest cannot see into shadow DOM.**
+Directus's repair broke the `@directus-extensions` virtual module; every
+route rendered only Vite's error overlay — whose exact import error sat in
+the aria snapshots but reads as "no visible content" to the classifier
+because the overlay lives in an open shadow root and `innerText` stops at
+the boundary. Five repair rounds chased "data fixtures" instead. Remedy:
+harvest open shadow-root text on the thin-harvest path.
+
+**midday — N45 validated; the repair chased the wrong layer (no N item;
+the fix channel is N50/N51-class evidence).** The zero-row gate fired on
+all three explorations, correctly. Local reproduction (screened tar +
+final patch, outside the sandbox) shows the prepared app's client bundle
+never hydrates under `next dev` — Next 16.2.1 + Turbopack boots, consumes
+the flight stream, and no app client module ever evaluates, silently, in
+four browser configurations; the demo flag was correctly Turbopack-inlined
+and the server-side demo link provably returned 3 invoice rows during SSR
+prefetch. Midday's tables are virtualized, so rows exist only after
+hydration — a hydration-dead page structurally cannot satisfy N45 no
+matter how correct the fixtures are (the summary cards render because they
+are server-streamed markup). A production build hydrates but trips a
+different client crash. Watch items: a framework-agnostic
+hydration-aliveness signal (no element gains framework event listeners
+after content-wait) to classify client-runtime death separately from empty
+data; the consoleErrors 50-cap saturates with benign HMR-websocket and
+blocked-analytics noise (dedupe + benign-class filter when a real signal
+needs the room).
+
+**Queued (agent-frontier, after the small fixes):** twenty — the fidelity
+gate demands the demo-gate token per changed file, so a caller-side gate
+(`if (isMakeADemoDemo) await import(...)` in `index.tsx`) is invisible
+when validating `graphqlMocks.ts`, and the single-blocker repair prompt
+made the agent shuttle one gate between two files for six failures
+(file-set-level gate reasoning + all-current-violations prompts).
+excalidraw — the static-contract rejection "uses ActionCatalog route …
+outside the selected FlowSpec" omits the scene/feature that makes it a
+one-line move (the sibling message names them), and the forcing function
+is upstream: the sole cataloged interaction for the feature is an
+external-origin marketing banner occluded by a modal at capture time
+(external-target links should not ground a feature's only interaction).
+Cosmetic: the matrix report's `detail` keeps only the first line, which is
+empty-suffixed for build failures whose output starts with a newline.
