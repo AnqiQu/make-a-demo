@@ -1799,6 +1799,24 @@ try {
     if (message.type() === "error") pushBounded(result.consoleErrors, page.url() + ": " + message.text());
   });
   page.on("pageerror", (error) => pushBounded(result.pageErrors, page.url() + ": " + error.message));
+  // Chrome's "Failed to load resource" console message omits the resource
+  // URL, so record request-level failures with the path the repair agent
+  // actually needs. Guard blocks are already blockedNetworkAttempts and
+  // ERR_ABORTED is routine dev-server churn.
+  const seenFailedResources = new Set();
+  const recordFailedResource = (url, detail) => {
+    if (url.startsWith("data:") || seenFailedResources.has(url)) return;
+    seenFailedResources.add(url);
+    pushBounded(result.consoleErrors, page.url() + ": failed resource " + url + " (" + detail + ")");
+  };
+  page.on("requestfailed", (request) => {
+    const failure = request.failure()?.errorText ?? "request failed";
+    if (/ERR_BLOCKED_BY_CLIENT|ERR_ABORTED/.test(failure)) return;
+    recordFailedResource(request.url(), failure);
+  });
+  page.on("response", (response) => {
+    if (response.status() >= 400) recordFailedResource(response.url(), "HTTP " + response.status());
+  });
   const remainingMs = () => Math.max(0, deadlineAtMs - Date.now());
   const gotoRoute = async (url) => {
     // Dev servers compile each route on first hit; give the initial load a

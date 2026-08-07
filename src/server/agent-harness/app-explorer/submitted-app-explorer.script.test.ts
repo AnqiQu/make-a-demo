@@ -573,4 +573,62 @@ describe("generated exploration script", () => {
       server.close();
     }
   }, 30_000);
+
+  it("records the failing resource URL when a page asset 404s", async () => {
+    // A page whose entry module 404s while the document itself is a healthy
+    // 200. The repair agent needs the missing PATH, not the page URL —
+    // Chrome's own console message omits it.
+    const server = createServer((request, response) => {
+      if (request.url === "/") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(
+          "<!doctype html><html><head><title>Shell</title></head><body>" +
+            "<h1>Publishing dashboard</h1><p>Draft queue and review status.</p>" +
+            '<script type="module" src="/app/missing-entry.js"></script>' +
+            "</body></html>",
+        );
+        return;
+      }
+      response.writeHead(404, { "content-type": "text/plain" });
+      response.end("not found");
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        consoleErrors: string[];
+      };
+
+      const resourceFailure = result.consoleErrors.find((entry) =>
+        entry.includes("/app/missing-entry.js"),
+      );
+      expect(resourceFailure).toBeDefined();
+      expect(resourceFailure).toContain("HTTP 404");
+    } finally {
+      server.close();
+    }
+  }, 30_000);
 });
