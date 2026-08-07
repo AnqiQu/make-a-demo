@@ -2533,6 +2533,53 @@ reasoning over the repair's file set, not each file in isolation;
 (d) consoleErrors dedupe — all ten visible midday entries were one
 repeated HMR-handshake error (the 08-06 watch item is now load-bearing).
 
+### Landed (2026-08-07, same day)
+
+**N53** `c2e821c` + `11238f8` — the suppression branch and the flag
+allowlist both carry `--mode=skip-build`, pinned by a test that runs the
+suppressed berry command back through the gate's own allowlist (the
+missing coupling that let the two wrong values agree). The gate result
+now carries `executedCommand`, and the install-failure,
+external-network, and reseal-failure reports name the command that ran —
+suppression flag and retry flags included — instead of the manifest's.
+**N54** `55002ed` — the experiment overturned the diagnosis before the
+test was written: with a matching `allowBuilds` allowlist, a bare
+`pnpm rebuild` after `--ignore-scripts` DOES run builds in a
+single-project repo (verified against better-sqlite3 12.11.1 with
+ghost's exact config form). The silent no-op is workspace-root scoping:
+at a monorepo root, members' dependencies are outside the root project's
+rebuild scope, so it exits 0 having built nothing — reproduced, and
+fixed with `pnpm rebuild -r`, which behaves identically in
+single-project repos. The lifecycle command now derives from the gate's
+executed command, inheriting `--config.engine-strict=false` when the
+install only passed via the N42 retry (directus's wasted round).
+Incidental empirical finding: pnpm 11 reads the build allowlist from
+`pnpm-workspace.yaml` `allowBuilds`; the `onlyBuiltDependencies` list
+form did not enable builds under 11.20. **N55** `4d86917` — lifecycle
+failures whose output shows a download attempt (URL fetch errors,
+ENOTFOUND/ECONNREFUSED class) carry the sealed-by-design hint: remove
+the need for the download; a gyp build error is pinned as NOT firing
+it. **N56** `56fa369` — planner-repairable violations are collected and
+thrown as one rejection (referential-integrity failures still throw
+immediately, since later checks depend on them); the browser-exercised
+rule names up to three exercised candidate ids and the unique-evidence
+rule names up to three unreferenced tagged ids — and is now enforced
+only when such a candidate exists, extending the N21b never-wedge
+precedent to a rule that could previously demand the impossible.
+**N57** `839bb0b` + `d832cab` + `db63430` + `945d031` — the zero-row
+message is an observation naming both candidate causes (empty query vs
+zero-height virtualizer) and steers repairs at fixtures and data paths;
+a vetoed repair's next prompt carries the original failure and the veto
+as one simultaneous constraint set; a conditional demo gate in a changed
+caller now counts for the module it references (with a precision pin
+that a gate elsewhere in the diff does NOT rescue an unreferenced file)
+— the twenty two-file shuttle becomes a passing candidate; and the
+explorer keeps one console entry per error class (query strings and long
+hex runs stripped from the dedupe key), pinned by a real-browser test
+that midday's exact HMR-retry noise collapses to one entry while a
+distinct hydration error still records. Full gauntlet per commit; 846
+tests green (+11 this batch).
+
 ## Loop economics and structural review (2026-08-07, N58–N64)
 
 Measured round cost this run: ghost ≈ 1.4m repair agent + 4m13s
