@@ -75,6 +75,7 @@ export async function runDependencyInstallThroughGate(input: {
   runCommand: (command: string) => Promise<DependencyInstallCommandResult>;
 }): Promise<
   | ({
+      executedCommand: string;
       resealError?: string;
       status: "failed" | "succeeded";
     } & DependencyInstallCommandResult)
@@ -101,6 +102,9 @@ export async function runDependencyInstallThroughGate(input: {
   const resealError = await resealNetwork(input.closeNetwork);
   return {
     ...result,
+    // Failure evidence must name the command that ran, suppression flag
+    // included — repair agents cannot reason about a flag they never see.
+    executedCommand: command,
     status: result.exitCode === 0 ? "succeeded" : "failed",
     ...(resealError === undefined ? {} : { resealError }),
   };

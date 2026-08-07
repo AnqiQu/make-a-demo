@@ -131,6 +131,7 @@ describe("dependency install gate", () => {
     });
 
     expect(result).toEqual({
+      executedCommand: "npm ci --no-audit --ignore-scripts",
       exitCode: 1,
       stderr: "install failed",
       status: "failed",
@@ -156,6 +157,7 @@ describe("dependency install gate", () => {
 
     expect(closes).toBe(2);
     expect(result).toEqual({
+      executedCommand: "npm ci --no-audit --ignore-scripts",
       exitCode: 0,
       status: "succeeded",
       stderr: "",

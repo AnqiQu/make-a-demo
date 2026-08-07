@@ -2852,6 +2852,48 @@ describe("createDefaultAgentHarnessDependencies", () => {
     });
   });
 
+  it("reports the gate-executed install command when the install fails", async () => {
+    // calcom's repair agents saw `yarn install --immutable` blamed for a
+    // `--mode` flag they never passed: the report carried the manifest's
+    // command while the gate executed a suppressed variant. The evidence
+    // must name the command that actually ran.
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("yarn install")) {
+          return {
+            exitCode: 1,
+            stderr:
+              'Usage Error: Invalid value for --mode: expected one of "update-lockfile" or "skip-build"',
+            stdout: "",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.validatePreparation({
+        preparationManifest: {
+          ...preparationManifest(),
+          installCommandUsed: "yarn install --immutable",
+        },
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).resolves.toMatchObject({
+      attemptedCommand: "yarn install --immutable --mode=skip-build",
+      failureClassification: "install failure",
+      status: "failed",
+    });
+  });
+
   it("fails closed when the dependency network window cannot be resealed", async () => {
     let windowOpened = false;
     const workspace = createFakeAgentHarnessWorkspace({

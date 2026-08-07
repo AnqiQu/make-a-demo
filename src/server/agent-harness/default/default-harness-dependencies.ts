@@ -2000,6 +2000,7 @@ async function validateResolvedSubmittedCodeRuntime(
           return undefined;
         } catch (error) {
           return {
+            executedCommand: reconciliation.executedCommand,
             exitCode: 1,
             status: "failed",
             stderr: `Automatic lockfile reconciliation could not be persisted: ${readErrorMessage(error)}`,
@@ -2028,6 +2029,9 @@ async function validateResolvedSubmittedCodeRuntime(
       result =
         reconciliationCommand === undefined
           ? {
+              // Nothing executed, so the manifest command is the truthful
+              // attempted command for the report below.
+              executedCommand: installCommand,
               exitCode: 1,
               status: "failed",
               stderr:
@@ -2083,7 +2087,7 @@ async function validateResolvedSubmittedCodeRuntime(
       const unreachable = readUnreachableDependencyHost(result);
       if (unreachable !== undefined) {
         return failedPreparationValidation({
-          attemptedCommand: installCommand,
+          attemptedCommand: result.executedCommand,
           classification: "external network required",
           exitCode: result.exitCode,
           logsSummary: `Dependency install cannot reach ${unreachable.host}${unreachable.packageName === undefined ? "" : ` for package ${unreachable.packageName}`}; a retry inside the open install window failed with the same network error: ${result.stderr || result.stdout}`,
@@ -2097,7 +2101,7 @@ async function validateResolvedSubmittedCodeRuntime(
         });
       }
       return failedPreparationValidation({
-        attemptedCommand: installCommand,
+        attemptedCommand: result.executedCommand,
         classification: "install failure",
         exitCode: result.exitCode,
         logsSummary: `Submitted-code dependency install failed: ${result.stderr || result.stdout}`,
@@ -2111,7 +2115,7 @@ async function validateResolvedSubmittedCodeRuntime(
       // Runtime Network Lockdown cannot be trusted while the install window
       // may still be open, so a successful install fails closed here.
       return failedPreparationValidation({
-        attemptedCommand: installCommand,
+        attemptedCommand: result.executedCommand,
         classification: "harness/internal failure",
         logsSummary: `Dependency install succeeded but the network window could not be resealed: ${result.resealError}`,
         manifest,
