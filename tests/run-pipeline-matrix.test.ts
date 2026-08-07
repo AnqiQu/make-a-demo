@@ -124,6 +124,27 @@ describe("runPipelineMatrix", () => {
     });
     expect(results[1]?.detail).toBe("exploration failed");
   });
+
+  it("keeps the first informative line when a failure's payload starts on the next line", async () => {
+    const results = await runPipelineMatrix(
+      resolveMatrixEntries(
+        [{ name: "cyberchef", repoUrl: "https://github.com/example/build" }],
+        {},
+      ),
+      {
+        log: () => {},
+        runPipeline: async () => {
+          throw new Error(
+            "preparation-preflight failed: Submitted-code build failed: \n\n> cyberchef@11.3.0 build\n> npx grunt prod\n",
+          );
+        },
+      },
+    );
+
+    expect(results[0]?.detail).toBe(
+      "preparation-preflight failed: Submitted-code build failed: > cyberchef@11.3.0 build",
+    );
+  });
 });
 
 describe("renderMatrixReport", () => {

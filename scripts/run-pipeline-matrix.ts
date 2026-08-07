@@ -119,7 +119,7 @@ export async function runPipelineMatrix(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       results.push({
-        detail: message.split("\n", 1)[0] ?? message,
+        detail: readFailureDetail(message),
         durationMs: Date.now() - startedAt,
         name: entry.name,
         status: "failed",
@@ -127,6 +127,26 @@ export async function runPipelineMatrix(
     }
   }
   return results;
+}
+
+/**
+ * A failure's first line ends with a bare colon when the informative payload
+ * (a subprocess's output) starts on a later line — keep that payload in the
+ * one-line report detail instead of truncating to an empty suffix.
+ */
+function readFailureDetail(message: string): string {
+  const firstLine = message.split("\n", 1)[0] ?? message;
+  if (!/:\s*$/.test(firstLine)) {
+    return firstLine;
+  }
+  const continuation = message
+    .split("\n")
+    .slice(1)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  return continuation === undefined
+    ? firstLine
+    : `${firstLine.trimEnd()} ${continuation}`;
 }
 
 /**
