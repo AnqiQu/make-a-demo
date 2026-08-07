@@ -2930,8 +2930,10 @@ async function readPreparationWorkspaceDiff(
         'GIT_INDEX_FILE="$temporary_index" git ls-files -o -i --exclude-standard -z | grep -zEv "(^|/)(node_modules|\\.pnpm-store|\\.yarn|\\.npm|\\.bun|\\.turbo|\\.cache)(/|$)" | GIT_INDEX_FILE="$temporary_index" xargs -0 -r git add -f --',
         // OpenCode writes session bookkeeping under .opencode/ inside the
         // repo directory while it runs; like .git/, that is tool state, not
-        // a workspace change.
-        'GIT_INDEX_FILE="$temporary_index" git rm -r --cached --ignore-unmatch -q -- .opencode',
+        // a workspace change. Resetting the subtree to HEAD (instead of
+        // removing it from the index) drops that untracked state without
+        // manufacturing phantom deletions for repos that commit .opencode/.
+        'GIT_INDEX_FILE="$temporary_index" git reset -q HEAD -- .opencode',
         'GIT_INDEX_FILE="$temporary_index" git diff --cached --name-only -z HEAD > "$changed_paths"',
         'cat "$changed_paths"',
         "printf '\\0MAKEADEMO_HASHES\\0'",

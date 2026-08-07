@@ -193,15 +193,110 @@ describe("createDefaultAgentHarnessDependencies", () => {
 
     const diffCommand =
       commands.find((command) => command.includes("MAKEADEMO_PATCH")) ?? "";
-    expect(diffCommand).toContain(
-      "git rm -r --cached --ignore-unmatch -q -- .opencode",
-    );
+    expect(diffCommand).toContain("git reset -q HEAD -- .opencode");
     const snapshotCommand =
       commands.find(
         (command) =>
           command.includes("ls-files") && !command.includes("MAKEADEMO_PATCH"),
       ) ?? "";
     expect(snapshotCommand).toContain("-x .opencode");
+  });
+
+  it("reports no changes for a repo that commits .opencode files", async () => {
+    // cal.com ships .opencode/skill/** as tracked files; the tool-state
+    // exemption must not manufacture phantom deletions for them, while
+    // untracked OpenCode session bookkeeping stays excluded.
+    const { execFile } = await import("node:child_process");
+    const { mkdtemp, mkdir, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { promisify } = await import("node:util");
+    const execFileAsync = promisify(execFile);
+    const repoDirectory = await mkdtemp(join(tmpdir(), "makeademo-diff-"));
+    const git = (...args: string[]) =>
+      execFileAsync("git", ["-C", repoDirectory, ...args], {
+        env: {
+          ...process.env,
+          GIT_AUTHOR_EMAIL: "test@example.test",
+          GIT_AUTHOR_NAME: "Test",
+          GIT_COMMITTER_EMAIL: "test@example.test",
+          GIT_COMMITTER_NAME: "Test",
+        },
+      });
+    await git("init", "-q");
+    await mkdir(join(repoDirectory, ".opencode/skill"), { recursive: true });
+    await mkdir(join(repoDirectory, "src"), { recursive: true });
+    await writeFile(
+      join(repoDirectory, ".opencode/skill/best-practices.md"),
+      "tracked skill\n",
+    );
+    await writeFile(join(repoDirectory, "src/app.ts"), "export {};\n");
+    await git("add", "-A");
+    await git("commit", "-q", "-m", "initial");
+    // Untracked OpenCode session bookkeeping appears while agents run.
+    await mkdir(join(repoDirectory, ".opencode/session"), { recursive: true });
+    await writeFile(
+      join(repoDirectory, ".opencode/session/state.json"),
+      "{}\n",
+    );
+    // One genuine workspace change the diff must still report.
+    await writeFile(
+      join(repoDirectory, "src/app.ts"),
+      "export const demo = true;\n",
+    );
+    // The production script targets the Linux sandbox; macOS lacks sha256sum.
+    const shimDirectory = await mkdtemp(join(tmpdir(), "makeademo-shim-"));
+    await mkdir(shimDirectory, { recursive: true });
+    await writeFile(
+      join(shimDirectory, "sha256sum"),
+      '#!/bin/bash\nexec shasum -a 256 "$@"\n',
+      { mode: 0o755 },
+    );
+
+    const workspace = createFakeAgentHarnessWorkspace({
+      async execute(command) {
+        const rewritten = command.replaceAll("/workspace/repo", repoDirectory);
+        try {
+          const { stdout, stderr } = await execFileAsync(
+            "bash",
+            ["-c", rewritten],
+            {
+              env: {
+                ...process.env,
+                PATH: `${shimDirectory}:${process.env.PATH}`,
+              },
+              maxBuffer: 16 * 1024 * 1024,
+            },
+          );
+          return { exitCode: 0, stderr, stdout };
+        } catch (error) {
+          const failure = error as {
+            code?: number;
+            stderr?: string;
+            stdout?: string;
+          };
+          return {
+            exitCode: failure.code ?? 1,
+            stderr: failure.stderr ?? String(error),
+            stdout: failure.stdout ?? "",
+          };
+        }
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const diff = await harness.dependencies.capturePreparationWorkspaceDiff?.({
+      workspace,
+    });
+
+    expect(diff?.changedPaths).toEqual(["/workspace/repo/src/app.ts"]);
+    expect(diff?.patch).not.toContain("best-practices.md");
+    expect(diff?.patch).not.toContain("session/state.json");
   });
 
   it("selects the product application before planning a multi-app monorepo", async () => {
