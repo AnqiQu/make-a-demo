@@ -1063,9 +1063,12 @@ function readExplorationFailure(
     const emptyTableColumns = routePaths
       .map((route) => emptyDataTablesByRoute.get(route))
       .find((columns) => columns !== undefined);
+    // Observation, not diagnosis: this gate cannot tell an empty query
+    // result from a virtualized body that measured zero height (midday,
+    // 2026-08-07 matrix), so it names both causes instead of asserting one.
     return emptyTableColumns === undefined
       ? ""
-      : ` An empty data table (${emptyTableColumns} column headers, zero data rows) rendered on these routes — the data query resolved empty or mis-shaped; align the fixture shape with the fields the consuming component reads.`;
+      : ` An empty data table (${emptyTableColumns} column headers, zero data rows) rendered on these routes. Two causes produce this: the data query resolved empty (fixture shape or default filters exclude the fixture rows), or a virtualized table body measured zero height and rendered no rows despite data being present — identify which before repairing, and prefer fixture and data-path fixes over changing product components.`;
   };
   const actionsByFeatureId = new Map<
     string,
