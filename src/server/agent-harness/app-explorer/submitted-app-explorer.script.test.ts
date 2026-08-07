@@ -631,4 +631,72 @@ describe("generated exploration script", () => {
       server.close();
     }
   }, 30_000);
+
+  it("harvests text that renders only inside an open shadow root", async () => {
+    // Vite's error overlay is a custom element with an open shadow root, so
+    // its import error is the page's only content while innerText sees
+    // nothing; web-component apps render real content the same way.
+    const shadowOverlayPage = `<!doctype html><html><head><title>Overlay</title></head><body>
+<div id="root"></div>
+<script>
+class ErrorOverlay extends HTMLElement {
+  constructor() {
+    super();
+    const root = this.attachShadow({ mode: "open" });
+    root.innerHTML = "<div>[plugin:vite:import-analysis] Failed to resolve import \\"@directus-extensions\\" from \\"src/extensions.ts\\". Does the file exist?</div>";
+  }
+}
+customElements.define("vite-error-overlay", ErrorOverlay);
+document.body.appendChild(document.createElement("vite-error-overlay"));
+</script>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(shadowOverlayPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-shadow-"),
+      );
+      // The page has no light-DOM content, so the content waits run long;
+      // clamp the script's own deadline the way the deadline test does.
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      )
+        .replaceAll("/workspace/.makeademo/exploration", outputDirectory)
+        .replace(
+          /deadlineAtMs = Date\.now\(\) \+ \d+/,
+          "deadlineAtMs = Date.now() + 15000",
+        );
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        routes: Array<{ text: string[] }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      expect(result.routes[0]?.text.join(" ")).toContain(
+        "Failed to resolve import",
+      );
+    } finally {
+      server.close();
+    }
+  }, 30_000);
 });

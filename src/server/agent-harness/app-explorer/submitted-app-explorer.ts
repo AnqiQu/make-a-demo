@@ -2022,9 +2022,19 @@ try {
           const emptyTableHeaderTokens = new Set((observed.emptyDataTables ?? []).flatMap((table) => (table.headerTexts ?? []).flatMap((text) => text.toLowerCase().split(/\\s+/).filter(Boolean))));
           const isEmptyTableStructure = (candidate) =>
             emptyTableHeaderTokens.size > 0 && candidate.toLowerCase().split(/\\s+/).filter(Boolean).every((token) => emptyTableHeaderTokens.has(token));
+          // The aria tree pierces open shadow roots (error overlays,
+          // web-component apps), and their content often arrives as one long
+          // text run — accept it and truncate instead of dropping it.
+          const cleanAriaText = (raw) => {
+            const trimmed = raw.trim();
+            const unquoted = trimmed.startsWith('"') && trimmed.endsWith('"')
+              ? trimmed.slice(1, -1).replaceAll('\\\\"', '"')
+              : trimmed;
+            return unquoted.slice(0, 120).trim();
+          };
           const ariaTextCandidates = [...new Set([
             ...[...aria.matchAll(/-\\s+[a-z]+ "([^"\\n]{3,80})"/g)].map((match) => match[1]),
-            ...[...aria.matchAll(/-\\s+text: (\\S[^\\n]{2,79})$/gm)].map((match) => match[1].trim()),
+            ...[...aria.matchAll(/-\\s+text: (\\S[^\\n]{2,399})$/gm)].map((match) => cleanAriaText(match[1])),
           ])].filter((candidate) => !observed.text.includes(candidate) && !observed.headings.includes(candidate) && !isEmptyTableStructure(candidate)).slice(0, 24);
           observed.text.push(...ariaTextCandidates);
         } catch {}
