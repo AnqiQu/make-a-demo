@@ -2,6 +2,10 @@
 // Phase 0.3): runs the full demo pipeline against the configured repo matrix and writes a
 // pass/fail report. Each entry costs real Daytona/agent money — run deliberately.
 //
+// Runnable entries run concurrently, each in its own sandbox, so peak sandbox
+// usage (and cost at any instant) scales with the number of selected entries.
+// Use --only to bound the batch when that peak matters.
+//
 //   bun run pipeline:matrix                 # all configured entries
 //   bun run pipeline:matrix -- --only vite-spa,midday
 //
@@ -84,49 +88,79 @@ export function resolveMatrixEntries(
   });
 }
 
+/**
+ * Builds a filesystem-safe run id that is unique per matrix entry within a
+ * batch. Every entry in one `runPipelineMatrix` call shares `batchStamp`, and
+ * the entry name (unique across the matrix config) disambiguates the rest, so
+ * concurrent runs never share `runDefaultDemoPipeline`'s output directory even
+ * though they all start in the same millisecond.
+ */
+function matrixRunId(entryName: string, batchStamp: string): string {
+  const slug = entryName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `matrix-${batchStamp}-${slug}`;
+}
+
+/**
+ * Runs every runnable entry concurrently, each in its own sandbox via
+ * `runPipeline`, and keeps report rows in entry order regardless of which run
+ * finishes first. A failing entry becomes a `failed` row without aborting the
+ * others. `runPipeline` receives a per-entry `runId` so concurrent runs write
+ * to distinct output directories.
+ */
 export async function runPipelineMatrix(
   entries: ResolvedMatrixEntry[],
   options: {
     log: (message: string) => void;
     runPipeline?: (
       input: DefaultDemoPipelineInput,
+      runId: string,
     ) => Promise<DefaultDemoPipelineResult>;
   },
 ): Promise<MatrixEntryResult[]> {
-  const runPipeline = options.runPipeline ?? runDefaultDemoPipeline;
-  const results: MatrixEntryResult[] = [];
-  for (const entry of entries) {
-    if (entry.status === "skipped") {
-      options.log(`skipping ${entry.name}: ${entry.reason}`);
-      results.push({
-        detail: entry.reason,
-        name: entry.name,
-        status: "skipped",
-      });
-      continue;
-    }
-    options.log(`running ${entry.name} (${entry.input.repoUrl})`);
-    const startedAt = Date.now();
-    try {
-      const result = await runPipeline(entry.input);
-      results.push({
-        detail: result.finalVideoPath,
-        durationMs: Date.now() - startedAt,
-        name: entry.name,
-        runDirectory: result.runDirectory,
-        status: "passed",
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      results.push({
-        detail: readFailureDetail(message),
-        durationMs: Date.now() - startedAt,
-        name: entry.name,
-        status: "failed",
-      });
-    }
-  }
-  return results;
+  const runPipeline =
+    options.runPipeline ??
+    ((input, runId) => runDefaultDemoPipeline(input, { runId }));
+  const batchStamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return Promise.all(
+    entries.map(async (entry): Promise<MatrixEntryResult> => {
+      if (entry.status === "skipped") {
+        options.log(`skipping ${entry.name}: ${entry.reason}`);
+        return {
+          detail: entry.reason,
+          name: entry.name,
+          status: "skipped",
+        };
+      }
+      options.log(`running ${entry.name} (${entry.input.repoUrl})`);
+      const startedAt = Date.now();
+      try {
+        const result = await runPipeline(
+          entry.input,
+          matrixRunId(entry.name, batchStamp),
+        );
+        options.log(`passed ${entry.name}`);
+        return {
+          detail: result.finalVideoPath,
+          durationMs: Date.now() - startedAt,
+          name: entry.name,
+          runDirectory: result.runDirectory,
+          status: "passed",
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        options.log(`failed ${entry.name}: ${readFailureDetail(message)}`);
+        return {
+          detail: readFailureDetail(message),
+          durationMs: Date.now() - startedAt,
+          name: entry.name,
+          status: "failed",
+        };
+      }
+    }),
+  );
 }
 
 /**

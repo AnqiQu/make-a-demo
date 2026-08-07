@@ -6,12 +6,26 @@ import {
   resolveMatrixEntries,
   runPipelineMatrix,
 } from "../scripts/run-pipeline-matrix";
+import type { DefaultDemoPipelineResult } from "../src/server/agent-harness/default/default-demo-pipeline";
 
 const runnableEntry = {
   name: "vite-spa",
   fixtureDir: "tests/fixtures/repos/vite-spa",
   repoUrl: "https://github.com/example/fixture-vite-spa",
 };
+
+function passingPipelineResult(): DefaultDemoPipelineResult {
+  return {
+    artifactDirectory: "run/artifacts",
+    captureManifestPath: "run/capture.json",
+    compositeManifestPath: "run/composite.json",
+    finalVideoPath: "run/final-video.mp4",
+    logPath: "run/pipeline-log.jsonl",
+    pipelineManifestPath: "run/manifest.json",
+    runDirectory: "run",
+    scriptPath: "run/demo-script.json",
+  };
+}
 
 describe("resolveMatrixEntries", () => {
   it("prefers the per-entry environment override to the configured repo URL", () => {
@@ -77,8 +91,41 @@ describe("resolveMatrixEntries", () => {
 });
 
 describe("runPipelineMatrix", () => {
-  it("runs entries sequentially and keeps going when one fails", async () => {
-    const calls: string[] = [];
+  it("runs every runnable entry concurrently rather than one at a time", async () => {
+    let inFlight = 0;
+    let peakInFlight = 0;
+    const results = await runPipelineMatrix(
+      resolveMatrixEntries(
+        [
+          { name: "alpha", repoUrl: "https://github.com/example/alpha" },
+          { name: "bravo", repoUrl: "https://github.com/example/bravo" },
+          { name: "charlie", repoUrl: "https://github.com/example/charlie" },
+          { name: "unpublished" },
+        ],
+        {},
+      ),
+      {
+        log: () => {},
+        runPipeline: async () => {
+          inFlight += 1;
+          peakInFlight = Math.max(peakInFlight, inFlight);
+          await Promise.resolve();
+          inFlight -= 1;
+          return passingPipelineResult();
+        },
+      },
+    );
+
+    expect(peakInFlight).toBe(3);
+    expect(results.map((result) => result.status)).toEqual([
+      "passed",
+      "passed",
+      "passed",
+      "skipped",
+    ]);
+  });
+
+  it("keeps report rows in entry order and keeps going when one entry fails", async () => {
     const results = await runPipelineMatrix(
       resolveMatrixEntries(
         [
@@ -91,28 +138,19 @@ describe("runPipelineMatrix", () => {
       {
         log: () => {},
         runPipeline: async (input) => {
-          calls.push(input.repoUrl);
           if (input.repoUrl.endsWith("fails")) {
             throw new Error("exploration failed\nstack line");
           }
-          return {
-            artifactDirectory: "run/artifacts",
-            captureManifestPath: "run/capture.json",
-            compositeManifestPath: "run/composite.json",
-            finalVideoPath: "run/final-video.mp4",
-            logPath: "run/pipeline-log.jsonl",
-            pipelineManifestPath: "run/manifest.json",
-            runDirectory: "run",
-            scriptPath: "run/demo-script.json",
-          };
+          // Settle the passing entry on a much later microtask so the report
+          // cannot be ordered by completion instead of by entry position.
+          for (let hop = 0; hop < 10; hop += 1) {
+            await Promise.resolve();
+          }
+          return passingPipelineResult();
         },
       },
     );
 
-    expect(calls).toEqual([
-      "https://github.com/example/passes",
-      "https://github.com/example/fails",
-    ]);
     expect(results.map((result) => result.status)).toEqual([
       "passed",
       "failed",
@@ -123,6 +161,31 @@ describe("runPipelineMatrix", () => {
       runDirectory: "run",
     });
     expect(results[1]?.detail).toBe("exploration failed");
+    expect(results[2]?.status).toBe("skipped");
+  });
+
+  it("gives each concurrent run its own run id so their directories do not collide", async () => {
+    const runIds: string[] = [];
+    await runPipelineMatrix(
+      resolveMatrixEntries(
+        [
+          { name: "vite-spa", repoUrl: "https://github.com/example/a" },
+          { name: "midday", repoUrl: "https://github.com/example/b" },
+        ],
+        {},
+      ),
+      {
+        log: () => {},
+        runPipeline: async (_input, runId) => {
+          runIds.push(runId);
+          return passingPipelineResult();
+        },
+      },
+    );
+
+    expect(new Set(runIds).size).toBe(2);
+    expect(runIds.some((id) => id.includes("vite-spa"))).toBe(true);
+    expect(runIds.some((id) => id.includes("midday"))).toBe(true);
   });
 
   it("keeps the first informative line when a failure's payload starts on the next line", async () => {
