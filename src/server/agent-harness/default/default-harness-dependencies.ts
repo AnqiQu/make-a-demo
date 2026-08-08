@@ -3900,7 +3900,9 @@ function createRepoPreparationPrompt(input: {
       appDirShapeInstruction,
       envUsedShapeInstruction,
       `Demo brief: ${JSON.stringify(input.demoBrief)}`,
-      `Repo profile: ${JSON.stringify(input.repoProfile)}`,
+      // Never inline the repo profile: large monorepos serialize past the
+      // kernel argv limit (N65) and the file is already a listed artifact.
+      `Repo profile: read ${artifactPaths.repoProfile} for the backend-resolved repository profile.`,
     ].join("\n"),
     stage: "repo-preparation",
   });
@@ -3948,7 +3950,9 @@ function createRepoPreparationRepairPrompt(input: {
         input.previousResult,
       )}`,
       `Demo brief: ${JSON.stringify(input.demoBrief)}`,
-      `Repo profile: ${JSON.stringify(input.repoProfile)}`,
+      // Never inline the repo profile: large monorepos serialize past the
+      // kernel argv limit (N65) and the file is already a listed artifact.
+      `Repo profile: read ${artifactPaths.repoProfile} for the backend-resolved repository profile.`,
     ].join("\n"),
     stage: "repo-preparation-repair",
   });

@@ -2097,6 +2097,81 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
   });
 
+  it("preparation prompts reference the repo-profile artifact instead of inlining it", async () => {
+    // Same argv-limit diet as the repair prompt (N65): calcom's repo profile
+    // serializes to 145KB, and the profile is already written to the
+    // workspace as an artifact the agent can read.
+    const workspace = repairableRepoPreparationWorkspace();
+    const prompts: Array<{ prompt: string; stage: string }> = [];
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(input) {
+          prompts.push({ prompt: input.prompt, stage: input.stage });
+          workspace.writePreparationManifest();
+          return { exitCode: 0, stderr: "", stdout: "done" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+    await harness.dependencies.prepareRepo({
+      demoBrief: { keyProductFeatures: ["dashboard"] },
+      normalizedSupportingDocuments: undefined,
+      repoProfile: repoProfile(),
+      repoSourcePaths: ["package.json", "src/App.tsx"],
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    const preparationPrompt =
+      prompts.find(({ stage }) => stage === "repo-preparation")?.prompt ?? "";
+    expect(preparationPrompt).not.toContain(JSON.stringify(repoProfile()));
+    expect(preparationPrompt).toContain(
+      "Repo profile: read /workspace/.makeademo/repo-profile.json",
+    );
+  });
+
+  it("failed-preparation repair prompts reference the repo-profile artifact too", async () => {
+    // The third prompt builder with the N65 inline: the repair after a
+    // failed preparation attempt.
+    const workspace = repairableRepoPreparationWorkspace();
+    const prompts: Array<{ prompt: string; stage: string }> = [];
+    let runs = 0;
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(input) {
+          prompts.push({ prompt: input.prompt, stage: input.stage });
+          runs += 1;
+          if (runs === 1) {
+            return { exitCode: 1, stderr: "prep died", stdout: "" };
+          }
+          workspace.writePreparationManifest();
+          return { exitCode: 0, stderr: "", stdout: "repaired" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+    await harness.dependencies.prepareRepo({
+      demoBrief: { keyProductFeatures: ["dashboard"] },
+      normalizedSupportingDocuments: undefined,
+      repoProfile: repoProfile(),
+      repoSourcePaths: ["package.json", "src/App.tsx"],
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    const repairPrompt =
+      prompts.find(({ stage }) => stage === "repo-preparation-repair")
+        ?.prompt ?? "";
+    expect(repairPrompt).not.toContain(JSON.stringify(repoProfile()));
+    expect(repairPrompt).toContain(
+      "Repo profile: read /workspace/.makeademo/repo-profile.json",
+    );
+  });
+
   it("bounds oversized failure evidence in repair prompts, keeping its head and tail", async () => {
     // ghostfolio's fourth repair round: evidence accumulated across rounds
     // pushed the prompt past the kernel argv limit and OpenCode never
