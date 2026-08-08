@@ -1335,15 +1335,22 @@ function readExplorationFailure(
   }
   // Exploration grounds a feature on exercised evidence alone, but flow
   // planning demands a tagged interaction AND a tagged visible assertion per
-  // requested feature. A grounded feature missing either kind makes flow
+  // selected feature. A grounded feature missing either kind makes flow
   // planning structurally unsatisfiable from its first attempt, so the gap
   // must fail here, where preparation repair can render assertable content
-  // or reselect the feature.
+  // or reselect the feature. With maker-requested features, every requested
+  // feature is forced into the plan; without them, planning must select
+  // min(3, |inventory|), so that many features must carry complete evidence
+  // (conduit's agent-selected comment feature had zero tagged asserts,
+  // 2026-08-07).
+  const requestedFeaturesExist = featureInventory.some(
+    (feature) => feature.requestedFeature !== undefined,
+  );
   const flowEvidenceGaps = featureInventory
     .map((feature) => {
       if (
-        feature.requestedFeature === undefined ||
-        !groundedFeatureIds.has(feature.id)
+        !groundedFeatureIds.has(feature.id) ||
+        (requestedFeaturesExist && feature.requestedFeature === undefined)
       ) {
         return undefined;
       }
@@ -1367,7 +1374,7 @@ function readExplorationFailure(
           .filter((route) => contentRoutePaths.has(route))
           .flatMap((route) => distinctContentByRoute.get(route) ?? []),
       ).slice(0, 4);
-      return `"${feature.requestedFeature}" lacks ${missing.join(" and ")}${
+      return `"${feature.requestedFeature ?? feature.label}" lacks ${missing.join(" and ")}${
         shownLabels.length === 0
           ? ""
           : ` (its routes rendered distinct content: ${shownLabels.join(
@@ -1376,13 +1383,31 @@ function readExplorationFailure(
       }`;
     })
     .filter((gap): gap is string => gap !== undefined);
-  if (flowEvidenceGaps.length > 0) {
+  if (requestedFeaturesExist && flowEvidenceGaps.length > 0) {
     return {
       classification: "requested feature not observable",
       message: `Flow planning must pair a tagged interaction with a tagged visible-text assert for every requested feature, but the ActionCatalog cannot satisfy that: ${flowEvidenceGaps.join(
         "; ",
       )}. Prepare these features' routes to render visible text that names the feature's data or UI, or reselect featureInventory entries onto routes that already do.`,
     };
+  }
+  if (!requestedFeaturesExist) {
+    // Grounding shortfalls fall through to the richer unreachable/hollow
+    // handling below; this rung fires only when enough features ground but
+    // too few of them are plannable.
+    const groundedCount = featureInventory.filter((feature) =>
+      groundedFeatureIds.has(feature.id),
+    ).length;
+    const plannableCount = groundedCount - flowEvidenceGaps.length;
+    const requiredCount = Math.min(3, featureInventory.length);
+    if (groundedCount >= requiredCount && plannableCount < requiredCount) {
+      return {
+        classification: "prepared feature not observable",
+        message: `Flow planning must select ${requiredCount} prepared feature(s), pairing each with a tagged interaction and a tagged visible-text assert, but only ${plannableCount} qualify: ${flowEvidenceGaps.join(
+          "; ",
+        )}. Prepare these features' routes to render visible text that names the feature's data or UI, or reselect featureInventory entries onto routes that already do.`,
+      };
+    }
   }
   if (
     !featureInventory.some((feature) => feature.requestedFeature !== undefined)

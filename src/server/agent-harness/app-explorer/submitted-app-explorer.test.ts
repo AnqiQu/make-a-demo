@@ -1701,6 +1701,65 @@ describe("exploreSubmittedApp", () => {
     );
   });
 
+  it("fails forced agent-selected features whose tagging cannot satisfy flow planning", async () => {
+    // conduit (2026-08-07): no maker-requested features, so the evidence-gap
+    // check skipped every inventory entry — yet flow planning must select
+    // min(3, |inventory|) features, and comment-on-article had zero tagged
+    // asserts. Structurally unsatisfiable from planning's first attempt; the
+    // wedge must fail here, where preparation repair can act.
+    const asAgentSelected = ({
+      requestedFeature: _requestedFeature,
+      ...feature
+    }: PreparedDemoFeature): PreparedDemoFeature => feature;
+    const posting = asAgentSelected(
+      preparedFeature({
+        description: "Publish a new article.",
+        entryPaths: ["/#/article/demo"],
+        id: "post-article",
+        label: "Posting an article",
+      }),
+    );
+    const comments = asAgentSelected(
+      preparedFeature({
+        description: "Comment on an article.",
+        entryPaths: ["/#/article/demo"],
+        id: "article-comments",
+        label: "Article comments",
+      }),
+    );
+    const { result } = await exploreObservation({
+      featureInventory: [posting, comments],
+      routes: [
+        observedRoute({
+          featureIds: ["post-article", "article-comments"],
+          headings: ["Publish demo article"],
+          interactions: [
+            {
+              kind: "fill",
+              locator: { strategy: "placeholder", value: "Write a comment..." },
+              name: "Write a comment...",
+              outcome: "The comment field contained the observed article text",
+            },
+          ],
+          path: "/#/article/demo",
+          requestedPath: "/#/article/demo",
+          text: ["A shared placeholder article body"],
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "prepared feature not observable",
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain(
+      '"Article comments" lacks a visible-text assert',
+    );
+    expect(result.validationReport.logsSummary).toContain(
+      "reselect featureInventory",
+    );
+  });
+
   it("grounds scrolling when the prepared page has scrollable content", async () => {
     const { result } = await exploreObservation({
       routes: [
