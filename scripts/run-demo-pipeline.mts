@@ -2,6 +2,18 @@ import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline/promises";
 import { runDefaultDemoPipeline } from "../src/server/agent-harness/default/default-demo-pipeline";
 import { collectTerminalDemoInput } from "../src/server/agent-harness/terminal/terminal-demo-runner";
+import { destroyAllDaytonaWorkspaces } from "../src/server/shared/integrations/daytona/daytona-sdk-preparation-workspace-provider";
+
+// An interrupted run must not orphan its Daytona sandboxes; without this
+// they keep billing until the server-side auto-delete backstop reaps them.
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.once(signal, () => {
+    stdout.write(
+      `${signal} received; deleting live Daytona sandboxes before exit...\n`,
+    );
+    void destroyAllDaytonaWorkspaces().finally(() => process.exit(130));
+  });
+}
 
 const questioner = createInterface({ input: stdin, output: stdout });
 

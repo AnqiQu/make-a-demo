@@ -148,10 +148,12 @@ const defaultArtifactTransferTimeoutSeconds = 60;
 const defaultSandboxCreateTimeoutSeconds = 300;
 const sandboxCreateConnectionRetryLimit = 2;
 /**
- * Server-side reaper for agent sandboxes, sized well past the longest observed
- * run so it never cuts a live pipeline short; destroy() remains the normal path.
+ * Server-side reaper for agent sandboxes: an hour past the 90-minute job
+ * deadline, so it never cuts a live pipeline short while keeping a killed
+ * run's leak bounded to hours, not a working day. destroy() and the
+ * process-shutdown registry remain the normal paths.
  */
-const agentSandboxAutoDeleteMinutes = 720;
+const agentSandboxAutoDeleteMinutes = 150;
 const ptyStartupRetryLimit = 2;
 const artifactTransferRetryLimit = 2;
 const makeADemoArtifactDirectory = "/tmp/makeademo";
@@ -339,6 +341,31 @@ export class DaytonaSdkPreparationWorkspaceProvider
   }
 }
 
+// Every live handle this process created and has not yet destroyed. The
+// shutdown path drains it: a killed run otherwise leaves its sandboxes
+// running until the server-side auto-delete backstop reaps them hours later.
+const liveWorkspaceHandles = new Set<AgentHarnessWorkspaceHandle>();
+
+/**
+ * Destroys every Daytona workspace this process still holds — the shutdown
+ * hook for interrupted runs (SIGINT/SIGTERM). Individual delete failures are
+ * swallowed: shutdown must not hang on a failing control plane, and the
+ * server-side auto-delete backstop remains the last resort.
+ */
+export async function destroyAllDaytonaWorkspaces(): Promise<void> {
+  const handles = [...liveWorkspaceHandles];
+  liveWorkspaceHandles.clear();
+  await Promise.all(
+    handles.map(async (handle) => {
+      try {
+        await handle.destroy();
+      } catch {
+        // Best effort by design; the backstop reaps what this misses.
+      }
+    }),
+  );
+}
+
 function createPreparationWorkspaceHandle(input: {
   client: DaytonaSdkClient;
   commandTimeoutMs: number;
@@ -360,13 +387,16 @@ function createPreparationWorkspaceHandle(input: {
     input.sandboxLogSinks ?? [],
   );
 
-  return {
+  const handle: AgentHarnessWorkspaceHandle = {
     async destroy() {
+      liveWorkspaceHandles.delete(handle);
       await workspace.destroy();
     },
     id: input.id,
     workspace,
   };
+  liveWorkspaceHandles.add(handle);
+  return handle;
 }
 
 class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {

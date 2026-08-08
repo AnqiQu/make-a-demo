@@ -20,6 +20,7 @@ import {
   type DefaultDemoPipelineResult,
   runDefaultDemoPipeline,
 } from "../src/server/agent-harness/default/default-demo-pipeline";
+import { destroyAllDaytonaWorkspaces } from "../src/server/shared/integrations/daytona/daytona-sdk-preparation-workspace-provider";
 
 export type MatrixEntryConfig = {
   demoLengthSeconds?: number;
@@ -281,5 +282,17 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.main) {
+  // An interrupted matrix must not orphan its Daytona sandboxes: without
+  // this, every live sandbox keeps billing until the server-side
+  // auto-delete backstop reaps it (18 orphans from one aborted run,
+  // 2026-08-08).
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.once(signal, () => {
+      process.stdout.write(
+        `[matrix] ${signal} received; deleting live Daytona sandboxes before exit...\n`,
+      );
+      void destroyAllDaytonaWorkspaces().finally(() => process.exit(130));
+    });
+  }
   await main();
 }

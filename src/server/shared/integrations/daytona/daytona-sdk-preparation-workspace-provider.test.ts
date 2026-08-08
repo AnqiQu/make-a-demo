@@ -18,6 +18,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   DaytonaSdkPreparationWorkspaceProvider,
   createDaytonaSdkPreparationWorkspaceHandle,
+  destroyAllDaytonaWorkspaces,
 } from "./daytona-sdk-preparation-workspace-provider";
 
 const execFileAsync = promisify(execFile);
@@ -35,12 +36,46 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     expect(handle.id).toBe("sandbox_123");
     expect(calls[0]).toEqual({
       create: {
-        autoDeleteInterval: 720,
+        autoDeleteInterval: 150,
         autoStopInterval: 0,
         disk: 3,
         snapshot: "makeademo-opencode",
       },
     });
+  });
+
+  it("destroys still-live workspaces when the process shuts down", async () => {
+    // Killed matrix runs leave their sandboxes running until the server-side
+    // backstop reaps them hours later (18 orphans, 2026-08-08). Every created
+    // handle registers with the process-wide registry so a shutdown hook can
+    // delete whatever a dead run left behind; a handle destroyed normally
+    // must not be deleted twice.
+    await destroyAllDaytonaWorkspaces();
+    const calls: unknown[] = [];
+    const sandboxA = fakeLinkedSandbox(calls, "sandbox_a", "ok");
+    const sandboxB = fakeLinkedSandbox(calls, "sandbox_b", "ok");
+    let created = 0;
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: {
+        async create() {
+          created += 1;
+          return created === 1 ? sandboxA : sandboxB;
+        },
+        async delete(input: { id?: string; name?: string }) {
+          calls.push({ delete: input.id ?? input.name });
+        },
+      } as never,
+    });
+    const first = await provider.create();
+    await provider.create();
+    await first.destroy();
+
+    await destroyAllDaytonaWorkspaces();
+
+    expect(calls.filter((call) => "delete" in Object(call))).toEqual([
+      { delete: "sandbox_a" },
+      { delete: "sandbox_b" },
+    ]);
   });
 
   it("keeps the original failure when the compensating parent delete also fails", async () => {
@@ -120,7 +155,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     await provider.create();
 
     expect(calls[0]).toEqual({
-      create: { autoDeleteInterval: 720, autoStopInterval: 0, disk: 3 },
+      create: { autoDeleteInterval: 150, autoStopInterval: 0, disk: 3 },
       options: { timeout: 180 },
     });
   });
@@ -152,11 +187,11 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     expect(handle.id).toBe("sandbox_123");
     expect(calls.slice(0, 2)).toEqual([
       {
-        create: { autoDeleteInterval: 720, autoStopInterval: 0, disk: 3 },
+        create: { autoDeleteInterval: 150, autoStopInterval: 0, disk: 3 },
         options: { timeout: 180 },
       },
       {
-        create: { autoDeleteInterval: 720, autoStopInterval: 0, disk: 3 },
+        create: { autoDeleteInterval: 150, autoStopInterval: 0, disk: 3 },
         options: { timeout: 180 },
       },
     ]);
@@ -173,7 +208,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
 
     expect(calls[0]).toEqual({
       create: {
-        autoDeleteInterval: 720,
+        autoDeleteInterval: 150,
         autoStopInterval: 0,
         disk: 3,
         secrets: { OPENAI_API_KEY: "makeademo-openai" },
@@ -957,7 +992,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     expect(calls.slice(0, 2)).toEqual([
       {
         create: {
-          autoDeleteInterval: 720,
+          autoDeleteInterval: 150,
           autoStopInterval: 0,
           disk: 3,
           snapshot: "makeademo-opencode",
@@ -1210,7 +1245,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     expect(calls.slice(0, 2)).toEqual([
       {
         create: {
-          autoDeleteInterval: 720,
+          autoDeleteInterval: 150,
           autoStopInterval: 0,
           disk: 3,
           secrets: { OPENAI_API_KEY: "makeademo-openai" },
