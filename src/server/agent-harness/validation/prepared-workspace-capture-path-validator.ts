@@ -120,7 +120,7 @@ export async function validatePreparedWorkspaceCapturePath(input: {
         );
   const result = await runObservedCommand(input, "script-execution", () =>
     workspace.executeSubmittedCode(
-      `cd ${shellQuote(remoteRunDirectory)} && NODE_PATH="$(npm root -g)" timeout -k ${CAPTURE_COMMAND_SHUTDOWN_GRACE_SECONDS}s ${scriptTimeoutSeconds}s bun ${shellQuote(remoteScriptPath)}`,
+      `cd ${shellQuote(remoteRunDirectory)} && NODE_PATH="\${MAKEADEMO_TOOLS_NODE_MODULES:-$(npm root -g)}" timeout -k ${CAPTURE_COMMAND_SHUTDOWN_GRACE_SECONDS}s ${scriptTimeoutSeconds}s bun ${shellQuote(remoteScriptPath)}`,
       {
         timeoutMs:
           (scriptTimeoutSeconds + CAPTURE_COMMAND_SHUTDOWN_GRACE_SECONDS) *

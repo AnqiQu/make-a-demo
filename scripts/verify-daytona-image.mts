@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { createNodeLineSwapCommand } from "../src/server/agent-harness/tools/node-line-resolution";
 import {
   assertSandboxMeetsCapacityFloor,
   readSandboxCapacityEvidence,
@@ -126,6 +127,35 @@ try {
     "Verifying exact submitted-code runtime and Capture SDK under network lockdown...",
   );
   await verifyDaytonaSubmittedCodeRuntime(handle.workspace);
+
+  // Runs sealed: the swap must work from baked tarballs alone, and the
+  // node-gyp configure smoke proves offline native builds compile against
+  // the swapped line's headers (the N78 ABI guarantee). Last submitted-code
+  // check by design — the sandbox is discarded, so no swap-back is needed.
+  console.log(
+    "Verifying offline node-line swap in the submitted-code sandbox...",
+  );
+  const swap = await handle.workspace.executeSubmittedCode(
+    createNodeLineSwapCommand(22),
+    {
+      onStderr: (chunk) => process.stderr.write(chunk),
+      onStdout: (chunk) => process.stdout.write(chunk),
+    },
+  );
+  assertCommandSucceeded("node-line swap", swap);
+  const swappedRuntime = await handle.workspace.executeSubmittedCode(
+    [
+      `node -e ${shellQuote("process.exit(process.version.startsWith('v22.') ? 0 : 1)")}`,
+      "yarn --version",
+      "pnpm --version",
+      "mkdir -p /tmp/makeademo-gyp-smoke",
+      "cd /tmp/makeademo-gyp-smoke",
+      `printf '%s' ${shellQuote('{"targets":[{"target_name":"smoke","sources":[]}]}')} > binding.gyp`,
+      "node-gyp configure --loglevel=silent",
+      "test -d build",
+    ].join(" && "),
+  );
+  assertCommandSucceeded("swapped node-line runtime", swappedRuntime);
 
   if (providerSecrets === undefined) {
     console.log(

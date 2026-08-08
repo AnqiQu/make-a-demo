@@ -211,7 +211,7 @@ export async function exploreSubmittedApp(input: {
         `mkdir -p ${explorerRuntimeDirectory}`,
         `rm -f ${explorerDirectory}/exploration.json`,
         `printf %s ${shellQuote(encodedScript)} | base64 -d > ${explorerPath}`,
-        `NODE_PATH="$(npm root -g)" bun ${explorerPath}`,
+        `NODE_PATH="\${MAKEADEMO_TOOLS_NODE_MODULES:-$(npm root -g)}" bun ${explorerPath}`,
       ].join(" && "),
       { timeoutMs: explorationCommandTimeoutMs },
     );

@@ -8,26 +8,67 @@ RUN apt-get update \
   && update-ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
+# Node lines (N78): every common LTS line is baked as a checksum-verified
+# official tarball so the backend can swap /usr/local wholesale to the
+# repository's pinned line before any repo command runs. Post-swap there is
+# exactly one Node in the sandbox — binaries and headers agree by
+# construction. Keep MAKEADEMO_NODE_LINES in sync with SUPPORTED_NODE_LINES
+# (src/server/agent-harness/tools/node-line-resolution.ts); the dockerfile
+# content test enforces the pairing. The base image's apt-installed Node is
+# removed entirely — its /usr/include/node headers are the stale-ABI trap
+# that broke ghost's better-sqlite3 (2026-08-08 matrix).
+ARG MAKEADEMO_NODE_LINES="20 22 24"
+ARG MAKEADEMO_DEFAULT_NODE_LINE="24"
+RUN set -eux; \
+  apt-get purge -y nodejs || true; \
+  rm -rf /usr/include/node /usr/local/lib/node_modules \
+    /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack; \
+  mkdir -p /opt/node-lines; \
+  for line in $MAKEADEMO_NODE_LINES; do \
+    curl -fsSL -o /tmp/SHASUMS256.txt "https://nodejs.org/dist/latest-v${line}.x/SHASUMS256.txt"; \
+    file="$(grep -o "node-v${line}\.[0-9.]*-linux-x64\.tar\.gz" /tmp/SHASUMS256.txt | head -1)"; \
+    curl -fsSL -o "/opt/node-lines/${file}" "https://nodejs.org/dist/latest-v${line}.x/${file}"; \
+    cd /opt/node-lines && grep " ${file}\$" /tmp/SHASUMS256.txt | sha256sum -c -; \
+    rm /tmp/SHASUMS256.txt; \
+  done; \
+  tar -xzf /opt/node-lines/node-v${MAKEADEMO_DEFAULT_NODE_LINE}.*-linux-x64.tar.gz \
+    -C /usr/local --strip-components=1; \
+  echo "${MAKEADEMO_DEFAULT_NODE_LINE}" > /usr/local/.makeademo-node-line; \
+  node --version
+
+# Native compiles resolve headers from the active /usr/local node (the
+# tarballs ship include/node), so offline node-gyp builds always match the
+# runtime ABI — including after a line swap.
+ENV npm_config_nodedir=/usr/local
+
+# Package managers come from corepack (bundled with every node line): a
+# pinned "packageManager" resolves exactly (outline's yarn@4.11.0) and the
+# defaults below are cached for offline use. COREPACK_HOME lives outside
+# /usr/local so the cache survives line swaps; swaps re-run corepack enable
+# because the shims live in the swapped bin directory.
+ENV COREPACK_HOME=/opt/corepack-cache \
+  COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  COREPACK_DEFAULT_TO_LATEST=0
+RUN corepack enable \
+  && corepack install -g yarn@1.22.22 pnpm@10.12.1 \
+  && yarn --version \
+  && pnpm --version
+
 RUN curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14" \
   && ln -sf /root/.bun/bin/bun /usr/local/bin/bun \
   && ln -sf /root/.bun/bin/bunx /usr/local/bin/bunx
 
-RUN npm install -g --force pnpm@10.12.1 yarn@1.22.22 \
-  && npm cache clean --force
-
-RUN npm install -g \
+# Harness tooling lives in its own prefix so a node-line swap can never
+# delete the capture stack; harness scripts resolve it through
+# MAKEADEMO_TOOLS_NODE_MODULES instead of `npm root -g`.
+ENV MAKEADEMO_TOOLS_NODE_MODULES=/opt/makeademo-tools/lib/node_modules
+RUN npm install -g --prefix /opt/makeademo-tools \
     @playwright/test@1.60.0 \
     playwright@1.60.0 \
     typescript@5.7.3 \
+    node-gyp@11.4.2 \
   && npm cache clean --force
-
-# Cache node-gyp's headers for this image's Node version (~/.cache/node-gyp):
-# the offline lifecycle pass runs after the network reseals, where the
-# header download can never succeed and every from-source native build
-# would fail (ghost's better-sqlite3, 2026-08-08 matrix).
-RUN npm install -g node-gyp@11.4.2 \
-  && node-gyp install \
-  && npm cache clean --force
+ENV PATH="/opt/makeademo-tools/bin:${PATH}"
 
 RUN mkdir -p /workspace /workspace/.makeademo
 

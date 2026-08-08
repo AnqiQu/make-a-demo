@@ -94,8 +94,8 @@ function createRuntimeVerificationCommand() {
     'makeademo_bun_version="$(bun --version)"',
     `test "$makeademo_bun_version" = ${shellQuote(EXPECTED_SUBMITTED_CODE_BUN_VERSION)}`,
     'echo "makeademo_bun_version=$makeademo_bun_version"',
-    `NODE_PATH="$(npm root -g)" node -e ${shellQuote(playwrightVersionCheck)}`,
-    `NODE_PATH="$(npm root -g)" timeout -k 5s 30s bun ${shellQuote("demo-script.ts")}`,
+    `NODE_PATH="\${MAKEADEMO_TOOLS_NODE_MODULES:-$(npm root -g)}" node -e ${shellQuote(playwrightVersionCheck)}`,
+    `NODE_PATH="\${MAKEADEMO_TOOLS_NODE_MODULES:-$(npm root -g)}" timeout -k 5s 30s bun ${shellQuote("demo-script.ts")}`,
     "echo 'makeademo_capture_sdk_smoke=passed'",
   ].join(" && ");
 }

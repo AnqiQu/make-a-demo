@@ -71,8 +71,10 @@ describe("exploreSubmittedApp", () => {
     // walking up from the script's directory, so a submitted repo that ships
     // its own @playwright/test would otherwise shadow the image's pinned
     // install (whose browsers are the only ones present).
+    // MAKEADEMO_TOOLS_NODE_MODULES points at the swap-proof tooling prefix
+    // (N78); the `npm root -g` fallback keeps pre-N78 images working.
     expect(commands[0]).toContain(
-      'NODE_PATH="$(npm root -g)" bun /tmp/makeademo/exploration/explore-app.mjs',
+      'NODE_PATH="${MAKEADEMO_TOOLS_NODE_MODULES:-$(npm root -g)}" bun /tmp/makeademo/exploration/explore-app.mjs',
     );
     expect(commands[0]).not.toContain("bun /workspace");
     // A stale durable protocol from an earlier attempt must never be

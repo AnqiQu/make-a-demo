@@ -159,7 +159,7 @@ export class PreparedWorkspacePlaywrightSceneRecorder implements SceneRecorder {
     });
 
     const result = await workspace.executeSubmittedCode(
-      `cd ${shellQuote(remoteSceneWorkspace)} && NODE_PATH="$(npm root -g)" timeout -k 10s ${Math.ceil(captureTimeoutMs / 1000)}s bun ${shellQuote(remoteScenePath)}`,
+      `cd ${shellQuote(remoteSceneWorkspace)} && NODE_PATH="\${MAKEADEMO_TOOLS_NODE_MODULES:-$(npm root -g)}" timeout -k 10s ${Math.ceil(captureTimeoutMs / 1000)}s bun ${shellQuote(remoteScenePath)}`,
       {
         timeoutMs:
           captureTimeoutMs +
