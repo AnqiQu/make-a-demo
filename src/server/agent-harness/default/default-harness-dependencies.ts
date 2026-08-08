@@ -2241,6 +2241,12 @@ async function validateResolvedSubmittedCodeRuntime(
         (value): value is string => value !== undefined && value.length > 0,
       )
       .join(" "),
+    // The sandbox's Node version is fixed by the image, so an engines check
+    // can only kill demos, never protect them: directus's agent-authored
+    // predev build died on ERR_PNPM_UNSUPPORTED_ENGINE while the install
+    // and lifecycle already carried the bypass (2026-08-08 matrix). Every
+    // downstream package-manager call inherits it here.
+    npm_config_engine_strict: "false",
   };
 
   if (input.buildApp !== false && manifest.buildCommandUsed !== undefined) {

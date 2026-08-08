@@ -3542,6 +3542,36 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
   });
 
+  it("runtime commands inherit the engine-strict bypass", async () => {
+    // directus (2026-08-08): the agent's gated predev build ran
+    // `pnpm -r … run build` and died on ERR_PNPM_UNSUPPORTED_ENGINE — the
+    // install and lifecycle carry the bypass, but agent-authored in-repo
+    // package-manager calls at build/start time did not. The sandbox's Node
+    // version is fixed by the image, so the engine check can only kill
+    // demos; the guarded runtime env disables it for every downstream call.
+    let startEnv: Record<string, string> | undefined;
+    const workspace = createFakeAgentHarnessWorkspace({
+      async startSubmittedCodeApp(input) {
+        startEnv = input.env;
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await harness.dependencies.validatePreparation({
+      preparationManifest: preparationManifest(),
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(startEnv?.npm_config_engine_strict).toBe("false");
+  });
+
   it("harvests yarn berry build.log tails into lifecycle failure evidence", async () => {
     // calcom (2026-08-07): `yarn rebuild` failed, but berry hides each
     // package's build output in /tmp/xfs-*/build.log files its YN0009 lines
@@ -4030,6 +4060,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
             MAKEADEMO_OFFLINE: "1",
             NODE_OPTIONS:
               "--require=/workspace/.makeademo/runtime-network-guard.cjs",
+            npm_config_engine_strict: "false",
           },
         },
       },
