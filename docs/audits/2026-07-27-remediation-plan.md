@@ -3047,6 +3047,16 @@ Verification: TDD per item, failing test verified red first; lint,
 typecheck, test, knip green per commit. Tests 858→870 (+12). The
 remotion-video-renderer suite passed on the final full run,
 confirming the earlier failures as environment flake, not breakage.
+
+**N72a operational step executed (2026-08-08).**
+`makeademo-submitted-code-browser-ca-20260808` built server-side via
+`daytona snapshot create` from the updated Dockerfile (build log shows
+`node-gyp install` caching the v24.15.0 headers); `.env` updated;
+`bun run verify:daytona-image` passed end-to-end. Correction found in
+flight (`ea566d8`): the org's **per-sandbox disk maximum is 10GB** — a
+20GB request is rejected at creation — so N75 is pinned at 10GB
+explicit, and twenty's remaining ENOSPC headroom, if it recurs, must
+come from package-manager cache pruning after install, not disk.
 Matrix expectations: ghost compiles better-sqlite3 offline and calcom's
 sqlite3 stops failing (N72a, after the image rebuild); directus's
 gated prerequisite build survives the engines check (N73); outline
