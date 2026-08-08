@@ -2762,8 +2762,18 @@ function assertFlowSpecGrounded(input: {
         ? action.preferredLocator.value
         : action.preferredLocator.name) ?? ""
     ).trim();
+  // On single-shell apps the explorer keeps nav-listed text as groundable
+  // route-distinct content (N77), but this preference rule stays strict:
+  // when a non-navigation assert exists, the FlowSpec must use it. The
+  // satisfiability guard below keeps nav-only catalogs from wedging.
+  const navigationNames = new Set(
+    input.appMap.discoveredRoutes.flatMap((route) =>
+      (route.primaryNavigation ?? []).map((value) => value.trim()),
+    ),
+  );
   const isRouteDistinctAssert = (action: ActionCatalog["actions"][number]) =>
     action.kind === "assert" &&
+    !navigationNames.has(assertTargetText(action)) &&
     (distinctContentByRoute.get(action.route) ?? []).includes(
       assertTargetText(action),
     );

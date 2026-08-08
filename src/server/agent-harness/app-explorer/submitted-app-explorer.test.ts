@@ -1464,6 +1464,33 @@ describe("exploreSubmittedApp", () => {
     expect(content.get("/?recipe=to-base64")).toContain("To Base64");
   });
 
+  it("keeps a single-shell app's nav-listed content as route-distinct", () => {
+    // cyberchef (2026-08-08): the operations sidebar is nav-role markup, so
+    // its names land in primaryNavigation and swallow their text matches as
+    // chrome — but on a single-shell app there is no cross-page navigation
+    // to discount; the "nav" is the product. Zero-row-table and
+    // assert-matching gates still guard hollowness downstream.
+    const shellRoutes = [
+      {
+        headings: [],
+        path: "/?op=From%20Base64",
+        primaryNavigation: ["From Base64", "To Base64", "Magic"],
+        text: ["From Base64", "Operations", "Recipe"],
+      },
+      {
+        headings: [],
+        path: "/?op=Magic",
+        primaryNavigation: ["From Base64", "To Base64", "Magic"],
+        text: ["Magic", "Operations", "Recipe"],
+      },
+    ];
+
+    const content = readRouteDistinctContent(shellRoutes);
+
+    expect(content.get("/?op=From%20Base64")).toContain("From Base64");
+    expect(content.get("/?op=Magic")).toContain("Magic");
+  });
+
   it("still detects chrome across hash-routed pages", () => {
     // /#/… is hash routing — real pages, exactly like pathname routing
     // (conduit). A sidebar repeated across them stays chrome.

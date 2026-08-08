@@ -578,9 +578,6 @@ export function readRouteDistinctContent(
 ): Map<string, string[]> {
   const trimmed = (values: string[]) =>
     values.map((value) => value.trim()).filter((value) => value.length > 0);
-  const navChrome = new Set(
-    routes.flatMap((route) => trimmed(route.primaryNavigation ?? [])),
-  );
   // Repetition is counted per shell, not per explored path: query and
   // fragment variants of one pathname are one page whose persistent UI is
   // the product (single-shell tools prepare /?flow=… entry routes —
@@ -595,6 +592,16 @@ export function readRouteDistinctContent(
     }
     routeShells.set(shell, values);
   }
+  // A single-shell app has no cross-page navigation to discount: its
+  // nav-role markup is the product (cyberchef's operations sidebar,
+  // 2026-08-08), so nav-matched text stays distinct — but ranked last, so
+  // genuine page content still leads assert selection. Multi-shell apps
+  // keep the full nav exclusion. The zero-row-table and assert-matching
+  // gates still guard hollowness downstream.
+  const singleShell = routeShells.size === 1;
+  const navChrome = new Set(
+    routes.flatMap((route) => trimmed(route.primaryNavigation ?? [])),
+  );
   const occurrences = new Map<string, number>();
   for (const values of routeShells.values()) {
     for (const value of values) {
@@ -622,6 +629,9 @@ export function readRouteDistinctContent(
       const isEmptyTableStructure = (value: string) =>
         headerTokens.size > 0 &&
         tokens(value).every((token) => headerTokens.has(token));
+      const routeText = trimmed(route.text).filter(
+        (value) => !repeatedChrome.has(value) && !isEmptyTableStructure(value),
+      );
       return [
         route.path,
         unique([
@@ -629,12 +639,10 @@ export function readRouteDistinctContent(
             (value) =>
               !repeatedChrome.has(value) && !isEmptyTableStructure(value),
           ),
-          ...trimmed(route.text).filter(
-            (value) =>
-              !repeatedChrome.has(value) &&
-              !navChrome.has(value) &&
-              !isEmptyTableStructure(value),
-          ),
+          ...routeText.filter((value) => !navChrome.has(value)),
+          ...(singleShell
+            ? routeText.filter((value) => navChrome.has(value))
+            : []),
         ]),
       ];
     }),
@@ -716,13 +724,25 @@ function createActions(
             (route.textLocatorEvidence === undefined ||
               Boolean(route.textLocatorEvidence[index])),
         );
-      // Route-distinct text first: chrome-only asserts are ungroundable for
-      // data features, so downstream planning needs content candidates ahead
-      // of navigation labels.
-      const distinct = new Set(distinctContentByRoute.get(route.path) ?? []);
+      // Route-distinct text first, in the distinct list's own order: the
+      // list already ranks genuine content ahead of nav-matched text on
+      // single-shell apps, and chrome-only asserts are ungroundable for
+      // data features, so downstream planning needs content candidates
+      // ahead of navigation labels.
+      const distinctRank = new Map(
+        (distinctContentByRoute.get(route.path) ?? []).map(
+          (value, index) => [value, index] as const,
+        ),
+      );
       const textCandidates = [
-        ...verifiedTexts.filter(({ text }) => distinct.has(text.trim())),
-        ...verifiedTexts.filter(({ text }) => !distinct.has(text.trim())),
+        ...verifiedTexts
+          .filter(({ text }) => distinctRank.has(text.trim()))
+          .sort(
+            (a, b) =>
+              (distinctRank.get(a.text.trim()) ?? 0) -
+              (distinctRank.get(b.text.trim()) ?? 0),
+          ),
+        ...verifiedTexts.filter(({ text }) => !distinctRank.has(text.trim())),
       ].slice(0, 3);
       // The shared slots can all go to strings matching no feature while
       // the texts that could token-match one sit past the cap. Preparation
