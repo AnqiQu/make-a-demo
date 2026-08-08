@@ -32,7 +32,7 @@ export function assertPreparedFeatureInventory(input: {
       "PreparationManifest productContext.evidencePaths must contain source evidence",
     );
   }
-  assertKnownSourcePaths(
+  const unknownSourcePaths = collectUnknownSourcePaths(
     context.evidencePaths,
     input.repoSourcePaths,
     "productContext.evidencePaths",
@@ -40,6 +40,26 @@ export function assertPreparedFeatureInventory(input: {
   if (context.featureInventory.length === 0) {
     throw new Error(
       "PreparationManifest productContext.featureInventory must contain at least one demo feature",
+    );
+  }
+  for (const [index, feature] of context.featureInventory.entries()) {
+    unknownSourcePaths.push(
+      ...collectUnknownSourcePaths(
+        feature.sourcePaths,
+        input.repoSourcePaths,
+        `productContext.featureInventory[${index}].sourcePaths`,
+      ),
+    );
+  }
+  // One error names every offending citation (repair-evidence contract
+  // clause 4): reporting them one at a time made the 2026-08-08 midday
+  // repair whack-a-mole — the same created-file path was rejected from a
+  // different field on every round.
+  if (unknownSourcePaths.length > 0) {
+    throw new Error(
+      `PreparationManifest cites paths outside the screened repository: ${unknownSourcePaths.join(
+        "; ",
+      )}. Product evidence must cite files that exist in the original screened repository — files added during preparation (fixtures, demo gates, mock endpoints) are never product evidence; cite the original modules the demo adapts instead.`,
     );
   }
   for (const [index, feature] of context.featureInventory.entries()) {
@@ -53,11 +73,6 @@ export function assertPreparedFeatureInventory(input: {
     if (feature.sourcePaths.length === 0) {
       throw new Error(`${path}.sourcePaths must contain source evidence`);
     }
-    assertKnownSourcePaths(
-      feature.sourcePaths,
-      input.repoSourcePaths,
-      `${path}.sourcePaths`,
-    );
     if (!feature.sourcePaths.some(isBrowserUiSourcePath)) {
       throw new Error(
         `${path}.sourcePaths must cite an original route, page, component, or browser UI module`,
@@ -184,18 +199,14 @@ function isBrowserUiSourcePath(path: string) {
   );
 }
 
-function assertKnownSourcePaths(
+function collectUnknownSourcePaths(
   paths: string[],
   repoSourcePaths: ReadonlySet<string>,
   fieldPath: string,
-): void {
-  for (const [index, path] of paths.entries()) {
-    if (!repoSourcePaths.has(path)) {
-      throw new Error(
-        `${fieldPath}[${index}] references unknown screened source path ${path}`,
-      );
-    }
-  }
+): string[] {
+  return paths.flatMap((path, index) =>
+    repoSourcePaths.has(path) ? [] : [`${fieldPath}[${index}] ${path}`],
+  );
 }
 
 /** Counts maker-requested features by their normalized comparison key. */

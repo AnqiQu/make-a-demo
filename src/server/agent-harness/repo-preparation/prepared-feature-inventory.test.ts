@@ -59,6 +59,42 @@ describe("assertPreparedFeatureInventory", () => {
     ).toThrow(/template/);
   });
 
+  it("reports every unknown source path at once with the eligibility rule", () => {
+    // Midday's 2026-08-08 regression: one-path-at-a-time rejection made the
+    // repair whack-a-mole — the agent fixed evidencePaths, then the same
+    // created-file path was rejected again from featureInventory.
+    const manifest = manifestWithFeatures([
+      {
+        id: "invoices",
+        label: "Invoices",
+        sourcePaths: ["src/routes.tsx", "src/demo/fixtures.ts"],
+      },
+    ]);
+    manifest.productContext.evidencePaths = [
+      "README.md",
+      "src/demo/fixtures.ts",
+    ];
+
+    let message = "";
+    try {
+      assertPreparedFeatureInventory({
+        demoBrief: {},
+        preparationManifest: manifest,
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("productContext.evidencePaths[1]");
+    expect(message).toContain(
+      "productContext.featureInventory[0].sourcePaths[1]",
+    );
+    expect(message).toContain("src/demo/fixtures.ts");
+    expect(message).toContain("original screened repository");
+    expect(message).toContain("files added during preparation");
+  });
+
   it("requires every prepared feature to cite original product UI source", () => {
     expect(() =>
       assertPreparedFeatureInventory({
