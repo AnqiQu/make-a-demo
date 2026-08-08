@@ -287,15 +287,19 @@ export async function createDefaultAgentHarnessDependencies(
         ? baseline.candidateFingerprint
         : undefined;
     let artifactError = stageInput.initialArtifactError;
-    let timeoutRetryUsed = false;
-    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    let stallRetriesRemaining = retryPolicy.agentStallRetries;
+    // Stall retries repeat an attempt number, so "is this the first run"
+    // must be tracked separately or a post-stall retry would lose the
+    // accumulated error evidence (including the kill disclosure).
+    let priorRunHappened = false;
+    for (let attempt = 1; attempt <= attempts; ) {
       const result = await runOpenCode({
         availableTools: ["read", "write"],
         configDir: openCodeConfigDirectory,
         model: `${providerID}/${modelID}`,
         prompt: stageInput.prompt(
           attempt,
-          attempt === 1 ? undefined : artifactError,
+          priorRunHappened ? artifactError : undefined,
         ),
         ...optionalSessionId(opencodeSessionId),
         stage: stageInput.stageForAttempt(attempt),
@@ -304,6 +308,7 @@ export async function createDefaultAgentHarnessDependencies(
         workspace: stageInput.workspace,
       });
       opencodeSessionId = result.sessionId ?? opencodeSessionId;
+      priorRunHappened = true;
       await stageInput.onResult?.(result);
       const readResult = await tryReadWorkspaceJson(
         stageInput.workspace,
@@ -346,10 +351,13 @@ export async function createDefaultAgentHarnessDependencies(
         artifactError = readResult.error;
       }
       if (result.timeoutError !== undefined) {
-        if (timeoutRetryUsed || attempt === attempts) {
+        // A stall spends the stall lane, never an artifact attempt: 15
+        // stalls hit one concurrent 11-repo matrix (2026-08-07), and ghost
+        // died with its quality budget untouched by any real agent output.
+        if (stallRetriesRemaining === 0) {
           throw result.timeoutError;
         }
-        timeoutRetryUsed = true;
+        stallRetriesRemaining -= 1;
         opencodeSessionId = undefined;
         artifactError = `${artifactError} The previous attempt was killed mid-work; the workspace may contain its unfinished edits — review them before finishing.`;
         await stageInput.onAttemptRejected?.({ artifactError, attempt });
@@ -374,6 +382,7 @@ export async function createDefaultAgentHarnessDependencies(
           }),
         );
       }
+      attempt += 1;
     }
     throw new Error(
       `${stageInput.displayName(attempts)} artifact retry loop exited early.`,
@@ -1125,12 +1134,8 @@ export async function createDefaultAgentHarnessDependencies(
         createPreparationManifestTemplate(runPlan, demoBrief),
       );
       let artifactError: string | undefined;
-      let timeoutRetryUsed = false;
-      for (
-        let attempt = 1;
-        attempt <= retryPolicy.agentArtifactAttempts;
-        attempt += 1
-      ) {
+      let stallRetriesRemaining = retryPolicy.agentStallRetries;
+      for (let attempt = 1; attempt <= retryPolicy.agentArtifactAttempts; ) {
         const result = await runOpenCode({
           availableTools: ["read", "write"],
           configDir: openCodeConfigDirectory,
@@ -1196,13 +1201,12 @@ export async function createDefaultAgentHarnessDependencies(
           workspace,
         });
         if (result.timeoutError !== undefined) {
-          if (
-            timeoutRetryUsed ||
-            attempt === retryPolicy.agentArtifactAttempts
-          ) {
+          // Stalls ride their own budget (see runAgentArtifactStage): a
+          // timed-out repair produced no evidence about repair quality.
+          if (stallRetriesRemaining === 0) {
             throw result.timeoutError;
           }
-          timeoutRetryUsed = true;
+          stallRetriesRemaining -= 1;
           opencodeSessionId = undefined;
           artifactError = `${
             manifestResult.ok
@@ -1236,6 +1240,7 @@ export async function createDefaultAgentHarnessDependencies(
             }),
           );
         }
+        attempt += 1;
       }
       throw new Error("Repo Preparation repair retry loop exited early.");
     },
@@ -1375,7 +1380,9 @@ export async function createDefaultAgentHarnessDependencies(
         prompt: (_attempt, artifactError) =>
           createRuntimeTargetSelectionPrompt(artifactError),
         stageForAttempt: () => "runtime-target-selection",
-        timeoutMsForAttempt: () => 5 * 60_000,
+        // 300s killed ghost twice in the concurrent 2026-08-07 matrix with
+        // output still flowing; selection reads a large repo before writing.
+        timeoutMsForAttempt: () => 10 * 60_000,
         workspace,
       });
     },
@@ -1692,10 +1699,12 @@ function appendTail(current: string, chunk: string, maxLength: number): string {
 }
 
 // A PTY line that is shell bootstrap rather than OpenCode output: a prompt
-// (optionally carrying the echoed command), a bare continuation prompt, or
-// the command exit marker.
+// (optionally carrying the echoed command), a bare continuation prompt, the
+// command exit marker, the shell's own exec diagnostic ("bash: <path>:
+// Argument list too long" — the 2026-08-07 E2BIG launches), or the session
+// teardown echo. Each proves the shell spoke and OpenCode never did.
 const ptyBootstrapLinePattern =
-  /^(?:[^@\s]+@[^\n#]*#.*|>\s*|__MAKEADEMO_EXIT(?:_[A-Za-z0-9]+)?__:\d+)$/;
+  /^(?:[^@\s]+@[^\n#]*#.*|>\s*|__MAKEADEMO_EXIT(?:_[A-Za-z0-9]+)?__:\d+|bash: [^:\n]+: .+|logout)$/;
 
 function hasOnlyPtyBootstrapOutput(result: {
   stderr: string;

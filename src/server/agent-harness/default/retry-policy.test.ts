@@ -6,6 +6,7 @@ describe("readAgentHarnessRetryPolicy", () => {
     expect(
       readAgentHarnessRetryPolicy({
         MAKEADEMO_AGENT_ARTIFACT_ATTEMPTS: "4",
+        MAKEADEMO_AGENT_STALL_RETRIES: "1",
         MAKEADEMO_EXTERNAL_RESOURCE_BROKER_PASSES: "8",
         MAKEADEMO_JOB_DEADLINE_MINUTES: "120",
         MAKEADEMO_REPO_PREPARATION_REPAIRS: "2",
@@ -13,6 +14,7 @@ describe("readAgentHarnessRetryPolicy", () => {
       }),
     ).toEqual({
       agentArtifactAttempts: 4,
+      agentStallRetries: 1,
       externalResourceBrokerPasses: 8,
       jobDeadlineMinutes: 120,
       repoPreparationRepairs: 2,

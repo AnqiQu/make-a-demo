@@ -499,6 +499,123 @@ describe("createDefaultAgentHarnessDependencies", () => {
     });
   });
 
+  it("absorbs repeated agent stalls without spending artifact-quality attempts", async () => {
+    // ghost died at runtime-target-selection: two 300s stalls consumed the
+    // whole attempt budget before the model ever finished a thought. Stalls
+    // are infrastructure weather, not agent-quality failures — they retry in
+    // their own bounded lane and leave the artifact attempts intact.
+    const stages: string[] = [];
+    const deadlines: number[] = [];
+    let runs = 0;
+    const workspace = createFakeAgentHarnessWorkspace({
+      async execute(command) {
+        if (
+          command ===
+          "cat '/workspace/.makeademo/runtime-target-selection.json'"
+        ) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: JSON.stringify({
+              candidates: [
+                {
+                  evidencePaths: ["apps/website/package.json"],
+                  reason: "Public acquisition and pricing pages.",
+                  role: "marketing",
+                  targetId: "apps/website",
+                },
+                {
+                  evidencePaths: ["apps/dashboard/package.json"],
+                  reason: "The product workflows match the demo brief.",
+                  role: "product",
+                  targetId: "apps/dashboard",
+                },
+              ],
+              reason: "The dashboard is the product experience.",
+              selectedTargetId: "apps/dashboard",
+            }),
+          };
+        }
+        if (command.includes("MAKEADEMO_PATCH")) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: "\0MAKEADEMO_HASHES\0\0MAKEADEMO_PATCH\0",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(input) {
+          stages.push(input.stage);
+          deadlines.push(input.timeoutMs);
+          runs += 1;
+          if (runs <= 2) {
+            throw new AgentHarnessCommandTimeoutError(300_000, "deadline");
+          }
+          return { exitCode: 0, stderr: "", stdout: "selected" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+      workspaceProvider: {
+        async create() {
+          return { async destroy() {}, id: "workspace", workspace };
+        },
+      },
+    });
+    const multiAppProfile: RepoProfile = {
+      ...repoProfile(),
+      browserRuntimeCandidates: [
+        {
+          dir: "apps/website",
+          evidencePaths: ["apps/website/package.json"],
+          frameworks: ["next", "react"],
+          installDir: ".",
+          isWorkspace: true,
+          ports: [3000],
+          scripts: { dev: "next dev" },
+        },
+        {
+          dir: "apps/dashboard",
+          evidencePaths: ["apps/dashboard/package.json"],
+          frameworks: ["next", "react"],
+          installDir: ".",
+          isWorkspace: true,
+          ports: [3001],
+          scripts: { dev: "next dev -p 3001" },
+        },
+      ],
+      candidateAppDirs: ["apps/website", "apps/dashboard"],
+      candidatePorts: [3000, 3001],
+      workspaces: { isMonorepo: true, packageDirectories: ["apps/*"] },
+    };
+    await harness.dependencies.createWorkspace({
+      repoProfile: multiAppProfile,
+    });
+
+    const plan = await harness.dependencies.synthesizeRunPlan({
+      demoBrief: { productSummary: "Operations dashboard" },
+      normalizedSupportingDocuments: [],
+      repoProfile: multiAppProfile,
+      workspace,
+    });
+
+    expect(runs).toBe(3);
+    expect(stages).toEqual([
+      "runtime-target-selection",
+      "runtime-target-selection",
+      "runtime-target-selection",
+    ]);
+    // The companion deadline rider: 300s of wall clock was not enough for a
+    // large repo under a concurrent matrix even with output still flowing.
+    expect(deadlines).toEqual([600_000, 600_000, 600_000]);
+    expect(plan).toMatchObject({ appDir: "apps/dashboard" });
+  });
+
   it("gives Flow Planning the complete backend-owned FlowSpec contract", async () => {
     const { result, textFiles } = await runFlowPlanningScenario({
       candidates: [flowSpec()],
@@ -1816,6 +1933,63 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(sessionIds).toEqual([undefined, "stalled_session", undefined]);
   });
 
+  it("absorbs repeated runtime-repair stalls without spending artifact attempts", async () => {
+    // Same stall lane as the artifact stages: a repair round whose agent
+    // command times out twice has produced no evidence about the repair's
+    // quality, so both stalls ride the stall budget and the repair still
+    // gets its full artifact attempts.
+    const workspace = repairableRepoPreparationWorkspace();
+    let runs = 0;
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(input) {
+          runs += 1;
+          if (runs === 1) {
+            workspace.writePreparationManifest();
+            return { exitCode: 0, stderr: "", stdout: "prepared" };
+          }
+          if (input.stage === "repo-preparation-repair" && runs <= 3) {
+            throw new AgentHarnessCommandTimeoutError(300_000, "deadline");
+          }
+          return {
+            exitCode: 0,
+            sessionId: "fresh_session",
+            stderr: "",
+            stdout: "repaired",
+          };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+    await harness.dependencies.prepareRepo({
+      demoBrief: { keyProductFeatures: ["dashboard"] },
+      normalizedSupportingDocuments: undefined,
+      repoProfile: repoProfile(),
+      repoSourcePaths: ["package.json", "src/App.tsx"],
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    await expect(
+      harness.dependencies.repairPreparation?.({
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        failureReport: {
+          ...validationReport("preparation-preflight", "failed"),
+          failureClassification: "start failure",
+        },
+        normalizedSupportingDocuments: undefined,
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+        repoSourcePaths: ["package.json", "src/App.tsx"],
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).resolves.toMatchObject({ opencodeSessionId: "fresh_session" });
+    expect(runs).toBe(4);
+  });
+
   it("repair prompts reference the repo-profile artifact instead of inlining it", async () => {
     // calcom's repo profile serializes to 145KB; inlined into the repair
     // prompt it pushed the argv past the kernel limit (E2BIG) and OpenCode
@@ -2216,6 +2390,52 @@ describe("createDefaultAgentHarnessDependencies", () => {
 
     expect(isAgentHarnessInfrastructureError(error)).toBe(true);
     expect(String(error)).toMatch(/no OpenCode output/);
+    expect(runs).toBe(2);
+  });
+
+  it("classifies a shell exec-diagnostic exit as infrastructure, not agent quality", async () => {
+    // calcom/ghostfolio 2026-08-07: bash printed "bash: /root/.opencode/bin/
+    // opencode: Argument list too long" and exited 126 in ~1s, three times —
+    // OpenCode never ran, yet the failures burned the whole repair budget as
+    // agent-quality attempts.
+    const workspace = repairableRepoPreparationWorkspace();
+    let runs = 0;
+    const harness = await createDefaultAgentHarnessDependencies({
+      agentLaunchRetryDelayMs: 1,
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run() {
+          runs += 1;
+          return {
+            exitCode: 126,
+            stderr: "",
+            stdout: [
+              "[?2004hroot@14ae8c70-2520:/workspace# stty -echo",
+              "[?2004l\r[?2004hroot@14ae8c70-2520:/workspace# ",
+              "bash: /root/.opencode/bin/opencode: Argument list too long",
+              "[?2004hroot@14ae8c70-2520:/workspace# [?2004l",
+              "logout",
+            ].join("\r\n"),
+          };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const error: unknown = await harness.dependencies
+      .prepareRepo({
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        normalizedSupportingDocuments: undefined,
+        repoProfile: repoProfile(),
+        repoSourcePaths: ["package.json", "src/App.tsx"],
+        runPlan: runPlan(),
+        workspace,
+      })
+      .then(() => undefined)
+      .catch((thrown: unknown) => thrown);
+
+    expect(isAgentHarnessInfrastructureError(error)).toBe(true);
     expect(runs).toBe(2);
   });
 

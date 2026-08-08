@@ -1,5 +1,11 @@
 export type AgentHarnessRetryPolicy = {
   agentArtifactAttempts: number;
+  /**
+   * Command stalls (timeouts) retried per stage call without consuming
+   * artifact-quality attempts: a stall is infrastructure weather, not
+   * evidence about the agent's work.
+   */
+  agentStallRetries: number;
   externalResourceBrokerPasses: number;
   /** Wall-clock budget for one whole pipeline job. */
   jobDeadlineMinutes: number;
@@ -9,6 +15,7 @@ export type AgentHarnessRetryPolicy = {
 
 const defaultRetryPolicy: AgentHarnessRetryPolicy = {
   agentArtifactAttempts: 3,
+  agentStallRetries: 2,
   externalResourceBrokerPasses: 6,
   jobDeadlineMinutes: 90,
   repoPreparationRepairs: 5,
@@ -27,6 +34,13 @@ export function readAgentHarnessRetryPolicy(
       key: "MAKEADEMO_AGENT_ARTIFACT_ATTEMPTS",
       minimum: 1,
       override: overrides.agentArtifactAttempts,
+    }),
+    agentStallRetries: readBudget({
+      defaultValue: defaultRetryPolicy.agentStallRetries,
+      env,
+      key: "MAKEADEMO_AGENT_STALL_RETRIES",
+      minimum: 0,
+      override: overrides.agentStallRetries,
     }),
     externalResourceBrokerPasses: readBudget({
       defaultValue: defaultRetryPolicy.externalResourceBrokerPasses,
