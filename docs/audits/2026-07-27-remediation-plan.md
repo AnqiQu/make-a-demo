@@ -3274,3 +3274,96 @@ use-node-version). **N70b** remains queued for excalidraw.
 Recommended order: N78 (unblocks directus + ghost + outline and is
 the substrate for N79), N72b (calcom + ghostfolio), N81 (midday
 regression), N79 → N80 → N82, then N70b.
+
+### Landed (2026-08-08, same day)
+
+All six planned items, in the recommended order. `2beba2e` N78
+resolution + swap: `node-line-resolution.ts` is the pure module
+(`SUPPORTED_NODE_LINES = [20, 22, 24]`, semver intersection over
+root + locked-target pins, root wins conflicts, nearest line with
+`satisfied: false` when nothing satisfies, no pin → 24); the harness
+attaches the resolution to the RunPlan right after run-plan synthesis
+and activates it once per submitted-code sandbox before the first
+repo command. The swap command guards the marker file, fails legibly
+to stderr when the tarball layer is missing (an old image), and
+never shell-`exit`s — that would drop the PTY sentinel. Deviation
+from the plan text: the resolved line is recorded in the run-plan
+artifact plus a `node-line.activated` sandbox-log event, not echoed
+into every preflight report — the artifact is the diagnosis surface
+and preflight reports stay unchanged. `2b8cbfb` N78 image: the
+Playwright base's apt-layout Node and `/usr/include/node` (ghost's
+stale-header trap) are purged; the default line installs from the
+official tarball at `/usr/local`; all three lines bake under
+`/opt/node-lines/` with SHA256 verification;
+`npm_config_nodedir=/usr/local` makes every node-gyp vintage follow
+the swap (supersedes N72a's version-specific header cache); harness
+tooling moves to the swap-proof `/opt/makeademo-tools` prefix,
+resolved at runtime via `MAKEADEMO_TOOLS_NODE_MODULES` with an
+`npm root -g` fallback so the pre-N78 image still captures; managers
+provision via corepack with a warm `COREPACK_HOME` surviving swaps.
+A Dockerfile-content test imports `SUPPORTED_NODE_LINES` so the
+const and the image cannot drift. `ccd581e` N72b: after a successful
+install, while the window is still open, the backend prefetches
+prisma query/schema engines into every installed `@prisma/engines`
+dir — the commit hash is read from the installed
+`@prisma/engines-version` package (deviation: keyed off the
+installed tree, not lockfile text — the tree is what the generate
+step will actually consult), downloads are atomic (tmp+mv) and
+best-effort by construction (the command always exits 0), and no
+third-party code runs while the network is open. `cd206ee` +
+`0c95956` N81: manifest validation now reports every out-of-screen
+citation across evidencePaths and all featureInventory sourcePaths
+in one error carrying the eligibility rule (agent-created files are
+never product evidence; cite the original modules the demo adapts),
+and the initial repo-preparation loop gains the N61 stall lane — a
+timeout without a usable artifact retries without consuming an
+artifact attempt (stall retries are loop state, not persisted
+attempt files). Placement was shaped by a pinned test: a timeout
+that already wrote a valid manifest is a success, so the lane sits
+after the manifest read. `421cfdc` N79: `RepoProfile.yarnVariant`
+derives from the repo's own identity (packageManager pin major,
+else `.yarnrc.yml`/`.yarnrc` presence) and is authoritative in
+suppression, offline-lifecycle, and reconciliation; agent flags
+remain the fallback. Found in flight: excalidraw actually pins
+`yarn@1.22.22`, so flag-based detection had classified it berry and
+its install-window lifecycle scripts were never truly suppressed —
+yarn 1 silently ignores `--mode=skip-build`; the pin now selects
+`--ignore-scripts`. `cfb77d3` N80: the generated exploration
+protocol detects full-viewport loading overlays (≥60% coverage,
+loading/spinner/splash/progressbar/aria-busy), waits bounded (15s
+inside the route budget), records `loadingOverlay` per route, and
+skips exercising stuck routes — exercising them produced junk
+chrome evidence and burned minutes in click-timeout retries; the
+classifier steers stuck-route grounding failures at the runtime
+startup path, never at wording. `0d13ea0` N82: mutating
+identity-semantic keys (nodeLinker, pnpMode, enableScripts,
+yarnPath, use-node-version, node-version) in *existing*
+manager-config files is now an identity violation; other keys stay
+editable for in-manager tweaks. `45f8ad4` regenerated dependency
+graphs for the two new modules.
+
+Verification: TDD per item, failing test verified red first; lint,
+typecheck, test, knip green per commit. Tests 870→903 (+33). The
+remotion-video-renderer suite stayed green all window.
+
+**N78 operational rollout executed (2026-08-08).**
+`makeademo-submitted-code-browser-ca-20260808-nodelines` built
+server-side from the rewritten Dockerfile (build log confirms the
+apt Node purge including `/usr/include/node`, SHA256-verified
+tarballs v20.20.2 / v22.23.2 / v24.19.0, default 24 active with the
+marker file, corepack yarn 1.22.22 + pnpm 10.12.1, tools prefix
+populated); `.env` updated; `bun run verify:daytona-image` passed
+end-to-end including the new sealed-sandbox swap step (offline swap
+to line 22 → `v22.23.2`, corepack-provisioned managers, node-gyp
+configure smoke against the swapped headers).
+
+Matrix expectations: directus's engine check passes under 22; ghost
+compiles better-sqlite3 against 22-line headers and loads it under
+pnpm's downloaded 22.x (NODE_MODULE_VERSION now matches by
+construction); twenty stays on 24; outline installs via corepack
+yarn 4.11.0; calcom and ghostfolio start with warm prisma engines
+(N72b); midday's stall and citation classes are closed (N81);
+cyberchef's stuck-loading failures, if any, steer at the runtime
+(N80); excalidraw's install window is finally script-suppressed
+under classic yarn (N79) — its terminal blocker remains N70b
+(canvas evidence lane, still queued).
