@@ -262,6 +262,13 @@ export async function createDefaultAgentHarnessDependencies(
   const runAgentArtifactStage = async <T>(stageInput: {
     artifactPath: string;
     displayName: (attempt: number) => string;
+    /**
+     * Clear the OpenCode session before a rejected-artifact retry. For
+     * wholesale-regenerated artifacts, resuming the session replays the
+     * reasoning that produced the rejected artifact (excalidraw wrote three
+     * identical assert-less FlowSpecs in one session, 2026-08-08).
+     */
+    freshSessionOnRetry?: boolean;
     initialArtifactError: string;
     /** Errors that must abort the stage instead of feeding the next attempt. */
     isFatalParseError?: (error: unknown) => boolean;
@@ -381,6 +388,9 @@ export async function createDefaultAgentHarnessDependencies(
             stage: stageInput.displayName(attempt),
           }),
         );
+      }
+      if (stageInput.freshSessionOnRetry === true) {
+        opencodeSessionId = undefined;
       }
       attempt += 1;
     }
@@ -844,6 +854,7 @@ export async function createDefaultAgentHarnessDependencies(
       return await runAgentArtifactStage({
         artifactPath: artifactPaths.flowSpec,
         displayName: () => "Flow Planning",
+        freshSessionOnRetry: true,
         initialArtifactError: "FlowSpec was not produced.",
         onAttemptRejected: async ({ artifactError, attempt }) => {
           await options.artifactStore.writeJson(
@@ -4046,6 +4057,7 @@ function createFlowPlanningPrompt(artifactError?: string): string {
         : [
             `The previous artifact was rejected by the backend: ${artifactError}`,
             "Correct the artifact at the exact path before finishing.",
+            'Concretely: every features[] entry must include, in referencedActionIds, at least one interaction id AND at least one assert-* id from the ActionCatalog, both tagged with that featureId. When the rejection names tagged asserts or candidate ids, reference those exact ids — for example a feature with "tagged asserts: assert-heading-2-1" and "tagged interactions: click-link-2-1" must list both ids in referencedActionIds.',
           ]),
     ].join("\n"),
     stage: "flow-planning",

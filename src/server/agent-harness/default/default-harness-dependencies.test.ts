@@ -1465,6 +1465,63 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(prompts[1]).toContain("killed mid-work");
   });
 
+  it("starts a fresh session after an invalid FlowSpec and discloses the rejection", async () => {
+    // excalidraw (2026-08-08): three identical assert-less FlowSpecs inside
+    // one sticky OpenCode session, with the violation text in every retry
+    // prompt. Resuming the session replays the reasoning that produced the
+    // rejected artifact; the retry must start clean and re-read the
+    // contract with the rejection in hand.
+    let opencodeRuns = 0;
+    const sessions: Array<string | undefined> = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async execute(command) {
+        if (command === "cat '/workspace/.makeademo/flow-spec.json'") {
+          if (opencodeRuns === 0) {
+            return { exitCode: 1, stderr: "missing", stdout: "" };
+          }
+          return opencodeRuns === 1
+            ? { exitCode: 0, stderr: "", stdout: JSON.stringify({ bad: 1 }) }
+            : { exitCode: 0, stderr: "", stdout: JSON.stringify(flowSpec()) };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(input) {
+          opencodeRuns += 1;
+          sessions.push(input.sessionId);
+          return {
+            exitCode: 0,
+            sessionId: `ses_sticky_${opencodeRuns}`,
+            stderr: "",
+            stdout: "planned",
+          };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+      workspaceProvider: {
+        async create() {
+          return { async destroy() {}, id: "workspace", workspace };
+        },
+      },
+    });
+    await harness.dependencies.createWorkspace({ repoProfile: repoProfile() });
+
+    await expect(
+      harness.dependencies.planFlow({
+        actionCatalog: actionCatalog(),
+        appMap: appMap(),
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+      }),
+    ).resolves.toMatchObject({ id: "flow" });
+    expect(sessions).toEqual([undefined, undefined]);
+  });
+
   it("rejects an unchanged Demo Script from a crashed Script Repair", async () => {
     // The script being repaired already sits at the artifact path as valid
     // JSON. A crashed repair must not "succeed" by leaving it untouched:
