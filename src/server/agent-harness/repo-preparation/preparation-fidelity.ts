@@ -127,12 +127,25 @@ export function validatePreparationFidelity(input: {
       [...patch.added, ...patch.removed].some((line) =>
         line.includes('"packageManager"'),
       );
+    const isManagerConfig =
+      fileName === ".yarnrc" ||
+      fileName === ".yarnrc.yml" ||
+      fileName === ".npmrc";
     const createsManagerConfig =
-      !input.repoSourceFiles.has(path) &&
-      (fileName === ".yarnrc" ||
-        fileName === ".yarnrc.yml" ||
-        fileName === ".npmrc");
-    if (changesManagerPin || createsManagerConfig) {
+      isManagerConfig && !input.repoSourceFiles.has(path);
+    // Mutating identity-semantic keys inside an EXISTING manager config is
+    // as identity-changing as pinning a different manager: twenty's agent
+    // flipped .yarnrc.yml to nodeLinker: pnp / pnpMode: loose and slipped
+    // the new-file check (2026-08-08 matrix). In-manager tweaks to other
+    // keys stay legal per N74's landed contract.
+    const mutatesManagerIdentity =
+      isManagerConfig &&
+      [...patch.added, ...patch.removed].some((line) =>
+        /^\s*(?:nodeLinker|pnpMode|enableScripts|yarnPath|use-node-version|node-version)\s*[:=]/.test(
+          line,
+        ),
+      );
+    if (changesManagerPin || createsManagerConfig || mutatesManagerIdentity) {
       violations.push({
         hint: repairHints.packageManagerIdentity,
         message: `${path} changes the package-manager identity (the packageManager pin or a manager configuration file); the backend pins the detected manager and regenerates lockfiles with it.`,

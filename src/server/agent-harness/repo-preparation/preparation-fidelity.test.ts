@@ -71,6 +71,43 @@ describe("validatePreparationFidelity", () => {
     expect(report.logsSummary).toContain("package-manager identity");
   });
 
+  it("rejects identity mutations inside an existing manager-config file", () => {
+    // twenty (2026-08-08 matrix): the agent flipped the repo's existing
+    // .yarnrc.yml from node-modules to pnp with pnpMode loose — as
+    // identity-changing as pinning a different manager, but invisible to
+    // the new-file check.
+    const report = validateDiff({
+      modifiedFiles: [".yarnrc.yml"],
+      patch: [
+        "diff --git a/.yarnrc.yml b/.yarnrc.yml",
+        "-nodeLinker: node-modules",
+        "+nodeLinker: pnp",
+        "+pnpMode: loose",
+      ].join("\n"),
+      sourceFiles: { ".yarnrc.yml": "nodeLinker: node-modules\n" },
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.failureClassification).toBe("product fidelity violation");
+    expect(report.logsSummary).toContain(".yarnrc.yml");
+    expect(report.logsSummary).toContain("package-manager identity");
+  });
+
+  it("accepts in-manager tweaks to an existing manager-config file", () => {
+    // N74's landed contract: existing manager config stays editable for
+    // adaptations inside the detected manager.
+    const report = validateDiff({
+      modifiedFiles: [".yarnrc.yml"],
+      patch: [
+        "diff --git a/.yarnrc.yml b/.yarnrc.yml",
+        "+httpTimeout: 60000",
+      ].join("\n"),
+      sourceFiles: { ".yarnrc.yml": "nodeLinker: node-modules\n" },
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
   it("accepts an empty diff when the manifest claims no prepared content", () => {
     // A repo needing zero preparation is legitimate (homer); env-only demo
     // modes carried by envUsed are too. Truthful emptiness must pass.
