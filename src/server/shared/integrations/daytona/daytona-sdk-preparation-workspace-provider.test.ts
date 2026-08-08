@@ -1002,6 +1002,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         create: {
           autoStopInterval: 0,
           autoDeleteInterval: 0,
+          disk: 20,
           ephemeral: true,
           linkedSandbox: "parent_sandbox",
           networkBlockAll: true,
@@ -1255,6 +1256,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         create: {
           autoStopInterval: 0,
           autoDeleteInterval: 0,
+          disk: 20,
           ephemeral: true,
           linkedSandbox: "parent_sandbox",
           networkBlockAll: true,

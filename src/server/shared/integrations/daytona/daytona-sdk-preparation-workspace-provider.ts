@@ -139,6 +139,13 @@ export type DaytonaSdkPreparationWorkspaceProviderOptions = {
 };
 
 const defaultSandboxDiskGB = 3;
+/**
+ * The submitted-code sandbox holds the repo, its dependency tree, the
+ * package-manager cache, and build outputs — twenty alone installs 3.14GiB
+ * of packages and filled the platform default twice (ENOSPC, 2026-08-07/08).
+ * 20GB keeps ~11 concurrent matrix pairs at ~253GiB of a 2000GiB quota.
+ */
+const submittedCodeSandboxDiskGB = 20;
 const defaultCommandTimeoutMs = 10 * 60_000;
 const defaultLogWriteTimeoutMs = 5_000;
 const defaultPtyConnectionTimeoutMs = 30_000;
@@ -261,6 +268,7 @@ export class DaytonaSdkPreparationWorkspaceProvider
               {
                 autoStopInterval: 0,
                 autoDeleteInterval: 0,
+                disk: submittedCodeSandboxDiskGB,
                 ephemeral: true,
                 linkedSandbox: id,
                 networkBlockAll: true,
