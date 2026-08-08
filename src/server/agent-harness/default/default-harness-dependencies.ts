@@ -2008,6 +2008,9 @@ async function validateResolvedSubmittedCodeRuntime(
           input.workspace.setSubmittedCodeNetworkAccess(false),
         command,
         openNetwork: () => input.workspace.setSubmittedCodeNetworkAccess(true),
+        ...(input.repoProfile.yarnVariant === undefined
+          ? {}
+          : { yarnVariant: input.repoProfile.yarnVariant }),
         // The gate may append a lifecycle-script suppression flag, so the
         // executed string must be the gate's command, not the closure's.
         runCommand: (gateCommand) =>
@@ -2061,8 +2064,10 @@ async function validateResolvedSubmittedCodeRuntime(
 
     let result: InstallResult;
     if (input.reconcileLockfile === true) {
-      const reconciliationCommand =
-        createLockfileReconciliationCommand(installCommand);
+      const reconciliationCommand = createLockfileReconciliationCommand(
+        installCommand,
+        input.repoProfile.yarnVariant,
+      );
       result =
         reconciliationCommand === undefined
           ? {
@@ -2081,11 +2086,14 @@ async function validateResolvedSubmittedCodeRuntime(
       result = await runInstall(installCommand);
       const reconciliationCommand =
         result.status === "failed"
-          ? planLockfileReconciliation({
-              installCommand,
-              stderr: result.stderr,
-              stdout: result.stdout,
-            })
+          ? planLockfileReconciliation(
+              {
+                installCommand,
+                stderr: result.stderr,
+                stdout: result.stdout,
+              },
+              input.repoProfile.yarnVariant,
+            )
           : undefined;
       if (reconciliationCommand !== undefined) {
         result =
@@ -2167,6 +2175,9 @@ async function validateResolvedSubmittedCodeRuntime(
     const lifecycleCommand = createOfflineLifecycleCommand({
       installCommand: result.executedCommand,
       packageScripts: input.repoProfile.packageScripts,
+      ...(input.repoProfile.yarnVariant === undefined
+        ? {}
+        : { yarnVariant: input.repoProfile.yarnVariant }),
     });
     if (lifecycleCommand !== undefined) {
       const lifecycle = await executeSubmitted(

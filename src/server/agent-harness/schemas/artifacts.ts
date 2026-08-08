@@ -83,6 +83,12 @@ export type RepoProfile = {
   commitSha?: string;
   rootDir: string;
   packageManager: PackageManager;
+  /**
+   * Yarn generation read from the repository's own identity (packageManager
+   * pin major, else .yarnrc.yml/.yarnrc presence) — never from install-command
+   * flags, which agents get wrong (N79).
+   */
+  yarnVariant?: "berry" | "classic";
   lockfiles: string[];
   workspaces: {
     isMonorepo: boolean;

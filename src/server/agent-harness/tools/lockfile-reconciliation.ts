@@ -27,6 +27,7 @@ const lockfileReconciliations: Record<
     reconciliationCommand: (
       install: PackageManagerInstall,
       installCommand: string,
+      yarnVariant?: "berry" | "classic",
     ) => string;
   }
 > = {
@@ -56,9 +57,9 @@ const lockfileReconciliations: Record<
       output.includes("yn0028") ||
       (output.includes("lockfile") &&
         output.includes("would have been modified")),
-    reconciliationCommand: (install, installCommand) =>
+    reconciliationCommand: (install, installCommand, yarnVariant) =>
       `${install.corepack}yarn install ${
-        readYarnInstallVariant(installCommand) === "berry"
+        readYarnInstallVariant(installCommand, yarnVariant) === "berry"
           ? "--mode=update-lockfile"
           : "--ignore-scripts"
       }`,
@@ -68,10 +69,11 @@ const lockfileReconciliations: Record<
 /** Returns the lifecycle-script-free lockfile command for a recognized install. */
 export function createLockfileReconciliationCommand(
   installCommand: string,
+  yarnVariant?: "berry" | "classic",
 ): string | undefined {
   const install = readPackageManagerInstall(installCommand);
   if (install === undefined) return undefined;
-  return scopedReconciliationCommand(install, installCommand);
+  return scopedReconciliationCommand(install, installCommand, yarnVariant);
 }
 
 /**
@@ -81,6 +83,7 @@ export function createLockfileReconciliationCommand(
  */
 export function planLockfileReconciliation(
   input: LockfileReconciliationInput,
+  yarnVariant?: "berry" | "classic",
 ): string | undefined {
   const install = readPackageManagerInstall(input.installCommand);
   if (install === undefined) {
@@ -96,7 +99,7 @@ export function planLockfileReconciliation(
     return undefined;
   }
   return lockfileReconciliations[install.manager].isStaleLockfileFailure(output)
-    ? scopedReconciliationCommand(install, input.installCommand)
+    ? scopedReconciliationCommand(install, input.installCommand, yarnVariant)
     : undefined;
 }
 
@@ -146,10 +149,11 @@ export function planEngineMismatchRetry(
 function scopedReconciliationCommand(
   install: PackageManagerInstall,
   installCommand: string,
+  yarnVariant?: "berry" | "classic",
 ): string {
   const command = lockfileReconciliations[
     install.manager
-  ].reconciliationCommand(install, installCommand);
+  ].reconciliationCommand(install, installCommand, yarnVariant);
   return install.workspaceScope.length === 0
     ? command
     : `${command} ${install.workspaceScope}`;

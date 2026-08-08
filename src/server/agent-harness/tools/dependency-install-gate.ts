@@ -75,6 +75,8 @@ export async function runDependencyInstallThroughGate(input: {
   command: string;
   openNetwork: () => Promise<void>;
   runCommand: (command: string) => Promise<DependencyInstallCommandResult>;
+  /** Repo-identity yarn generation (RepoProfile.yarnVariant); overrides flag inference. */
+  yarnVariant?: "berry" | "classic";
 }): Promise<
   | ({
       executedCommand: string;
@@ -88,7 +90,10 @@ export async function runDependencyInstallThroughGate(input: {
     return decision;
   }
 
-  const command = withLifecycleScriptSuppression(input.command);
+  const command = withLifecycleScriptSuppression(
+    input.command,
+    input.yarnVariant,
+  );
   await input.openNetwork();
   let result: DependencyInstallCommandResult;
   try {
@@ -204,11 +209,19 @@ export function parseInstallCommand(command: string): ParsedInstallCommand {
 }
 
 /**
- * Yarn Berry rejects `--ignore-scripts` and classic yarn rejects `--mode=...`,
- * so the yarn variant is read from version-specific flags already on the
- * command; a bare `yarn install` follows the run planner's Berry convention.
+ * Yarn Berry rejects `--ignore-scripts` and classic yarn rejects `--mode=...`.
+ * The repository's own identity (RepoProfile.yarnVariant — packageManager pin
+ * major, else yarnrc shape) is authoritative when known: agents write
+ * berry-style flags against classic repos (excalidraw's pinned yarn@1 with
+ * `--immutable`, 2026-08-08 matrix). Version-specific flags on the command
+ * remain the fallback; a bare `yarn install` follows the run planner's Berry
+ * convention.
  */
-export function readYarnInstallVariant(command: string): "berry" | "classic" {
+export function readYarnInstallVariant(
+  command: string,
+  repoVariant?: "berry" | "classic",
+): "berry" | "classic" {
+  if (repoVariant !== undefined) return repoVariant;
   return parseInstallCommand(command).tokens.some((token) =>
     classicYarnOnlyFlags.has(token),
   )
@@ -230,6 +243,8 @@ export function readYarnInstallVariant(command: string): "berry" | "classic" {
 export function createOfflineLifecycleCommand(input: {
   installCommand: string;
   packageScripts: Record<string, string>;
+  /** Repo-identity yarn generation (RepoProfile.yarnVariant); overrides flag inference. */
+  yarnVariant?: "berry" | "classic";
 }): string | undefined {
   const parsed = parseInstallCommand(input.installCommand);
   const manager = parsed.packageManager;
@@ -251,7 +266,8 @@ export function createOfflineLifecycleCommand(input: {
           // behaves identically in single-project repos.
           `pnpm rebuild -r${engineBypass}`
         : manager === "yarn" &&
-            readYarnInstallVariant(input.installCommand) === "berry"
+            readYarnInstallVariant(input.installCommand, input.yarnVariant) ===
+              "berry"
           ? "yarn rebuild"
           : undefined;
   const declaresPostinstall =
@@ -271,7 +287,10 @@ export function createOfflineLifecycleCommand(input: {
   return parts.length === 0 ? undefined : parts.join(" && ");
 }
 
-function withLifecycleScriptSuppression(command: string): string {
+function withLifecycleScriptSuppression(
+  command: string,
+  yarnVariant?: "berry" | "classic",
+): string {
   const parsed = parseInstallCommand(command);
   if (
     parsed.tokens.some(
@@ -283,7 +302,7 @@ function withLifecycleScriptSuppression(command: string): string {
 
   const flag =
     parsed.packageManager === "yarn" &&
-    readYarnInstallVariant(command) === "berry"
+    readYarnInstallVariant(command, yarnVariant) === "berry"
       ? "--mode=skip-build"
       : "--ignore-scripts";
   return `${parsed.command} ${flag}`;

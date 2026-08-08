@@ -126,8 +126,10 @@ export function profileRepo(input: RepoProfileInput): RepoProfile {
   const envExamples = files
     .filter((file) => isEnvironmentFileName(file.path))
     .map((file) => file.path);
+  const yarnVariant = readYarnVariant(primaryPackage?.json, paths);
 
   return {
+    ...(yarnVariant === undefined ? {} : { yarnVariant }),
     authHints: Object.keys(dependencies).filter((name) =>
       authPackagePattern.test(name),
     ),
@@ -686,6 +688,28 @@ function readPackageManagerDeclaration(
   return ["bun", "npm", "pnpm", "yarn"].includes(name ?? "")
     ? { packageManagerDeclaration: name as PackageManager }
     : {};
+}
+
+/**
+ * The yarn generation is a property of the repository, never of whatever
+ * flags an agent typed on an install command: the packageManager pin's major
+ * decides, and without a pin a `.yarnrc.yml` marks a vendored berry setup
+ * while `.yarnrc` marks classic (excalidraw's pinned yarn@1 was misread as
+ * berry from its `--immutable` flag, 2026-08-08 matrix).
+ */
+function readYarnVariant(
+  packageJson: Record<string, unknown> | undefined,
+  paths: ReadonlySet<string>,
+): "berry" | "classic" | undefined {
+  const pin = packageJson?.packageManager;
+  const pinnedMajor =
+    typeof pin === "string" ? /^yarn@(\d+)/.exec(pin.trim())?.[1] : undefined;
+  if (pinnedMajor !== undefined) {
+    return Number(pinnedMajor) >= 2 ? "berry" : "classic";
+  }
+  if (paths.has(".yarnrc.yml")) return "berry";
+  if (paths.has(".yarnrc")) return "classic";
+  return undefined;
 }
 
 function readPnpmWorkspacePatterns(files: RepoProfileFile[]): string[] {

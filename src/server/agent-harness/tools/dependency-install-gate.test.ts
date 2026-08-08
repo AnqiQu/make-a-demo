@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createOfflineLifecycleCommand,
   evaluateDependencyInstallCommand,
   runDependencyInstallThroughGate,
 } from "./dependency-install-gate";
@@ -114,6 +115,46 @@ describe("dependency install gate", () => {
       expect(ran[0]).toBe(command);
       expect(ran[1]).toContain("binaries.prisma.sh");
     }
+  });
+
+  it("lets the repo's yarn variant override berry-style install flags", async () => {
+    // excalidraw (2026-08-08 matrix): pinned yarn@1.22.22, agent wrote
+    // `--immutable`; flag-inferred "berry" issued `yarn rebuild` (which
+    // classic yarn lacks) and chose a suppression flag yarn 1 silently
+    // ignores. The repo's identity, not the agent's flags, decides.
+    const ran: string[] = [];
+    await runDependencyInstallThroughGate({
+      command: "yarn install --immutable",
+      closeNetwork: async () => {},
+      openNetwork: async () => {},
+      runCommand: async (executed) => {
+        ran.push(executed);
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      yarnVariant: "classic",
+    });
+
+    expect(ran[0]).toBe("yarn install --immutable --ignore-scripts");
+  });
+
+  it("skips the offline yarn rebuild for a classic-variant repo", () => {
+    expect(
+      createOfflineLifecycleCommand({
+        installCommand: "yarn install --immutable",
+        packageScripts: {},
+        yarnVariant: "classic",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps the offline yarn rebuild when the repo variant is berry", () => {
+    expect(
+      createOfflineLifecycleCommand({
+        installCommand: "yarn install --frozen-lockfile",
+        packageScripts: {},
+        yarnVariant: "berry",
+      }),
+    ).toBe("yarn rebuild");
   });
 
   it("prefetches prisma engines inside the still-open window after a successful install", async () => {

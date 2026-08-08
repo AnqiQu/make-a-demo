@@ -106,6 +106,72 @@ describe("profileRepo", () => {
     ]);
   });
 
+  it("reads the yarn variant from the repo's own identity, not command flags", () => {
+    // excalidraw (2026-08-08 matrix): pinned yarn@1.22.22, but the agent's
+    // berry-style `--immutable` flag made the lifecycle issue `yarn
+    // rebuild`, which classic yarn does not have.
+    const classic = profileRepo({
+      files: [
+        {
+          path: "package.json",
+          text: JSON.stringify({
+            packageManager: "yarn@1.22.22",
+            scripts: { dev: "vite" },
+          }),
+        },
+        { path: "yarn.lock", text: "" },
+      ],
+      repoUrl: "https://github.com/example/classic-pin",
+    });
+    expect(classic.yarnVariant).toBe("classic");
+
+    const berry = profileRepo({
+      files: [
+        {
+          path: "package.json",
+          text: JSON.stringify({
+            packageManager: "yarn@4.12.0",
+            scripts: { dev: "vite" },
+          }),
+        },
+        { path: "yarn.lock", text: "" },
+      ],
+      repoUrl: "https://github.com/example/berry-pin",
+    });
+    expect(berry.yarnVariant).toBe("berry");
+  });
+
+  it("infers the berry variant from .yarnrc.yml when the pin is absent", () => {
+    const profile = profileRepo({
+      files: [
+        {
+          path: "package.json",
+          text: JSON.stringify({ scripts: { dev: "vite" } }),
+        },
+        { path: ".yarnrc.yml", text: "nodeLinker: node-modules\n" },
+        { path: "yarn.lock", text: "" },
+      ],
+      repoUrl: "https://github.com/example/vendored-berry",
+    });
+
+    expect(profile.yarnVariant).toBe("berry");
+  });
+
+  it("leaves the yarn variant unset without yarn evidence", () => {
+    const profile = profileRepo({
+      files: [
+        {
+          path: "package.json",
+          text: JSON.stringify({ scripts: { dev: "vite" } }),
+        },
+        { path: "package-lock.json", text: "{}" },
+      ],
+      repoUrl: "https://github.com/example/npm-repo",
+    });
+
+    expect(profile.yarnVariant).toBeUndefined();
+  });
+
   it("records an assumption when conflicting lockfiles force a manager tiebreak", () => {
     const profile = profileRepo({
       files: [
