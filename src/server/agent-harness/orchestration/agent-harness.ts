@@ -48,6 +48,11 @@ import {
 import { ensureSceneNavigation } from "../script-contract/demo-script-contract";
 import { readDisallowedScriptWritingChanges } from "../script-generation/read-only-boundary";
 import {
+  DEFAULT_NODE_LINE,
+  createNodeLineSwapCommand,
+  resolveNodeLine,
+} from "../tools/node-line-resolution";
+import {
   PreparationFallbackRequiredError,
   createPreparationFallbackArtifact,
 } from "./preparation-fallback";
@@ -368,6 +373,15 @@ export async function runAgentHarnessPipeline(
           }),
         ),
     );
+    runPlan = {
+      ...runPlan,
+      nodeLine: resolveNodeLine({
+        files: input.files,
+        ...(runPlan.targetSelection?.targetId === undefined
+          ? {}
+          : { targetId: runPlan.targetSelection.targetId }),
+      }),
+    };
     await writeArtifact(dependencies, artifactPaths.runPlan, runPlan);
   } catch (error) {
     stageStatuses["agent-harness"] = "failed";
@@ -397,6 +411,7 @@ export async function runAgentHarnessPipeline(
 
   try {
     preparationWorkspaceMutated = true;
+    await activatePinnedNodeLine(requireWorkspace(workspace), runPlan);
     const preparation = await runAsyncStage(
       "repo-preparation",
       stageStatuses,
@@ -1944,6 +1959,41 @@ function requireWorkspace(
     throw new Error("Agent harness workspace has not been created.");
   }
   return workspace;
+}
+
+const nodeLineSwapTimeoutMs = 120_000;
+
+// Runs before any submitted-code command so binaries, headers, and every
+// nested spawn agree on the repository's pinned Node line (N78). The default
+// line skips the round-trip: the image's marker already matches.
+async function activatePinnedNodeLine(
+  workspace: AgentHarnessWorkspace,
+  runPlan: RunPlan,
+): Promise<void> {
+  const nodeLine = runPlan.nodeLine;
+  if (nodeLine === undefined || nodeLine.line === DEFAULT_NODE_LINE) {
+    return;
+  }
+  const result = await workspace.executeSubmittedCode(
+    createNodeLineSwapCommand(nodeLine.line),
+    { timeoutMs: nodeLineSwapTimeoutMs },
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `Submitted-code sandbox could not activate Node line ${nodeLine.line} (pins: ${nodeLine.provenance.join("; ")}): ${(result.stderr || result.stdout).trim().slice(-500)}`,
+    );
+  }
+  try {
+    await workspace.writeSandboxLog({
+      event: "node-line.activated",
+      line: nodeLine.line,
+      message: `Submitted-code sandbox activated Node line ${nodeLine.line}.`,
+      provenance: nodeLine.provenance,
+      satisfied: nodeLine.satisfied,
+    });
+  } catch {
+    // Audit logging is best-effort; the swap itself already succeeded.
+  }
 }
 
 function optionalString<K extends string>(

@@ -3838,7 +3838,8 @@ const sealedNetworkWorldRulesInstruction =
   "(1) The network is open only during the backend's dependency install with lifecycle scripts suppressed, and permanently sealed afterward. Any lifecycle or runtime step that downloads (prisma engines, prebuilt native binaries, telemetry, remote fonts) fails there on every retry — neutralize the downloading step for the demo, avoid the artifact at runtime, or vendor it into the repo. " +
   "(2) Internal workspace-package build outputs (dist/, build/) exist only if a declared build command produces them; dependency install never builds workspace members. When the app imports a workspace package's build output, declare the repo's own narrowest target that builds it first. " +
   "(3) package.json script gates run under restricted shells — turbo and nx use a minimal interpreter without if/then — so gate demo behavior with a node -e conditional such as node -e \"if (process.env.MAKEADEMO_DEMO === 'true') { … }\", never POSIX if/then syntax. " +
-  "(4) 'It works in this sandbox' proves nothing about the demo runtime: this agent sandbox has an open network and different caches. Validate assumptions against these rules instead of by running the app here.";
+  "(4) 'It works in this sandbox' proves nothing about the demo runtime: this agent sandbox has an open network and different caches. Validate assumptions against these rules instead of by running the app here. " +
+  "(5) The backend fixes the demo runtime's Node version from the repository's own pin (engines, devEngines, .nvmrc) before any repo command runs — never install, download, or reconfigure Node, and never edit those pins to dodge a version check.";
 
 const appDirShapeInstruction =
   'appDir must be relative to /workspace/repo: use "." for the repo root or a path such as "frontend"; never use an absolute path.';

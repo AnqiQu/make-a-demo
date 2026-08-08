@@ -273,6 +273,145 @@ describe("runAgentHarnessPipeline", () => {
     });
   });
 
+  it("swaps the submitted-code sandbox to the repo-pinned node line before repo preparation", async () => {
+    const events: string[] = [];
+    const submittedCommands: string[] = [];
+    const fakeWorkspace = createFakeAgentHarnessWorkspace({
+      executeSubmittedCode: async (command: string) => {
+        events.push("swap");
+        submittedCommands.push(command);
+        return { exitCode: 0, stderr: "", stdout: "v22.23.1\n" };
+      },
+    });
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({
+          files: [
+            {
+              path: "package.json",
+              text: JSON.stringify({ engines: { node: "22" } }),
+            },
+            { path: "src/page.tsx", text: "export default 1" },
+            { path: "bun.lock", text: "" },
+          ],
+        }),
+        stubPipelineDependencies({
+          async createWorkspace() {
+            return fakeWorkspace;
+          },
+          async prepareRepo() {
+            events.push("prepare");
+            throw new Error("stop after swap");
+          },
+        }),
+      ),
+    ).rejects.toThrow("stop after swap");
+
+    expect(events).toEqual(["swap", "prepare"]);
+    expect(submittedCommands[0]).toContain("node-v22");
+    expect(submittedCommands[0]).toContain("corepack enable");
+  });
+
+  it("skips the node-line swap when the repository declares no Node pin", async () => {
+    const submittedCommands: string[] = [];
+    const fakeWorkspace = createFakeAgentHarnessWorkspace({
+      executeSubmittedCode: async (command: string) => {
+        submittedCommands.push(command);
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput(),
+        stubPipelineDependencies({
+          async createWorkspace() {
+            return fakeWorkspace;
+          },
+          async prepareRepo() {
+            throw new Error("stop before preparation");
+          },
+        }),
+      ),
+    ).rejects.toThrow("stop before preparation");
+
+    expect(submittedCommands).toEqual([]);
+  });
+
+  it("fails the run legibly when the pinned node line cannot be activated", async () => {
+    const fakeWorkspace = createFakeAgentHarnessWorkspace({
+      executeSubmittedCode: async () => ({
+        exitCode: 1,
+        stderr:
+          "makeademo: node line 22 is not baked into this image; rebuild the submitted-code snapshot",
+        stdout: "",
+      }),
+    });
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({
+          files: [
+            {
+              path: "package.json",
+              text: JSON.stringify({ engines: { node: "22" } }),
+            },
+            { path: "src/page.tsx", text: "export default 1" },
+            { path: "bun.lock", text: "" },
+          ],
+        }),
+        stubPipelineDependencies({
+          async createWorkspace() {
+            return fakeWorkspace;
+          },
+          async prepareRepo() {
+            throw new Error(
+              "Repo Preparation must not run after a failed swap.",
+            );
+          },
+        }),
+      ),
+    ).rejects.toThrow(/Node line 22.*rebuild the submitted-code snapshot/s);
+  });
+
+  it("records the resolved node line in the run-plan artifact", async () => {
+    const artifacts: Record<string, unknown> = {};
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({
+          files: [
+            {
+              path: "package.json",
+              text: JSON.stringify({ engines: { node: "22" } }),
+            },
+            { path: "src/page.tsx", text: "export default 1" },
+            { path: "bun.lock", text: "" },
+          ],
+        }),
+        stubPipelineDependencies({
+          artifactStore: {
+            async writeJson(path: string, value: unknown) {
+              artifacts[path] = value;
+            },
+          },
+          async prepareRepo() {
+            throw new Error("stop after run plan");
+          },
+        }),
+      ),
+    ).rejects.toThrow("stop after run plan");
+
+    const recordedRunPlan = artifacts[
+      "/workspace/.makeademo/run-plan.json"
+    ] as {
+      nodeLine?: { line: number; provenance: string[]; satisfied: boolean };
+    };
+    expect(recordedRunPlan.nodeLine?.line).toBe(22);
+    expect(recordedRunPlan.nodeLine?.satisfied).toBe(true);
+  });
+
   it("routes Script Writing app-source edits to script repair", async () => {
     let diffChecks = 0;
     const repairClassifications: Array<string | undefined> = [];

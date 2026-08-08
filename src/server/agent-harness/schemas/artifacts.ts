@@ -125,6 +125,16 @@ export type RunPlan = {
   riskFlags: string[];
   validationExpectations: string[];
   targetSelection?: RuntimeTargetSelection;
+  /**
+   * Submitted-code Node line resolved from the screened repository's pins
+   * (N78). Attached by the backend after synthesis — never by the agent —
+   * and executed as a /usr/local swap before any repo command runs.
+   */
+  nodeLine?: {
+    line: number;
+    provenance: string[];
+    satisfied: boolean;
+  };
 };
 
 export type PreparedDemoFeature = {
@@ -409,6 +419,7 @@ export function readRunPlan(value: unknown): RunPlan {
     expectedLocalUrl: readLocalHttpUrl(record, "expectedLocalUrl"),
     installCommand: readNonEmptyString(record, "installCommand"),
     localServices: readStringArray(record, "localServices"),
+    ...readOptionalNodeLine(record.nodeLine),
     riskFlags: readStringArray(record, "riskFlags"),
     runtime: readEnum(record, "runtime", ["bun", "deno", "node", "unknown"]),
     startCommand: readNonEmptyString(record, "startCommand"),
@@ -422,6 +433,29 @@ export function readRunPlan(value: unknown): RunPlan {
     throw new Error("RunPlan.targetSelection.targetId must match appDir");
   }
   return runPlan;
+}
+
+// The backend attaches the resolved submitted-code Node line after run-plan
+// synthesis; reads must preserve it so repair rounds and run-dir forensics
+// see the same decision the swap executed.
+function readOptionalNodeLine(value: unknown): Pick<RunPlan, "nodeLine"> {
+  if (value === undefined) return {};
+  const record = assertRecord(value, "RunPlan.nodeLine");
+  if (
+    typeof record.line !== "number" ||
+    typeof record.satisfied !== "boolean"
+  ) {
+    throw new Error(
+      "RunPlan.nodeLine must carry a numeric line and satisfied flag",
+    );
+  }
+  return {
+    nodeLine: {
+      line: record.line,
+      provenance: readStringArray(record, "provenance", "RunPlan.nodeLine"),
+      satisfied: record.satisfied,
+    },
+  };
 }
 
 function readOptionalRuntimeTargetSelection(
