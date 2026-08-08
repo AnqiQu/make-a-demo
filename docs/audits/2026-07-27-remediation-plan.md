@@ -2997,3 +2997,61 @@ all small except none), N58 (cheapest economics win, specced), N76 →
 N77 (planning/exploration polish), N63 with the turbo-shell rider
 (prompt work), then N59; N72b gated on the post-N72a matrix, N60/N64
 still gated.
+
+### Landed (2026-08-08, same day; N62 pulled forward by request)
+
+All nine items. `b4750b0` N72a: the submitted-code image installs
+build-essential + python3 and caches node-gyp headers for its own Node
+version — **operational step: rebuild and re-push the submitted-code
+image/snapshot before the next matrix, or ghost/calcom keep failing on
+the old image**. `d89f102` N73: `npm_config_engine_strict=false` joins
+the guarded runtime env unconditionally — the sandbox's Node is fixed
+by the image, so the engines check can only kill demos, and threading
+per-install state would go stale on N58's skipped-install rounds.
+`166f91d` N74: fidelity rejects packageManager-pin changes and new
+`.yarnrc`/`.yarnrc.yml`/`.npmrc` files; existing manager-config files
+stay editable for in-manager tweaks. `82ae830` N75: the submitted-code
+sandbox gets an explicit 20GB disk (agent sandbox stays 3GB; ~253GiB
+for 11 concurrent pairs of the 2000GiB quota). `e5ae930` N58: repair
+rounds whose delta leaves dependency inputs unchanged pass
+`installDependencies: false` and reuse the prior round's install; the
+reuse note travels as a suggestedRepairHint, deliberately not in
+logsSummary — a round-varying summary prefix would defeat the
+repeated-failure fingerprint (found in flight when two fingerprint
+tests broke). The reusable-install tracker resets conservatively on
+{install failure, external network attempted, harness/internal
+failure}. `e068ee2` N76: FlowSpec rejections clear the OpenCode
+session before retrying (the timeout path already did) and the retry
+prompt shows a concrete referencedActionIds example built from the
+rejection's own ids. `e06de6e` N77: on single-shell apps nav-listed
+text stays groundable route-distinct content but ranks last for assert
+selection, and flow planning's route-distinct preference stays strict
+(nav text never satisfies it when a non-nav assert exists — its
+satisfiability guard keeps nav-only catalogs from wedging); the
+two-sided design emerged from a pinned assert-ordering test and the
+chrome-preference test both failing against the naive exemption.
+`abba688` N63: both preparation prompts and the runtime repair prompt
+carry the sealed-network world rules including the turbo/nx
+restricted-shell rider (gate with `node -e`, never if/then).
+`86505f3` (refs N65): the initial preparation prompt and the
+failed-prep repair prompt stop inlining the repo profile — two more
+sites of the calcom 145KB inline found during N63. `26d54df` +
+`a48143a` N62: `harness/internal failure` validation reports get one
+agent-free revalidation then fail the run as not-agent-repairable
+(zero repair-budget spend), and the five-clause repair-evidence
+contract is written down in docs/agents/repair-evidence-contract.md
+with a per-gate audit table and anchored on the ValidationReport
+docstring.
+
+Verification: TDD per item, failing test verified red first; lint,
+typecheck, test, knip green per commit. Tests 858→870 (+12). The
+remotion-video-renderer suite passed on the final full run,
+confirming the earlier failures as environment flake, not breakage.
+Matrix expectations: ghost compiles better-sqlite3 offline and calcom's
+sqlite3 stops failing (N72a, after the image rebuild); directus's
+gated prerequisite build survives the engines check (N73); outline
+keeps yarn berry (N74); twenty stops filling its disk (N75); repair
+rounds drop ~1–2 minutes each on source-only repairs (N58);
+excalidraw's flow planning converges (N76); cyberchef's operation
+names ground its features (N77); prisma-class downloads get designed
+around up front (N63) — ghostfolio remains the N72b gate test.
