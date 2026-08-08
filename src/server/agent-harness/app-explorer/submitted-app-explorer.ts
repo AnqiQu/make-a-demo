@@ -100,6 +100,14 @@ type ObservedRoute = {
   inputs: string[];
   interactions?: ObservedInteraction[];
   links: ObservedLink[];
+  /**
+   * True when a full-viewport loading indicator was still covering the page
+   * at harvest time despite the protocol's bounded readiness wait. Text
+   * harvested behind such an overlay is not exercisable evidence, so
+   * grounding failures on these routes steer repair at the app's startup
+   * path, never at feature wording (cyberchef, 2026-08-08 matrix).
+   */
+  loadingOverlay?: boolean;
   path: string;
   primaryNavigation: string[];
   requestedPath?: string;
@@ -408,6 +416,11 @@ function createExplorationArtifacts(input: {
   const distinctContentByRoute = readRouteDistinctContent(
     input.observation.routes,
   );
+  const stuckLoadingRoutes = new Set(
+    input.observation.routes
+      .filter((route) => route.loadingOverlay === true)
+      .map((route) => route.path),
+  );
   const routes: Array<Record<string, unknown>> = [];
   const loginOrAuthWalls: string[] = [];
   const emptyDataTablesByRoute = new Map<string, number>();
@@ -475,6 +488,7 @@ function createExplorationArtifacts(input: {
     featureInventory: input.featureInventory,
     networkAttempts,
     populatedTableRoutes,
+    stuckLoadingRoutes,
     unreachableRoutes: input.observation.unreachableRoutes ?? [],
   });
 
@@ -987,6 +1001,7 @@ function createExplorationValidationReport(input: {
   featureInventory: PreparedDemoFeature[];
   networkAttempts: NetworkAttempt[];
   populatedTableRoutes?: ReadonlySet<string>;
+  stuckLoadingRoutes?: ReadonlySet<string>;
   unreachableRoutes: UnreachableRoute[];
 }): ValidationReport {
   const groundingFailure = readExplorationFailure(
@@ -998,6 +1013,7 @@ function createExplorationValidationReport(input: {
     input.emptyDataTablesByRoute ?? new Map(),
     input.distinctContentByRoute,
     input.populatedTableRoutes ?? new Set(),
+    input.stuckLoadingRoutes ?? new Set(),
   );
   // Load-breaking runtime evidence outranks grounding counts: a route that
   // crashes before rendering cannot ground anything, and only the dependency
@@ -1089,6 +1105,7 @@ function readExplorationFailure(
   emptyDataTablesByRoute: ReadonlyMap<string, number>,
   distinctContentByRoute: ReadonlyMap<string, string[]>,
   populatedTableRoutes: ReadonlySet<string>,
+  stuckLoadingRoutes: ReadonlySet<string>,
 ): { classification: string; message: string } | undefined {
   const unreachableFailure = (features: PreparedDemoFeature[]) => {
     const featureIds = new Set(features.map(({ id }) => id));
@@ -1301,6 +1318,23 @@ function readExplorationFailure(
         taggedRoutes.length > 0 ? taggedRoutes : feature.entryPaths;
       if (routes.length === 0) {
         return { sentence: "", vetoedByEmptyTable: false };
+      }
+      const stuckRoutes = routes.filter((route) =>
+        stuckLoadingRoutes.has(route),
+      );
+      // A route that never left its loading overlay cannot evidence
+      // anything: text behind the overlay is not exercisable, so wording
+      // and fixture steering would send every repair round the wrong way
+      // (cyberchef burned five on wording alignment, 2026-08-08).
+      if (stuckRoutes.length > 0) {
+        return {
+          sentence: ` Requested feature "${feature.requestedFeature}" is tagged to routes ${stuckRoutes
+            .slice(0, 4)
+            .join(
+              ", ",
+            )}, which stayed behind a full-page loading overlay for the entire exploration — the app never finished initializing in the demo runtime, so no interaction or assert could be exercised. Repair the prepared app's startup path (look for silently pending requests, workers that never come up, or gated initialization that never completes); featureInventory wording cannot help.`,
+          vetoedByEmptyTable: false,
+        };
       }
       const contentRoutes = routes.filter((route) =>
         contentRoutePaths.has(route),
@@ -1777,6 +1811,17 @@ try {
       }), [settleMs, maxMs]);
     } catch {}
   };
+  const hasCoveringLoadingOverlay = () => {
+    const viewportArea = window.innerWidth * window.innerHeight;
+    if (viewportArea === 0) return false;
+    const candidates = document.querySelectorAll("[class*='load' i], [id*='load' i], [class*='spinner' i], [id*='spinner' i], [class*='splash' i], [role='progressbar'], [aria-busy='true']");
+    return Array.from(candidates).some((element) => {
+      const style = getComputedStyle(element);
+      if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) return false;
+      const box = element.getBoundingClientRect();
+      return (box.width * box.height) / viewportArea >= 0.6;
+    });
+  };
   const readAriaRootName = (snapshot) => {
     const firstLine = snapshot.split("\\n", 1)[0] || "";
     const match = /^-\\s+[a-zA-Z]+(?:\\s+("(?:[^"\\\\]|\\\\.)*"))?/.exec(firstLine);
@@ -1933,6 +1978,14 @@ try {
       }, undefined, { timeout: Math.min(15000, Math.max(1, remainingMs())) }).catch(() => {});
     }
     await waitForQuietDom(300, 2500);
+    // A full-viewport loading indicator means the page is not ready no
+    // matter how quiet the DOM is (cyberchef, 2026-08-08): wait it out
+    // within a bounded budget; the verdict is recorded at harvest time.
+    const overlayDeadlineAtMs = Date.now() + Math.min(15000, Math.max(1, remainingMs()));
+    while (await page.evaluate(hasCoveringLoadingOverlay).catch(() => false)) {
+      if (Date.now() >= overlayDeadlineAtMs) break;
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
   };
   const queue = [
     ...featureEntryTargets,
@@ -2047,6 +2100,7 @@ try {
           title: document.title || clean(document.querySelector("h1")?.textContent) || location.pathname,
         };
       });
+      observed.loadingOverlay = await page.evaluate(hasCoveringLoadingOverlay).catch(() => false);
       const current = new URL(page.url());
       const path = current.pathname + current.search + current.hash;
       observed.links = await Promise.all(observed.links.map(async (link) => ({
@@ -2143,7 +2197,11 @@ try {
       })));
       observed.interactions = [];
       const routeUrl = page.url();
-      for (let index = 0; index < Math.min(observed.buttons.length, 8); index += 1) {
+      // Exercising a route that is still behind its loading overlay yields
+      // junk evidence: clicks are intercepted by the overlay and every
+      // re-navigation re-pays the overlay wait. The stuck verdict itself is
+      // the route's evidence.
+      for (let index = 0; observed.loadingOverlay !== true && index < Math.min(observed.buttons.length, 8); index += 1) {
         if (Date.now() >= deadlineAtMs) break;
         const name = observed.buttons[index];
         const locatorEvidence = observed.buttonLocatorEvidence[index];
@@ -2180,7 +2238,7 @@ try {
           if (isAppUnavailableError(error)) throw error;
         }
       }
-      for (const input of observed.inputLocators.slice(0, 6)) {
+      for (const input of observed.loadingOverlay === true ? [] : observed.inputLocators.slice(0, 6)) {
         if (Date.now() >= deadlineAtMs) break;
         if (!input.locatorEvidence || ["button", "checkbox", "file", "hidden", "password", "radio", "submit"].includes(input.inputType) || input.inAuthForm) continue;
         try {

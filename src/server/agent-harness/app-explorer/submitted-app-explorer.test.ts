@@ -1512,6 +1512,45 @@ describe("exploreSubmittedApp", () => {
     expect(content.get("/#/feed")).toEqual(["Page 0"]);
   });
 
+  it("steers a stuck-loading route at the runtime, never at feature wording", async () => {
+    // cyberchef (2026-08-08 matrix): the app sat on its full-page loading
+    // overlay through the whole exploration — text harvested from the DOM
+    // behind the overlay, zero exercisable actions, no errors anywhere —
+    // and five repair rounds chased featureInventory wording alignment.
+    const recipe = preparedFeature({
+      description: "Demonstrate building an encoding recipe",
+      entryPaths: ["/"],
+      id: "encode-recipe",
+      label: "Encoding recipe",
+      requestedFeature:
+        "Paste sample input, add an encoding operation to the recipe, and inspect the transformed output",
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [recipe],
+      routes: [
+        observedRoute({
+          buttons: ["To Base64", "From Base64", "Bake!"],
+          featureIds: ["encode-recipe"],
+          loadingOverlay: true,
+          path: "/",
+          text: ["Download CyberChef", "Options", "To Base64", "Bake!"],
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "requested feature not observable",
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain("loading overlay");
+    expect(result.validationReport.logsSummary).toContain(
+      "never finished initializing",
+    );
+    expect(result.validationReport.logsSummary).not.toContain(
+      "align the featureInventory wording",
+    );
+  });
+
   it("fails a requested feature grounded only over a zero-row data table", async () => {
     // Hollow pass #3: the invoices route rendered populated summary cards
     // while its data table stayed at zero rows, and grounding accepted the

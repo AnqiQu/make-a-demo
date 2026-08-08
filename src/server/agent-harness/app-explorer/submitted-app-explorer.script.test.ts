@@ -107,6 +107,107 @@ describe("generated exploration script", () => {
     }
   }, 30_000);
 
+  it("flags a route that never leaves its full-page loading overlay", async () => {
+    // cyberchef (2026-08-08 matrix): a full-viewport loader that never
+    // clears, with the real UI parked behind it — no errors, no blocked
+    // requests, just a page that is not ready and never becomes ready.
+    const stuckLoaderPage = `<!doctype html><html><head><title>Stuck App</title>
+<style>#loading-overlay{position:fixed;inset:0;background:#eee;z-index:10;display:flex;align-items:center;justify-content:center}</style>
+</head><body>
+<div id="loading-overlay"><p>Issuing one-time pads and warming caches...</p></div>
+<main><h1>Operations</h1><button>To Base64</button><button>Bake!</button></main>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(stuckLoaderPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-stuck-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 45_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        routes: Array<{ loadingOverlay?: boolean }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      expect(result.routes[0]?.loadingOverlay).toBe(true);
+    } finally {
+      server.close();
+    }
+  }, 60_000);
+
+  it("waits out a clearing loading overlay and harvests the revealed page", async () => {
+    const clearingLoaderPage = `<!doctype html><html><head><title>Slow App</title>
+<style>#boot-spinner{position:fixed;inset:0;background:#fff;z-index:10}</style>
+</head><body>
+<div id="boot-spinner">Loading workspace...</div>
+<main><h1>Ledger</h1><p>Quarterly totals ready for review.</p></main>
+<script>setTimeout(() => document.getElementById("boot-spinner").remove(), 1500);</script>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(clearingLoaderPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-clearing-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        routes: Array<{ loadingOverlay?: boolean; text: string[] }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      expect(result.routes[0]?.loadingOverlay).toBe(false);
+      expect(result.routes[0]?.text.join(" ")).toContain("Quarterly totals");
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
   it("harvests table content on a route whose selector text is only its own navigation", async () => {
     // The sidebar renders as main li entries, so the primary text harvest is
     // non-empty but carries only nav names; the data rows live in a table the
