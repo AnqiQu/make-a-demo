@@ -928,40 +928,39 @@ export async function createDefaultAgentHarnessDependencies(
       let readError = "PreparationManifest was not produced.";
       let repairBaselineFingerprint: string | undefined;
       let primaryAgentTimeout: AgentHarnessCommandTimeoutError | undefined;
-      for (
-        let attempt = 1;
-        attempt <= retryPolicy.agentArtifactAttempts;
-        attempt += 1
-      ) {
-        const stage =
-          attempt === 1 ? "repo-preparation" : "repo-preparation-repair";
+      let stallRetriesRemaining = retryPolicy.agentStallRetries;
+      let priorRunHappened = false;
+      for (let attempt = 1; attempt <= retryPolicy.agentArtifactAttempts; ) {
+        const initialRun = attempt === 1 && !priorRunHappened;
+        const stage = initialRun
+          ? "repo-preparation"
+          : "repo-preparation-repair";
         let result: OpenCodeHarnessRunResult;
         try {
           result = await runOpenCode({
             availableTools: ["read", "write"],
             configDir: openCodeConfigDirectory,
             model: `${providerID}/${modelID}`,
-            prompt:
-              attempt === 1
-                ? createRepoPreparationPrompt({
-                    demoBrief,
-                    repoProfile,
-                    runPlan,
-                  })
-                : createRepoPreparationRepairPrompt({
-                    demoBrief,
-                    previousResult: previousResult ?? {
-                      exitCode: 1,
-                      stderr: "",
-                      stdout: "",
-                    },
-                    readError,
-                    repoProfile,
-                    runPlan,
-                  }),
+            prompt: initialRun
+              ? createRepoPreparationPrompt({
+                  demoBrief,
+                  repoProfile,
+                  runPlan,
+                })
+              : createRepoPreparationRepairPrompt({
+                  demoBrief,
+                  previousResult: previousResult ?? {
+                    exitCode: 1,
+                    stderr: "",
+                    stdout: "",
+                  },
+                  readError,
+                  repoProfile,
+                  runPlan,
+                }),
             ...optionalSessionId(opencodeSessionId),
             stage,
-            timeoutMs: attempt === 1 ? 20 * 60_000 : 10 * 60_000,
+            timeoutMs: initialRun ? 20 * 60_000 : 10 * 60_000,
             workingDirectory: workspaceRepoDirectory,
             workspace,
           });
@@ -983,11 +982,26 @@ export async function createDefaultAgentHarnessDependencies(
           opencodeSessionId = undefined;
         }
         previousResult = result;
+        priorRunHappened = true;
         const candidateManifest = await tryReadPreparationManifest(
           workspace,
           artifactPaths.preparationManifest,
           { demoBrief, repoProfile, repoSourcePaths, runPlan },
         );
+        if (
+          !candidateManifest.ok &&
+          result.timeoutError !== undefined &&
+          stallRetriesRemaining > 0
+        ) {
+          // N61 stall lane (N81): a stall without a usable artifact is
+          // infrastructure weather, not evidence about the agent's work —
+          // retry without consuming an artifact attempt (midday's
+          // 2026-08-08 regression). A stall that already wrote a valid
+          // manifest still succeeds through the normal read below.
+          stallRetriesRemaining -= 1;
+          readError = `${formatAgentCommandFailure(result)} The previous attempt was killed mid-work; the workspace may contain its unfinished edits — review them before finishing.`;
+          continue;
+        }
         let manifestResult: PreparationManifestReadResult =
           candidateManifest.ok || result.exitCode === 0
             ? candidateManifest
@@ -1089,6 +1103,7 @@ export async function createDefaultAgentHarnessDependencies(
             opencodeSessionId,
           );
         }
+        attempt += 1;
       }
       throw new Error("Repo Preparation artifact retry loop exited early.");
     },

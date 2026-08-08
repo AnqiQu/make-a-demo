@@ -2437,6 +2437,53 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(repairPrompt).toContain("Do not rewrite the PreparationManifest");
   });
 
+  it("retries an initial-preparation stall without consuming an artifact attempt", async () => {
+    // Midday's 2026-08-08 regression: a 300s inactivity stall consumed one
+    // of three artifact attempts because the initial-preparation loop had
+    // no N61 stall lane. With a single artifact attempt, only the lane can
+    // make this run succeed.
+    const workspace = repairableRepoPreparationWorkspace();
+    const stages: string[] = [];
+    const prompts: string[] = [];
+    let runs = 0;
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(input) {
+          runs += 1;
+          stages.push(input.stage);
+          prompts.push(input.prompt);
+          if (runs === 1) {
+            throw new AgentHarnessCommandTimeoutError(300_000, "inactivity");
+          }
+          workspace.writePreparationManifest();
+          return {
+            exitCode: 0,
+            sessionId: "session_after_stall",
+            stderr: "",
+            stdout: "prepared",
+          };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+      retryPolicy: { agentArtifactAttempts: 1 },
+    });
+
+    const prepared = await harness.dependencies.prepareRepo({
+      demoBrief: { keyProductFeatures: ["dashboard"] },
+      normalizedSupportingDocuments: undefined,
+      repoProfile: repoProfile(),
+      repoSourcePaths: ["package.json", "src/App.tsx"],
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(prepared.manifest.id).toBeDefined();
+    expect(stages).toEqual(["repo-preparation", "repo-preparation-repair"]);
+    expect(prompts[1]).toContain("killed mid-work");
+  });
+
   it("preserves a runtime repair timeout when artifact retries are disabled", async () => {
     const workspace = repairableRepoPreparationWorkspace();
     const timeout = new AgentHarnessCommandTimeoutError(300_000, "inactivity");
