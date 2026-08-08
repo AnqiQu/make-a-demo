@@ -2887,3 +2887,113 @@ steering (N67); conduit fails at exploration with actionable gaps
 instead of wedging flow planning (N71); cyberchef's single-shell
 evidence survives chrome discounting (N70); interrupted runs stop
 leaking sandboxes (N66).
+
+## Addendum (2026-08-08, seventh 11-repo matrix — first midday video; native-artifact class N72; N73–N77)
+
+Run: `matrix-report-2026-08-08T06-48-00-266Z.json`. **2 passed** — homer
+(1894s) and **midday's first end-to-end video** (3192s), the loop that
+converged across two matrices finally landing. Runtimes are longer by
+design: the N61 stall lane absorbs timeouts instead of dying on them.
+Every item from the N61/N65–N71 batch observably fired: zero exit-126s
+(N65 — every calcom/ghostfolio repair reached the model), ghost
+cleared runtime-target-selection for the first time in three matrices
+(N61) and reached preflight, N68 forced honest preps (excalidraw
+renders real content now; its wall moved two stages forward), N67's
+steering was followed verbatim by directus's agent, and N69's
+harvested build.log is what makes calcom's diagnosis below possible.
+Nine failures, five root causes.
+
+**N72 (Critical, infra) — sealed-network native artifacts, now the #1
+blocking class (ghost, ghostfolio, calcom).** ghost: `pnpm rebuild -r`
+ran and correctly attempted better-sqlite3, which cannot compile
+offline — the prebuild download is sealed and node-gyp then wants
+Node-24 headers it also cannot download; boot dies on "Could not
+locate the bindings file" (the exact rider N54 flagged for
+verification). ghostfolio: the repair agent wrote the right guard
+(`if [ -f node_modules/.prisma/client/index.d.ts ] … else prisma
+generate`) but the client was never generated, so the guard falls
+through to the sealed engine download every round. No repair agent can
+manufacture these artifacts inside a sealed sandbox; the durable fix
+is backend-owned. (a) **Snapshot node-gyp headers**: the sandbox's
+Node version is fixed by the snapshot image, so `node-gyp install`
+during the snapshot build makes every node-gyp source compile work
+offline — fixes ghost and calcom's sqlite3 with zero per-run cost.
+(b) **Backend prisma-engine prefetch during the install window**: the
+engines a repo needs are keyed by its own `@prisma/engines-version`
+resolution; the backend (not repo code — scripts stay suppressed, so
+the security model is unchanged) derives the engine URLs and warms
+`~/.cache/prisma` inside the already-open dependency window, keyed off
+lockfile evidence. (a) first; (b) is the larger design half and is
+gated on (a)'s matrix result showing prisma still blocking.
+
+**N73 (High, bugfix) — the engine-strict bypass has a third missing
+location: the runtime env.** directus's agent-authored gated `predev`
+runs `pnpm -r --filter @directus/app... run build` and dies on
+ERR_PNPM_UNSUPPORTED_ENGINE (Node 24 vs engines 22). Install gets the
+bypass (N42), the offline lifecycle inherits it (N54b), but agent-
+authored in-repo pnpm invocations at build/start time do not. When the
+install only succeeded via the bypass retry, export
+`npm_config_engine_strict=false` into the guarded runtime env so every
+downstream package-manager call inherits what the install already
+established about this sandbox.
+
+**N74 (High, feature) — package-manager identity is backend territory.**
+outline's prep agent deleted `"packageManager": "yarn@4.11.0"` and
+added a `.yarnrc`, silently downgrading the repo from yarn berry to
+yarn classic; lockfile reconciliation then ran yarn 1.22 against a
+berry lockfile and imploded (the registry 404 for a package literally
+named "5.0.1" is berry `resolutions` syntax read by classic).
+Fidelity must reject removal or version-change of the `packageManager`
+field and creation of manager-config files (`.yarnrc`, `.yarnrc.yml`,
+`.npmrc`) the same way lockfiles are protected, with a hint that the
+backend pins the manager and adaptations must stay inside it.
+
+**N75 (Medium, infra) — sandbox disk sizing.** twenty hit ENOSPC on
+its first install for the second consecutive matrix:
+`defaultSandboxDiskGB = 3` against 3.14GiB of dependencies alone. Its
+later ECONNREFUSED build fetches and the final EBADF are wounded-
+sandbox fallout, not independent causes. Raise the submitted-code
+sandbox disk default (target 10GB) after re-checking the Daytona quota
+arithmetic (disk quota bounds matrix concurrency).
+
+**N76 (Medium, feature) — flow-planning retries must start clean.**
+excalidraw died at flow planning with a satisfiable catalog: asserts
+existed, the navigation fallback was legal, and the agent produced the
+identical assert-less FlowSpec three times inside one sticky OpenCode
+session. (a) Drop the session on artifact-invalid retries — the
+timeout path already does — so the retry re-reads the contract fresh;
+(b) rejection prompts append a minimal concrete example composed from
+the violation's own candidate ids (prompt text; behavioral acceptance
+via the matrix per policy).
+
+**N77 (Medium, feature) — single-shell apps: the nav-chrome half of
+N70.** cyberchef's operation names live in nav-role sidebar links, so
+the `navChrome` union — untouched by N70's shell fix — still swallows
+them as text matches and the requested feature's `/?op=…` route reads
+as chrome-only. When explored routes collapse to a single shell, skip
+the navChrome text exclusion: with no cross-page navigation to
+discount, the "nav" is the product. Multi-shell behavior unchanged
+(homer canary).
+
+**calcom's gate-syntax casualty (fold into queued N63, no new
+number).** N69's harvested build.log shows calcom's real lifecycle
+failure: the agent's MAKEADEMO_DEMO gate on `@calcom/prisma`'s
+post-install used `if/then` shell syntax that turbo's built-in
+mini-shell cannot parse (`Unbound variable "MAKEADEMO_DEMO"`,
+`command not found: then`). N63's world-rules prompt gains a rider:
+package.json script gates run under restricted shells (turbo, nx) —
+gate with `node -e` conditionals (directus's agent did this
+correctly), never `if/then`.
+
+**conduit needs no new item** — exploration steering was clean (2 of 3
+features grounded, six content-bearing reselection routes named); the
+budget died before the reselection landed. That, plus cyberchef and
+ghostfolio burning full budgets on converging repairs, makes **N58 and
+N59 (round economics, specced under Loop economics above) the top
+loop-shaped items in this batch.**
+
+Recommended order: N72a → N73 → N74 → N75 (unblock the pinned repos;
+all small except none), N58 (cheapest economics win, specced), N76 →
+N77 (planning/exploration polish), N63 with the turbo-shell rider
+(prompt work), then N59; N72b gated on the post-N72a matrix, N60/N64
+still gated.
