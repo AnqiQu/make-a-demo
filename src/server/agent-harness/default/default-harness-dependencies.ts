@@ -2150,14 +2150,45 @@ async function validateResolvedSubmittedCodeRuntime(
         { timeoutMs: dependencyInstallTimeoutMs },
       );
       if (lifecycle.exitCode !== 0) {
+        const lifecycleOutput = `${lifecycle.stderr}\n${lifecycle.stdout}`;
+        // Yarn berry reports only "couldn't be built successfully (…logs can
+        // be found here: /tmp/xfs-*/build.log)" — each failed package's real
+        // error lives in that file (calcom, 2026-08-07). Harvest bounded
+        // tails so the report carries causes, not references.
+        const referencedBuildLogs = [
+          ...new Set(
+            [
+              ...lifecycleOutput.matchAll(
+                /logs can be found here: (\/[^\s)]+\/build\.log)/g,
+              ),
+            ]
+              .map((match) => match[1])
+              .filter((path): path is string => path !== undefined),
+          ),
+        ].slice(0, 3);
+        const buildLogEvidence: string[] = [];
+        for (const logPath of referencedBuildLogs) {
+          const logTail = await executeSubmitted(
+            input.workspace,
+            `tail -c 2000 ${shellQuote(logPath)}`,
+          );
+          if (logTail.exitCode === 0 && logTail.stdout.trim().length > 0) {
+            buildLogEvidence.push(
+              `Referenced build log ${logPath} (tail):\n${redactSecretText(logTail.stdout)}`,
+            );
+          }
+        }
         const downloadFailure = isLifecycleDownloadFailure(
-          `${lifecycle.stderr}\n${lifecycle.stdout}`,
+          [lifecycleOutput, ...buildLogEvidence].join("\n"),
         );
         return failedPreparationValidation({
           attemptedCommand: lifecycleCommand,
           classification: "install failure",
           exitCode: lifecycle.exitCode,
-          logsSummary: `Network-closed lifecycle scripts failed after the dependency install: ${lifecycle.stderr || lifecycle.stdout}`,
+          logsSummary: [
+            `Network-closed lifecycle scripts failed after the dependency install: ${lifecycle.stderr || lifecycle.stdout}`,
+            ...buildLogEvidence,
+          ].join("\n"),
           manifest,
           stage,
           stderr: lifecycle.stderr,

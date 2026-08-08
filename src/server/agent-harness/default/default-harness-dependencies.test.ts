@@ -3542,6 +3542,63 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
   });
 
+  it("harvests yarn berry build.log tails into lifecycle failure evidence", async () => {
+    // calcom (2026-08-07): `yarn rebuild` failed, but berry hides each
+    // package's build output in /tmp/xfs-*/build.log files its YN0009 lines
+    // only reference — the report carried no cause and the sealed-network
+    // steering never fired. The referenced logs are the evidence.
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("yarn rebuild")) {
+          return {
+            exitCode: 1,
+            stderr: "",
+            stdout: [
+              "➤ YN0007: │ sqlite3@npm:5.1.7 [e799a] must be built because it never has been before or the last one failed",
+              "➤ YN0009: │ sqlite3@npm:5.1.7 [e799a] couldn't be built successfully (exit code 1, logs can be found here: /tmp/xfs-62546382/build.log)",
+              "➤ YN0000: · Failed with errors in 21s 630ms",
+            ].join("\n"),
+          };
+        }
+        if (command.includes("tail") && command.includes("build.log")) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout:
+              "node-pre-gyp ERR! install request to https://mapbox-node-binary.s3.amazonaws.com/sqlite3.tar.gz failed",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "yarn install --immutable",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "install failure",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain("/tmp/xfs-62546382/build.log");
+    expect(report.logsSummary).toContain("mapbox-node-binary.s3.amazonaws.com");
+    expect(report.suggestedRepairHints.join("\n")).toContain(
+      "network stays sealed",
+    );
+  });
+
   it("steers an unbuilt workspace package at the repo's own build target", async () => {
     // twenty (2026-08-07): vite.config imports twenty-shared/vite, whose
     // dist/ never exists because dependency install builds no workspace
