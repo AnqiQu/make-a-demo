@@ -27,6 +27,22 @@ describe("Daytona OpenCode prepared image", () => {
     );
   });
 
+  it("pre-caches the offline native-build toolchain in the submitted-code image", async () => {
+    // Sealed-network rebuilds compile native modules from source (ghost's
+    // better-sqlite3, calcom's sqlite3, 2026-08-08 matrix): they need the
+    // compiler toolchain and node-gyp's headers for this image's Node
+    // version already on disk, because both downloads are impossible after
+    // the install window reseals.
+    const dockerfile = await readFile(
+      join(import.meta.dirname, "submitted-code-node-browser.Dockerfile"),
+      "utf8",
+    );
+
+    expect(dockerfile).toContain("build-essential");
+    expect(dockerfile).toContain("python3");
+    expect(dockerfile).toContain("node-gyp install");
+  });
+
   it("defines the generic Node/browser submitted-code runtime image", async () => {
     const dockerfile = await readFile(
       join(import.meta.dirname, "submitted-code-node-browser.Dockerfile"),
