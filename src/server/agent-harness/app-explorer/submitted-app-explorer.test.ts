@@ -1432,6 +1432,57 @@ describe("exploreSubmittedApp", () => {
     ]);
   });
 
+  it("keeps content repeated across same-shell route variants out of chrome", () => {
+    // excalidraw and cyberchef prepare entry routes as query variants of one
+    // pathname (/?flow=…, /?recipe=…). Those are one shell, not four sites:
+    // content repeated across them is the product's persistent UI, and
+    // discounting it as chrome left single-shell apps with zero evidence
+    // (2026-08-07 matrix).
+    const shellRoutes = [
+      {
+        headings: ["Recipe"],
+        path: "/?recipe=to-base64",
+        text: ["Drop input here", "To Base64"],
+      },
+      {
+        headings: ["Recipe"],
+        path: "/?recipe=reverse",
+        text: ["Drop input here", "Reverse"],
+      },
+      { headings: ["Recipe"], path: "/#settings", text: ["Drop input here"] },
+      {
+        headings: ["Recipe"],
+        path: "/?recipe=zip",
+        text: ["Drop input here", "Zip"],
+      },
+    ];
+
+    const content = readRouteDistinctContent(shellRoutes);
+
+    expect(content.get("/?recipe=to-base64")).toContain("Drop input here");
+    expect(content.get("/?recipe=to-base64")).toContain("Recipe");
+    expect(content.get("/?recipe=to-base64")).toContain("To Base64");
+  });
+
+  it("still detects chrome across hash-routed pages", () => {
+    // /#/… is hash routing — real pages, exactly like pathname routing
+    // (conduit). A sidebar repeated across them stays chrome.
+    const hashRoutes = [
+      "/#/feed",
+      "/#/editor",
+      "/#/settings",
+      "/#/article/x",
+    ].map((path, index) => ({
+      headings: [`Page ${index}`],
+      path,
+      text: ["Conduit sidebar"],
+    }));
+
+    const content = readRouteDistinctContent(hashRoutes);
+
+    expect(content.get("/#/feed")).toEqual(["Page 0"]);
+  });
+
   it("fails a requested feature grounded only over a zero-row data table", async () => {
     // Hollow pass #3: the invoices route rendered populated summary cards
     // while its data table stayed at zero rows, and grounding accepted the

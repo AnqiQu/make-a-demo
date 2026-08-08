@@ -581,17 +581,31 @@ export function readRouteDistinctContent(
   const navChrome = new Set(
     routes.flatMap((route) => trimmed(route.primaryNavigation ?? [])),
   );
-  const occurrences = new Map<string, number>();
+  // Repetition is counted per shell, not per explored path: query and
+  // fragment variants of one pathname are one page whose persistent UI is
+  // the product (single-shell tools prepare /?flow=… entry routes —
+  // excalidraw, cyberchef 2026-08-07). "#/…" stays a distinct page: hash
+  // routing is real routing.
+  const routeShells = new Map<string, Set<string>>();
   for (const route of routes) {
-    for (const value of new Set(trimmed([...route.headings, ...route.text]))) {
+    const shell = routeShellKey(route.path);
+    const values = routeShells.get(shell) ?? new Set<string>();
+    for (const value of trimmed([...route.headings, ...route.text])) {
+      values.add(value);
+    }
+    routeShells.set(shell, values);
+  }
+  const occurrences = new Map<string, number>();
+  for (const values of routeShells.values()) {
+    for (const value of values) {
       occurrences.set(value, (occurrences.get(value) ?? 0) + 1);
     }
   }
   const repeatedChrome = new Set(
-    routes.length < 4
+    routeShells.size < 4
       ? []
       : [...occurrences]
-          .filter(([, count]) => count > routes.length / 2)
+          .filter(([, count]) => count > routeShells.size / 2)
           .map(([value]) => value),
   );
   const tokens = (value: string) =>
@@ -625,6 +639,19 @@ export function readRouteDistinctContent(
       ];
     }),
   );
+}
+
+// One shell per pathname: the query is state, and a fragment is state unless
+// it begins with "#/" (hash routing), in which case the hashed path — minus
+// its own query — is part of the page identity.
+function routeShellKey(path: string): string {
+  const hashIndex = path.indexOf("#");
+  const hash = hashIndex === -1 ? "" : path.slice(hashIndex);
+  const beforeHash = hashIndex === -1 ? path : path.slice(0, hashIndex);
+  const pathname = beforeHash.split("?")[0] ?? beforeHash;
+  return hash.startsWith("#/")
+    ? `${pathname}${hash.split("?")[0] ?? hash}`
+    : pathname;
 }
 
 function createActions(
