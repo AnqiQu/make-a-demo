@@ -28,6 +28,7 @@ import {
 import { DaytonaSdkPreparationWorkspaceProvider } from "../../shared/integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import type { PipelineEventLogger } from "../../shared/logging/pipeline-event-logger";
 import { shellQuote } from "../../shared/shell/shell-quote";
+import { elideMiddle } from "../../shared/text/elide-middle";
 import {
   type SubmittedAppExplorationResult,
   exploreSubmittedApp,
@@ -1139,7 +1140,6 @@ export async function createDefaultAgentHarnessDependencies(
             demoBrief,
             failureReport,
             preparationManifest,
-            repoProfile,
             runPlan,
           }),
           ...optionalSessionId(opencodeSessionId),
@@ -3851,7 +3851,6 @@ function createRuntimePreparationRepairPrompt(input: {
   demoBrief: AgentHarnessPipelineInput["demoBrief"];
   failureReport: ValidationReport;
   preparationManifest: PreparationManifest;
-  repoProfile: RepoProfile;
   runPlan: RunPlan;
 }): string {
   const dependencyRepair = isDependencyRepairFailure(
@@ -3872,18 +3871,18 @@ function createRuntimePreparationRepairPrompt(input: {
     instructions: [
       "Backend-owned submitted-code validation failed. Repair the prepared repo and update the PreparationManifest; do not claim success yourself.",
       `Failure classification: ${input.failureReport.failureClassification ?? "unknown"}`,
-      `Failure summary: ${input.failureReport.logsSummary}`,
-      `Browser observations: ${JSON.stringify(input.failureReport.browserObservations)}`,
-      `Blocked network attempts: ${JSON.stringify(input.failureReport.blockedNetworkAttempts)}`,
-      `Console errors: ${JSON.stringify(input.failureReport.consoleErrors)}`,
-      `Page errors: ${JSON.stringify(input.failureReport.pageErrors)}`,
-      `stderr evidence: ${JSON.stringify(input.failureReport.stderrExcerpts)}`,
-      `stdout evidence: ${JSON.stringify(input.failureReport.stdoutExcerpts)}`,
+      `Failure summary: ${elideMiddle(input.failureReport.logsSummary, 16_000)}`,
+      `Browser observations: ${elideMiddle(JSON.stringify(input.failureReport.browserObservations), 8_000)}`,
+      `Blocked network attempts: ${elideMiddle(JSON.stringify(input.failureReport.blockedNetworkAttempts), 8_000)}`,
+      `Console errors: ${elideMiddle(JSON.stringify(input.failureReport.consoleErrors), 8_000)}`,
+      `Page errors: ${elideMiddle(JSON.stringify(input.failureReport.pageErrors), 8_000)}`,
+      `stderr evidence: ${elideMiddle(JSON.stringify(input.failureReport.stderrExcerpts), 8_000)}`,
+      `stdout evidence: ${elideMiddle(JSON.stringify(input.failureReport.stdoutExcerpts), 8_000)}`,
       `Suggested repair hints: ${JSON.stringify(input.failureReport.suggestedRepairHints)}`,
       ...(input.artifactError === undefined
         ? []
         : [
-            `The previous repaired manifest was rejected: ${input.artifactError}`,
+            `The previous repaired manifest was rejected: ${elideMiddle(input.artifactError, 8_000)}`,
           ]),
       ...(rebuildFromScreenedSource
         ? [
@@ -3922,7 +3921,9 @@ function createRuntimePreparationRepairPrompt(input: {
         : [`Current manifest: ${JSON.stringify(input.preparationManifest)}`]),
       `Run plan: ${JSON.stringify(input.runPlan)}`,
       `Demo brief: ${JSON.stringify(input.demoBrief)}`,
-      `Repo profile: ${JSON.stringify(input.repoProfile)}`,
+      // Never inline the repo profile: large monorepos serialize past the
+      // kernel argv limit and OpenCode fails to launch (E2BIG, exit 126).
+      `Repo profile: read ${artifactPaths.repoProfile} for the backend-resolved repository profile.`,
     ].join("\n"),
     stage: "repo-preparation-repair",
   });

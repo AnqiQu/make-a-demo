@@ -1,5 +1,6 @@
 import path from "node:path/posix";
 import { shellQuote } from "../../shared/shell/shell-quote";
+import { elideMiddle } from "../../shared/text/elide-middle";
 import {
   makeADemoDirectory,
   stageWriteableArtifactPaths,
@@ -15,8 +16,15 @@ export class DefaultOpenCodeHarnessRunner implements OpenCodeHarnessRunner {
     // The prompt travels by file: a single-line shell argument would pass
     // through the sandbox PTY's canonical line discipline, which truncates
     // lines around 4KB (MAX_CANON) and silently corrupts large prompts.
+    // The file still expands into one execve argument via "$(cat …)", and
+    // Linux caps a single argument around 128KB (MAX_ARG_STRLEN) — past it,
+    // OpenCode exits 126 without launching. Elide the middle as a last
+    // resort; prompt builders are expected to stay under this on their own.
     const promptPath = `${input.configDir}/prompt-${input.stage}.txt`;
-    await input.workspace.writeTextFile(promptPath, input.prompt);
+    await input.workspace.writeTextFile(
+      promptPath,
+      elideMiddle(input.prompt, 96_000),
+    );
     const result = await input.workspace.execute(
       createOpenCodeRunCommand({
         configDir: input.configDir,

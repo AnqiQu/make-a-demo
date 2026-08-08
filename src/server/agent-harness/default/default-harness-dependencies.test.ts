@@ -1816,6 +1816,109 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(sessionIds).toEqual([undefined, "stalled_session", undefined]);
   });
 
+  it("repair prompts reference the repo-profile artifact instead of inlining it", async () => {
+    // calcom's repo profile serializes to 145KB; inlined into the repair
+    // prompt it pushed the argv past the kernel limit (E2BIG) and OpenCode
+    // never launched. The profile is already written to the workspace as an
+    // artifact, so the prompt must point there instead.
+    const workspace = repairableRepoPreparationWorkspace();
+    const prompts: Array<{ prompt: string; stage: string }> = [];
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(input) {
+          prompts.push({ prompt: input.prompt, stage: input.stage });
+          workspace.writePreparationManifest();
+          return { exitCode: 0, stderr: "", stdout: "done" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+    await harness.dependencies.prepareRepo({
+      demoBrief: { keyProductFeatures: ["dashboard"] },
+      normalizedSupportingDocuments: undefined,
+      repoProfile: repoProfile(),
+      repoSourcePaths: ["package.json", "src/App.tsx"],
+      runPlan: runPlan(),
+      workspace,
+    });
+    await harness.dependencies.repairPreparation?.({
+      demoBrief: { keyProductFeatures: ["dashboard"] },
+      failureReport: {
+        ...validationReport("preparation-preflight", "failed"),
+        failureClassification: "start failure",
+      },
+      normalizedSupportingDocuments: undefined,
+      preparationManifest: preparationManifest(),
+      repoProfile: repoProfile(),
+      repoSourcePaths: ["package.json", "src/App.tsx"],
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    const repairPrompt =
+      prompts.find(({ stage }) => stage === "repo-preparation-repair")
+        ?.prompt ?? "";
+    expect(repairPrompt).not.toContain(JSON.stringify(repoProfile()));
+    expect(repairPrompt).toContain(
+      "Repo profile: read /workspace/.makeademo/repo-profile.json",
+    );
+  });
+
+  it("bounds oversized failure evidence in repair prompts, keeping its head and tail", async () => {
+    // ghostfolio's fourth repair round: evidence accumulated across rounds
+    // pushed the prompt past the kernel argv limit and OpenCode never
+    // launched again. The head carries the failure classification, the tail
+    // carries the fatal lines — both must survive the bound.
+    const workspace = repairableRepoPreparationWorkspace();
+    const prompts: Array<{ prompt: string; stage: string }> = [];
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(input) {
+          prompts.push({ prompt: input.prompt, stage: input.stage });
+          workspace.writePreparationManifest();
+          return { exitCode: 0, stderr: "", stdout: "done" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+    await harness.dependencies.prepareRepo({
+      demoBrief: { keyProductFeatures: ["dashboard"] },
+      normalizedSupportingDocuments: undefined,
+      repoProfile: repoProfile(),
+      repoSourcePaths: ["package.json", "src/App.tsx"],
+      runPlan: runPlan(),
+      workspace,
+    });
+    await harness.dependencies.repairPreparation?.({
+      demoBrief: { keyProductFeatures: ["dashboard"] },
+      failureReport: {
+        ...validationReport("preparation-preflight", "failed"),
+        consoleErrors: [`console-head ${"c".repeat(120_000)} console-tail`],
+        failureClassification: "start failure",
+        logsSummary: `summary-head\n${"x".repeat(300_000)}\nsummary-tail`,
+      },
+      normalizedSupportingDocuments: undefined,
+      preparationManifest: preparationManifest(),
+      repoProfile: repoProfile(),
+      repoSourcePaths: ["package.json", "src/App.tsx"],
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    const repairPrompt =
+      prompts.find(({ stage }) => stage === "repo-preparation-repair")
+        ?.prompt ?? "";
+    expect(repairPrompt.length).toBeLessThan(90_000);
+    expect(repairPrompt).toContain("summary-head");
+    expect(repairPrompt).toContain("summary-tail");
+    expect(repairPrompt).toContain("console-head");
+    expect(repairPrompt).toContain("console-tail");
+  });
+
   it("rebuilds a fidelity repair from screened source without stale manifest or session state", async () => {
     let manifestPresent = false;
     let manifestPresentAtRepairStart: boolean | undefined;

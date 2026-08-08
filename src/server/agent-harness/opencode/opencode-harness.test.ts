@@ -171,6 +171,42 @@ describe("OpenCode harness seam", () => {
     expect(command).not.toContain("evidence line");
   });
 
+  it("elides the middle of a prompt that would exceed the argv transport limit", async () => {
+    // The run command expands the prompt file back into a single execve
+    // argument via "$(cat …)"; Linux caps one argument around 128KB
+    // (MAX_ARG_STRLEN). Past it, bash reports "Argument list too long" and
+    // OpenCode exits 126 without ever launching — so the runner must keep
+    // every stage prompt under the limit, preserving its head and tail.
+    const runner = new DefaultOpenCodeHarnessRunner();
+    const prompt = `HEAD-MARKER\n${"y".repeat(400_000)}\nTAIL-MARKER`;
+    const writes: Array<{ contents: string; path: string }> = [];
+
+    await runner.run({
+      availableTools: ["read", "write"],
+      configDir: "/tmp/makeademo/opencode",
+      model: "openai/gpt-5",
+      prompt,
+      stage: "flow-planning",
+      timeoutMs: 1000,
+      workingDirectory: "/workspace/repo",
+      workspace: createFakeAgentHarnessWorkspace({
+        async execute() {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async writeTextFile(path, contents) {
+          writes.push({ contents, path });
+        },
+      }),
+    });
+
+    const promptWrite = writes.find(({ path }) => path.includes("prompt-"));
+    expect(promptWrite).toBeDefined();
+    expect(promptWrite?.contents.length ?? 0).toBeLessThan(100_000);
+    expect(promptWrite?.contents).toContain("HEAD-MARKER");
+    expect(promptWrite?.contents).toContain("TAIL-MARKER");
+    expect(promptWrite?.contents).toContain("characters elided");
+  });
+
   it("starts a new OpenCode session without resuming a made-up session", async () => {
     const runner = new DefaultOpenCodeHarnessRunner();
 
