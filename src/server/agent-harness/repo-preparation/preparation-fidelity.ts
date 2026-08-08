@@ -76,6 +76,8 @@ const repairHints = {
   seam: "Move the change into an authentication, data, service, or configuration seam and gate it.",
   selfRequest:
     "Import the fixture or adapter directly instead of requesting your own listener.",
+  truthfulManifest:
+    "Complete the preparation so the claimed fixtures and replacements exist in the workspace, or correct the manifest to describe the actual prepared state.",
 } as const;
 
 export function validatePreparationFidelity(input: {
@@ -86,6 +88,26 @@ export function validatePreparationFidelity(input: {
   workspaceDiff: PreparationWorkspaceDiff;
 }): ValidationReport {
   const violations: FidelityViolation[] = [];
+  // A manifest may only claim prepared content the workspace carries:
+  // give-up repairs after agent stalls wrote fixture claims onto empty
+  // diffs (excalidraw, ghostfolio 2026-08-07), and the hollow prep passed
+  // every gate until capture. Added fixtures and replaced services require
+  // at least one repo change; env-only demo modes (localDemoModeChanges
+  // enacted through envUsed) legitimately need none.
+  if (input.workspaceDiff.changedPaths.length === 0) {
+    const unsupportedClaims = [
+      ...input.preparationManifest.mocksAndFixturesAdded,
+      ...input.preparationManifest.blockedExternalServicesReplaced,
+    ];
+    if (unsupportedClaims.length > 0) {
+      violations.push({
+        hint: repairHints.truthfulManifest,
+        message: `The manifest claims prepared content the workspace does not contain: ${unsupportedClaims.join(
+          "; ",
+        )}. The workspace diff is empty.`,
+      });
+    }
+  }
   const repairPaths = readInvalidRepairPaths(input);
   const filePatches = parsePatchSections(input.workspaceDiff.patch);
   const demoGate = readDemoGateEvidence(

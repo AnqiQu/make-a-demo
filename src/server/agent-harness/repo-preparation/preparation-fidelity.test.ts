@@ -5,6 +5,49 @@ import { validatePreparationFidelity } from "./preparation-fidelity";
 const routePath = "apps/dashboard/src/app/tracker/page.tsx";
 
 describe("validatePreparationFidelity", () => {
+  it("fails a manifest claiming fixtures the empty workspace contains no trace of", () => {
+    // Give-up repairs after agent stalls (excalidraw, ghostfolio 2026-08-07)
+    // wrote manifests claiming prepared fixtures onto empty workspace diffs;
+    // the hollow prep passed every gate and every downstream stage failed.
+    const report = validatePreparationFidelity({
+      preparationManifest: manifest({
+        blockedExternalServicesReplaced: [
+          "Firebase replaced by a local fixture adapter",
+        ],
+        mocksAndFixturesAdded: [
+          "excalidraw-app/demoScene.ts supplies local in-memory diagram fixtures.",
+        ],
+      }),
+      repoSourceFiles: new Map(),
+      workspaceDiff: workspaceDiff([], ""),
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "product fidelity violation",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain("demoScene.ts");
+    expect(report.logsSummary).toContain("Firebase");
+    expect(report.logsSummary).toContain("workspace diff is empty");
+  });
+
+  it("accepts an empty diff when the manifest claims no prepared content", () => {
+    // A repo needing zero preparation is legitimate (homer); env-only demo
+    // modes carried by envUsed are too. Truthful emptiness must pass.
+    const report = validatePreparationFidelity({
+      preparationManifest: manifest({
+        envUsed: { MAKEADEMO_DEMO: "true" },
+        localDemoModeChanges: [
+          "MAKEADEMO_DEMO=true activates the repository's existing demo mode.",
+        ],
+      }),
+      repoSourceFiles: new Map(),
+      workspaceDiff: workspaceDiff([], ""),
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
   it("rejects a standalone replacement runtime for an existing product", () => {
     const report = validateDiff({
       createdFiles: ["demo/server.ts"],
