@@ -2680,3 +2680,147 @@ keep the current eleven as regression.
 Recommended order: N53 → N54 → N55 (small, unblock four repos), N58
 (cheapest economics win), N56 → N57 (agent frontier), N61 → N62 → N63,
 then N59; N60 and N64 stay gated on the post-N54 matrix.
+
+## Addendum (2026-08-07, sixth 11-repo matrix — argv-limit N65; stall economics; N66–N71)
+
+Run: `matrix-report-2026-08-07T23-22-03-590Z.json` (the 22:35:58Z batch;
+two earlier same-evening starts aborted before agents ran). **1 passed** —
+homer (870s, absorbing one 300s agent stall). Ten failures, seven root
+causes, two of them new bugs of ours. The N53/N54/N57 batch demonstrably
+moved walls: calcom and twenty cleared the berry install for the first
+time (N53); twenty also cleared preparation-fidelity for the first time
+(the N57c caller-gate ended the two-file shuttle); directus's engine
+bypass carried into the lifecycle (N54b); midday's repair loop visibly
+converged (round 1: invoicing and transactions both zero-row; round 3:
+invoicing fixed, only transactions left); directus and outline failures
+now carry exact route-aware causes (N51 + N57d evidence: directus
+`/src/extensions.ts` HTTP 500, outline `undefined (reading 'forEach')` +
+NotFoundError). N54 itself went unexercised — ghost never reached
+install (see the stall item).
+
+**N65 (Critical, bugfix) — repair prompts exceed the kernel argv limit;
+the repair budget burns with zero model involvement.** The runner writes
+the prompt to a file, then substitutes it straight back into a single
+execve argument via `"$(cat …)"`
+(default-opencode-harness-runner.ts:73); past ~128KB (MAX_ARG_STRLEN)
+bash reports `/root/.opencode/bin/opencode: Argument list too long` and
+exits 126 in ~1.1s. Two feeders crossed the limit this run: calcom
+statically — `createRuntimePreparationRepairPrompt` inlines the whole
+repo profile (145,209 bytes for calcom) even though the same file is
+listed in the prompt's own artifactPaths for sandbox reading; ghostfolio
+dynamically — repair rounds 1–3 launched fine, then round 3's ~80KB diff
+bloated the next round's failure evidence past the cap. Both pipelines
+then burned their remaining repair budget in ~3 seconds (three instant
+126s each) and died reporting "did not produce valid required artifact."
+Remedy: stop inlining artifacts that are already readable artifact
+paths (repo profile foremost); bound every interpolated evidence field;
+enforce a byte ceiling with mid-elision at the runner seam as a
+last-resort guard for every stage. Transport stays argv (`"$(cat …)"`):
+switching to stdin depends on unverified OpenCode CLI behavior, and no
+stage legitimately needs a >100KB prompt — smaller prompts are strictly
+better for cost and attention.
+
+**N61 (promoted from the queue; now urgent) — 15 agent-command stalls in
+one matrix; stalls and launch failures spend agent-quality budget.**
+Every repo hit at least one 300s timeout (homer recovered; ghost did not
+— both runtime-target-selection attempts hit the 300s *total* cap with
+output still flowing, and the pipeline died before install ever ran).
+This is the concurrent matrix's bill: eleven parallel pipelines
+contending for the model API. Each stall costs 5 minutes and consumes
+the same attempt budget as a real agent-quality failure; calcom's and
+ghostfolio's instant exit-126 launch failures (N65) did the same. The
+taxonomy as specced above, sharpened by this run: infra-class command
+failures (timeout/no-output; instant non-zero exits that never created
+an OpenCode session) retry in their own bounded lane without consuming
+artifact/repair attempts. Rider: the runtime-target-selection total cap
+(300s) is too tight for large repos under concurrency — raise it above
+its inactivity cap.
+
+**N68 (High, feature; promoted from the N61 rider) — give-up preps: a
+manifest the empty workspace diff contradicts must fail validation.**
+Four repos followed the same arc this run (calcom, twenty, ghostfolio,
+excalidraw): prep agent stalls out mid-work → a 30–90s "repair" writes a
+manifest, changes nothing (`patchBytes: 0`), passes artifact validation
+→ fidelity passes trivially → everything downstream fails against an
+unprepared app. Last matrix this happened once (outline); it is now the
+dominant failure shape. The check is claims-vs-diff consistency, not
+diff emptiness per se: a manifest declaring fixtures, demo gating, or
+integration adaptations while the workspace diff contains no supporting
+change is untruthful and must fail with steering back to preparation
+(a genuinely zero-change repo whose manifest claims nothing stays
+valid).
+
+**N67 (High, feature) — unbuilt internal workspace packages need
+prerequisite-build steering.** twenty's preflight build dies on
+`Cannot find module …/twenty-shared/dist/vite.mjs`; directus's blank
+admin traces to `/src/extensions.ts` HTTP 500 (`@directus/extensions`
+unbuilt). Second consecutive matrix for this class. Install plus native
+rebuild never builds *internal workspace* packages — that normally rides
+on turbo/nx build graphs the pipeline never runs. When a build/start/
+console failure names an unresolved module that matches a workspace
+member (the repo profile knows the member names), steer the repair with
+the harvested run target (N44) that builds that member before the app
+command.
+
+**N71 (High, bugfix) — forced-feature satisfiability: exploration's
+flow-evidence gap check skips agent-selected features.** conduit has no
+maker-requested features, so the check behind N39
+(submitted-app-explorer.ts, `feature.requestedFeature === undefined` →
+skip) ignored all three inventory features — but flow planning must
+select `min(3, inventory)` = all three, and `comment-on-article` has
+zero tagged asserts. Structurally unsatisfiable from the first planning
+attempt; the planning budget burned on an impossible demand (its first
+attempt also lost 350s to a stall). Extend the check to every feature
+planning can be forced to select: when fewer than `min(3, |inventory|)`
+features carry both a tagged interaction and a tagged assert,
+exploration fails with the existing gap steering naming what each
+feature lacks.
+
+**N69 (Medium, feature) — yarn berry hides lifecycle build failures in
+sandbox-local build.log files.** calcom's first-ever successful berry
+install was followed by the N48 lifecycle `yarn rebuild`, which rebuilds
+*every* pending package — including sealed-network downloaders (prisma
+engines, sentry-cli, sqlite3 prebuilts). It failed, but the real errors
+live in `/tmp/xfs-*/build.log` files that yarn's YN0009 lines only
+reference — so N55's download-failure regex saw nothing and
+`suggestedRepairHints` stayed empty. Harvest bounded tails of the
+referenced build.log files (first few, capped bytes) into the failure
+evidence so the sealed-network steering can fire.
+
+**N70 (Design, feature) — single-shell apps defeat route-distinct text
+evidence.** excalidraw regressed from last run's first video: prep
+created `/?flow=…` query variants of one canvas shell, every string
+repeats across "routes," the chrome discount swallowed the entire
+toolbar, and exploration reported "only globally-repeated navigation
+chrome." cyberchef's two features are similarly forced onto identical
+evidence on its single page. The evidence currency (route-distinct
+*text*) structurally cannot see one-shell canvas/tool apps — the
+overfitting worry made concrete. When explored routes collapse to one
+distinct pathname (query/hash variants of a single shell), repeated
+content must not be classified as chrome, and the N36 control/aria
+evidence lane needs to extend to distinguish features by exercised
+controls rather than text. Canaries: homer (per-route text) and midday
+(data tables) shapes must pass unchanged.
+
+**N66 (Medium, infra) — pipeline runs leave Daytona sandboxes running on
+completion and abort.** Tonight's aborted run left 18 STARTED sandboxes;
+the completed evening matrix left 16 more still STARTED two hours later;
+only Daytona's lazy auto-archive reclaims them. Pipeline completion
+(success or failure) must tear down the sandboxes it created; the matrix
+runner should handle SIGINT the same way. Cost and quota (~125
+concurrent) both bleed until this lands.
+
+**ENOSPC note (infra, unnumbered).** twenty's first two preflight
+installs died filling the sandbox disk (4,399 packages, +3.14 GiB, yarn
+global cache plus linked copies) before the third attempt recovered.
+Sandbox disk headroom or yarn cache pruning is worth sizing alongside
+the Daytona quota when N66 is implemented.
+
+**midday needs no new item.** The loop was winning and ran out of
+rounds: round 5's repair was its *first* fidelity veto (ask-midday.tsx
+ungated), so the N57b intersection hint never had a subsequent round to
+steer. N58/N59 round economics remain its medicine.
+
+Recommended order: N65 → N61 → N68 (budget integrity — stop the
+bleeding), N67 → N71 → N69 (unblock specific repos), N70 (design),
+N66 (infra); N58/N59 still queued next for round economics.
