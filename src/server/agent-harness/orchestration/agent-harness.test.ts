@@ -1215,6 +1215,103 @@ describe("runAgentHarnessPipeline", () => {
     );
   });
 
+  it("never dispatches a repair agent for a harness-internal validation failure", async () => {
+    // Repair-evidence contract clause 5 (N62): infra errors must not reach
+    // agent prompts or spend repair budget — outline's fallback once asked a
+    // future coding agent to "fix" a Daytona control-plane error. A
+    // harness-internal failure gets one agent-free revalidation (transient
+    // blips recover), then fails the run as infrastructure.
+    let preflightAttempts = 0;
+    let repairs = 0;
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({ runId: "run_internal_failure" }),
+        stubPipelineDependencies({
+          async capturePreparationWorkspaceDiff() {
+            return unchangedWorkspaceDiff();
+          },
+          async prepareRepo() {
+            return { manifest: preparationManifest() };
+          },
+          async repairPreparation() {
+            repairs += 1;
+            return { manifest: preparationManifest() };
+          },
+          async validatePreparation() {
+            preflightAttempts += 1;
+            return {
+              ...report("preparation-preflight", "failed"),
+              failureClassification: "harness/internal failure",
+              logsSummary:
+                "Failed to reset submitted-code workspace: Daytona rejected the update",
+            };
+          },
+          async writeScript() {
+            return scriptCandidate();
+          },
+        }),
+      ),
+    ).rejects.toThrow(/not agent-repairable/);
+    expect(repairs).toBe(0);
+    expect(preflightAttempts).toBe(2);
+  });
+
+  it("recovers from a transient harness-internal failure without spending repairs", async () => {
+    let preflightAttempts = 0;
+    let repairs = 0;
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_internal_recovery" }),
+      stubPipelineDependencies({
+        async capturePreparationWorkspaceDiff() {
+          return unchangedWorkspaceDiff();
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation() {
+          repairs += 1;
+          return { manifest: preparationManifest() };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          return preflightAttempts === 1
+            ? {
+                ...report("preparation-preflight", "failed"),
+                failureClassification: "harness/internal failure",
+                logsSummary: "Failed to reset submitted-code workspace: blip",
+              }
+            : report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    expect(repairs).toBe(0);
+    expect(preflightAttempts).toBe(2);
+  });
+
   it("counts a deterministic install-scope expansion against the global repair budget", async () => {
     let preflightAttempts = 0;
     let repairAttempts = 0;

@@ -1300,12 +1300,25 @@ async function ensureValidPreparation(input: {
   // same warm node_modules (N58); any round that installs afresh or fails
   // at-or-before install resets it.
   let lastCleanInstallAttempt: number | undefined;
+  let internalFailureRetryUsed = false;
   const attemptedInstallScopes =
     input.preparationRepairBudget.attemptedInstallScopes;
   attemptedInstallScopes.add(input.preparationManifest.installCommandUsed);
 
   for (;;) {
     input.assertJobWithinDeadline();
+    if (failure?.failureClassification === "harness/internal failure") {
+      // Repair-evidence contract clause 5 (N62): infra errors never reach
+      // agent prompts or spend repair budget. One agent-free revalidation
+      // absorbs a transient control-plane blip; a repeat is a real fault.
+      if (internalFailureRetryUsed) {
+        throw new Error(
+          `Preparation validation failed inside the harness (not agent-repairable): ${failure.logsSummary}`,
+        );
+      }
+      internalFailureRetryUsed = true;
+      failure = undefined;
+    }
     if (failure !== undefined) {
       const expandedPreparation =
         expandPreparationInstallScopeForMissingWorkspace({
