@@ -3542,6 +3542,59 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
   });
 
+  it("steers an unbuilt workspace package at the repo's own build target", async () => {
+    // twenty (2026-08-07): vite.config imports twenty-shared/vite, whose
+    // dist/ never exists because dependency install builds no workspace
+    // member — five repair rounds poked everything but the missing build.
+    // directus's blank admin (@directus/extensions unbuilt) is the same
+    // class. A module missing at an absolute path under the repo's own
+    // node_modules after a successful install is workspace-linked: a
+    // registry package ships its files.
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("bun run build")) {
+          return {
+            exitCode: 1,
+            stderr: [
+              "vite.config.ts (16:41) [UNRESOLVED_IMPORT] Could not resolve 'twenty-shared/vite' in vite.config.ts",
+              "Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/workspace/repo/node_modules/twenty-shared/dist/vite.mjs' imported from /workspace/repo/packages/twenty-front/vite.config.ts",
+            ].join("\n"),
+            stdout: "",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        buildCommandUsed: "bun run build",
+      },
+      repoProfile: {
+        ...repoProfile(),
+        packageScripts: { build: "vite build", dev: "bun run dev" },
+      },
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "build failure",
+      status: "failed",
+    });
+    const hints = report.suggestedRepairHints.join("\n");
+    expect(hints).toContain("twenty-shared");
+    expect(hints).toContain("workspace package");
+    expect(hints).toContain("instead of changing the import");
+  });
+
   it("fails closed when the dependency network window cannot be resealed", async () => {
     let windowOpened = false;
     const workspace = createFakeAgentHarnessWorkspace({

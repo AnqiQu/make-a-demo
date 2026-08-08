@@ -2225,6 +2225,9 @@ async function validateResolvedSubmittedCodeRuntime(
       [buildResult.stderr, buildResult.stdout].filter(Boolean).join("\n"),
     );
     if (buildResult.exitCode !== 0 || blockedBuildAttempts.length > 0) {
+      const unbuiltWorkspaceHints = readUnbuiltWorkspacePackageHints(
+        `${buildResult.stderr}\n${buildResult.stdout}`,
+      );
       return failedPreparationValidation({
         attemptedCommand: manifest.buildCommandUsed,
         blockedNetworkAttempts: blockedBuildAttempts,
@@ -2241,6 +2244,9 @@ async function validateResolvedSubmittedCodeRuntime(
         stage,
         stderr: buildResult.stderr,
         stdout: buildResult.stdout,
+        ...(unbuiltWorkspaceHints.length > 0
+          ? { suggestedRepairHints: unbuiltWorkspaceHints }
+          : {}),
       });
     }
   }
@@ -2329,16 +2335,41 @@ async function validateResolvedSubmittedCodeRuntime(
     stdoutExcerpts: preflightResult.stdout
       ? [redactSecretText(preflightResult.stdout.slice(-500))]
       : [],
-    ...(failureClassification === "listen failure" &&
-    appStatus?.running === true
-      ? {
-          suggestedRepairHints: [
-            "The process is alive but nothing listens on the probed port and the captured app output stopped changing — the bind failure or crash is already in that output (a supervisor such as nodemon may be keeping the parent alive after its child crashed). Fix the cause shown there instead of adjusting ports or probes.",
-          ],
-        }
-      : {}),
+    ...(() => {
+      const hints = [
+        ...(failureClassification === "listen failure" &&
+        appStatus?.running === true
+          ? [
+              "The process is alive but nothing listens on the probed port and the captured app output stopped changing — the bind failure or crash is already in that output (a supervisor such as nodemon may be keeping the parent alive after its child crashed). Fix the cause shown there instead of adjusting ports or probes.",
+            ]
+          : []),
+        ...(probeSucceeded ? [] : readUnbuiltWorkspacePackageHints(appOutput)),
+      ];
+      return hints.length > 0 ? { suggestedRepairHints: hints } : {};
+    })(),
     urlChecked: preflightUrl,
   });
+}
+
+// Dependency install never builds internal workspace packages. A module
+// missing at an absolute path under the repo's own node_modules after a
+// successful install is workspace-linked with unproduced build output — a
+// registry package ships its files in the tarball (twenty's
+// twenty-shared/dist, directus's @directus/extensions, 2026-08-07 matrix).
+function readUnbuiltWorkspacePackageHints(output: string): string[] {
+  const packages = new Set<string>();
+  for (const match of output.matchAll(
+    /(?:can'?t resolve|cannot find module|could not resolve)\s+["'][^"']*node_modules\/((?:@[A-Za-z0-9_.-]+\/)?[A-Za-z0-9_.-]+)\/[^"']+["']/gi,
+  )) {
+    const name = match[1];
+    if (name !== undefined) {
+      packages.add(name);
+    }
+  }
+  return [...packages].map(
+    (name) =>
+      `${name} resolves into the repo's own node_modules but the imported file does not exist — it is likely an internal workspace package whose build output was never produced, and dependency install builds no workspace member. Set buildCommandUsed to the repository's own target that builds ${name} before the app (check the repo's build, nx, or turbo scripts) instead of changing the import.`,
+  );
 }
 
 function classifyPreparationRuntimeFailure(
