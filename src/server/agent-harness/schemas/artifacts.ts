@@ -167,6 +167,14 @@ export type PreparationManifest = {
   cleanupAndReproInstructions: string[];
 };
 
+/**
+ * A validator's verdict and the evidence it owes the repair agent. Failed
+ * reports must satisfy the repair-evidence contract
+ * (docs/agents/repair-evidence-contract.md): executed commands verbatim,
+ * bounded and deduped evidence channels, observations separated from
+ * diagnoses, all currently-known violations per attempt, and no
+ * infrastructure errors — those are the harness's to retry or surface.
+ */
 export type ValidationReport = {
   status: "failed" | "passed";
   stage: string;
