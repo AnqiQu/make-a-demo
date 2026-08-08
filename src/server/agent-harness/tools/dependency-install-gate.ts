@@ -1,3 +1,5 @@
+import { createPrismaEnginePrefetchCommand } from "./prisma-engine-prefetch";
+
 export type DependencyInstallDecision =
   | { status: "allowed" }
   | { reason: string; status: "denied" };
@@ -93,6 +95,13 @@ export async function runDependencyInstallThroughGate(input: {
     result = await input.runCommand(command);
     if (result.exitCode !== 0 && hasNetworkInstallFailureSignature(result)) {
       result = await input.runCommand(command);
+    }
+    if (result.exitCode === 0) {
+      // Engine downloads the suppressed lifecycle scripts would have done
+      // become impossible once the window reseals (N72b), so warming them
+      // is part of the gated install itself. The command is best-effort by
+      // construction — its result carries no install evidence.
+      await input.runCommand(createPrismaEnginePrefetchCommand());
     }
   } catch (error) {
     await resealNetwork(input.closeNetwork);

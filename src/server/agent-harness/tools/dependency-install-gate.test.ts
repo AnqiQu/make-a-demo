@@ -66,7 +66,9 @@ describe("dependency install gate", () => {
       });
 
       expect(result).toMatchObject({ status: "succeeded" });
-      expect(ran).toEqual([expected]);
+      // A successful install is followed by the in-window prisma prefetch.
+      expect(ran[0]).toBe(expected);
+      expect(ran[1]).toContain("binaries.prisma.sh");
     }
   });
 
@@ -86,7 +88,7 @@ describe("dependency install gate", () => {
       },
     });
 
-    expect(ran).toEqual(["yarn install --immutable --mode=skip-build"]);
+    expect(ran[0]).toBe("yarn install --immutable --mode=skip-build");
     expect(evaluateDependencyInstallCommand(ran[0] ?? "")).toMatchObject({
       status: "allowed",
     });
@@ -109,8 +111,52 @@ describe("dependency install gate", () => {
         },
       });
 
-      expect(ran).toEqual([command]);
+      expect(ran[0]).toBe(command);
+      expect(ran[1]).toContain("binaries.prisma.sh");
     }
+  });
+
+  it("prefetches prisma engines inside the still-open window after a successful install", async () => {
+    // The sealed network makes these downloads impossible later (calcom's
+    // libquery_engine fetch, ghostfolio's prisma generate — 2026-08-08
+    // matrix), so warming them is part of the gated install itself.
+    const events: string[] = [];
+    const ran: string[] = [];
+
+    await runDependencyInstallThroughGate({
+      command: "npm ci --no-audit",
+      closeNetwork: async () => {
+        events.push("closed");
+      },
+      openNetwork: async () => {
+        events.push("opened");
+      },
+      runCommand: async (executed) => {
+        ran.push(executed);
+        events.push("ran");
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+
+    expect(ran).toHaveLength(2);
+    expect(ran[1]).toContain("binaries.prisma.sh");
+    expect(events).toEqual(["opened", "ran", "ran", "closed"]);
+  });
+
+  it("skips the prisma prefetch when the install fails", async () => {
+    const ran: string[] = [];
+
+    await runDependencyInstallThroughGate({
+      command: "npm ci --no-audit",
+      closeNetwork: async () => {},
+      openNetwork: async () => {},
+      runCommand: async (executed) => {
+        ran.push(executed);
+        return { exitCode: 1, stderr: "install failed", stdout: "" };
+      },
+    });
+
+    expect(ran).toHaveLength(1);
   });
 
   it("reseals dependency network when the install command fails", async () => {
@@ -208,7 +254,8 @@ describe("dependency install gate", () => {
     });
 
     expect(result).toMatchObject({ status: "succeeded" });
-    expect(runs).toBe(2);
+    // Two install attempts plus the post-success prisma prefetch.
+    expect(runs).toBe(3);
   });
 
   it("does not retry a deterministic install failure", async () => {

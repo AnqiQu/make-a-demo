@@ -3972,6 +3972,12 @@ describe("createDefaultAgentHarnessDependencies", () => {
     const promotedFiles: string[][] = [];
     const workspace = createFakeAgentHarnessWorkspace({
       async executeSubmittedCode(command) {
+        // The in-window prisma prefetch (N72b) is a no-op in a fake
+        // sandbox and must not disturb probe or install accounting.
+        if (command.includes("binaries.prisma.sh")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+
         commands.push(command);
         return { exitCode: 0, stderr: "", stdout: "" };
       },
@@ -4249,6 +4255,12 @@ describe("createDefaultAgentHarnessDependencies", () => {
     const submittedCommands: string[] = [];
     const workspace = createFakeAgentHarnessWorkspace({
       async executeSubmittedCode(command) {
+        // The in-window prisma prefetch (N72b) is a no-op in a fake
+        // sandbox and must not disturb probe or install accounting.
+        if (command.includes("binaries.prisma.sh")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+
         submittedCommands.push(command);
         return { exitCode: 0, stderr: "", stdout: "ok" };
       },
@@ -4283,6 +4295,12 @@ describe("createDefaultAgentHarnessDependencies", () => {
     let probeAttempt = 0;
     const workspace = createFakeAgentHarnessWorkspace({
       async executeSubmittedCode(command) {
+        // The in-window prisma prefetch (N72b) is a no-op in a fake
+        // sandbox and must not disturb probe or install accounting.
+        if (command.includes("binaries.prisma.sh")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+
         if (!command.includes("curl -")) {
           return { exitCode: 0, stderr: "", stdout: "" };
         }
@@ -4577,6 +4595,12 @@ describe("createDefaultAgentHarnessDependencies", () => {
     let probes = 0;
     const workspace = createFakeAgentHarnessWorkspace({
       async executeSubmittedCode(command) {
+        // The in-window prisma prefetch (N72b) is a no-op in a fake
+        // sandbox and must not disturb probe or install accounting.
+        if (command.includes("binaries.prisma.sh")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+
         if (!command.includes("curl -")) {
           return { exitCode: 0, stderr: "", stdout: "" };
         }
@@ -4622,6 +4646,12 @@ describe("createDefaultAgentHarnessDependencies", () => {
     let probeAttempts = 0;
     const workspace = createFakeAgentHarnessWorkspace({
       async executeSubmittedCode(command) {
+        // The in-window prisma prefetch (N72b) is a no-op in a fake
+        // sandbox and must not disturb probe or install accounting.
+        if (command.includes("binaries.prisma.sh")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+
         if (!command.includes("curl -")) {
           return { exitCode: 0, stderr: "", stdout: "" };
         }
@@ -5531,6 +5561,12 @@ describe("createDefaultAgentHarnessDependencies", () => {
     const commands: string[] = [];
     const workspace = createFakeAgentHarnessWorkspace({
       async executeSubmittedCode(command) {
+        // The in-window prisma prefetch (N72b) is a no-op in a fake
+        // sandbox and must not disturb probe or install accounting.
+        if (command.includes("binaries.prisma.sh")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+
         commands.push(command);
         if (command.includes("curl")) {
           return {
