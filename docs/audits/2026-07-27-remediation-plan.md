@@ -3065,3 +3065,212 @@ rounds drop ~1–2 minutes each on source-only repairs (N58);
 excalidraw's flow planning converges (N76); cyberchef's operation
 names ground its features (N77); prisma-class downloads get designed
 around up front (N63) — ghostfolio remains the N72b gate test.
+
+## Addendum (2026-08-08, eighth 11-repo matrix — first conduit video; node-line class N78; N79–N82 queued)
+
+Run: `matrix-report-2026-08-08T19-04-54-096Z.json`. **2 passed** — homer
+(981s) and **conduit's first end-to-end video** (1287s; the N77
+satisfiability guard and single-shell currency landed it). Zero
+exit-126s, zero ENOSPC (N75's explicit 10GB held twenty's install),
+and N69's harvested build.log again decoded the one failure that
+mattered (calcom below). Nine failures, seven root causes — and for
+the first time nearly every one is backend/harness-owned: the agents
+mostly did what we engineered them to do (directus's world-rules gate,
+ghost's offline rebuild design, outline's honest retreat after the N74
+veto). The frontier has moved from "agents doing the wrong thing" to
+"the sandbox cannot run what correct agents prepare."
+
+Diagnosis by class:
+
+- **Repo-pinned Node line vs the image's Node 24 (directus, ghost) —
+  N78 below.** directus pins `engines.node: "22"` with its own
+  `.npmrc` `engine-strict=true`; every pnpm call dies
+  ERR_PNPM_UNSUPPORTED_ENGINE under Node 24 (the N73 env bypass loses
+  to a project-level `.npmrc` in pnpm's precedence, and the failing
+  call is the agent's nested `execFileSync` where we cannot inject
+  flags). ghost pins `devEngines: {node 22.23.1, onFail: download}`;
+  pnpm 11 downloaded that Node during the install window and ran the
+  app under it, while the agent's (correctly designed) offline
+  better-sqlite3 rebuild compiled against `/usr/include/node` — the
+  image's Node 24 headers — so boot died on ERR_DLOPEN_FAILED
+  (NODE_MODULE_VERSION 137 vs 127). twenty pins `^24.5.0`, so no
+  single-line image can satisfy the matrix.
+- **Corepack absent from the submitted-code image (outline) — folded
+  into N78.** outline pins `packageManager: yarn@4.11.0`; the image
+  ships only a global npm-installed yarn 1.22.22 and never enables
+  corepack, so the install dies asking for it. The agent's `.yarnrc`
+  workaround was correctly vetoed by N74 — the gate held; the backend
+  never supplied the pinned manager it promised.
+- **Prisma engines under the sealed network (calcom, ghostfolio) —
+  N72b's gate condition met; activate it.** calcom cleared last
+  matrix's turbo-shell gate (N63 rider validated — turbo runs now)
+  and its harvested build.log shows `@calcom/prisma post-install`
+  fetching `libquery_engine` from binaries.prisma.sh network-closed.
+  ghostfolio's `postinstall: prisma generate` was script-suppressed in
+  the window, then failed the same fetch offline — no generated
+  client, so the client build dies on TS2305 `'@prisma/client'` has no
+  exported member.
+- **Yarn-variant misdetection from agent-chosen flags (excalidraw's
+  burned early rounds) — N79.** The agent wrote `yarn install
+  --immutable` for a yarn-classic repo; `readYarnInstallVariant`
+  infers berry from flags, so the offline lifecycle issued `yarn
+  rebuild`, which yarn 1 does not have — a harness-generated invalid
+  command cost a preflight attempt and a repair round.
+- **Canvas evidence gap (excalidraw terminal) — N70b, already
+  queued.** Exploration demanded wording-matched text asserts for
+  canvas features; two features forced onto one assert+interaction
+  made uniqueness unsatisfiable; the final repair was vetoed on the
+  demo-gate rule. excalidraw cannot pass without the text-free canvas
+  lane.
+- **App-stuck-loading blind spot (cyberchef) — N80.** The N21d
+  screenshot shows CyberChef sitting on its loading overlay through
+  the whole exploration; text harvested from the DOM behind the
+  overlay, zero actions cataloged, no console/page errors, no blocked
+  requests — silent. The N71 gate fired "requested feature not
+  observable" with wording-alignment steering, sending five
+  repo-preparation-repair rounds at featureInventory wording while the
+  actual defect was a hung loader.
+- **Preparation-manifest validator defects (midday regression) —
+  N81.** (1) The initial repo-preparation loop in
+  default-harness-dependencies has no N61 stall lane — `attempt += 1`
+  unconditionally — so a 300s inactivity stall consumed one of three
+  artifact attempts. (2) `assertKnownSourcePaths` throws on the first
+  unknown path: attempt 2 rejected `evidencePaths[3]` (agent-created
+  `src/demo/fixtures.ts`), attempt 3 rejected the same path in
+  `featureInventory[0].sourcePaths[3]` — whack-a-mole that violates
+  repair-evidence contract clause 4. (3) The message never states the
+  rule (files created during preparation are not citable product
+  evidence), so the agent could not learn the constraint it kept
+  tripping.
+- **Existing-manager-config mutation slipped the N74 gate (twenty) —
+  N82.** The agent flipped the repo's existing `.yarnrc.yml` from
+  `nodeLinker: node-modules` to pnp with `pnpMode: loose` (N74 only
+  rejects *new* manager-config files), then rewrote twenty-front's
+  build script to `yarn nx build twenty-front` where nx is not a
+  dependency ("Couldn't find a script named \"nx\"").
+
+### N78 (Critical, infra + feature) — repo-pinned Node lines: one image, baked lines, system swap
+
+Design decision (explored against three alternatives): a **single
+submitted-code image baking every common Node LTS line (20, 22, 24) as
+official tarballs, with the backend resolving the repo's pin from the
+screened archive and swapping `/usr/local` wholesale to the resolved
+line before any repo command runs.** Rejected: (a) multi-Node image
+with PATH selection — correctness-by-plumbing; every exec seam
+(install gate, offline lifecycle, managed-app spawn, capture restart,
+the repo's own nested spawns) must carry the selection, and ghost's
+ABI split-brain is exactly what one missed seam looks like; (b)
+per-line snapshot variants — correctness-by-construction but triples
+every build/verify/rotate cycle we just executed by hand; (c) runtime
+download from nodejs.org — adds a per-run network flake surface and
+checksum plumbing for artifacts we can bake at build time; (d)
+bypass-only (extending N73) — cannot beat a project-level `.npmrc` and
+trades honest engine errors for ABI corruption. The swap makes the
+one-image design safe: post-swap only one Node exists in the sandbox —
+binaries, headers, and every nested spawn agree by construction — and
+the wrong-Node failure class is impossible rather than plumbed around.
+Reactive detection (boot default, fail, switch) is rejected outright:
+directus spent 28 minutes discovering what one manifest line declares;
+resolution is proactive, from the screen we already hold.
+
+Work items (TDD each; the boundary that generalizes is **repo runtime
+vs harness tooling** — the swap must only ever touch the repo's
+world):
+
+1. **Pin resolution (pure module, `SUPPORTED_NODE_LINES = [20, 22,
+   24]` as the single source of truth).** `resolveNodeLine({files,
+   targetId})` → `{line, provenance, satisfied}`. Constraints
+   gathered: `devEngines.runtime` (node), `engines.node`, and
+   `.nvmrc`/`.node-version`, from the repo root and the locked
+   `targetId` app dir; exact versions map to their major line; ranges
+   evaluate via `semver` (already in the tree transitively; add as a
+   direct dependency). Selection: highest baked line satisfying the
+   intersection of all constraints; if the intersection is empty, the
+   root's install-governing constraint wins (install is the first
+   gate); if no baked line satisfies at all, nearest baked line with
+   `satisfied: false` recorded — a run that then fails preflight on a
+   node-version error self-explains. No pin → the default line (24),
+   so nothing currently passing regresses.
+2. **Image redesign (one Dockerfile, one snapshot).** Remove the
+   Playwright base image's apt-layout Node entirely — including
+   `/usr/include/node`, the stale-header trap ghost's gyp fell into —
+   and install the default line from the official tarball at
+   `/usr/local`. Bake all three lines' tarballs under
+   `/opt/node-lines/` with build-time SHA256 verification. Set
+   `npm_config_nodedir=/usr/local` in the image env (and mirrored in
+   the guarded runtime env) so node-gyp of any vintage compiles
+   against whatever `/usr/local` currently is — this supersedes
+   N72a's version-specific header cache. Move harness tooling
+   (playwright, typescript, node-gyp CLI) out of the swappable prefix
+   into a private `/opt/makeademo-tools` prefix invoked by absolute
+   path, so the swap can never delete our own capture stack. Manager
+   provisioning moves to **corepack** (each line's tarball ships it):
+   drop the npm-global pnpm/yarn, bake a warm `COREPACK_HOME` cache
+   for the default manager versions, set
+   `COREPACK_ENABLE_DOWNLOAD_PROMPT=0`, and re-run `corepack enable`
+   as the final step of every swap (shims live in the swapped bin).
+   This is the outline fix: pinned managers resolve exactly, and
+   unpinned repos keep classic yarn via corepack's default. A
+   Dockerfile-content test asserts the baked-line layers match
+   `SUPPORTED_NODE_LINES` so the const and the image cannot drift.
+3. **Swap execution (one choke point, idempotent).** The provider
+   exposes the primitive (verify marker file → clear
+   `/usr/local/{bin,include/node,lib/node_modules}` → untar the line
+   with `--strip-components=1` → `corepack enable` → assert `node
+   -v`); the harness owns the *when*: once per submitted-code sandbox,
+   after target lock and before the first submitted command (install
+   gate or agent-run alike), so even the earliest agent probe sees the
+   resolved line. The resolved line and provenance are recorded in the
+   run plan and echoed in every preflight report (`node -v` evidence),
+   so future version diagnoses read off the artifact instead of gyp
+   arg forensics.
+4. **World-rules rider (N63 text).** One line: the backend fixes the
+   Node version from the repository's own pin; agents must never
+   install, download, or reconfigure Node. Prevents the workaround
+   class before it starts.
+5. **Verify + rollout.** `verify:daytona-image` gains a swap check
+   (boot, swap to a non-default line, assert `node -v`, `corepack
+   yarn --version`, and a minimal `node-gyp configure` smoke against
+   the swapped headers — ABI alignment is the entire point). Then the
+   same one-command rotation as today: one snapshot build, `.env`
+   update, verify, ledger note.
+
+Growth path: when Node 26 goes LTS, the change is one entry in
+`SUPPORTED_NODE_LINES` plus one tarball layer — the resolution,
+swap, and verify machinery are line-agnostic. The exact-version
+download fallback (a pin whose *major* we do not bake) is deliberately
+not built: resolution records `satisfied: false`, and pnpm-style
+managers that download their own exact Node stay ABI-compatible with
+our line-matched headers (NODE_MODULE_VERSION is per-major). Mid-run
+line switches are likewise not designed for: the pin basis (screened
+archive + locked target) is immutable by construction, agent pin edits
+are gate territory, and the one residual (stale engines metadata) is
+undetectable without machinery neither design ships — if it ever
+occurs it fails legibly at preflight and becomes its own item.
+
+Acceptance: directus's engine check passes under 22; ghost's
+better-sqlite3 compiles with 22-line headers and loads under
+pnpm-downloaded 22.23.1; twenty stays on 24; outline installs with
+corepack-provisioned yarn 4.11.0; every unpinned repo behaves
+identically to today.
+
+### Queued from this matrix (planned on request)
+
+**N72b (activate)** — backend prisma-engine prefetch during the
+install window, per the seventh-matrix spec; calcom and ghostfolio now
+both block on it. **N79** — yarn-variant detection must read the
+repo's identity (packageManager pin, now authoritative via N78's
+corepack), not the agent's chosen install flags. **N80** — exploration
+readiness gate: persistent loading overlay / zero interactive elements
+alongside harvested text → bounded re-poll, then classify "app stuck
+loading" and steer repair at the runtime, never at wording. **N81** —
+preparation-manifest validator: report all unknown source paths across
+all fields in one error (contract clause 4), state the eligibility
+rule in the message, and give the initial repo-preparation loop the
+N61 stall lane. **N82** — extend N74 to semantic mutations of
+*existing* manager-config files (nodeLinker, enableScripts, yarnPath,
+use-node-version). **N70b** remains queued for excalidraw.
+
+Recommended order: N78 (unblocks directus + ghost + outline and is
+the substrate for N79), N72b (calcom + ghostfolio), N81 (midday
+regression), N79 → N80 → N82, then N70b.
