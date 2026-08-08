@@ -142,10 +142,12 @@ const defaultSandboxDiskGB = 3;
 /**
  * The submitted-code sandbox holds the repo, its dependency tree, the
  * package-manager cache, and build outputs — twenty alone installs 3.14GiB
- * of packages and filled the platform default twice (ENOSPC, 2026-08-07/08).
- * 20GB keeps ~11 concurrent matrix pairs at ~253GiB of a 2000GiB quota.
+ * of packages and filled its disk twice (ENOSPC, 2026-08-07/08). 10GB is
+ * the Daytona org's per-sandbox maximum (a 20GB request is rejected with
+ * "exceeds maximum allowed per sandbox", measured 2026-08-08); further
+ * headroom must come from cache pruning, not disk.
  */
-const submittedCodeSandboxDiskGB = 20;
+const submittedCodeSandboxDiskGB = 10;
 const defaultCommandTimeoutMs = 10 * 60_000;
 const defaultLogWriteTimeoutMs = 5_000;
 const defaultPtyConnectionTimeoutMs = 30_000;
