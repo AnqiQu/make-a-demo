@@ -3833,6 +3833,13 @@ const offCameraAuthenticationInstruction =
 const offlineFeatureStateInstruction =
   "Follow every selected feature beyond authentication through its API, RPC, GraphQL, client, repository, database, and service calls. Add deterministic local adapters or fixtures at existing seams, conditionally select them with the same source-backed demo gate, and retain the normal adapter when it is off; a feature that still requires an external API or database is not prepared under Runtime Network Lockdown. Server-side demo adapters must invoke fixtures or local service code directly, never send HTTP back through the prepared app's own baseUrl or listening port; browser clients may use relative same-origin routes only in code that never executes during server-side rendering — a data-fetching layer shared with SSR cannot fetch a relative URL, so gate it to run client-side only or invoke the fixture module directly on the server — and a truly separate local service must use its own declared port.";
 
+const sealedNetworkWorldRulesInstruction =
+  "World rules for the demo runtime — the backend's submitted-code sandbox differs from this one, and every repair round is expensive, so design for these up front: " +
+  "(1) The network is open only during the backend's dependency install with lifecycle scripts suppressed, and permanently sealed afterward. Any lifecycle or runtime step that downloads (prisma engines, prebuilt native binaries, telemetry, remote fonts) fails there on every retry — neutralize the downloading step for the demo, avoid the artifact at runtime, or vendor it into the repo. " +
+  "(2) Internal workspace-package build outputs (dist/, build/) exist only if a declared build command produces them; dependency install never builds workspace members. When the app imports a workspace package's build output, declare the repo's own narrowest target that builds it first. " +
+  "(3) package.json script gates run under restricted shells — turbo and nx use a minimal interpreter without if/then — so gate demo behavior with a node -e conditional such as node -e \"if (process.env.MAKEADEMO_DEMO === 'true') { … }\", never POSIX if/then syntax. " +
+  "(4) 'It works in this sandbox' proves nothing about the demo runtime: this agent sandbox has an open network and different caches. Validate assumptions against these rules instead of by running the app here.";
+
 const appDirShapeInstruction =
   'appDir must be relative to /workspace/repo: use "." for the repo root or a path such as "frontend"; never use an absolute path.';
 
@@ -3879,6 +3886,7 @@ function createRepoPreparationPrompt(input: {
       "When keyProductFeatures is empty, select and fully prepare up to three strong source-backed browser features. Each selected feature must be reachable with deterministic local authentication and data fixtures where needed; candidate identification alone is not sufficient.",
       offCameraAuthenticationInstruction,
       offlineFeatureStateInstruction,
+      sealedNetworkWorldRulesInstruction,
       "Do not invent core product behavior that is absent from the source. If a requested capability is truly absent, leave concrete evidence in knownLimitations rather than fabricating it.",
       "Every feature sourcePaths list must cite at least one original browser route, page, component, or UI module used by the prepared route. If the original app cannot be prepared through the allowed seams, do not synthesize a substitute product.",
       `Use this local runtime URL in the manifest: ${input.runPlan.expectedLocalUrl}`,
@@ -4012,6 +4020,7 @@ function createRuntimePreparationRepairPrompt(input: {
       "Preserve every selected productContext feature, including every requested feature, and retain its source evidence and entryPaths.",
       offCameraAuthenticationInstruction,
       offlineFeatureStateInstruction,
+      sealedNetworkWorldRulesInstruction,
       "Read /workspace/.makeademo/preparation-manifest-contract.json and use /workspace/.makeademo/preparation-manifest-template.json as the canonical shape.",
       "Do not patch only the reported failure. Revalidate the complete manifest and every productContext.featureInventory entry before finishing.",
       appDirShapeInstruction,
