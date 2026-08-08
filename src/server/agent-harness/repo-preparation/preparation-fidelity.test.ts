@@ -31,6 +31,46 @@ describe("validatePreparationFidelity", () => {
     expect(report.logsSummary).toContain("workspace diff is empty");
   });
 
+  it("rejects removing the packageManager pin", () => {
+    // outline (2026-08-08): the prep agent deleted `"packageManager":
+    // "yarn@4.11.0"`, silently downgrading the repo to yarn classic;
+    // lockfile reconciliation then ran yarn 1.22 against a berry lockfile
+    // and imploded. Package-manager identity is backend territory.
+    const report = validateDiff({
+      modifiedFiles: ["package.json"],
+      patch: [
+        "diff --git a/package.json b/package.json",
+        '-  "packageManager": "yarn@4.11.0"',
+        '-  "version": "1.9.1",',
+        '+  "version": "1.9.1"',
+      ].join("\n"),
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "product fidelity violation",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain("package-manager identity");
+    expect(report.logsSummary).toContain("package.json");
+  });
+
+  it("rejects creating a package-manager configuration file", () => {
+    // The other half of outline's downgrade: a new .yarnrc steering yarn
+    // classic behavior the backend never chose.
+    const report = validateDiff({
+      createdFiles: [".yarnrc"],
+      patch: [
+        "diff --git a/.yarnrc b/.yarnrc",
+        "new file mode 100644",
+        "+--ignore-lockfile true",
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(".yarnrc");
+    expect(report.logsSummary).toContain("package-manager identity");
+  });
+
   it("accepts an empty diff when the manifest claims no prepared content", () => {
     // A repo needing zero preparation is legitimate (homer); env-only demo
     // modes carried by envUsed are too. Truthful emptiness must pass.

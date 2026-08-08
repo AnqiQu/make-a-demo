@@ -76,6 +76,8 @@ const repairHints = {
   seam: "Move the change into an authentication, data, service, or configuration seam and gate it.",
   selfRequest:
     "Import the fixture or adapter directly instead of requesting your own listener.",
+  packageManagerIdentity:
+    "Keep the repository's packageManager pin and manager configuration; adapt the demo within the detected package manager instead of switching or unpinning it.",
   truthfulManifest:
     "Complete the preparation so the claimed fixtures and replacements exist in the workspace, or correct the manifest to describe the actual prepared state.",
 } as const;
@@ -110,6 +112,33 @@ export function validatePreparationFidelity(input: {
   }
   const repairPaths = readInvalidRepairPaths(input);
   const filePatches = parsePatchSections(input.workspaceDiff.patch);
+  // Package-manager identity is backend territory: the detected manager
+  // drives install, lockfile reconciliation, and the offline lifecycle.
+  // outline's prep deleted the packageManager pin, silently downgrading
+  // yarn berry to classic, and reconciliation ran the wrong manager
+  // against the berry lockfile (2026-08-08). Pin changes and new
+  // manager-config files are rejected; existing config files stay
+  // editable for in-manager tweaks.
+  for (const path of input.workspaceDiff.changedPaths.map(toRepoRelativePath)) {
+    const fileName = path.split("/").at(-1) ?? path;
+    const patch = filePatches.get(path) ?? emptyPatchSection;
+    const changesManagerPin =
+      fileName === "package.json" &&
+      [...patch.added, ...patch.removed].some((line) =>
+        line.includes('"packageManager"'),
+      );
+    const createsManagerConfig =
+      !input.repoSourceFiles.has(path) &&
+      (fileName === ".yarnrc" ||
+        fileName === ".yarnrc.yml" ||
+        fileName === ".npmrc");
+    if (changesManagerPin || createsManagerConfig) {
+      violations.push({
+        hint: repairHints.packageManagerIdentity,
+        message: `${path} changes the package-manager identity (the packageManager pin or a manager configuration file); the backend pins the detected manager and regenerates lockfiles with it.`,
+      });
+    }
+  }
   const demoGate = readDemoGateEvidence(
     input.preparationManifest,
     input.repoSourceFiles,
