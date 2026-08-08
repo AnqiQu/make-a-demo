@@ -2824,3 +2824,66 @@ steer. N58/N59 round economics remain its medicine.
 Recommended order: N65 → N61 → N68 (budget integrity — stop the
 bleeding), N67 → N71 → N69 (unblock specific repos), N70 (design),
 N66 (infra); N58/N59 still queued next for round economics.
+
+### Landed (2026-08-07, same day)
+
+All eight items, in the recommended order. `8076d76` N65: the runtime
+repair prompt no longer inlines the repo profile (it is already a
+listed artifact path), every interpolated evidence field is bounded by
+a shared `elideMiddle` (new `src/server/shared/text/elide-middle.ts`;
+graphs regenerated in `b93d7c7`), and the OpenCode runner enforces a
+96KB last-resort ceiling for every stage prompt. Transport stays argv:
+no stage legitimately needs a >100KB prompt. `b490f91` N61: command
+stalls ride a new `agentStallRetries` lane (default 2, env
+`MAKEADEMO_AGENT_STALL_RETRIES`) in both the generic artifact loop and
+the runtime-repair loop without spending `agentArtifactAttempts`; the
+launch-failure detector now recognizes shell exec diagnostics
+(`bash: …: Argument list too long`, `logout`) so an E2BIG-class launch
+is infrastructure, not agent quality; runtime-target-selection's total
+cap rises 300s→600s. A found-in-flight fix: stall retries repeat an
+attempt number, so first-run detection now keys off a prior-run flag —
+without it the retry prompt lost the kill disclosure. `342f580` N68:
+fidelity fails a manifest claiming `mocksAndFixturesAdded` or
+`blockedExternalServicesReplaced` over an empty diff; truthful
+emptiness (calcom/twenty-style honest give-ups, env-only demo modes,
+zero-prep repos) still passes — the honest-hollow shape remains prompt
+territory (N63) and preflight's job. `a78e112` N67: a module missing at
+an absolute path under the repo's own node_modules after a successful
+install is diagnosed as an unbuilt workspace-linked package (registry
+packages ship their files) and steered at the repo's own build target,
+at both the build-failure and runtime-report seams. `8149248` N71: the
+flow-evidence gap check covers agent-selected features — when no maker
+features exist and fewer than min(3, |inventory|) grounded features
+carry a tagged interaction plus assert, exploration fails with the gap
+steering (grounding shortfalls still fall through to the richer
+unreachable/hollow handling). `50bd4ad` N69: YN0009-referenced
+`build.log` paths are tail-harvested (first 3, 2KB each, redacted) into
+the lifecycle failure report, and the N55 sealed-network detector runs
+over the harvested text. `15bd1e0` N70 (mechanical core; `refs`, not
+closes): chrome repetition counts distinct shells — query/fragment
+variants of one pathname are one shell, `#/…` hash routing stays a
+distinct page — so single-shell apps stop having their persistent UI
+discounted as chrome; the text-free canvas evidence lane (excalidraw's
+bare-canvas case) remains the gated design half, expected to matter
+less once N68/N61 prevent hollow preps. `aec4322` N66: every created
+workspace handle registers in a process-wide registry,
+`destroyAllDaytonaWorkspaces()` drains it, both runner scripts hook
+SIGINT/SIGTERM, and the agent-sandbox auto-delete backstop drops
+720→150 minutes (an hour past the 90-minute job deadline).
+
+Verification: TDD per item with the failing test verified red first;
+`bun run lint`, `bun run typecheck`, `bun run test`, `bun run knip`
+green per commit — with one standing exception: `remotion-video-
+renderer.test.ts` (the parallel session's pinned-browser render test)
+fails on this machine on a clean checkout independent of these changes
+and was excluded from the per-commit suite runs after that was
+verified against HEAD. Tests 850→858 (+13 this batch, net of the
+diagnosis-window baseline 846→850 from N53–N57's landing). Matrix
+expectations: calcom/ghostfolio repair rounds now reach the model
+(N65) and their berry lifecycle failures carry causes (N69); ghost
+survives selection-stage weather (N61); give-up preps die at fidelity
+instead of exploration (N68); twenty/directus get prerequisite-build
+steering (N67); conduit fails at exploration with actionable gaps
+instead of wedging flow planning (N71); cyberchef's single-shell
+evidence survives chrome discounting (N70); interrupted runs stop
+leaking sandboxes (N66).
