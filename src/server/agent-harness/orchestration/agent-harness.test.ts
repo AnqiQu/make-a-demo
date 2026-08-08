@@ -1127,6 +1127,94 @@ describe("runAgentHarnessPipeline", () => {
     ]);
   });
 
+  it("reuses the previous round's install when a repair changes no dependency inputs", async () => {
+    // Loop economics (N58): most repairs touch source and fixtures, not
+    // package manifests — re-running the gated install every round spends
+    // 1–2 minutes reproducing the same warm node_modules. When the repair
+    // delta leaves dependency inputs unchanged and the prior round's
+    // install succeeded in this sandbox, the next validation skips install
+    // and the repair agent is told the install was reused.
+    const installFlags: Array<boolean | undefined> = [];
+    const repairHintLog: string[] = [];
+    let preflightAttempts = 0;
+    let diffCalls = 0;
+    const diffAfterRepair = (round: number) => ({
+      changedFileSha256: {
+        "/workspace/repo/src/demo-fixtures.ts":
+          `sha256:${String(round).repeat(64).slice(0, 64)}` as const,
+      },
+      changedPaths: ["/workspace/repo/src/demo-fixtures.ts"],
+      patch: [
+        "diff --git a/src/demo-fixtures.ts b/src/demo-fixtures.ts",
+        "new file mode 100644",
+        `+export const fixtureRows = [${round}];`,
+      ].join("\n"),
+      patchSha256: `sha256:${"d".repeat(64)}` as const,
+      sourceCommitSha: "abc123def456",
+    });
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_install_reuse" }),
+      stubPipelineDependencies({
+        async capturePreparationWorkspaceDiff() {
+          diffCalls += 1;
+          // Call order: initial fidelity diff; before-repair baseline;
+          // after-repair diff; before-repair-2 baseline; after-repair-2.
+          if (diffCalls <= 2) return unchangedWorkspaceDiff();
+          if (diffCalls === 3) return diffAfterRepair(1);
+          if (diffCalls === 4) return diffAfterRepair(1);
+          return diffAfterRepair(2);
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation({ failureReport }) {
+          repairHintLog.push(failureReport.suggestedRepairHints.join("\n"));
+          return { manifest: preparationManifest() };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation({ installDependencies }) {
+          preflightAttempts += 1;
+          installFlags.push(installDependencies);
+          return preflightAttempts <= 2
+            ? {
+                ...report("preparation-preflight", "failed"),
+                failureClassification: "start failure",
+                logsSummary: `boot failed round ${preflightAttempts}`,
+              }
+            : report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    // Round 1 installs; rounds 2 and 3 follow source-only repairs and reuse
+    // the round-1 install.
+    expect(installFlags).toEqual([undefined, false, false]);
+    expect(repairHintLog[1]).toContain(
+      "install reused from validation attempt 1",
+    );
+  });
+
   it("counts a deterministic install-scope expansion against the global repair budget", async () => {
     let preflightAttempts = 0;
     let repairAttempts = 0;

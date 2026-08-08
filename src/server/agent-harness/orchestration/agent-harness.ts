@@ -176,6 +176,12 @@ export type AgentHarnessPipelineDependencies = {
     workspace: AgentHarnessWorkspace;
   }): Promise<ValidationReport>;
   validatePreparation(input: {
+    /**
+     * False skips the gated dependency install: the orchestrator passes it
+     * on repair rounds whose diff leaves dependency inputs unchanged, so
+     * the sandbox's warm node_modules from the prior round is reused.
+     */
+    installDependencies?: boolean;
     /** Regenerate the package-manager lockfile before frozen installation. */
     reconcileLockfile?: boolean;
     preparationManifest: PreparationManifest;
@@ -1288,6 +1294,12 @@ async function ensureValidPreparation(input: {
   let reconcileLockfile = false;
   let repairBaseline: PreparationWorkspaceDiff | undefined;
   let lastWorkspaceDiff = acceptedPreparation?.workspaceDiff;
+  // The preflight attempt whose gated install last succeeded in this
+  // sandbox. Repair rounds whose diff leaves dependency inputs unchanged
+  // reuse that install instead of spending 1–2 minutes reproducing the
+  // same warm node_modules (N58); any round that installs afresh or fails
+  // at-or-before install resets it.
+  let lastCleanInstallAttempt: number | undefined;
   const attemptedInstallScopes =
     input.preparationRepairBudget.attemptedInstallScopes;
   attemptedInstallScopes.add(input.preparationManifest.installCommandUsed);
@@ -1482,6 +1494,10 @@ async function ensureValidPreparation(input: {
     acceptedPreparation = { manifest: preparationManifest, workspaceDiff };
     activeRepairFailure = undefined;
 
+    const reuseInstallFromAttempt =
+      repairDelta !== undefined && !repairDelta.dependencyInputsChanged
+        ? lastCleanInstallAttempt
+        : undefined;
     const preparationValidation = await runValidationStage(
       "preparation-preflight",
       input.dependencies,
@@ -1491,6 +1507,9 @@ async function ensureValidPreparation(input: {
       input.stageTimings,
       () =>
         input.dependencies.validatePreparation({
+          ...(reuseInstallFromAttempt === undefined
+            ? {}
+            : { installDependencies: false }),
           preparationManifest,
           ...(reconcileLockfile ? { reconcileLockfile: true } : {}),
           repoProfile: input.repoProfile,
@@ -1500,6 +1519,18 @@ async function ensureValidPreparation(input: {
       input.validationAttemptCounts,
       input.preparationRepairAttemptsByPhase["preparation-preflight"] ?? 0,
     );
+    if (reuseInstallFromAttempt === undefined) {
+      // Install ran this validation: it stays reusable unless the failure
+      // happened at or before install. The pre/at-install classifications
+      // are listed conservatively — anything ambiguous forces a reinstall.
+      lastCleanInstallAttempt = [
+        "install failure",
+        "external network attempted",
+        "harness/internal failure",
+      ].includes(preparationValidation.failureClassification ?? "")
+        ? undefined
+        : (input.validationAttemptCounts["preparation-preflight"] ?? 0);
+    }
     if (
       preparationValidation.status === "failed" &&
       preparationValidation.failureClassification === "install failure"
@@ -1526,7 +1557,19 @@ async function ensureValidPreparation(input: {
         preparationValidation,
       };
     }
-    failure = preparationValidation;
+    // The reuse note travels as a hint, never in logsSummary: the failure
+    // fingerprint normalizes the summary, and a round-varying prefix would
+    // defeat repeated-failure detection.
+    failure =
+      reuseInstallFromAttempt === undefined
+        ? preparationValidation
+        : {
+            ...preparationValidation,
+            suggestedRepairHints: [
+              ...preparationValidation.suggestedRepairHints,
+              `Dependency install reused from validation attempt ${reuseInstallFromAttempt} (this repair changed no dependency inputs).`,
+            ],
+          };
   }
 }
 

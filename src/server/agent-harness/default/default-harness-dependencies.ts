@@ -1486,6 +1486,7 @@ export async function createDefaultAgentHarnessDependencies(
       );
     },
     async validatePreparation({
+      installDependencies,
       preparationManifest,
       reconcileLockfile,
       repoProfile,
@@ -1493,6 +1494,7 @@ export async function createDefaultAgentHarnessDependencies(
       workspace,
     }) {
       return await validateRuntimeWithExternalResources({
+        ...(installDependencies === undefined ? {} : { installDependencies }),
         preparationManifest,
         ...(reconcileLockfile === undefined ? {} : { reconcileLockfile }),
         repoProfile,
