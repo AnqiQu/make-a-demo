@@ -25,6 +25,7 @@ const preparationFailureClassifications = new Set([
   "external network required",
   "feature auth barrier",
   "install failure",
+  "lifecycle timeout",
   "listen failure",
   "missing dependency",
   "missing env",

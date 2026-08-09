@@ -2339,12 +2339,25 @@ async function validateResolvedSubmittedCodeRuntime(
             (line) =>
               line.includes("[makeademo:disk]") && !excerpt.includes(line),
           );
+        // Exit 124 is the deadline-evidence conversion of a timeout kill:
+        // the work in the tail completed and the hang began after its last
+        // line. Naming it "install failure" sent five ghost repair rounds
+        // chasing a phantom install with dependency-only edit rights
+        // (2026-08-09); "lifecycle timeout" keeps full repo latitude.
+        const timedOut = lifecycle.exitCode === 124;
+        const timeoutSummary = `${lifecycle.stdout}`.includes(
+          "produced no output",
+        )
+          ? "Network-closed lifecycle scripts were killed after 5 minutes of silence with no CPU progress"
+          : "Network-closed lifecycle scripts were killed at their overall deadline";
         return failedPreparationValidation({
           attemptedCommand: lifecycleCommand,
-          classification: "install failure",
+          classification: timedOut ? "lifecycle timeout" : "install failure",
           exitCode: lifecycle.exitCode,
           logsSummary: [
-            `Network-closed lifecycle scripts failed after the dependency install: ${excerpt}`,
+            timedOut
+              ? `${timeoutSummary} (exit 124). Everything in the output below completed successfully — the hang began after its last line; repair the step that would have run next, not the completed work: ${excerpt}`
+              : `Network-closed lifecycle scripts failed after the dependency install: ${excerpt}`,
             ...buildLogEvidence,
             ...managerLogEvidence,
             ...diskMarkerLines,

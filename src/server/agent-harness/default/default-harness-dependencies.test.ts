@@ -3902,6 +3902,57 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(lifecycle).toContain("[makeademo:alive] cpu");
   });
 
+  it("classifies an inactivity-killed lifecycle as a lifecycle timeout, not an install failure", async () => {
+    // Ghost (2026-08-09): pnpm rebuild was killed after 5 silent minutes,
+    // classified "install failure", and five repair rounds chased a
+    // phantom install problem with dependency-only edit rights. A killed
+    // lifecycle must say it was killed and leave repairs full latitude.
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("npm rebuild")) {
+          return {
+            exitCode: 124,
+            stderr: "",
+            stdout: [
+              "> better-sqlite3 install: gyp info ok",
+              "[makeademo:timeout] Daytona command produced no output for 300000ms. The command was killed at its deadline; output above is partial.",
+            ].join("\n"),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: {
+        ...repoProfile(),
+        packageScripts: { dev: "next dev", postinstall: "prisma generate" },
+      },
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "lifecycle timeout",
+      status: "failed",
+    });
+    // The summary must lead with the kill so repairs target the hang, and
+    // must state that everything above the marker completed.
+    expect(report.logsSummary).toMatch(/killed after .*silence/i);
+    expect(report.logsSummary).toContain("completed");
+    expect(report.logsSummary).toContain("gyp info ok");
+  });
+
   it("keeps liveness heartbeats out of failure evidence excerpts", async () => {
     // Heartbeats are transport for the no-output watchdog, not evidence:
     // a failing install's summary must carry the real error lines, not a
@@ -4548,8 +4599,10 @@ describe("createDefaultAgentHarnessDependencies", () => {
       workspace,
     });
 
+    // N98 re-pin: a timeout kill is a "lifecycle timeout" (full repair
+    // latitude), no longer an "install failure" (dependency-only edits).
     expect(report).toMatchObject({
-      failureClassification: "install failure",
+      failureClassification: "lifecycle timeout",
       status: "failed",
     });
     expect(report.logsSummary).toContain("[makeademo:timeout]");

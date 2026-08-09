@@ -1643,6 +1643,9 @@ async function ensureValidPreparation(input: {
       // are listed conservatively — anything ambiguous forces a reinstall.
       lastCleanInstallAttempt = [
         "install failure",
+        // A timed-out lifecycle left native builds and postinstall codegen
+        // unfinished — reuse would skip the re-run entirely (N98).
+        "lifecycle timeout",
         "external network attempted",
         "harness/internal failure",
       ].includes(preparationValidation.failureClassification ?? "")

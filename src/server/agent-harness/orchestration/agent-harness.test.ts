@@ -1354,6 +1354,81 @@ describe("runAgentHarnessPipeline", () => {
     );
   });
 
+  it("reinstalls after a lifecycle timeout instead of reusing the incomplete install", async () => {
+    // A timed-out lifecycle (N98) left native builds and postinstall codegen
+    // unfinished: reusing that install would skip the lifecycle re-run and
+    // send preflight against half-built node_modules.
+    const installFlags: Array<boolean | undefined> = [];
+    let preflightAttempts = 0;
+    let diffCalls = 0;
+    const sourceOnlyDiff = () => ({
+      changedFileSha256: {
+        "/workspace/repo/src/demo-fixtures.ts":
+          `sha256:${"e".repeat(64)}` as const,
+      },
+      changedPaths: ["/workspace/repo/src/demo-fixtures.ts"],
+      patch: [
+        "diff --git a/src/demo-fixtures.ts b/src/demo-fixtures.ts",
+        "new file mode 100644",
+        "+export const fixtureRows = [1];",
+      ].join("\n"),
+      patchSha256: `sha256:${"f".repeat(64)}` as const,
+      sourceCommitSha: "abc123def456",
+    });
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_lifecycle_timeout_reinstall" }),
+      stubPipelineDependencies({
+        async capturePreparationWorkspaceDiff() {
+          diffCalls += 1;
+          return diffCalls <= 2 ? unchangedWorkspaceDiff() : sourceOnlyDiff();
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation() {
+          return { manifest: preparationManifest() };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation({ installDependencies }) {
+          preflightAttempts += 1;
+          installFlags.push(installDependencies);
+          return preflightAttempts <= 1
+            ? {
+                ...report("preparation-preflight", "failed"),
+                failureClassification: "lifecycle timeout",
+                logsSummary:
+                  "Network-closed lifecycle scripts were killed after 5 minutes of silence with no CPU progress (exit 124).",
+              }
+            : report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    // Round 2 must run a full install again, not reuse round 1's.
+    expect(installFlags).toEqual([undefined, undefined]);
+  });
+
   it("never dispatches a repair agent for a harness-internal validation failure", async () => {
     // Repair-evidence contract clause 5 (N62): infra errors must not reach
     // agent prompts or spend repair budget — outline's fallback once asked a

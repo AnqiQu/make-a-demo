@@ -48,6 +48,17 @@ describe("RepairRouter", () => {
     expect(isDependencyRepairFailure("missing dependency")).toBe(true);
   });
 
+  it("routes a lifecycle timeout to preparation repair with full repo latitude", () => {
+    // Ghost's inactivity-killed lifecycle was classified "install failure"
+    // (2026-08-09), which both misnamed the cause and locked repairs to
+    // dependency-metadata edits — the real fix (neutralizing a hanging
+    // lifecycle step) needs repo edits.
+    expect(
+      classifyRepairRoute({ failureClassification: "lifecycle timeout" }),
+    ).toBe("repo-preparation-repair");
+    expect(isDependencyRepairFailure("lifecycle timeout")).toBe(false);
+  });
+
   it("fails a sandbox capacity failure instead of routing it to any repair agent", () => {
     expect(
       classifyRepairRoute({
