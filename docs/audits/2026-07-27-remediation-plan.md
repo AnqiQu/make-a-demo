@@ -4119,3 +4119,244 @@ unchanged Dockerfile; `.env` repointed;
 `bun run verify:daytona-image` passed (one retry after a transient
 sandbox DNS failure on the first attempt). The eleventh matrix
 remains the acceptance gate and awaits an explicit go-ahead.
+
+## Addendum (2026-08-09, eleventh 11-repo matrix — the silence-is-death class; the in-code fixture contract; N98–N101)
+
+Run `matrix-2026-08-09T16-11-15-533Z` / report
+`matrix-report-2026-08-09T17-35-26-992Z.json`. Three passed:
+homer (23min), conduit (33min), excalidraw (49min — its
+preparation survived the rebuilt fidelity gate end-to-end,
+N92's acceptance expectation). Eight failed. Scorecard against
+the N92–N97 gates: no run died at fidelity (the judge lane ran
+repeatedly across five entries without killing anything);
+calcom's failure names its actual broken start target; midday
+explored under 8GB and failed at the data gate for the right
+reason; N97's memory marker was immediately load-bearing
+(twenty's build peaked at exactly 8589934592 bytes — the
+ceiling; ghostfolio 3.25GB; cyberchef 1.35GB). Two gates
+failed instructively: ghost's repair rounds were spent against
+a phantom "install failure" manufactured by a false inactivity
+kill, and outline spent its rounds on its real data bug only
+for the run to die on an unclassified exploration timeout. The
+frontier this cycle: the harness reads silence as death — 43
+five-minute agent inactivity kills across all 11 entries
+(including every pass) plus ghost's sandbox-side false kill —
+and two Daytona seams still convert one transient into a dead
+run. Beneath the infrastructure noise, the recurring
+prep-quality failure is data that never reaches the UI.
+
+### Diagnoses
+
+**The silence-is-death class (≈3.5h wall-clock; ghost
+killed).** Agent commands were killed 43 times by the 300s
+no-output watchdog (midday and excalidraw 7 each; the three
+passes 12 between them). Each kill is ~5 minutes of stall plus
+a burned validation attempt before relaunch; agents running a
+long silent tool call — a build, an install, a slow
+adjudication read — exceed the window while working correctly.
+Ghost is the terminal case, sandbox-side: the N96 lifecycle
+inactivity deadline killed `pnpm rebuild -r` at exit 124
+mid-run — the evidence tail proves everything prior was
+healthy (sqlite3 compiled, re2 rebuilt "info ok") — because
+pnpm buffers each package's script output until the package
+finishes, so one long native compile emits nothing for
+minutes. The verdict was then classified "install failure",
+and all repair attempts chased that phantom until the global
+budget of 5 died. The N95/N96 evidence chain itself worked:
+the `[makeademo:timeout]` marker and legible tail are in the
+attempt file.
+
+**Daytona transients and timeouts outside N94's cover
+(cyberchef killed; outline killed).** Cyberchef died after 71
+minutes when the control-plane socket closed during a
+submitted-code workspace reset — classified "not
+agent-repairable", no retry, though N94 retries the same class
+of failure one seam over. Outline first failed exploration for
+the right reason (`Cannot read properties of undefined
+(reading 'forEach')` on every content route — fixture shape
+mismatch) and spent repair rounds on it per N93; then the
+final exploration attempt hung for the full 420s protocol
+deadline and `AgentHarnessCommandTimeoutError` escaped
+unclassified as a raw pipeline kill — bypassing
+exploration-failure classification and forfeiting the reserve
+rounds that remained.
+
+**midday (data surface stuck loading — a third cause the
+classifier cannot name).** Exploration correctly failed the
+transactions feature, but the aria evidence shows the true
+state: the table mounted rows whose every cell is textless —
+loading skeletons for a query that never resolves. The
+classifier offers exactly two causes (query resolved empty;
+virtualized zero-height body), so both repair rounds steered
+at fixture shape and default filters while the actual defect
+was the wiring between fixture and UI. Two same-fingerprint
+attempts exhausted the lane.
+
+**directus (served at the wrong base; API dead).** The
+screenshots show a login page; `auth/refresh` 404s under
+`/settings/…`; and the app's own relative links resolved
+against the current page into concatenated 404 routes
+(`/settings/admin/settings/data-model`,
+`/content/tasks/admin/content/tasks`) that exploration then
+tagged as the features' routes. The prepared serving
+arrangement put the admin SPA at a base it does not expect
+with no working API behind it; the chrome-only verdict was
+correct and repair never addressed the arrangement.
+
+**calcom, ghostfolio (start commands reference missing
+outputs — legible, unfixed).** Calcom's managed app output
+names it: `turbo … No package found with name '@calcom/
+website' in workspace`. Ghostfolio's start ran without its
+build product: `Cannot find module /workspace/repo/dist/apps/
+api/main`. Both are agent-quality failures with clean
+evidence; both exhausted their repeated-failure lanes.
+
+**twenty (memory ceiling plus missing prerequisite).** The
+build died on `EvalError: Cannot find module
+'twenty-ui/dist/theme-constants.cjs'` — the workspace
+prerequisite was never built, the exact shape N67 steers for,
+but N67's matcher does not recognize the
+`Cannot find module '<pkg>/dist/…'` form. The mem marker
+recorded the build pinned at the 8GB cgroup ceiling, so even a
+correct build order may not fit. Global budget exhausted after
+5 attempts.
+
+**Matrix report truncation.** `readFailureDetail` keeps a
+failure's first line; for multiline lifecycle evidence that
+line is mid-word tail garbage (`ite3 install: …`) while the
+pipeline log holds the legible story. Diagnosis this run
+required the JSONL every time.
+
+### N98 (Critical, feature) — progress-aware liveness: silence plus idle CPU, not silence alone
+
+One primitive retires the class: liveness = output OR CPU-time
+advance. A small wrapper samples the wrapped command's
+process-tree CPU jiffies from `/proc` and prints
+`[makeademo:alive] cpu <n>` at most once a minute, only when
+jiffies advanced since the last sample. The line feeds the
+existing client-side inactivity watchdog unchanged: a silent
+compile burns CPU → heartbeats flow → no kill; a process
+wedged on a blocked syscall goes idle → heartbeats stop → the
+5-minute kill fires exactly as designed. Wrap both seams: the
+OpenCode agent invocation and the sealed
+install/lifecycle/build commands. Two required details:
+`isAgentLaunchFailure`'s only-PTY-bootstrap check and the
+evidence excerpts must filter `[makeademo:alive]` lines (a
+dead agent must not look alive; tails stay legible), and an
+exit-124 verdict whose output carries the `[makeademo:timeout]`
+marker must classify as an inactivity kill ("everything above
+is healthy partial output"), never as "install failure" —
+ghost's five wasted rounds are the cost of that mislabel.
+
+### N99 (High, bugfix) — Daytona transient and timeout cover at the two uncovered seams
+
+Extend N94's transient classifier (socket closed, ECONNRESET
+class, HTTP 5xx) with the same bounded retry to the
+submitted-code workspace reset and the remaining control-plane
+calls it guards nothing of today. At the exploration seam,
+catch `AgentHarnessCommandTimeoutError` from the protocol
+command and convert it into a classified exploration failure
+carrying whatever partial evidence exists ("the protocol did
+not complete; the app likely wedged mid-navigation"), so it
+routes into repo-preparation-repair with N93's reserve intact
+instead of escaping as a raw unclassified pipeline kill.
+
+### N100 (Critical, feature) — the in-code fixture contract: demo data lives in code, in the shape the function declares
+
+The standing directive, stated plainly in the prep contract:
+for each demoed feature, find the exact function the UI calls
+for its data — server query function, API route handler, or
+client fetch hook — and under the demo gate return an in-code
+fixture literal satisfying that function's declared return
+type, resolved immediately. Making the database optional is
+explicitly forbidden: no transport left in the demo path, no
+empty-on-missing fallback. The fixture is the data; nothing is
+fetched. Four coordinated pieces give it teeth:
+
+1. **Manifest declaration (checkable).** Each feature declares
+its data seams — the file/function replaced and the fixture
+module supplying the shape. The validator verifies
+referentially that the declared files appear in the workspace
+diff; no prose reconciliation.
+
+2. **Exploration names the third cause.** The zero-row
+classifier adds the state midday actually presented: rows
+mounted whose cells contain no text — a stuck-loading
+skeleton, detectable from the aria shape alone. Its steering
+quotes the feature's declared data seam: "the fixture in
+`<module>` never reaches `<function>` — return it in code from
+that function; do not gate on database availability." A
+correctly named cause changes the repair fingerprint, so the
+lane earns fresh budget instead of dying on repetition.
+
+3. **The fixture-shape probe (verifier tool, not a
+generator).** After wiring a seam, the agent writes a probe —
+`const _check: Awaited<ReturnType<typeof getTransactions>> =
+fixtures;` — and a small helper runs the repo's own
+`tsc --noEmit` on it, returning the diagnostics. Shape truth
+moves from LLM guesswork to the submitted repo's compiler;
+outline's `forEach` crash dies at authoring time instead of 40
+minutes later at exploration. TypeScript repos only; the probe
+is steered and its result recorded, never a hard veto — a
+probe that cannot run must never kill a legitimate
+preparation. The browser-evidence gate remains the truth for
+every stack.
+
+4. **The data-fixture playbook (skill rider).** The method as
+a checklist in the prep and repair riders: locate the function
+the UI calls; author the fixture as an in-code literal typed
+by its return type; wire it under the demo gate to resolve
+immediately; run the shape probe and record the result; then
+check what no compiler can — fixture dates inside the default
+visible range, status/enum values that survive default
+filters, relations between fixture entities consistent. That
+last step is the trap that likely kept midday's table empty
+across ten runs.
+
+### N101 (Medium, mixed) — legibility and steering follow-through
+
+`readFailureDetail` in the matrix runner prefers a
+`[makeademo:…]` marker or `exit=` line over a blind first line
+for multiline failures. N67's prerequisite matcher learns the
+`Cannot find module '<pkg>/dist/…'` shape (twenty). Exploration
+adds wrong-base steering when followed in-app links 404
+alongside auth-endpoint 404s (directus: "the app's base path
+or API base does not match the prepared serving arrangement").
+Twenty's memory policy: build steering first — bounded
+`NODE_OPTIONS` old-space and sourcemaps off under demo prep —
+and a 16GB snapshot only if steering fails, since doubling
+memory halves matrix parallelism headroom under the Daytona
+quota.
+
+### Rejected as non-general
+
+A type-driven fixture generator (demo data quality is product
+quality and the agent already authors it better than a faker;
+types cannot carry the value semantics — default filters, date
+ranges, relations — that actually break runs; per-schema
+adapters are a treadmill: the tool verifies, the agent
+generates); blindly raising inactivity windows (slows true-hang
+detection — the CPU signal distinguishes work from wedge);
+hard-gating the shape probe (non-TS repos cannot run it, and a
+probe that cannot run must never veto); a 16GB snapshot as the
+first response to twenty (quota cost before cheaper steering is
+tried); detecting skeleton rows by CSS class names (styling-
+specific; the aria shape is the general signal); retrying agent
+commands wholesale (unchanged: not idempotent).
+
+### Recommended order
+
+N98 → N99 (stop losing runs and budget to misread
+infrastructure) → N100 (the batch's core: manifest seams,
+classifier, probe helper, and playbook rider land together) →
+N101. TDD per item with the failing test verified red first;
+full gauntlet per commit. Twelfth matrix is the acceptance
+gate: agent inactivity kills drop from 43 to near zero and no
+run dies from a false one; a control-plane socket blip costs a
+bounded retry, not a run; an exploration hang becomes a
+classified failure that spends its reserve rounds; midday
+either renders fixture rows with real text or fails naming the
+stuck-loading cause with seam-level steering; ghost's rounds
+target its actual lifecycle behavior instead of a phantom
+install failure; twenty either builds under memory steering or
+its verdict cites the marker's ceiling reading.
