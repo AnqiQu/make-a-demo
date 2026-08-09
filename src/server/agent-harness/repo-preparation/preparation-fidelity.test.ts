@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { PreparationManifest } from "../schemas/artifacts";
 import {
+  createPreparationFidelityReport,
+  readPreparationFidelityCandidates,
   reconcileFidelityAdjudication,
   validatePreparationFidelity,
 } from "./preparation-fidelity";
@@ -252,6 +254,61 @@ describe("validatePreparationFidelity", () => {
     expect(report.status).toBe("passed");
   });
 
+  it("routes a gated external-service neutralization outside the seam vocabulary through the judge", () => {
+    // ghost (2026-08-09): neutralizing gravatar.js — a genuine external
+    // integration — was vetoed "outside a seam" twice because neither the
+    // path nor the diff wording matches the seam vocabulary, and those two
+    // rounds started the budget starvation. Vocabulary gaps cost a judge
+    // call, not a run: the candidate is generated with its evidence path,
+    // and an overturn verdict clears it without spending a repair round.
+    const path = "core/server/lib/gravatar.js";
+    const patch = [
+      `diff --git a/${path} b/${path}`,
+      "+if (process.env.MAKEADEMO_DEMO === 'true') {",
+      "+  module.exports.lookup = async () => null;",
+      "+}",
+    ].join("\n");
+    const candidates = readPreparationFidelityCandidates({
+      preparationManifest: manifest({ envUsed: { MAKEADEMO_DEMO: "true" } }),
+      repoSourceFiles: new Map([
+        ["package.json", ""],
+        [routePath, ""],
+        [path, "module.exports.lookup = lookup;"],
+      ]),
+      workspaceDiff: workspaceDiff([path], patch),
+    });
+
+    expect(candidates).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining("outside an authentication"),
+        path,
+      }),
+    ]);
+
+    const { record, surviving } = reconcileFidelityAdjudication({
+      candidates,
+      patch,
+      verdicts: [
+        {
+          candidateIndex: 0,
+          quotedEvidence: [],
+          steering:
+            "The change conditionally disables an external avatar lookup and preserves the original path.",
+          verdict: "overturn",
+        },
+      ],
+    });
+    const report = createPreparationFidelityReport({
+      adjudication: record,
+      candidates: surviving,
+    });
+
+    expect(report.status).toBe("passed");
+    expect(report.fidelityAdjudication?.outcomes).toEqual([
+      expect.objectContaining({ candidateIndex: 0, outcome: "overturned" }),
+    ]);
+  });
+
   it("allows package commands to wire a created demo-named module", () => {
     const report = validateDiff({
       createdFiles: ["scripts/demoSeed.ts"],
@@ -280,6 +337,35 @@ describe("validatePreparationFidelity", () => {
 
     expect(report.status).toBe("failed");
     expect(report.logsSummary).toContain(replacementPath);
+  });
+
+  it("rejects an ungated created page component that takes over an original import", () => {
+    // The recall guard for N92's precision work: replacement UI must render
+    // something, so a created .tsx with JSX whose export takes over an
+    // original import must still veto — even though its demo-named path is
+    // a demo seam and .tsx is not presentation by file type. Content
+    // decides in both directions.
+    const replacementPath = "src/pages/DemoDashboard.tsx";
+    const report = validateDiff({
+      createdFiles: [replacementPath],
+      modifiedFiles: ["src/App.tsx"],
+      patch: [
+        "diff --git a/src/App.tsx b/src/App.tsx",
+        "-import { Dashboard } from './pages/Dashboard';",
+        "+import { Dashboard } from './pages/DemoDashboard';",
+        `diff --git a/${replacementPath} b/${replacementPath}`,
+        "new file mode 100644",
+        "+export const Dashboard = () => <main>Timer overview</main>;",
+      ].join("\n"),
+      sourceFiles: {
+        "src/App.tsx": "import { Dashboard } from './pages/Dashboard';",
+      },
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain(
+      `${replacementPath} creates replacement product UI`,
+    );
   });
 
   it("rejects replacement UI hidden behind seam-like names or public directories", () => {
