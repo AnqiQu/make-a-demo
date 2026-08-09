@@ -45,6 +45,10 @@ describe("Daytona OpenCode prepared image", () => {
 
     expect(dockerfile).toContain("build-essential");
     expect(dockerfile).toContain("python3");
+    // Vendored node-gyp vintages (calcom's sqlite3 ships node-gyp 8) import
+    // distutils, which Python 3.12 removed; python3-setuptools restores the
+    // shim so any gyp vintage configures offline.
+    expect(dockerfile).toContain("python3-setuptools");
     expect(dockerfile).toContain("npm_config_nodedir=/usr/local");
     expect(dockerfile).not.toContain("node-gyp install");
   });

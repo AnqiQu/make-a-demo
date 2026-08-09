@@ -2,9 +2,11 @@ FROM mcr.microsoft.com/playwright:v1.60.0-noble
 
 # build-essential and python3 let node-gyp compile native modules from
 # source inside the sealed-network sandbox, where prebuilt binaries can
-# never be downloaded.
+# never be downloaded. python3-setuptools restores the distutils shim that
+# Python 3.12 removed — vendored node-gyp vintages (calcom's sqlite3 ships
+# node-gyp 8) import distutils during configure.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends build-essential ca-certificates ffmpeg git python3 unzip \
+  && apt-get install -y --no-install-recommends build-essential ca-certificates ffmpeg git python3 python3-setuptools unzip \
   && update-ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 

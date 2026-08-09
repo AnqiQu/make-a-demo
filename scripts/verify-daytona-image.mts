@@ -148,6 +148,9 @@ try {
       `node -e ${shellQuote("process.exit(process.version.startsWith('v22.') ? 0 : 1)")}`,
       "yarn --version",
       "pnpm --version",
+      // Vendored node-gyp vintages import distutils (removed in Python
+      // 3.12); the image's python3-setuptools shim must satisfy them.
+      `python3 -c ${shellQuote("from distutils.version import StrictVersion")}`,
       "mkdir -p /tmp/makeademo-gyp-smoke",
       "cd /tmp/makeademo-gyp-smoke",
       `printf '%s' ${shellQuote('{"targets":[{"target_name":"smoke","sources":[]}]}')} > binding.gyp`,
