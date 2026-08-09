@@ -2030,9 +2030,12 @@ async function validateResolvedSubmittedCodeRuntime(
         runCommand: (gateCommand) =>
           executeSubmittedWithDeadlineEvidence(
             input.workspace,
-            commandInAppDirectory(
-              runtimeTarget?.install.cwd ?? manifest.appDir,
-              gateCommand,
+            withDiskMarkers(
+              commandInAppDirectory(
+                runtimeTarget?.install.cwd ?? manifest.appDir,
+                gateCommand,
+              ),
+              "deps",
             ),
             { timeoutMs: dependencyInstallTimeoutMs },
           ),
@@ -2196,9 +2199,12 @@ async function validateResolvedSubmittedCodeRuntime(
     if (lifecycleCommand !== undefined) {
       const lifecycle = await executeSubmittedWithDeadlineEvidence(
         input.workspace,
-        commandInAppDirectory(
-          runtimeTarget?.install.cwd ?? manifest.appDir,
-          lifecycleCommand,
+        withDiskMarkers(
+          commandInAppDirectory(
+            runtimeTarget?.install.cwd ?? manifest.appDir,
+            lifecycleCommand,
+          ),
+          "lifecycle",
         ),
         { timeoutMs: dependencyInstallTimeoutMs },
       );
@@ -2259,6 +2265,16 @@ async function validateResolvedSubmittedCodeRuntime(
         });
       }
     }
+    // The package archives double-store next to node_modules (~1GB for a
+    // berry monorepo — twenty's ENOSPC, 2026-08-08) and nothing sealed
+    // reads them after the offline lifecycle: any future install reopens
+    // the network window and refetches. The corepack cache is untouched —
+    // sealed node-line swaps re-provision managers from it. Best-effort by
+    // construction.
+    await executeSubmitted(
+      input.workspace,
+      `rm -rf /root/.yarn/berry/cache /root/.npm/_cacache /root/.local/share/pnpm/store 2>/dev/null; df -k /workspace 2>/dev/null | tail -1 | sed "s|^|[makeademo:disk] cache-prune after |"; true`,
+    );
   }
 
   if (input.externalResourceCache !== undefined) {
@@ -2308,9 +2324,12 @@ async function validateResolvedSubmittedCodeRuntime(
   if (input.buildApp !== false && manifest.buildCommandUsed !== undefined) {
     const buildResult = await executeSubmittedWithDeadlineEvidence(
       input.workspace,
-      commandInAppDirectory(
-        runtimeTarget?.build?.cwd ?? manifest.appDir,
-        manifest.buildCommandUsed,
+      withDiskMarkers(
+        commandInAppDirectory(
+          runtimeTarget?.build?.cwd ?? manifest.appDir,
+          manifest.buildCommandUsed,
+        ),
+        "build",
       ),
       { env: guardedRuntimeEnv, timeoutMs: submittedCodeBuildTimeoutMs },
     );
@@ -2615,6 +2634,19 @@ async function executeSubmittedWithDeadlineEvidence(
       stdout: `${streamed.join("")}\n[makeademo:timeout] ${readErrorMessage(error)} The command was killed at its deadline; output above is partial.`,
     };
   }
+}
+
+/**
+ * Brackets a heavy submitted-code command with `[makeademo:disk]` df lines
+ * so ENOSPC diagnoses read the budget off the record instead of guessing
+ * (twenty died on a hard 10GB cap three matrices running, 2026-08-08). The
+ * original exit code is preserved for the PTY sentinel via a subshell exit,
+ * never a top-level `exit` (which would drop the sentinel).
+ */
+function withDiskMarkers(command: string, label: string): string {
+  const marker = (phase: string) =>
+    `df -k /workspace 2>/dev/null | tail -1 | sed "s|^|[makeademo:disk] ${label} ${phase} |"`;
+  return `${marker("before")}; ${command}; makeademo_disk_status=$?; ${marker("after")}; sh -c "exit \${makeademo_disk_status}"`;
 }
 
 function commandInAppDirectory(appDir: string, command: string): string {

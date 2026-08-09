@@ -3678,6 +3678,82 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
   });
 
+  it("brackets the heavy submitted-code commands with disk usage markers", async () => {
+    // Twenty has died on ENOSPC across three matrices while diagnosis
+    // guessed at where the 10GB went; the markers turn the budget into
+    // recorded fact (2026-08-08).
+    const commands: string[] = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    const install = commands.find((command) => command.includes("npm ci"));
+    expect(install).toContain("[makeademo:disk]");
+    const lifecycle = commands.find((command) =>
+      command.includes("npm rebuild"),
+    );
+    expect(lifecycle).toContain("[makeademo:disk]");
+  });
+
+  it("prunes package-manager caches after a successful offline lifecycle", async () => {
+    // The berry zip cache double-stores ~1GB next to node_modules; once the
+    // lifecycle's immutable re-run is done nothing sealed needs it again —
+    // any future install reopens the network window and refetches.
+    const commands: string[] = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    const pruneIndex = commands.findIndex((command) =>
+      command.includes("berry/cache"),
+    );
+    const lifecycleIndex = commands.findIndex((command) =>
+      command.includes("npm rebuild"),
+    );
+    expect(pruneIndex).toBeGreaterThan(lifecycleIndex);
+    // The corepack cache must survive: sealed swaps re-provision managers
+    // from it offline.
+    expect(commands[pruneIndex]).not.toContain("corepack");
+  });
+
   it("stamps a timeout marker with partial output when the install command is killed at its deadline", async () => {
     // calcom's lifecycle records ended mid-stream with no error line and
     // diagnosis had to infer the kill (2026-08-08 matrix). A deadline kill
