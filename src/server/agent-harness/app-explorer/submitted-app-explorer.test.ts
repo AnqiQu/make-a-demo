@@ -2034,6 +2034,77 @@ describe("exploreSubmittedApp", () => {
     );
   });
 
+  it("names the stuck-loading cause when a zero-row table mounted textless skeleton rows", async () => {
+    // Midday (2026-08-09): the transactions table mounted rows whose every
+    // cell was empty — loading skeletons for a query that never resolves.
+    // Neither of the two-cause candidates (empty query, zero-height
+    // virtualizer) fits, so both repair rounds steered at fixture shape
+    // while the actual defect was the wiring between fixture and UI. Rows
+    // without text are a third, distinguishable state, and the declared
+    // data seam names exactly where to repair it.
+    const transactions = preparedFeature({
+      dataSeams: [
+        {
+          fixtureModule: "src/demo/transaction-fixtures.ts",
+          functionName: "getTransactions",
+          path: "apps/dashboard/src/lib/queries.ts",
+        },
+      ],
+      description: "Demonstrate transactions",
+      entryPaths: ["/transactions"],
+      id: "transactions",
+      label: "Transactions",
+      requestedFeature: "transactions",
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [transactions],
+      routes: [
+        observedRoute({
+          emptyDataTables: [
+            {
+              columnHeaders: 8,
+              headerTexts: ["Date", "Description", "Amount"],
+              skeletonRows: 12,
+            },
+          ],
+          featureIds: ["transactions"],
+          interactions: [
+            {
+              kind: "fill",
+              locator: {
+                strategy: "placeholder",
+                value: "Search transactions...",
+              },
+              name: "Search transactions...",
+              outcome: "The field contained the observed demo value",
+            },
+          ],
+          path: "/transactions",
+          primaryNavigation: ["Overview"],
+          requestedPath: "/transactions",
+          text: ["Search transactions...", "Review"],
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "empty/unmeaningful app state",
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain(
+      "12 textless skeleton rows",
+    );
+    expect(result.validationReport.logsSummary).toContain("never resolved");
+    // Steering points at the declared seam, not at fixture shape.
+    expect(result.validationReport.logsSummary).toContain("getTransactions");
+    expect(result.validationReport.logsSummary).toContain(
+      "src/demo/transaction-fixtures.ts",
+    );
+    expect(result.validationReport.logsSummary).not.toContain(
+      "virtualized table body",
+    );
+  });
+
   it("keeps a requested feature grounded when its route also renders a populated data table", async () => {
     // The zero-row veto reads "the data surface rendered empty", so a route
     // whose tables include a populated one — an incidental empty secondary

@@ -83,8 +83,15 @@ type ObservedRoute = {
    * browser evidence that distinguishes it from a broken transport. The
    * header texts are carried so harvested strings made only of header words
    * can be recognized as table structure rather than rendered data.
+   * `skeletonRows` counts body rows that mounted with no cell text at all —
+   * the signature of a loading state whose query never resolves (midday,
+   * 2026-08-09), a third cause distinct from an empty result set.
    */
-  emptyDataTables?: Array<{ columnHeaders: number; headerTexts?: string[] }>;
+  emptyDataTables?: Array<{
+    columnHeaders: number;
+    headerTexts?: string[];
+    skeletonRows?: number;
+  }>;
   forms: string[];
   featureIds?: string[];
   /**
@@ -486,7 +493,10 @@ function createExplorationArtifacts(input: {
   );
   const routes: Array<Record<string, unknown>> = [];
   const loginOrAuthWalls: string[] = [];
-  const emptyDataTablesByRoute = new Map<string, number>();
+  const emptyDataTablesByRoute = new Map<
+    string,
+    { columnHeaders: number; skeletonRows: number }
+  >();
   const populatedTableRoutes = new Set<string>();
   for (const route of observedRoutes) {
     routes.push({
@@ -512,10 +522,10 @@ function createExplorationArtifacts(input: {
       loginOrAuthWalls.push(route.path);
     }
     if ((route.emptyDataTables?.length ?? 0) > 0) {
-      emptyDataTablesByRoute.set(
-        route.path,
-        route.emptyDataTables?.[0]?.columnHeaders ?? 0,
-      );
+      emptyDataTablesByRoute.set(route.path, {
+        columnHeaders: route.emptyDataTables?.[0]?.columnHeaders ?? 0,
+        skeletonRows: route.emptyDataTables?.[0]?.skeletonRows ?? 0,
+      });
     }
     if ((route.populatedDataTables ?? 0) > 0) {
       populatedTableRoutes.add(route.path);
@@ -1231,7 +1241,10 @@ function createExplorationValidationReport(input: {
   actionCatalog: ActionCatalog;
   appMap: AppMap;
   distinctContentByRoute: ReadonlyMap<string, string[]>;
-  emptyDataTablesByRoute?: ReadonlyMap<string, number>;
+  emptyDataTablesByRoute?: ReadonlyMap<
+    string,
+    { columnHeaders: number; skeletonRows: number }
+  >;
   errorEvidenceByRoute?: ReadonlyMap<string, string[]>;
   explicitAuthenticationFeatureIds: ReadonlySet<string>;
   featureInventory: PreparedDemoFeature[];
@@ -1343,7 +1356,10 @@ function readExplorationFailure(
   actionCatalog: ActionCatalog,
   explicitAuthenticationFeatureIds: ReadonlySet<string>,
   unreachableRoutes: UnreachableRoute[],
-  emptyDataTablesByRoute: ReadonlyMap<string, number>,
+  emptyDataTablesByRoute: ReadonlyMap<
+    string,
+    { columnHeaders: number; skeletonRows: number }
+  >,
   distinctContentByRoute: ReadonlyMap<string, string[]>,
   populatedTableRoutes: ReadonlySet<string>,
   stuckLoadingRoutes: ReadonlySet<string>,
@@ -1375,16 +1391,32 @@ function readExplorationFailure(
   };
   const chromeOnlyExplanation = (tail: string) =>
     `rendered only globally-repeated navigation chrome — no route-distinct headings, text, or data${tail}`;
-  const emptyTableEvidence = (routePaths: readonly string[]) => {
-    const emptyTableColumns = routePaths
+  const emptyTableEvidence = (
+    routePaths: readonly string[],
+    feature?: PreparedDemoFeature,
+  ) => {
+    const emptyTable = routePaths
       .map((route) => emptyDataTablesByRoute.get(route))
-      .find((columns) => columns !== undefined);
+      .find((table) => table !== undefined);
+    if (emptyTable === undefined) {
+      return "";
+    }
+    // Rows that mounted with no cell text are a loading state whose query
+    // never resolved (midday, 2026-08-09) — a diagnosis the browser CAN
+    // make, unlike the empty-result/zero-height ambiguity below. The
+    // declared data seam turns the steering from a search into an address.
+    if (emptyTable.skeletonRows > 0) {
+      const seam = feature?.dataSeams?.[0];
+      const seamSteering =
+        seam === undefined
+          ? "Return the fixture directly, in code, from the exact function the UI calls for this data — do not gate on database or transport availability."
+          : `The declared data seam is ${seam.functionName} in ${seam.path}, backed by ${seam.fixtureModule} — the fixture never reaches the UI through it. Return the fixture in code from ${seam.functionName}; do not gate on database or transport availability.`;
+      return ` A data table (${emptyTable.columnHeaders} column headers) mounted ${emptyTable.skeletonRows} textless skeleton rows on these routes: the data query never resolved, so the table is stuck in its loading state. ${seamSteering}`;
+    }
     // Observation, not diagnosis: this gate cannot tell an empty query
     // result from a virtualized body that measured zero height (midday,
     // 2026-08-07 matrix), so it names both causes instead of asserting one.
-    return emptyTableColumns === undefined
-      ? ""
-      : ` An empty data table (${emptyTableColumns} column headers, zero data rows) rendered on these routes. Two causes produce this: the data query resolved empty (fixture shape or default filters exclude the fixture rows), or a virtualized table body measured zero height and rendered no rows despite data being present — identify which before repairing, and prefer fixture and data-path fixes over changing product components.`;
+    return ` An empty data table (${emptyTable.columnHeaders} column headers, zero data rows) rendered on these routes. Two causes produce this: the data query resolved empty (fixture shape or default filters exclude the fixture rows), or a virtualized table body measured zero height and rendered no rows despite data being present — identify which before repairing, and prefer fixture and data-path fixes over changing product components.`;
   };
   const actionsByFeatureId = new Map<
     string,
@@ -1626,6 +1658,7 @@ function readExplorationFailure(
               ", ",
             )}, which rendered distinct content (${shownContent.join(", ")}) but a zero-row data table as the feature's data surface — an empty table cannot demonstrate the feature.${emptyTableEvidence(
             contentRoutes,
+            feature,
           )}`,
           vetoedByEmptyTable: true,
         };
@@ -1661,6 +1694,7 @@ function readExplorationFailure(
           .join(", ")} ${chromeOnlyExplanation(
           `; repair the prepared app's data path for these routes.${emptyTableEvidence(
             routes,
+            feature,
           )}`,
         )}${
           errorEvidence.length === 0
@@ -2391,12 +2425,15 @@ try {
           : [];
         const dataTables = Array.from(document.querySelectorAll("table, [role=table], [role=grid]")).filter(visible).map((table) => {
           const headerCells = Array.from(table.querySelectorAll("th, [role=columnheader]")).filter(visible);
-          const populatedRows = headerCells.length === 0 ? [] : Array.from(table.querySelectorAll("tbody tr, [role=row]")).filter((row) =>
-            row.querySelector("th, [role=columnheader]") == null && clean(row.innerText) !== "");
-          return { headerCells, populatedRows };
+          const bodyRows = headerCells.length === 0 ? [] : Array.from(table.querySelectorAll("tbody tr, [role=row]")).filter((row) =>
+            row.querySelector("th, [role=columnheader]") == null);
+          const populatedRows = bodyRows.filter((row) => clean(row.innerText) !== "");
+          // Rows that mounted with no text are loading skeletons: a query
+          // stuck pending, not an empty result (midday, 2026-08-09).
+          return { headerCells, populatedRows, skeletonRows: bodyRows.length - populatedRows.length };
         }).filter(({ headerCells }) => headerCells.length > 0);
         const emptyDataTables = dataTables.filter(({ populatedRows }) => populatedRows.length === 0)
-          .map(({ headerCells }) => ({ columnHeaders: headerCells.length, headerTexts: headerCells.map((cell) => clean(cell.innerText)).filter(Boolean).slice(0, 24) }))
+          .map(({ headerCells, skeletonRows }) => ({ columnHeaders: headerCells.length, headerTexts: headerCells.map((cell) => clean(cell.innerText)).filter(Boolean).slice(0, 24), ...(skeletonRows > 0 ? { skeletonRows } : {}) }))
           .slice(0, 4);
         const populatedTables = dataTables.filter(({ populatedRows }) => populatedRows.length > 0);
         // Table rows are the canonical data surface of an admin or ledger
