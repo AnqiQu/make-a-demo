@@ -36,6 +36,96 @@ describe("validatePreparationFidelity", () => {
     expect(report.logsSummary).toContain("workspace diff is empty");
   });
 
+  it("fails a data seam whose declared fixture module never entered the workspace", () => {
+    // N100: the in-code fixture contract is only checkable if the declared
+    // fixture module actually exists in the prepared diff — a seam declared
+    // over nothing is the same hollow-manifest class as claimed fixtures on
+    // an empty diff.
+    const report = validateDiff({
+      manifestOverrides: {
+        productContext: {
+          evidencePaths: [routePath],
+          featureInventory: [
+            {
+              authStrategy: "bypass",
+              dataSeams: [
+                {
+                  fixtureModule: "src/demo/tracker-fixtures.ts",
+                  functionName: "getTrackerEntries",
+                  path: routePath,
+                },
+              ],
+              description: "Track project time.",
+              entryPaths: ["/tracker"],
+              fixtureNotes: [],
+              id: "tracker",
+              label: "Tracker",
+              sourcePaths: [routePath],
+            },
+          ],
+          name: "Product",
+          summary: "The original product.",
+        },
+      },
+      modifiedFiles: [routePath],
+      patch: [
+        `diff --git a/${routePath} b/${routePath}`,
+        "+import { getTrackerEntries } from '../demo/tracker-fixtures';",
+      ].join("\n"),
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "product fidelity violation",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain("src/demo/tracker-fixtures.ts");
+    expect(report.logsSummary).toContain("tracker");
+  });
+
+  it("accepts a data seam whose fixture module and replaced file are real", () => {
+    const report = validateDiff({
+      createdFiles: ["src/demo/tracker-fixtures.ts"],
+      manifestOverrides: {
+        envUsed: { MAKEADEMO_DEMO: "true" },
+        productContext: {
+          evidencePaths: [routePath],
+          featureInventory: [
+            {
+              authStrategy: "bypass",
+              dataSeams: [
+                {
+                  fixtureModule: "src/demo/tracker-fixtures.ts",
+                  functionName: "getTrackerEntries",
+                  path: routePath,
+                  shapeProbe: "passed",
+                },
+              ],
+              description: "Track project time.",
+              entryPaths: ["/tracker"],
+              fixtureNotes: [],
+              id: "tracker",
+              label: "Tracker",
+              sourcePaths: [routePath],
+            },
+          ],
+          name: "Product",
+          summary: "The original product.",
+        },
+      },
+      modifiedFiles: [routePath],
+      patch: [
+        "diff --git a/src/demo/tracker-fixtures.ts b/src/demo/tracker-fixtures.ts",
+        "new file mode 100644",
+        "+export const getTrackerEntries = () => trackerFixtures;",
+        `diff --git a/${routePath} b/${routePath}`,
+        "+import { getTrackerEntries } from '../demo/tracker-fixtures';",
+        "+const entries = process.env.MAKEADEMO_DEMO === 'true' ? getTrackerEntries() : await fetchTrackerEntries();",
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
   it("rejects removing the packageManager pin", () => {
     // outline (2026-08-08): the prep agent deleted `"packageManager":
     // "yarn@4.11.0"`, silently downgrading the repo to yarn classic;

@@ -31,6 +31,21 @@ describe("createPreparationManifestContract", () => {
     ).toBe(false);
   });
 
+  it("describes the optional per-feature data seams with their probe field", () => {
+    // N100: agents declare where in-code fixtures live and which function
+    // the UI calls; a contract with additionalProperties: false must name
+    // the field or every declaring manifest becomes a contract violation.
+    const contract = createPreparationManifestContract();
+    const feature =
+      contract.properties.productContext.properties.featureInventory.items;
+    const seam = feature.properties.dataSeams.items;
+
+    expect(seam.required).toEqual(["fixtureModule", "functionName", "path"]);
+    expect(seam.properties.shapeProbe).toMatchObject({ type: "string" });
+    expect(feature.required).not.toContain("dataSeams");
+    expect(contract.invariants.join(" ")).toContain("dataSeams");
+  });
+
   it("carries no version field that nothing reads", () => {
     expect(createPreparationManifestContract()).not.toHaveProperty(
       "contractVersion",

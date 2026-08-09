@@ -31,6 +31,9 @@ export function createPreparationManifestTemplate(
       evidencePaths: [],
       featureInventory: requestedFeatures.map((feature, index) => ({
         authStrategy: "none",
+        // Data-backed features fill this with their in-code fixture wiring
+        // (N100); static surfaces leave it empty.
+        dataSeams: [],
         description: `Prepare a deterministic demo for ${feature}`,
         entryPaths: [],
         fixtureNotes: [],

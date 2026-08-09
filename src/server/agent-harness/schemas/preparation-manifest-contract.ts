@@ -52,6 +52,7 @@ export function createPreparationManifestContract() {
       "authStrategy must be exactly bypass, demo-identity, or none",
       "when any feature uses bypass or demo-identity, authBypassOrDemoIdentity must describe the active secret-free authentication bootstrap",
       "feature ids must be stable safe identifiers and unique within featureInventory",
+      "every data-backed feature must declare its dataSeams: the repo-relative path and functionName of the function the UI calls (now returning the in-code fixture under the demo gate) and the fixtureModule holding the fixture literal; declared files must exist in the prepared diff",
     ],
     outputPath: "/workspace/.makeademo/preparation-manifest.json",
     properties: {
@@ -91,6 +92,20 @@ export function createPreparationManifestContract() {
                 authStrategy: {
                   enum: ["bypass", "demo-identity", "none"],
                   type: "string",
+                },
+                dataSeams: {
+                  items: {
+                    additionalProperties: false,
+                    properties: {
+                      fixtureModule: repoRelativePathArray.items,
+                      functionName: { minLength: 1, type: "string" },
+                      path: repoRelativePathArray.items,
+                      shapeProbe: { minLength: 1, type: "string" },
+                    },
+                    required: ["fixtureModule", "functionName", "path"],
+                    type: "object",
+                  },
+                  type: "array",
                 },
                 description: { minLength: 1, type: "string" },
                 entryPaths: localAppPathArray,

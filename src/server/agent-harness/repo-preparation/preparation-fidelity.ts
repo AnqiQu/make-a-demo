@@ -144,6 +144,33 @@ export function readPreparationFidelityCandidates(input: {
       });
     }
   }
+  // Declared data seams are referential claims (N100): the fixture module
+  // must be a file the preparation actually created or changed, and the
+  // replaced file must exist in the repo or the diff. A seam declared over
+  // nothing is the hollow-manifest class again, one level down.
+  const changedRepoPaths = new Set(
+    input.workspaceDiff.changedPaths.map(toRepoRelativePath),
+  );
+  for (const feature of input.preparationManifest.productContext
+    .featureInventory) {
+    for (const seam of feature.dataSeams ?? []) {
+      if (!changedRepoPaths.has(seam.fixtureModule)) {
+        violations.push({
+          hint: repairHints.truthfulManifest,
+          message: `Feature ${feature.id} declares data seam fixture module ${seam.fixtureModule}, but the preparation never created or changed that file. Author the fixture literal there and return it from ${seam.functionName} under the demo gate, or correct the declaration.`,
+        });
+      }
+      if (
+        !changedRepoPaths.has(seam.path) &&
+        !input.repoSourceFiles.has(seam.path)
+      ) {
+        violations.push({
+          hint: repairHints.truthfulManifest,
+          message: `Feature ${feature.id} declares data seam file ${seam.path}, which exists neither in the repository nor in the prepared diff.`,
+        });
+      }
+    }
+  }
   const repairPaths = readInvalidRepairPaths(input);
   const filePatches = parsePatchSections(input.workspaceDiff.patch);
   // Package-manager identity is backend territory: the detected manager

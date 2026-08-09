@@ -143,8 +143,25 @@ export type RunPlan = {
   };
 };
 
+/**
+ * In-code fixture wiring for one data surface (N100): `functionName` in
+ * `path` is the function the UI calls for this feature's data, and under
+ * the demo gate it returns the fixture literal authored in
+ * `fixtureModule` — never a database or network response. `shapeProbe`
+ * records the fixture-shape probe outcome ("passed", "failed: …", or
+ * "not-run: …") so repairs know whether the shape was compiler-verified.
+ */
+type PreparedDataSeam = {
+  fixtureModule: string;
+  functionName: string;
+  path: string;
+  shapeProbe?: string;
+};
+
 export type PreparedDemoFeature = {
   authStrategy: "bypass" | "demo-identity" | "none";
+  /** Declared for data-backed features; empty or absent for static surfaces. */
+  dataSeams?: PreparedDataSeam[];
   description: string;
   entryPaths: string[];
   fixtureNotes: string[];
@@ -717,6 +734,12 @@ function readPreparedDemoFeature(
   const sourcePaths = captureValidationError(errors, () =>
     readRepoPathArray(feature, "sourcePaths", path),
   );
+  const dataSeams =
+    feature.dataSeams === undefined
+      ? undefined
+      : captureValidationError(errors, () =>
+          readPreparedDataSeams(feature.dataSeams, path),
+        );
   if (
     errors.length > errorCount ||
     id === undefined ||
@@ -731,6 +754,7 @@ function readPreparedDemoFeature(
   }
   return {
     authStrategy,
+    ...(dataSeams === undefined ? {} : { dataSeams }),
     description,
     entryPaths,
     fixtureNotes,
@@ -739,6 +763,37 @@ function readPreparedDemoFeature(
     ...(requestedFeature === undefined ? {} : { requestedFeature }),
     sourcePaths,
   };
+}
+
+function readPreparedDataSeams(
+  value: unknown,
+  parentPath: string,
+): PreparedDataSeam[] {
+  const path = `${parentPath}.dataSeams`;
+  return readArray(value, path, (entry, index) => {
+    const seam = assertRecord(entry, `${path}[${index}]`);
+    const fixtureModule = readRepoRelativePath(
+      seam,
+      "fixtureModule",
+      `${path}[${index}]`,
+    );
+    const functionName = readNonEmptyString(
+      seam,
+      "functionName",
+      `${path}[${index}]`,
+    );
+    const seamPath = readRepoRelativePath(seam, "path", `${path}[${index}]`);
+    const shapeProbe =
+      seam.shapeProbe === undefined
+        ? undefined
+        : readNonEmptyString(seam, "shapeProbe", `${path}[${index}]`);
+    return {
+      fixtureModule,
+      functionName,
+      path: seamPath,
+      ...(shapeProbe === undefined ? {} : { shapeProbe }),
+    };
+  });
 }
 
 function captureValidationError<T>(
@@ -1527,8 +1582,9 @@ function readLocalRoute(
 function readRepoRelativePath(
   record: Record<string, unknown>,
   key: string,
+  parentPath?: string,
 ): string {
-  const value = readNonEmptyString(record, key);
+  const value = readNonEmptyString(record, key, parentPath);
   const segments = value.split(/[\\/]/);
   if (
     value !== value.trim() ||
@@ -1538,7 +1594,9 @@ function readRepoRelativePath(
     value.includes("\0") ||
     segments.includes("..")
   ) {
-    throw new Error(`${key} must be a relative path within /workspace/repo`);
+    throw new Error(
+      `${childPath(parentPath, key)} must be a relative path within /workspace/repo`,
+    );
   }
   return value;
 }

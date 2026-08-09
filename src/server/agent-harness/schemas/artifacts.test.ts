@@ -223,6 +223,49 @@ describe("agent harness artifact schemas", () => {
     );
   });
 
+  it("parses a feature's declared data seams through to the manifest", () => {
+    // N100: a feature backed by data declares where its in-code fixtures
+    // live and which function the UI calls, so downstream steering can
+    // point repairs at the exact seam instead of guessing.
+    const manifest = validPreparationManifest();
+    const feature = manifest.productContext.featureInventory[0];
+    if (feature === undefined) {
+      throw new Error("Expected a prepared feature fixture");
+    }
+    (feature as Record<string, unknown>).dataSeams = [
+      {
+        fixtureModule: "src/demo/transaction-fixtures.ts",
+        functionName: "getTransactions",
+        path: "src/lib/queries.ts",
+        shapeProbe: "passed",
+      },
+    ];
+
+    const parsed = readPreparationManifest(manifest);
+
+    expect(parsed.productContext.featureInventory[0]?.dataSeams).toEqual([
+      {
+        fixtureModule: "src/demo/transaction-fixtures.ts",
+        functionName: "getTransactions",
+        path: "src/lib/queries.ts",
+        shapeProbe: "passed",
+      },
+    ]);
+  });
+
+  it("rejects data seams that escape the repo or omit the replaced function", () => {
+    const manifest = validPreparationManifest();
+    const feature = manifest.productContext.featureInventory[0];
+    if (feature === undefined) {
+      throw new Error("Expected a prepared feature fixture");
+    }
+    (feature as Record<string, unknown>).dataSeams = [
+      { fixtureModule: "/etc/passwd", path: "src/lib/queries.ts" },
+    ];
+
+    expect(() => readPreparationManifest(manifest)).toThrow(/dataSeams\[0\]/);
+  });
+
   it("rejects Script Candidates without the compiler and runtime versions that produced them", () => {
     const {
       browserActionCompilerVersion: _browserActionCompilerVersion,
