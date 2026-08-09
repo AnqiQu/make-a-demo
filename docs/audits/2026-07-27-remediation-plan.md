@@ -3701,3 +3701,330 @@ trailers, conduit's flow rejection must echo its own referenced
 ids, twenty's disk markers must prove or retire N87 prong 3, and
 cyberchef-class tool UIs now have the revealed-evidence lane to
 ground and script against.
+
+## Addendum (2026-08-09, tenth 11-repo matrix — conduit and cyberchef first videos; the fidelity false-veto class; N92–N97)
+
+Run `matrix-2026-08-09T04-38-20-486Z` / report
+`matrix-report-2026-08-09T05-39-40-016Z.json`. Two passed, both
+**first-ever videos**: conduit (41min) and cyberchef (45min —
+grounded through N89's revealed-evidence lane, exactly its
+acceptance gate). Nine failed. Batch scorecard: N89 validated
+end-to-end, N90's bonus round observed live (excalidraw's sixth
+attempt after its failing-feature set shrank 2→1), N84/N88
+validated by conduit's clean pass, N87's twenty question left
+unanswered (twenty died before install). Two acceptance gates
+failed in instructive ways: calcom's lifecycle verdict is still
+illegible (the trailer exists but nothing excerpts around it), and
+outline failed at exploration for the right reason but with its
+repair budget already spent upstream. The frontier this cycle is
+not a new capability: it is precision. The preparation-fidelity
+gate's false vetoes are now the dominant run-killer (four runs),
+and one-shot infrastructure fragility (a single 502, a dropped
+PTY tail, a 20-minute hang) killed or blinded four more.
+
+### Diagnoses
+
+**The fidelity false-veto class (directus killed; excalidraw
+killed; outline 2/5 budget; ghost 2/5 budget).** The gate answers
+semantic questions with syntactic proxies, and every proxy failed
+on a real repo this run. Directus's preparation was textbook — a
+fixture axios adapter (`demo-api.ts`) selected by `if (isDemo)` in
+`api.ts`/`hydrate.ts`, original UI untouched — and was vetoed
+because `app/src/utils/is-demo.ts`, a one-line boolean gate,
+"creates replacement product UI": `isProductPresentationPath`
+treats every path under a directory named `app/` as presentation
+(directus's whole frontend package is named `app/`), and
+`isDemoSeamPath`'s vocabulary has no `demo` token, so MakeADemo's
+own gate file is not a seam to MakeADemo's own checker. The
+repeated wrong verdict then hit the fidelity fingerprint cap of 1
+→ dead run. Excalidraw's last two repairs seeded a demo canvas
+scene — precisely what its failing undo/redo feature needed — and
+attempt 7 gated it canonically (`const isMakeADemoDemo =
+import.meta.env.VITE_MAKEADEMO_DEMO === "true"` … `if
+(isMakeADemoDemo) { return { scene: getMakeADemoScene(), … } }`);
+`readDemoGateIdentifiers`' lookbehind `(?<![A-Za-z0-9_])` rejects
+the flag inside `VITE_MAKEADEMO_DEMO` (always preceded by `_`), so
+the Vite-required prefix made the gate invisible and the "does not
+conditionally use the demo gate" veto fired; attempt 6's
+`__MAKEADEMO_DEMO__` define-constant hit the same underscore blind
+spot. Outline lost two rounds to `app/utils/demo.ts`,
+`demoFixtures.ts`, `isDemoMode.ts` (frontend dir also named
+`app/`; camelCase `demoFixtures` cannot match the `fixtures` token
+through the `[./_-]` delimiter requirement). Ghost lost two:
+neutralizing `gravatar.js` — a genuine external-service
+integration — was vetoed "outside a seam" because neither path nor
+diff wording matches the seam vocabulary, and one veto fired on a
+unit-test file. The deepest defect is not any single regex: the
+created-file rule lets a path prior override content evidence — a
+file with zero presentation content was vetoed without its content
+mattering.
+
+**homer, twenty (Daytona 502, no retry).** Both died on a single
+transient 502 during artifact upload (`writeTextFile` →
+`sandbox.fs.uploadFiles`), milliseconds after successful writes,
+inside the 11-way parallel launch window. homer lost a run 3
+minutes in over a 2.4KB file. One HTTP request, no retry, whole
+run.
+
+**calcom (offline lifecycle, evidence lost).** `yarn rebuild &&
+yarn run postinstall` exited 1 three times. The captured PTY
+stream ends at YN0007 "must be built"; yarn's actual failure
+report (YN0009 + the `build.log` path) never appears, though later
+shell output (disk marker, command-end trailer) does — the stream
+dropped the tail. The N69 harvest keys on seeing the `build.log`
+path in output, so it never fired, and all three repairs ran blind
+with empty hints. Compounding: the failure summary is the full raw
+PTY transcript, head-first, ANSI intact — every surface shows
+`stty -echo` preamble garbage instead of the tail.
+
+**ghostfolio (offline lifecycle, lingering hang).** Attempts 1 and
+3 show `prisma generate` succeeding in ~200ms — then the command
+hangs to the 20-minute hard deadline (exit 124), consistent with a
+post-generate phone-home child holding stdio open against the
+sealed network. No inactivity timer exists on the lifecycle
+execute path, so two hangs burned ~40 minutes. Attempt 2 was the
+repair agent mangling the prisma invocation.
+
+**midday (exploration, OOM).** `bun run dev` runs a Next.js/
+Turbopack dev server over a ~30-package monorepo; walking routes
+OOM-killed it under the 4096MiB ceiling (1 cgroup OOM kill). The
+sandbox-capacity classification landed and is correctly terminal —
+only an operator can add memory.
+
+**outline, ghost (hollow data, budget starvation).** Both
+classifications correct, and the evidence reached the repair
+prompts (pageErrors/consoleErrors interpolate). Outline's content
+routes crash with `Cannot read properties of undefined (reading
+'node')` — fixture documents that do not match the ProseMirror
+schema — and the failure was evolving (attempt 1 empty, attempt 2
+the specific crash) exactly when the budget died, pre-spent on two
+preflight repairs and two false fidelity vetoes. Ghost's admin
+shell renders but every API call 400/500s server-side; three
+preflight repairs plus two false vetoes consumed the entire global
+budget of 5 before exploration ever got a repair round — the
+data-path steering never reached an agent.
+
+### The anti-overfit contract
+
+Every item below follows five principles, adopted as standing
+design constraints for validation gates: (1) **content decides,
+path suggests** — a naming convention may nominate a candidate but
+never carry a veto alone; (2) **parse, don't pattern-match** —
+syntactic questions about code get an AST, not a regex window;
+(3) **semantic verdicts require a judge with verifiable
+evidence** — when a gate must decide meaning, an LLM adjudicates
+and its verdict only stands if its quoted evidence literally
+exists in the diff; (4) **evidence comes from the source of
+truth** — files the tool itself wrote, not a PTY stream that can
+drop chunks; (5) **precision failures must not be fatal** —
+budgets reserve room for the terminal stage, and a wrong veto
+costs a round, never the run.
+
+### N92 (Critical, feature) — fidelity: content decides, AST detects, a judge confirms
+
+The gate keeps its genuinely structural rules (entrypoint
+redirection, workspace removal, `readUnpreservedRemovedLine`
+deletion preservation, standalone replacement runtime — zero false
+vetoes to date) and rebuilds the three failing families.
+
+**a. Content over path for created files.** A created file may be
+vetoed as replacement UI only on positive presentation evidence in
+its own content: markup/JSX/styling per `addsProductPresentation`
+(or presentation by file type — .css/.html/.svelte/.vue/images
+are presentation by nature). The directory prior
+(`app|components|pages|routes|screens|views`) and the seam
+vocabulary may nominate candidates and shape messages, never veto
+a content-negative file. This kills the directus/outline class for
+any repo regardless of directory naming, and loses no recall:
+replacement UI must render something, so it must contain markup.
+
+**b. AST gate detection.** New pure module (e.g.
+`src/server/agent-harness/repo-preparation/demo-gate-analysis.ts`)
+replacing `readsDemoFlag`/`readDemoGateIdentifiers`/
+`isConditionalUse`/`isBoundInFile`. Parse changed files with the
+TypeScript compiler API (handles .js/.jsx/.ts/.tsx/.mjs/.cjs; for
+.vue/.svelte extract `<script>` blocks first). A **gate name** is
+any identifier or env/define property whose name contains
+`MAKEADEMO_DEMO` case-insensitively — substring, not
+delimiter-bound, because this is the one token the pipeline itself
+owns and instructs agents to use; `VITE_`/`NEXT_PUBLIC_` prefixes
+and `__…__` define-constants are then automatically gate names. A
+**gate binding** is any const/let/var/function whose initializer
+references a gate name (followed transitively through local
+bindings). An added statement is **gated** when an AST ancestor
+if/ternary/`&&`/`||`/early-return condition references a gate name
+or binding. Unparseable or non-JS-family files fail open for gate
+detection (no veto on "no gate found" without a parse) — the judge
+in (c) still sees them. Exported with a docstring; direct unit
+tests: prefixed env reads, define constants, multi-hop bindings,
+ternary/guard-clause/if forms, unparseable input → undefined.
+
+**c. Judged vetoes.** `validatePreparationFidelity` stays pure and
+becomes the candidate generator. When it proposes ≥1 violation,
+the caller in `default-harness-dependencies.ts` runs one
+adjudication agent command in the preparation sandbox (existing
+OpenCode machinery and provider secret; no new infra seam). Input:
+the candidate violations, the flagged files' diff hunks (bounded
+per file), created files' content (bounded), the manifest's
+declared adaptations (`localDemoModeChanges`,
+`mocksAndFixturesAdded`, `authBypassOrDemoIdentity`, `envUsed`),
+and the fidelity rules. Output artifact
+(`fidelity-adjudication.json`, schema-validated): per candidate
+`confirm`/`overturn` + quoted evidence lines + a steering message.
+Code verifies every `confirm`'s quotes literally appear in the
+named file's diff; a confirm with unverifiable quotes downgrades
+to overturn (a hallucinated veto cannot survive). Overturned
+candidates are dropped; confirmed ones veto with the judge's
+steering (repairs finally get told *what* to change instead of
+"creates replacement product UI" pointed at a one-line boolean).
+Guards: `patchSha256` compared before/after adjudication — a
+changed diff discards the adjudication and keeps the candidate
+verdict; an adjudication agent failure keeps the candidate verdict
+and marks the report unadjudicated (the judge can only rescue from
+false vetoes — its absence is exactly today's behavior, never
+weaker). Cost lands only on the veto path. Adjudication outcomes
+(per-candidate verdicts and whether quotes verified) are recorded
+in the fidelity report artifact so future diagnoses can audit the
+judge. Tests through the caller seam with a fake agent runner:
+confirm-with-real-quotes → veto stands with judge steering;
+confirm-with-fabricated-quotes → overturned; agent failure → veto
+stands, unadjudicated marker; diff mutated during adjudication →
+adjudication discarded. One integration-style test runs the real
+artifact plumbing.
+
+**d. Vocabulary demotion.** `isDemoSeamPath` and the term lists
+survive only as candidate-classifiers (choosing which message a
+candidate gets) — with (a) and (c) their gaps cost a judge call,
+not a run. One addition, owned-convention not vocab-chasing: any
+path segment containing `demo` (case-insensitive, substring)
+counts as a demo seam, because the pipeline's own prompts tell
+agents to build demo-gated adaptations under exactly such names.
+
+**e. Regression fixtures from this run.** Directus-shaped (created
+one-line gate file under `app/`), excalidraw-shaped (gated scene
+seeding with `VITE_`-prefixed flag), outline-shaped (camelCase
+`demoFixtures.ts`), ghost-shaped (external-service neutralization
+with non-vocab wording) — all must pass candidate generation
+without a veto or be overturned by the judge; plus a true-positive
+fixture (created `.tsx` with JSX replacing an original import,
+ungated) that must still veto.
+
+### N93 (High, feature) — exploration repair reserve
+
+One global budget across all stages means early-stage churn
+starves the terminal stage; ghost reached exploration with zero
+rounds left. At the `repairPreparationManifest` call site
+(agent-harness.ts), failures whose `stage === "app-exploration"`
+may consume up to 2 repair rounds beyond the global limit when the
+budget was exhausted before exploration's first failure — hard cap
+`repoPreparationRepairLimit + 2` total, fingerprint caps and the
+N90 bonus unchanged (worst case 5+2+2 rounds, bounded). No
+reservation for earlier stages: they already run first and their
+classes are covered by fingerprint caps. Orchestration tests
+through `runAgentHarnessPipeline`: budget spent to the limit
+pre-exploration still yields 2 exploration repairs; the +2 cap
+holds; a run that never reaches exploration is unchanged.
+
+### N94 (High, bugfix) — retry transient Daytona artifact transfers
+
+`writeTextFile`, `uploadFiles`, and the submitted-code artifact
+transfer paths in
+`daytona-sdk-preparation-workspace-provider.ts` wrap their body in
+a shared bounded retry: 3 attempts, backoff (~1s/4s), retrying
+only transport-transient failures (HTTP 5xx status codes,
+ECONNRESET/ETIMEDOUT-class errors). The temp-path + `mv` promotion
+design is already idempotent; each retry uses a fresh transferId.
+Agent command execution is deliberately out of scope (not
+idempotent). Provider tests with a fake sandbox: one 502 then
+success → succeeds with one retry and a single promoted file;
+persistent 502 → fails after 3 with the original message
+preserved; non-transient error → no retry.
+
+### N95 (High, bugfix) — lifecycle evidence from files, legible tails
+
+Three parts, one principle: the report must carry causes, and must
+survive a lossy stream. (1) **Tee to a file.** The
+`withDiskMarkers` lifecycle/install wrapper also tees combined
+output to a sandbox file (`/tmp/makeademo/lifecycle-<uuid>.log`,
+preserving the command's exit code via PIPESTATUS); on failure the
+harness reads the file's bounded tail — deterministic evidence
+currency even when the PTY drops chunks (calcom's missing YN0009).
+(2) **Harvest the manager's own logs.** On lifecycle/install
+failure, harvest bounded tails of the package manager's standard
+failure logs regardless of whether the stream referenced them:
+newest `$TMPDIR/xfs-*/build.log` globs (yarn berry's documented
+build-log location), newest `/root/.npm/_logs/*-debug-0.log`
+(npm always writes one). This is manager-convention knowledge, not
+repo-specific. (3) **Tail-biased, clean summaries.** The
+`Network-closed lifecycle scripts failed…` summary (and install
+failures generally) leads with an ANSI-stripped excerpt of the
+*last* ~4KB up to and including the `[makeademo:command-end]`
+trailer plus the disk-marker lines, never the raw head; a shared
+`stripAnsi` is applied at excerpt construction so no surface shows
+escape-sequence garbage again. Full raw output stays in the
+stdout/stderr fields. Tests with a fake workspace: stream missing
+the failure tail + file tail present → summary carries the file
+tail; build.log/npm-log harvest fires without an output reference;
+summary head is legible prose, no ESC bytes.
+
+### N96 (Medium, feature) — lifecycle inactivity deadline + standard telemetry opt-outs
+
+(1) `executeSubmittedWithDeadlineEvidence` gains an
+inactivity deadline (default 300s, matching the agent-command
+no-output policy): a lifecycle command producing no output for the
+window is killed with a
+`[makeademo:timeout] no output for …ms` marker distinguishing
+hang-after-quiet from deadline-overrun — ghostfolio's class costs
+5 minutes and reports itself instead of costing 20 and reporting
+nothing. Builds that legitimately go quiet longer than 300s can
+raise it per call. (2) The sealed-runtime environment declares the
+ecosystem-standard telemetry opt-outs (`DO_NOT_TRACK=1`,
+`CHECKPOINT_DISABLE=1`, `NEXT_TELEMETRY_DISABLED=1`) so
+post-success phone-home children never hold stdio open against
+the sealed network in the first place. These are industry
+conventions honored across tools, not per-repo patches. Tests: a
+fake command that emits then stalls → killed at the inactivity
+window with the marker; the env rider carries the opt-outs.
+
+### N97 (Medium, infra) — submitted-code sandbox memory + memory marker
+
+Rebuild the submitted-code snapshot at 8GB memory (CPU 2 and disk
+10 unchanged): midday's dev-server class needs headroom no repo
+change can provide, and quota math still clears the 11-way matrix.
+Alongside the disk markers, `withDiskMarkers` also emits a
+`[makeademo:mem]` line reading `memory.peak` from the cgroup after
+lifecycle and start commands, so the next capacity diagnosis reads
+peaks from the transcript instead of inferring them. Rollout via
+the existing rotation: `bunx daytona snapshot create … --memory
+8`, `.env` repoint, `bun run verify:daytona-image`.
+
+### Rejected as non-general
+
+Expanding the seam vocabulary token-by-token (the treadmill this
+batch retires); demanding envUsed spell every prefixed variant of
+the gate flag (the code owns the semantic: substring on our one
+reserved token); a full-LLM fidelity judge on every validation
+attempt (cost on the happy path; heuristics stay as free candidate
+generators); behavioral fidelity verification via exploration
+(replacement UI renders fine — only diff-level judgment can tell
+an adaptation from a substitute); `CI=1` as a telemetry opt-out
+(changes real build behavior in CRA-class tooling); banning dev
+servers for monorepos (production builds can OOM too and cost
+minutes; capacity is the honest fix); chasing the Daytona PTY
+chunk-loss bug upstream (file-based evidence makes the stream
+non-load-bearing); retrying agent commands (not idempotent).
+
+### Recommended order
+
+N94 → N95 → N96 (small, independent, stop losing runs and
+evidence to infrastructure) → N92 (the batch's core, in order
+a→b→d→c→e so the pure logic lands before the judge) → N93 →
+N97 rollout last (snapshot rebuild + verify). TDD per item with
+the failing test verified red first; full gauntlet per commit.
+Eleventh matrix is the acceptance gate: directus/excalidraw/
+outline-class preparations must survive fidelity (or die only on
+judge-confirmed evidence), calcom's failure must name the actual
+failing build with a legible tail, ghostfolio must fail fast with
+the inactivity marker or pass outright, homer/twenty must survive
+a 502 blip, midday must explore under 8GB, and ghost/outline must
+spend ≥2 repair rounds on their real data bugs.
