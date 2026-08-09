@@ -1078,6 +1078,43 @@ describe("exploreSubmittedApp", () => {
     });
   });
 
+  it("lists the ungrounded feature ids on grounding failures", async () => {
+    const searchFeature = preparedFeature({
+      entryPaths: ["/search"],
+      id: "service-search",
+      label: "Service search",
+      requestedFeature: "service search",
+    });
+    const reviewFeature = preparedFeature({
+      entryPaths: ["/reports"],
+      id: "report-review",
+      label: "Report review",
+      requestedFeature: "report review",
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [searchFeature, reviewFeature],
+      requestedFeatures: ["service search", "report review"],
+      routes: [
+        observedRoute({
+          featureIds: ["service-search"],
+          headings: ["Search results"],
+          path: "/search",
+        }),
+        observedRoute({
+          featureIds: ["report-review"],
+          headings: ["Welcome back"],
+          path: "/reports",
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failingFeatureIds: ["report-review"],
+      failureClassification: "requested feature not observable",
+      status: "failed",
+    });
+  });
+
   it("normalizes crawl URLs so cosmetic variants share one route identity", () => {
     expect(
       normalizeCrawlUrl("http://127.0.0.1:3000/pricing/?utm_source=x&ref=nav"),

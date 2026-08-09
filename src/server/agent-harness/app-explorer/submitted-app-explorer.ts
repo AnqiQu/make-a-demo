@@ -1233,6 +1233,10 @@ function createExplorationValidationReport(input: {
     ...(failure === undefined
       ? { failureClassification: "none" }
       : { failureClassification: failure.classification }),
+    ...(failure?.failingFeatureIds === undefined ||
+    failure.failingFeatureIds.length === 0
+      ? {}
+      : { failingFeatureIds: unique(failure.failingFeatureIds).sort() }),
     logsSummary:
       failure?.message ??
       `Playwright explored ${input.appMap.discoveredRoutes.length} route(s) in the submitted-code sandbox.`,
@@ -1282,15 +1286,25 @@ function readExplorationFailure(
   populatedTableRoutes: ReadonlySet<string>,
   stuckLoadingRoutes: ReadonlySet<string>,
   errorEvidenceByRoute: ReadonlyMap<string, string[]> = new Map(),
-): { classification: string; message: string } | undefined {
+):
+  | { classification: string; failingFeatureIds?: string[]; message: string }
+  | undefined {
   const unreachableFailure = (features: PreparedDemoFeature[]) => {
     const featureIds = new Set(features.map(({ id }) => id));
     const unreachable = unreachableRoutes.filter((route) =>
       (route.featureIds ?? []).some((featureId) => featureIds.has(featureId)),
     );
     if (unreachable.length === 0) return undefined;
+    const unreachableFeatureIds = unique(
+      unreachable.flatMap((route) =>
+        (route.featureIds ?? []).filter((featureId) =>
+          featureIds.has(featureId),
+        ),
+      ),
+    );
     return {
       classification: "app route not discoverable",
+      failingFeatureIds: unreachableFeatureIds,
       message: `Feature entry routes failed to load: ${unreachable
         .slice(0, 2)
         .map((route) => `${route.url}: ${route.error}`)
@@ -1347,6 +1361,7 @@ function readExplorationFailure(
       .map((feature) => feature.requestedFeature ?? feature.label);
     return {
       classification: "feature auth barrier",
+      failingFeatureIds: [...authBarrierFeatureIds],
       message: `Prepared feature routes redirected to authentication for: ${blockedFeatures.join(", ")}. Seed an authenticated demo session through the repo's demo gate so these routes render signed in, or reselect featureInventory entries onto routes outside authentication.`,
     };
   }
@@ -1383,6 +1398,7 @@ function readExplorationFailure(
     ];
     return {
       classification: "empty/unmeaningful app state",
+      failingFeatureIds: features.map(({ id }) => id),
       message: `Explored ${appMap.discoveredRoutes.length} route(s) but every route ${chromeOnlyExplanation(
         ` appeared within the content wait. Feature entry routes affected: ${affectedRoutes
           .slice(0, 4)
@@ -1476,6 +1492,7 @@ function readExplorationFailure(
   if (requestedCollision !== undefined) {
     return {
       classification: "requested feature not observable",
+      failingFeatureIds: requestedCollision,
       message: indistinguishableMessage(requestedCollision),
     };
   }
@@ -1588,11 +1605,13 @@ function readExplorationFailure(
     const requestedFeatureNames = missingRequestedFeatures
       .map((feature) => feature.requestedFeature as string)
       .join(", ");
+    const missingRequestedIds = missingRequestedFeatures.map(({ id }) => id);
     return (
       hollowFailure(missingRequestedFeatures) ??
       (featureEvidence.every(({ vetoedByEmptyTable }) => vetoedByEmptyTable)
         ? {
             classification: "empty/unmeaningful app state",
+            failingFeatureIds: missingRequestedIds,
             message: `Every requested feature's data surface rendered as a zero-row table: ${requestedFeatureNames}.${routeEvidence}`,
           }
         : featureEvidence.every(
@@ -1603,10 +1622,12 @@ function readExplorationFailure(
               // app is broken, not mis-worded — steer at the runtime/data
               // contract with the error evidence.
               classification: "empty/unmeaningful app state",
+              failingFeatureIds: missingRequestedIds,
               message: `Every requested feature's routes rendered error states instead of content: ${requestedFeatureNames}.${routeEvidence}`,
             }
           : {
               classification: "requested feature not observable",
+              failingFeatureIds: missingRequestedIds,
               message: `App Exploration found no browser evidence for requested features: ${requestedFeatureNames}.${routeEvidence}`,
             })
     );
@@ -1624,7 +1645,7 @@ function readExplorationFailure(
   const requestedFeaturesExist = featureInventory.some(
     (feature) => feature.requestedFeature !== undefined,
   );
-  const flowEvidenceGaps = featureInventory
+  const flowEvidenceGapEntries = featureInventory
     .map((feature) => {
       if (
         !groundedFeatureIds.has(feature.id) ||
@@ -1652,18 +1673,25 @@ function readExplorationFailure(
           .filter((route) => contentRoutePaths.has(route))
           .flatMap((route) => distinctContentByRoute.get(route) ?? []),
       ).slice(0, 4);
-      return `"${feature.requestedFeature ?? feature.label}" lacks ${missing.join(" and ")}${
-        shownLabels.length === 0
-          ? ""
-          : ` (its routes rendered distinct content: ${shownLabels.join(
-              ", ",
-            )} — align the featureInventory wording with these on-screen labels)`
-      }`;
+      return {
+        featureId: feature.id,
+        gap: `"${feature.requestedFeature ?? feature.label}" lacks ${missing.join(" and ")}${
+          shownLabels.length === 0
+            ? ""
+            : ` (its routes rendered distinct content: ${shownLabels.join(
+                ", ",
+              )} — align the featureInventory wording with these on-screen labels)`
+        }`,
+      };
     })
-    .filter((gap): gap is string => gap !== undefined);
+    .filter((entry) => entry !== undefined);
+  const flowEvidenceGaps = flowEvidenceGapEntries.map(({ gap }) => gap);
   if (requestedFeaturesExist && flowEvidenceGaps.length > 0) {
     return {
       classification: "requested feature not observable",
+      failingFeatureIds: flowEvidenceGapEntries.map(
+        ({ featureId }) => featureId,
+      ),
       message: `Flow planning must pair a tagged interaction with a tagged visible-text assert for every requested feature, but the ActionCatalog cannot satisfy that: ${flowEvidenceGaps.join(
         "; ",
       )}. Prepare these features' routes to render visible text that names the feature's data or UI, or reselect featureInventory entries onto routes that already do.`,
@@ -1681,6 +1709,9 @@ function readExplorationFailure(
     if (groundedCount >= requiredCount && plannableCount < requiredCount) {
       return {
         classification: "prepared feature not observable",
+        failingFeatureIds: flowEvidenceGapEntries.map(
+          ({ featureId }) => featureId,
+        ),
         message: `Flow planning must select ${requiredCount} prepared feature(s), pairing each with a tagged interaction and a tagged visible-text assert, but only ${plannableCount} qualify: ${flowEvidenceGaps.join(
           "; ",
         )}. Prepare these features' routes to render visible text that names the feature's data or UI, or reselect featureInventory entries onto routes that already do.`,
@@ -1710,6 +1741,7 @@ function readExplorationFailure(
       ) {
         return {
           classification: "prepared feature not observable",
+          failingFeatureIds: collisionGroups[0] ?? [],
           message: indistinguishableMessage(collisionGroups[0] ?? []),
         };
       }
@@ -1720,6 +1752,7 @@ function readExplorationFailure(
       return (
         hollowFailure(ungroundedFeatures) ?? {
           classification: "prepared feature not observable",
+          failingFeatureIds: ungroundedFeatures.map(({ id }) => id),
           message: `App Exploration observed ${observedPreparedFeatureCount} prepared features but needs ${requiredPreparedFeatureCount} to plan the default demo.${formatGroundedRoutes(actionCatalog, contentRoutePaths)}`,
         }
       );

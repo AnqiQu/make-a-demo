@@ -207,6 +207,13 @@ export type ValidationReport = {
   blockedNetworkAttempts: NetworkAttempt[];
   screenshots: string[];
   failureClassification?: string;
+  /**
+   * Feature ids the failure is scoped to, when the validating stage can name
+   * them (for example ungrounded features at app exploration). Consecutive
+   * repair rounds compare these sets to detect converging progress; producers
+   * must emit the full failing set, not a truncated excerpt.
+   */
+  failingFeatureIds?: string[];
   suggestedRepairHints: string[];
   retryCount: number;
   artifactReferences: string[];
@@ -759,6 +766,7 @@ export function readValidationReport(value: unknown): ValidationReport {
     browserObservations: readStringArray(record, "browserObservations"),
     consoleErrors: readStringArray(record, "consoleErrors"),
     ...optionalKey(record, "exitCode", readNonNegativeNumber),
+    ...optionalKey(record, "failingFeatureIds", readStringArray),
     ...optionalKey(record, "failureClassification", readNonEmptyString),
     logsSummary: readNonEmptyString(record, "logsSummary"),
     networkAttempts: readNetworkAttempts(record, "networkAttempts"),

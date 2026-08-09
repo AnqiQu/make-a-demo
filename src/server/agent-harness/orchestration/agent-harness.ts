@@ -445,6 +445,7 @@ export async function runAgentHarnessPipeline(
     const preparationRepairBudget: PreparationRepairBudget = {
       attemptedInstallScopes: new Set(),
       attemptsByFingerprint: {},
+      bonusRounds: 0,
       totalAttempts: 0,
     };
     const preparationRepairAttemptsByPhase: Record<string, number> = {};
@@ -1274,6 +1275,8 @@ type AcceptedPreparationCandidate = {
 type PreparationRepairBudget = {
   attemptedInstallScopes: Set<string>;
   attemptsByFingerprint: Record<string, number>;
+  bonusRounds: number;
+  lastFailingFeatureIds?: readonly string[];
   totalAttempts: number;
 };
 
@@ -1366,6 +1369,7 @@ async function ensureValidPreparation(input: {
           input.preparationRepairBudget.attemptsByFingerprint[fingerprint] ?? 0;
         const phaseRepairAttempts =
           input.preparationRepairAttemptsByPhase[phase] ?? 0;
+        recordFailingFeatureProgress(input.preparationRepairBudget, failure);
         const repair = await repairPreparationManifest({
           dependencies: input.dependencies,
           failureReport: failure,
@@ -1373,7 +1377,9 @@ async function ensureValidPreparation(input: {
           preparationManifest,
           phaseRepairAttempts,
           fingerprintRepairAttempts,
-          repoPreparationRepairLimit: input.repoPreparationRepairLimit,
+          repoPreparationRepairLimit:
+            input.repoPreparationRepairLimit +
+            input.preparationRepairBudget.bonusRounds,
           repoProfile: input.repoProfile,
           runPlan: input.runPlan,
           stageStatuses: input.stageStatuses,
@@ -1791,6 +1797,41 @@ function readFailingCatalogActionId(
   return actionCatalog.actions.some((action) => action.id === candidateId)
     ? candidateId
     : undefined;
+}
+
+const preparationProgressBonusLimit = 2;
+
+/**
+ * Grants a bonus repair round when a failure's failing-feature set strictly
+ * shrank — a proper subset of the previous feature-bearing failure's set. A
+ * loop that fixes features round over round is converging, so it earns
+ * headroom (capped at +2 per run) instead of dying one round short; churn
+ * (different features failing) and app-wide failures earn nothing.
+ */
+function recordFailingFeatureProgress(
+  budget: PreparationRepairBudget,
+  failure: ValidationReport,
+): void {
+  const failing = failure.failingFeatureIds;
+  if (failing === undefined || failing.length === 0) {
+    return;
+  }
+  const previous = budget.lastFailingFeatureIds;
+  budget.lastFailingFeatureIds = failing;
+  if (
+    previous === undefined ||
+    budget.bonusRounds >= preparationProgressBonusLimit
+  ) {
+    return;
+  }
+  const previousSet = new Set(previous);
+  const failingSet = new Set(failing);
+  if (
+    failingSet.size < previousSet.size &&
+    [...failingSet].every((featureId) => previousSet.has(featureId))
+  ) {
+    budget.bonusRounds += 1;
+  }
 }
 
 function preparationFailureFingerprint(report: ValidationReport): string {

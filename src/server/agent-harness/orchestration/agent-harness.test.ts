@@ -2556,6 +2556,128 @@ describe("runAgentHarnessPipeline", () => {
     expect(diffCaptures).toBe(6);
   });
 
+  it("grants bonus repair rounds while the failing-feature set strictly shrinks, capped at two", async () => {
+    let explorationAttempts = 0;
+    let repairAttempts = 0;
+    const failingFeatureSets = [
+      ["feature-a", "feature-b", "feature-c", "feature-d", "feature-e"],
+      ["feature-a", "feature-b", "feature-c", "feature-d"],
+      ["feature-a", "feature-b", "feature-c"],
+      ["feature-a", "feature-b"],
+      ["feature-a"],
+    ];
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({ runId: "run_progress_bonus" }),
+        stubPipelineDependencies({
+          async capturePreparationWorkspaceDiff() {
+            return preparationWorkspaceDiff();
+          },
+          async exploreApp() {
+            explorationAttempts += 1;
+            const failingFeatureIds =
+              failingFeatureSets[explorationAttempts - 1];
+            if (failingFeatureIds === undefined) {
+              throw new Error("Unexpected exploration attempt.");
+            }
+            return {
+              kind: "artifacts" as const,
+              actionCatalog: actionCatalog(),
+              appMap: appMap(),
+              validationReport: {
+                ...report("app-exploration", "failed"),
+                failingFeatureIds,
+                failureClassification: "requested feature not observable",
+                logsSummary: `No browser evidence for requested features: ${failingFeatureIds.join(", ")}`,
+              },
+            };
+          },
+          async prepareRepo() {
+            return { manifest: preparationManifest() };
+          },
+          async repairPreparation() {
+            repairAttempts += 1;
+            return {
+              manifest: {
+                ...preparationManifest(),
+                id: `prep_repaired_${repairAttempts}`,
+              },
+            };
+          },
+          async validatePreparation() {
+            return report("preparation-preflight", "passed");
+          },
+        }),
+        { repoPreparationRepairLimit: 2 },
+      ),
+    ).rejects.toThrow("global retry budget exhausted");
+
+    // Base limit 2 plus one bonus per shrinking round, capped at +2: four
+    // repairs run before the fifth failure exhausts the budget.
+    expect(repairAttempts).toBe(4);
+    expect(explorationAttempts).toBe(5);
+  });
+
+  it("grants no bonus round when the failing-feature set merely changes", async () => {
+    let explorationAttempts = 0;
+    let repairAttempts = 0;
+    const failingFeatureSets = [
+      ["feature-a", "feature-b"],
+      ["feature-c", "feature-d"],
+      ["feature-e", "feature-f"],
+    ];
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({ runId: "run_progress_no_bonus" }),
+        stubPipelineDependencies({
+          async capturePreparationWorkspaceDiff() {
+            return preparationWorkspaceDiff();
+          },
+          async exploreApp() {
+            explorationAttempts += 1;
+            const failingFeatureIds =
+              failingFeatureSets[explorationAttempts - 1];
+            if (failingFeatureIds === undefined) {
+              throw new Error("Unexpected exploration attempt.");
+            }
+            return {
+              kind: "artifacts" as const,
+              actionCatalog: actionCatalog(),
+              appMap: appMap(),
+              validationReport: {
+                ...report("app-exploration", "failed"),
+                failingFeatureIds,
+                failureClassification: "requested feature not observable",
+                logsSummary: `No browser evidence for requested features: ${failingFeatureIds.join(", ")}`,
+              },
+            };
+          },
+          async prepareRepo() {
+            return { manifest: preparationManifest() };
+          },
+          async repairPreparation() {
+            repairAttempts += 1;
+            return {
+              manifest: {
+                ...preparationManifest(),
+                id: `prep_repaired_${repairAttempts}`,
+              },
+            };
+          },
+          async validatePreparation() {
+            return report("preparation-preflight", "passed");
+          },
+        }),
+        { repoPreparationRepairLimit: 2 },
+      ),
+    ).rejects.toThrow("global retry budget exhausted");
+
+    expect(repairAttempts).toBe(2);
+    expect(explorationAttempts).toBe(3);
+  });
+
   it("allows three script repairs independently in static and capture validation", async () => {
     let captureAttempts = 0;
     let staticAttempts = 0;
