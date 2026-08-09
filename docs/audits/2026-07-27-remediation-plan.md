@@ -3367,3 +3367,227 @@ cyberchef's stuck-loading failures, if any, steer at the runtime
 (N80); excalidraw's install window is finally script-suppressed
 under classic yarn (N79) — its terminal blocker remains N70b
 (canvas evidence lane, still queued).
+
+## Addendum (2026-08-08, ninth 11-repo matrix — first excalidraw video; outline false positive; N83–N91)
+
+Run `matrix-2026-08-08T23-39-56-603Z` / report
+`matrix-report-2026-08-09T00-40-48-518Z.json`. Three passed: homer
+(4min), **excalidraw's first-ever video** (46min — N79's classic-yarn
+suppression validated in the best way possible), and outline (60min)
+— but outline's pass is a **false positive**: the video is a guided
+tour of error states. Eight failed. The batch scorecard is strong:
+N78 fully validated (directus and ghost both resolved and activated
+line 22; the ABI/NODE_MODULE_VERSION class is extinct;
+`npm_config_nodedir` correctly steered even a 2021 vendored
+node-gyp), N72b validated (calcom installed with warm prisma
+engines), N76/N77/N80/N81/N82 held. The frontier moved again: to
+environment completeness (python/distutils, boot-validated theme
+builds, disk economics), to the **error-copy evidence gap** outline
+exposed, and to flow-planning diagnosability.
+
+### Diagnoses
+
+**outline (passed, hollow — the worst failure mode: a shipped bad
+video).** The prep agent built a Vite-middleware API adapter with
+fixture data (design sound; auth worked, sidebar rendered the
+fixture team). But the adapter's responses violate Outline's client
+contract: list envelopes missing `pagination`, non-array `data`
+(`Pagination information not available in response`,
+`res.data.map is not a function` — 9 page errors), and fixture
+entities missing required fields (`parseEmail` on a user with no
+email crashed `<Invite>`, `<UserFilter>`, `<MembershipPreview>`).
+Every list request threw: home rendered an eternal skeleton (zero
+harvested text), toasts stacked ("Could not load shared/starred
+documents"), the fixture doc slug 404'd, `/search` crashed into the
+error boundary. Three gate defects let it through: (1) the manifest
+declared router *patterns* (`/collection/:collectionSlug`) and the
+harness navigated them verbatim — 6 of 10 explored routes were
+guaranteed 404s, and two demo scenes `goto` placeholder URLs; (2)
+**error copy is admissible evidence** — "Not found" headings, 404
+body text, error toasts, and the error boundary's "Something
+Unexpected Happened" satisfied route-distinct grounding, N21b
+assert selection, and capture-path validation; the script literally
+clicks the error boundary's "Reload" button and asserts its crash
+heading; (3) 19 console errors and 9 page errors were recorded and
+gated nothing on the pass path. N80 correctly saw no overlay —
+skeletons are a sibling class, not a stuck overlay. Secondary: Vite
+dep re-optimization mid-exploration (504 "Outdated Optimize Dep"
+across five `?v=` generations).
+
+**ghost (preflight, 503).** N78 win: line 22 activated,
+better-sqlite3 compiled AND loaded. New blocker at boot:
+`ThemeValidationError: the currently active theme "source" has
+fatal errors` → Ghost stays in maintenance (503). The bundled theme
+is a workspace package whose built assets don't exist in a fresh
+checkout; six sealed-network repair rounds cannot build what needs
+the install window. N67's class in a new costume.
+
+**calcom (preflight, offline lifecycle).** Install succeeded,
+prisma engines warm. `sqlite3@5.1.7`'s vendored node-gyp 8.4.1 runs
+`from distutils.version import StrictVersion` — deleted in Python
+3.12 (the image's python). Our header plumbing worked
+(`-I /usr/local/include/node/common.gypi`); the Python side broke.
+Attempts 2–3: agent disabled other native builds, then the record
+ends mid-monorepo-root-build with no error line — consistent with
+the lifecycle timeout killing it silently (diagnosability gap).
+
+**twenty (preflight, install).** ENOSPC during the link step:
+947MiB of berry zips plus the expanding node_modules double-store
+on the hard 10GB org cap. The dormant cache-pruning contingency is
+activated — but the peak is *during* link, so post-hoc pruning
+alone cannot fix it.
+
+**conduit (flow planning, regression).** Three attempts, one
+byte-identical rejection: feature `browse-and-favorite-articles`
+never selected both a tagged interaction and a tagged assert. The
+rejection lists what was available, never what the candidate
+referenced; rejected candidates are not persisted, so neither the
+agent nor the diagnosis can see the actual mistake. Suspected
+tension: the route-distinct assert preference vs. a tagged-assert
+set that is all nav-ish headings.
+
+**cyberchef (exploration, satisfiability).** "Use Magic or
+operation search to decode a sample" has no visible-text assert in
+the catalog — its proof text (search results, operation output)
+appears only *after* an interaction, which static harvest cannot
+see. Five repair rounds, zero convergence. Same family as
+excalidraw's old blocker: tool-shaped UIs reveal evidence
+interactively.
+
+**directus (exploration, near-miss).** First time past install AND
+preflight. The repair loop genuinely converged — attempts 1–2 had
+three unobservable features, attempt 3 one (policies routes
+rendering only nav chrome; N21 doing its job on a real data gap) —
+and ran out of budget one fix short.
+
+**midday, ghostfolio (infra).** Daytona API 502 / "Operation timed
+out" during workspace creation; both sandbox logs empty; neither
+run started. Rerun; nothing to build.
+
+### N83 (Critical, feature) — quarantine error-state evidence
+
+The general defect: text that describes failure counts as proof of
+success. Three framework-agnostic signals, all applied at harvest
+so every downstream gate inherits them unchanged: (1) **alert
+quarantine** — the generated script harvests text inside
+`role=alert`/`role=status`/`alertdialog`/`aria-live` regions into a
+separate per-route `alerts` list, excluded from headings/text;
+alert text can never ground features or seed asserts, but it is
+attached to failure verdicts as repair evidence (the toast names
+the broken contract). (2) **Not-found signature probe** — before
+the route loop, visit a synthetic path (`/__makeademo-404-probe__`)
+and record its content signature; any real route matching it is
+`notFoundLike`, not content-bearing; if the probe redirects to a
+real route, skip signature matching (redirect-style apps render no
+404 page). No string-matching on app wording. (3) **Tainted
+routes** — a route with an uncaught page error supplies no
+grounding evidence and no asserts, with an ambient filter: an
+error message on >50% of routes is background noise and does not
+taint (mirrors the chrome rule; catches the crashed search page
+whose error-boundary copy is ordinary DOM, without failing apps
+that log one benign rejection everywhere). Classifier: a feature
+whose routes are all non-content-bearing (empty, alert-only,
+notFoundLike, tainted) → the existing `empty/unmeaningful app
+state` classification with alerts + page-error messages as
+steering evidence. Regression fixture: this run's outline app-map
+replayed through the new logic must fail with the toast text and
+`Pagination information not available in response` in the repair
+prompt.
+
+### N84 (High, feature) — placeholder routes are never navigable
+
+Guard the three seams where a route becomes navigation: manifest
+validation rejects route patterns (`:seg`, `*`, `[param]`) with
+"routes must be concrete URLs reachable in the demo — substitute
+your fixture slugs"; the exploration input builder drops pattern
+paths defensively (recorded, non-fatal); the static script
+contract rejects any `goto` with a pattern path so one can never
+reach capture. Fail-fast at the manifest is the general fix — only
+the agent knows its fixture slugs.
+
+### N85 (High, feature) — prep riders + install-window escape hatch
+
+Two one-line world-rules riders: API adapters must reproduce the
+client's expected response envelope (copy the shape from the app's
+own client/store code) and cover every endpoint the demo routes
+call — a partially covered adapter fails exploration as an empty
+app (outline); packages the app validates at boot (themes, plugins,
+bundled dashboards) are prerequisite builds that must run during
+the install window (ghost). Control-flow half (the truly general
+piece): a repair that needs installation/network cannot succeed in
+a sealed sandbox by construction — ghost burned six rounds proving
+it. Add a repair lane that escalates **once per run** to a fresh
+preparation cycle via the existing preparation-fallback mechanism,
+carrying the blocker verbatim, instead of spending sealed budget.
+
+### N86 (High, infra) — restore distutils; timeout markers
+
+`python3-setuptools` in the submitted-code image (Ubuntu's package
+ships the distutils shim), so any vendored node-gyp configures
+under Python 3.12. Dockerfile content test asserts the package;
+`verify:daytona-image` gains `python3 -c "from distutils.version
+import StrictVersion"` beside the node-gyp smoke; one snapshot
+rotation. Plus: when a gate/lifecycle command is killed at its
+timeout, stamp `[makeademo:timeout]` into the log summary —
+calcom's attempts 2–3 ended silently and diagnosis had to infer
+the kill.
+
+### N87 (Medium, feature) — disk economics with eyes open
+
+The ENOSPC peak is during link (zips + node_modules coexist), so:
+(1) `[makeademo:disk]` df markers before/after install, lifecycle,
+and build — engineer to the hard 10GB number instead of guessing;
+(2) prune manager caches after the offline lifecycle completes
+(the `--immutable` re-run still needs the cache; the prune slots
+after it), freeing ~1GB for build outputs and capture; (3)
+steering: large workspace monorepos with a locked single-app
+target prefer focused installs (`yarn workspaces focus`, pnpm
+`--filter`) — lockfile-respecting, and the only lever that attacks
+the peak itself. Rejected: backend-mutating `nodeLinker` — exactly
+the identity violation N74/N82 forbid.
+
+### N88 (High, bugfix) — flow rejections echo the offense
+
+The rejection enumerates the feature's offending
+`referencedActionIds` with per-id reasons ("tagged to feature X",
+"untagged", "not an assert"); rejected FlowSpec candidates persist
+as attempt files like every other stage; one prompt line
+subordinates the route-distinct preference to the tagged-set
+requirement.
+
+### N89 (High, feature, largest) — interaction-revealed evidence
+
+Tool-shaped UIs reveal proof-text only after an interaction, so
+static harvest cannot catalog an assert and pairing is
+unsatisfiable by construction. Extension: when exploration
+exercises an interaction, harvest text that newly appeared and
+catalog it as asserts carrying `revealedBy: <interactionId>`; flow
+validation accepts an interaction+assert pair when the assert is
+revealed by that interaction. The general form of cyberchef's Magic
+search and excalidraw's old N70b blocker. Build last.
+
+### N90 (Low, feature) — progress-aware repair budget
+
+A repair round that strictly shrinks the failing-feature set
+grants a bonus round, capped at +2 per run (directus died one
+round short of a converging loop).
+
+### N91 (Low, feature) — dev-server re-optimization reload
+
+If a route visit records a 504 module-fetch failure (Vite
+"Outdated Optimize Dep"), reload once and re-harvest.
+
+### Rejected as non-general
+
+Gating on console/stderr content (N21c's decision stands — N83's
+compound signals replace it); string-matching error wording;
+backend mutation of manager identity for disk savings; preflight
+body inspection (content truth belongs to the browser stage).
+
+Recommended order: N86 → N84 → N83 → N88 → N85 → N87 → N90 → N91
+→ N89; TDD per item; one snapshot rotation covering N86.
+Acceptance: outline must now **fail** at exploration with toast
+text steering the repair (a failed outline run validates N83 as
+much as a good video would); calcom clears its offline lifecycle;
+conduit's rejection becomes self-diagnosing; twenty's df markers
+prove or retire prong 3; midday/ghostfolio rerun clean.
