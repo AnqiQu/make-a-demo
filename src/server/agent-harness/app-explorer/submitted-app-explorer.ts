@@ -1044,6 +1044,30 @@ function createActions(
         risks: [],
         route: route.path,
       });
+      (interaction.revealedTexts ?? []).forEach(
+        (revealedText, revealedIndex) => {
+          if (!revealedText.locatorEvidence) return;
+          const assertId = `assert-revealed-${routeIndex + 1}-${index + 1}-${revealedIndex + 1}`;
+          actions.push({
+            confidence: 0.95,
+            evidence: `Playwright observed "${revealedText.value}" appear after exercising ${interaction.name} on ${route.path}`,
+            expectedResult: `${revealedText.value} becomes visible after ${interaction.name}`,
+            featureIds: matchFeatureIds(
+              `${interaction.name} ${revealedText.value}`,
+            ),
+            id: assertId,
+            kind: "assert",
+            ...createLocatorCandidateFields(
+              assertId,
+              revealedText.locatorEvidence,
+            ),
+            preferredLocator: { strategy: "text", value: revealedText.value },
+            revealedBy: id,
+            risks: [],
+            route: route.path,
+          });
+        },
+      );
     });
     route.links.forEach((link, index) => {
       if (

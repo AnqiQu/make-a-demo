@@ -293,6 +293,14 @@ type ActionCatalogAction = {
   id: string;
   /** True only when browser exploration executed the action and observed its result. */
   exercised?: true;
+  /**
+   * For asserts on text that becomes visible only after an interaction: the
+   * catalog id of the revealing interaction. Such an assert is valid demo
+   * evidence only when its revealing interaction runs earlier in the same
+   * scene, and it satisfies the route-distinct assert preference when the
+   * pair is selected together.
+   */
+  revealedBy?: string;
   featureIds?: string[];
   route: string;
   kind:
@@ -893,6 +901,21 @@ export function readActionCatalog(value: unknown): ActionCatalog {
   if (actions.length === 0) {
     throw new Error("actions must be a non-empty array");
   }
+  const interactionIds = new Set(
+    actions
+      .filter((action) => action.kind !== "assert")
+      .map((action) => action.id),
+  );
+  for (const action of actions) {
+    if (
+      action.revealedBy !== undefined &&
+      !interactionIds.has(action.revealedBy)
+    ) {
+      throw new Error(
+        `actions ${action.id}.revealedBy must reference an interaction action in the catalog`,
+      );
+    }
+  }
   return {
     actions,
     appMapId: readNonEmptyString(record, "appMapId"),
@@ -1098,6 +1121,13 @@ function readAction(value: unknown, index: number): ActionCatalogAction {
   ) {
     throw new Error(`${path}.exercised is only valid for feature interactions`);
   }
+  const revealedBy =
+    record.revealedBy === undefined
+      ? undefined
+      : readNonEmptyString(record, "revealedBy", path);
+  if (revealedBy !== undefined && kind !== "assert") {
+    throw new Error(`${path}.revealedBy is only valid on assert actions`);
+  }
   if (
     locatorCandidates !== undefined &&
     preferredLocatorCandidateId === undefined
@@ -1136,6 +1166,7 @@ function readAction(value: unknown, index: number): ActionCatalogAction {
     ...(preferredLocatorCandidateId === undefined
       ? {}
       : { preferredLocatorCandidateId }),
+    ...(revealedBy === undefined ? {} : { revealedBy }),
     risks: readStringArray(record, "risks", path),
     route: readLocalRoute(record, "route", path),
     ...(record.scrollPosition === undefined

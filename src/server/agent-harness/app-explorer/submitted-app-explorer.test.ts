@@ -1078,6 +1078,86 @@ describe("exploreSubmittedApp", () => {
     });
   });
 
+  it("catalogs interaction-revealed text as asserts carrying revealedBy", async () => {
+    const feature = preparedFeature({
+      entryPaths: ["/analyzer"],
+      id: "magic-analysis",
+      label: "Magic analysis",
+      requestedFeature: "magic analysis",
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [feature],
+      requestedFeatures: ["magic analysis"],
+      routes: [
+        observedRoute({
+          buttons: ["Run analysis"],
+          featureIds: ["magic-analysis"],
+          interactions: [
+            {
+              kind: "click",
+              locator: {
+                name: "Run analysis",
+                strategy: "role",
+                value: "button",
+              },
+              locatorEvidence: {
+                locator: {
+                  name: "Run analysis",
+                  role: "button",
+                  strategy: "role",
+                },
+                verification: {
+                  matchCount: 1,
+                  route: "/analyzer",
+                  visible: true,
+                },
+              },
+              name: "Run analysis",
+              outcome: "Detected format: Base64 became visible",
+              revealedTexts: [
+                {
+                  locatorEvidence: {
+                    locator: {
+                      exact: true,
+                      strategy: "text",
+                      value: "Detected format: Base64",
+                    },
+                    verification: {
+                      matchCount: 1,
+                      route: "/analyzer",
+                      visible: true,
+                    },
+                  },
+                  value: "Detected format: Base64",
+                },
+              ],
+            },
+          ],
+          path: "/analyzer",
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    const interactionAction = artifacts.actionCatalog.actions.find(
+      (action) => action.exercised === true,
+    );
+    const revealedAssert = artifacts.actionCatalog.actions.find(
+      (action) => action.revealedBy !== undefined,
+    );
+    expect(interactionAction).toBeDefined();
+    expect(revealedAssert).toMatchObject({
+      kind: "assert",
+      revealedBy: interactionAction?.id,
+      route: "/analyzer",
+    });
+    expect(revealedAssert?.preferredLocator).toMatchObject({
+      strategy: "text",
+      value: "Detected format: Base64",
+    });
+    expect(revealedAssert?.featureIds).toContain("magic-analysis");
+  });
+
   it("lists the ungrounded feature ids on grounding failures", async () => {
     const searchFeature = preparedFeature({
       entryPaths: ["/search"],
