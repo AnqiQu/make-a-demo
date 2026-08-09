@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join, posix } from "node:path";
 import {
   BROWSER_ACTION_COMPILER_VERSION,
@@ -29,6 +29,7 @@ import { DaytonaSdkPreparationWorkspaceProvider } from "../../shared/integration
 import type { PipelineEventLogger } from "../../shared/logging/pipeline-event-logger";
 import { shellQuote } from "../../shared/shell/shell-quote";
 import { elideMiddle } from "../../shared/text/elide-middle";
+import { stripAnsi } from "../../shared/text/strip-ansi";
 import {
   type SubmittedAppExplorationResult,
   exploreSubmittedApp,
@@ -2016,6 +2017,7 @@ async function validateResolvedSubmittedCodeRuntime(
   if (input.installDependencies !== false) {
     const installCommand =
       manifest.installCommandUsed || input.runPlan.installCommand;
+    let installEvidenceLogPath: string | undefined;
     const runInstall = (command: string) =>
       runDependencyInstallThroughGate({
         closeNetwork: () =>
@@ -2027,18 +2029,21 @@ async function validateResolvedSubmittedCodeRuntime(
           : { yarnVariant: input.repoProfile.yarnVariant }),
         // The gate may append a lifecycle-script suppression flag, so the
         // executed string must be the gate's command, not the closure's.
-        runCommand: (gateCommand) =>
-          executeSubmittedWithDeadlineEvidence(
-            input.workspace,
-            withDiskMarkers(
-              commandInAppDirectory(
-                runtimeTarget?.install.cwd ?? manifest.appDir,
-                gateCommand,
-              ),
-              "deps",
+        runCommand: (gateCommand) => {
+          const guarded = withDiskMarkers(
+            commandInAppDirectory(
+              runtimeTarget?.install.cwd ?? manifest.appDir,
+              gateCommand,
             ),
+            "deps",
+          );
+          installEvidenceLogPath = guarded.evidenceLogPath;
+          return executeSubmittedWithDeadlineEvidence(
+            input.workspace,
+            guarded.command,
             { timeoutMs: dependencyInstallTimeoutMs },
-          ),
+          );
+        },
       });
     type InstallResult = Awaited<ReturnType<typeof runInstall>>;
     const reconcileLockfile = async (
@@ -2152,7 +2157,7 @@ async function validateResolvedSubmittedCodeRuntime(
           attemptedCommand: result.executedCommand,
           classification: "external network required",
           exitCode: result.exitCode,
-          logsSummary: `Dependency install cannot reach ${unreachable.host}${unreachable.packageName === undefined ? "" : ` for package ${unreachable.packageName}`}; a retry inside the open install window failed with the same network error: ${result.stderr || result.stdout}`,
+          logsSummary: `Dependency install cannot reach ${unreachable.host}${unreachable.packageName === undefined ? "" : ` for package ${unreachable.packageName}`}; a retry inside the open install window failed with the same network error: ${legibleFailureExcerpt(result)}`,
           manifest,
           stage,
           stderr: result.stderr,
@@ -2166,7 +2171,18 @@ async function validateResolvedSubmittedCodeRuntime(
         attemptedCommand: result.executedCommand,
         classification: "install failure",
         exitCode: result.exitCode,
-        logsSummary: `Submitted-code dependency install failed: ${result.stderr || result.stdout}`,
+        logsSummary: `Submitted-code dependency install failed: ${legibleFailureExcerpt(
+          {
+            ...result,
+            fileTail:
+              installEvidenceLogPath === undefined
+                ? ""
+                : await readCommandEvidenceTail(
+                    input.workspace,
+                    installEvidenceLogPath,
+                  ),
+          },
+        )}`,
         manifest,
         stage,
         stderr: result.stderr,
@@ -2197,19 +2213,30 @@ async function validateResolvedSubmittedCodeRuntime(
         : { yarnVariant: input.repoProfile.yarnVariant }),
     });
     if (lifecycleCommand !== undefined) {
+      const guardedLifecycle = withDiskMarkers(
+        commandInAppDirectory(
+          runtimeTarget?.install.cwd ?? manifest.appDir,
+          lifecycleCommand,
+        ),
+        "lifecycle",
+      );
       const lifecycle = await executeSubmittedWithDeadlineEvidence(
         input.workspace,
-        withDiskMarkers(
-          commandInAppDirectory(
-            runtimeTarget?.install.cwd ?? manifest.appDir,
-            lifecycleCommand,
-          ),
-          "lifecycle",
-        ),
+        guardedLifecycle.command,
         { timeoutMs: dependencyInstallTimeoutMs },
       );
       if (lifecycle.exitCode !== 0) {
-        const lifecycleOutput = `${lifecycle.stderr}\n${lifecycle.stdout}`;
+        // The stream is lossy (calcom's YN0009 failure report never arrived,
+        // 2026-08-09); the teed evidence file is the source of truth.
+        const lifecycleFileTail = await readCommandEvidenceTail(
+          input.workspace,
+          guardedLifecycle.evidenceLogPath,
+        );
+        const lifecycleOutput = [
+          lifecycle.stderr,
+          lifecycle.stdout,
+          lifecycleFileTail,
+        ].join("\n");
         // Yarn berry reports only "couldn't be built successfully (…logs can
         // be found here: /tmp/xfs-*/build.log)" — each failed package's real
         // error lives in that file (calcom, 2026-08-07). Harvest bounded
@@ -2237,16 +2264,41 @@ async function validateResolvedSubmittedCodeRuntime(
             );
           }
         }
-        const downloadFailure = isLifecycleDownloadFailure(
-          [lifecycleOutput, ...buildLogEvidence].join("\n"),
+        // The reference harvest above needs the stream to have carried the
+        // reference — exactly what a dropped tail loses. The managers write
+        // their failure logs at documented locations regardless; harvest
+        // those unconditionally and skip paths already covered.
+        const managerLogEvidence = (
+          await harvestPackageManagerLogs(input.workspace)
+        ).filter(
+          (entry) =>
+            !referencedBuildLogs.some((logPath) => entry.includes(logPath)),
         );
+        const downloadFailure = isLifecycleDownloadFailure(
+          [lifecycleOutput, ...buildLogEvidence, ...managerLogEvidence].join(
+            "\n",
+          ),
+        );
+        const excerpt = legibleFailureExcerpt({
+          fileTail: lifecycleFileTail,
+          stderr: lifecycle.stderr,
+          stdout: lifecycle.stdout,
+        });
+        const diskMarkerLines = `${lifecycle.stderr}\n${lifecycle.stdout}`
+          .split("\n")
+          .filter(
+            (line) =>
+              line.includes("[makeademo:disk]") && !excerpt.includes(line),
+          );
         return failedPreparationValidation({
           attemptedCommand: lifecycleCommand,
           classification: "install failure",
           exitCode: lifecycle.exitCode,
           logsSummary: [
-            `Network-closed lifecycle scripts failed after the dependency install: ${lifecycle.stderr || lifecycle.stdout}`,
+            `Network-closed lifecycle scripts failed after the dependency install: ${excerpt}`,
             ...buildLogEvidence,
+            ...managerLogEvidence,
+            ...diskMarkerLines,
             // Proves the record saw the command end: output that merely
             // stops (killed child, dropped stream) has no such trailer.
             `[makeademo:command-end] exit=${lifecycle.exitCode}`,
@@ -2322,15 +2374,16 @@ async function validateResolvedSubmittedCodeRuntime(
   };
 
   if (input.buildApp !== false && manifest.buildCommandUsed !== undefined) {
+    const guardedBuild = withDiskMarkers(
+      commandInAppDirectory(
+        runtimeTarget?.build?.cwd ?? manifest.appDir,
+        manifest.buildCommandUsed,
+      ),
+      "build",
+    );
     const buildResult = await executeSubmittedWithDeadlineEvidence(
       input.workspace,
-      withDiskMarkers(
-        commandInAppDirectory(
-          runtimeTarget?.build?.cwd ?? manifest.appDir,
-          manifest.buildCommandUsed,
-        ),
-        "build",
-      ),
+      guardedBuild.command,
       { env: guardedRuntimeEnv, timeoutMs: submittedCodeBuildTimeoutMs },
     );
     const blockedBuildAttempts = readRuntimeNetworkAttempts(
@@ -2340,6 +2393,14 @@ async function validateResolvedSubmittedCodeRuntime(
       const unbuiltWorkspaceHints = readUnbuiltWorkspacePackageHints(
         `${buildResult.stderr}\n${buildResult.stdout}`,
       );
+      const buildExcerpt = legibleFailureExcerpt({
+        fileTail: await readCommandEvidenceTail(
+          input.workspace,
+          guardedBuild.evidenceLogPath,
+        ),
+        stderr: buildResult.stderr,
+        stdout: buildResult.stdout,
+      });
       return failedPreparationValidation({
         attemptedCommand: manifest.buildCommandUsed,
         blockedNetworkAttempts: blockedBuildAttempts,
@@ -2350,8 +2411,8 @@ async function validateResolvedSubmittedCodeRuntime(
         exitCode: buildResult.exitCode,
         logsSummary:
           blockedBuildAttempts.length > 0
-            ? `Submitted-code build requested ${blockedBuildAttempts.length} uncached external resource(s): ${buildResult.stderr || buildResult.stdout}`
-            : `Submitted-code build failed: ${buildResult.stderr || buildResult.stdout}`,
+            ? `Submitted-code build requested ${blockedBuildAttempts.length} uncached external resource(s): ${buildExcerpt}`
+            : `Submitted-code build failed: ${buildExcerpt}`,
         manifest,
         stage,
         stderr: buildResult.stderr,
@@ -2639,14 +2700,114 @@ async function executeSubmittedWithDeadlineEvidence(
 /**
  * Brackets a heavy submitted-code command with `[makeademo:disk]` df lines
  * so ENOSPC diagnoses read the budget off the record instead of guessing
- * (twenty died on a hard 10GB cap three matrices running, 2026-08-08). The
- * original exit code is preserved for the PTY sentinel via a subshell exit,
- * never a top-level `exit` (which would drop the sentinel).
+ * (twenty died on a hard 10GB cap three matrices running, 2026-08-08), and
+ * tees the command's combined output to `evidenceLogPath` so failure
+ * evidence survives a lossy PTY stream (calcom's yarn failure report never
+ * reached the record, 2026-08-09). The command's own exit code is preserved
+ * through the tee via PIPESTATUS and reaches the PTY sentinel via a
+ * subshell exit, never a top-level `exit` (which would drop the sentinel).
  */
-function withDiskMarkers(command: string, label: string): string {
+function withDiskMarkers(
+  command: string,
+  label: string,
+): { command: string; evidenceLogPath: string } {
+  const evidenceLogPath = `/tmp/makeademo/${label}-${randomUUID()}.log`;
   const marker = (phase: string) =>
     `df -k /workspace 2>/dev/null | tail -1 | sed "s|^|[makeademo:disk] ${label} ${phase} |"`;
-  return `${marker("before")}; ${command}; makeademo_disk_status=$?; ${marker("after")}; sh -c "exit \${makeademo_disk_status}"`;
+  return {
+    command: `${marker("before")}; mkdir -p /tmp/makeademo; { ${command}; } 2>&1 | tee ${shellQuote(evidenceLogPath)}; makeademo_disk_status=\${PIPESTATUS[0]}; ${marker("after")}; sh -c "exit \${makeademo_disk_status}"`,
+    evidenceLogPath,
+  };
+}
+
+const failureEvidenceTailBytes = 4_096;
+
+/**
+ * Reads the bounded tail of a command's teed evidence file — the durable
+ * copy of the output that the PTY stream may have dropped. Best-effort by
+ * design: a missing or unreadable file yields the empty string so callers
+ * fall back to the streamed output.
+ */
+async function readCommandEvidenceTail(
+  workspace: AgentHarnessWorkspace,
+  evidenceLogPath: string,
+): Promise<string> {
+  try {
+    const result = await executeSubmitted(
+      workspace,
+      `tail -c ${failureEvidenceTailBytes} ${shellQuote(evidenceLogPath)} 2>/dev/null`,
+    );
+    return result.exitCode === 0 ? result.stdout : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * The legible core of a failure summary: ANSI-stripped and tail-biased,
+ * because failures conclude — they don't begin — and every surface of
+ * calcom's verdict showed `stty -echo` preamble garbage instead of the
+ * failing build. Synthesized stderr wins over the teed file (it carries
+ * harness context the file cannot), and the file wins over the streamed
+ * stdout (the stream drops tails; the file does not).
+ */
+function legibleFailureExcerpt(input: {
+  fileTail?: string;
+  stderr: string;
+  stdout: string;
+}): string {
+  const source =
+    input.stderr.trim().length > 0
+      ? input.stderr
+      : (input.fileTail?.trim().length ?? 0) > 0
+        ? (input.fileTail ?? "")
+        : input.stdout;
+  const cleaned = stripAnsi(source).trim();
+  if (cleaned.length <= failureEvidenceTailBytes) {
+    return cleaned;
+  }
+  return `[earlier output elided]\n${cleaned.slice(-failureEvidenceTailBytes)}`;
+}
+
+/**
+ * Harvests bounded tails of the package managers' own failure logs —
+ * yarn berry's per-package build logs and npm's debug log — regardless of
+ * whether the streamed output referenced them. Manager-convention
+ * knowledge, not repo knowledge: these locations are documented behavior
+ * of the tools themselves.
+ */
+async function harvestPackageManagerLogs(
+  workspace: AgentHarnessWorkspace,
+): Promise<string[]> {
+  let result: AgentHarnessWorkspaceCommandResult;
+  try {
+    result = await executeSubmitted(
+      workspace,
+      `for f in $(ls -t \${TMPDIR:-/tmp}/xfs-*/build.log 2>/dev/null | head -3) $(ls -t /root/.npm/_logs/*-debug-0.log 2>/dev/null | head -1); do printf '\\n[makeademo:manager-log] %s\\n' "$f"; tail -c 2000 "$f" 2>/dev/null; done`,
+    );
+  } catch {
+    return [];
+  }
+  if (result.exitCode !== 0) {
+    return [];
+  }
+  return result.stdout
+    .split(/\n?\[makeademo:manager-log\] /)
+    .slice(1, 5)
+    .flatMap((section) => {
+      const newline = section.indexOf("\n");
+      const path = (
+        newline === -1 ? section : section.slice(0, newline)
+      ).trim();
+      const content =
+        newline === -1 ? "" : stripAnsi(section.slice(newline + 1)).trim();
+      if (path.length === 0 || content.length === 0) {
+        return [];
+      }
+      return [
+        `Package-manager log ${path} (tail):\n${redactSecretText(content)}`,
+      ];
+    });
 }
 
 function commandInAppDirectory(appDir: string, command: string): string {

@@ -4141,6 +4141,175 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
   });
 
+  it("carries the lifecycle evidence file tail when the stream drops the failure", async () => {
+    // calcom (2026-08-09): the PTY stream ended at YN0007 "must be built" —
+    // yarn's actual YN0009 failure report never reached the record, so the
+    // N69 harvest never fired and three repairs ran blind. The lifecycle
+    // command tees its output to a sandbox file the harness reads back.
+    let lifecycleLogPath: string | undefined;
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("yarn rebuild")) {
+          lifecycleLogPath = /\/tmp\/makeademo\/lifecycle-[0-9a-f-]+\.log/.exec(
+            command,
+          )?.[0];
+          return {
+            exitCode: 1,
+            stderr: "",
+            stdout:
+              "➤ YN0007: │ sqlite3@npm:5.1.7 [e799a] must be built because it never has been before",
+          };
+        }
+        if (
+          lifecycleLogPath !== undefined &&
+          command.includes(lifecycleLogPath) &&
+          command.includes("tail")
+        ) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: [
+              "➤ YN0007: │ sqlite3@npm:5.1.7 [e799a] must be built because it never has been before",
+              "➤ YN0009: │ sqlite3@npm:5.1.7 [e799a] couldn't be built successfully (exit code 1)",
+              "➤ YN0000: · Failed with errors in 21s 630ms",
+            ].join("\n"),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "yarn install --immutable",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "install failure",
+      status: "failed",
+    });
+    expect(lifecycleLogPath).toBeDefined();
+    expect(report.logsSummary).toContain("couldn't be built successfully");
+    expect(report.logsSummary).toContain("[makeademo:command-end] exit=1");
+  });
+
+  it("harvests package-manager failure logs without an output reference", async () => {
+    // The N69 harvest keys on the stream mentioning a build.log path — the
+    // exact evidence calcom's dropped tail lost. Yarn berry and npm write
+    // their failure logs at documented locations regardless, so a failed
+    // lifecycle harvests those directly.
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("npm rebuild")) {
+          return {
+            exitCode: 1,
+            stderr: "",
+            stdout: "npm error rebuild failed",
+          };
+        }
+        if (
+          command.includes("[makeademo:manager-log]") &&
+          command.includes("_logs")
+        ) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: [
+              "",
+              "[makeademo:manager-log] /root/.npm/_logs/2026-08-09T04_38_20_486Z-debug-0.log",
+              "npm verb stack Error: command failed",
+              "npm error gyp ERR! find Python",
+            ].join("\n"),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "install failure",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain(
+      "/root/.npm/_logs/2026-08-09T04_38_20_486Z-debug-0.log",
+    );
+    expect(report.logsSummary).toContain("gyp ERR! find Python");
+  });
+
+  it("leads lifecycle failure summaries with a legible tail, never the raw head", async () => {
+    // Every surface of calcom's verdict showed `stty -echo` preamble and
+    // bracketed-paste escapes instead of the failure: the summary embedded
+    // the raw PTY transcript head-first, ANSI intact.
+    const preamble =
+      "[?2004h]0;root@d92bd653: /workspaceroot@d92bd653:/workspace# stty -echo\r\n";
+    const filler = "➤ YN0007: workspace resolution progress line\n".repeat(200);
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("npm rebuild")) {
+          return {
+            exitCode: 1,
+            stderr: "",
+            stdout: `${preamble}${filler}gyp ERR! build error at the very end`,
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "install failure",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain(
+      "gyp ERR! build error at the very end",
+    );
+    expect(report.logsSummary).not.toContain("");
+    expect(report.logsSummary).not.toContain("stty -echo");
+  });
+
   it("steers an unbuilt workspace package at the repo's own build target", async () => {
     // twenty (2026-08-07): vite.config imports twenty-shared/vite, whose
     // dist/ never exists because dependency install builds no workspace
