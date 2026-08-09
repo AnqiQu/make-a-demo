@@ -27,6 +27,7 @@ import {
 } from "../../shared/integrations/agents/opencode-provider-secrets";
 import { DaytonaSdkPreparationWorkspaceProvider } from "../../shared/integrations/daytona/daytona-sdk-preparation-workspace-provider";
 import type { PipelineEventLogger } from "../../shared/logging/pipeline-event-logger";
+import { withCpuLivenessHeartbeat } from "../../shared/shell/cpu-liveness";
 import { shellQuote } from "../../shared/shell/shell-quote";
 import { elideMiddle } from "../../shared/text/elide-middle";
 import { stripAnsi } from "../../shared/text/strip-ansi";
@@ -1790,10 +1791,12 @@ function appendTail(current: string, chunk: string, maxLength: number): string {
 // A PTY line that is shell bootstrap rather than OpenCode output: a prompt
 // (optionally carrying the echoed command), a bare continuation prompt, the
 // command exit marker, the shell's own exec diagnostic ("bash: <path>:
-// Argument list too long" — the 2026-08-07 E2BIG launches), or the session
-// teardown echo. Each proves the shell spoke and OpenCode never did.
+// Argument list too long" — the 2026-08-07 E2BIG launches), the session
+// teardown echo, or a CPU-liveness heartbeat (transport from the harness's
+// own sampler, never the agent). Each proves the shell spoke and OpenCode
+// never did.
 const ptyBootstrapLinePattern =
-  /^(?:[^@\s]+@[^\n#]*#.*|>\s*|__MAKEADEMO_EXIT(?:_[A-Za-z0-9]+)?__:\d+|bash: [^:\n]+: .+|logout)$/;
+  /^(?:[^@\s]+@[^\n#]*#.*|>\s*|__MAKEADEMO_EXIT(?:_[A-Za-z0-9]+)?__:\d+|bash: [^:\n]+: .+|logout|\[makeademo:alive\] cpu \d+)$/;
 
 function hasOnlyPtyBootstrapOutput(result: {
   stderr: string;
@@ -2792,8 +2795,13 @@ function withDiskMarkers(
   // inferring them (midday's dev-server OOM, 2026-08-09). Best-effort: a
   // host without a readable cgroup emits no line.
   const memoryMarker = `cat /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory/memory.max_usage_in_bytes 2>/dev/null | head -1 | sed "s|^|[makeademo:mem] ${label} peak-bytes |"`;
+  // The liveness bracket wraps the whole marker sequence: heartbeats go to
+  // the PTY stream (feeding the no-output watchdog) but never through the
+  // tee, so the evidence file stays clean of transport lines.
   return {
-    command: `${marker("before")}; mkdir -p /tmp/makeademo; { ${command}; } 2>&1 | tee ${shellQuote(evidenceLogPath)}; makeademo_disk_status=\${PIPESTATUS[0]}; ${marker("after")}; ${memoryMarker}; sh -c "exit \${makeademo_disk_status}"`,
+    command: withCpuLivenessHeartbeat(
+      `${marker("before")}; mkdir -p /tmp/makeademo; { ${command}; } 2>&1 | tee ${shellQuote(evidenceLogPath)}; makeademo_disk_status=\${PIPESTATUS[0]}; ${marker("after")}; ${memoryMarker}; sh -c "exit \${makeademo_disk_status}"`,
+    ),
     evidenceLogPath,
   };
 }
@@ -2840,7 +2848,13 @@ function legibleFailureExcerpt(input: {
       : (input.fileTail?.trim().length ?? 0) > 0
         ? (input.fileTail ?? "")
         : input.stdout;
-  const cleaned = stripAnsi(source).trim();
+  // Liveness heartbeats are watchdog transport, never evidence — a
+  // line-per-minute of sampler output would dilute the bounded tail.
+  const cleaned = stripAnsi(source)
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("[makeademo:alive]"))
+    .join("\n")
+    .trim();
   if (cleaned.length <= failureEvidenceTailBytes) {
     return cleaned;
   }

@@ -71,7 +71,10 @@ describe("OpenCode harness seam", () => {
         workingDirectory: "/workspace/repo",
         workspace: createFakeAgentHarnessWorkspace({
           async execute(command, options) {
-            if (!command.startsWith("mkdir -p '/tmp/makeademo/opencode' && ")) {
+            const mkdirAt = command.indexOf(
+              "mkdir -p '/tmp/makeademo/opencode' && ",
+            );
+            if (mkdirAt === -1 || command.indexOf("opencode run") < mkdirAt) {
               return {
                 exitCode: 1,
                 stderr:
@@ -92,6 +95,36 @@ describe("OpenCode harness seam", () => {
       exitCode: 0,
       stdout: "/tmp/makeademo/opencode",
     });
+  });
+
+  it("keeps a silent working OpenCode run alive with CPU heartbeats", async () => {
+    // The no-output watchdog killed working agents 43 times in one matrix
+    // (2026-08-09): a long tool call streams nothing while it works. The
+    // runner brackets OpenCode with the CPU-liveness sampler so silence
+    // with progress stays alive and silence without progress still dies.
+    const runner = new DefaultOpenCodeHarnessRunner();
+    const commands: string[] = [];
+
+    await runner.run({
+      availableTools: ["read", "write"],
+      configDir: "/tmp/makeademo/opencode",
+      model: "openai/gpt-5",
+      prompt: "Prepare the repo.",
+      stage: "repo-preparation",
+      timeoutMs: 1000,
+      workingDirectory: "/workspace/repo",
+      workspace: createFakeAgentHarnessWorkspace({
+        async execute(command) {
+          commands.push(command);
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+      }),
+    });
+
+    const command = commands.find((entry) => entry.includes("opencode run"));
+    expect(command).toContain("[makeademo:alive] cpu");
+    // The heartbeat wrapper must preserve OpenCode's own exit status.
+    expect(command).toContain('sh -c "exit $makeademo_alive_status"');
   });
 
   it("applies stage deadlines and streams OpenCode output to the caller", async () => {

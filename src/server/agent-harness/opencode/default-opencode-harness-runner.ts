@@ -1,4 +1,5 @@
 import path from "node:path/posix";
+import { withCpuLivenessHeartbeat } from "../../shared/shell/cpu-liveness";
 import { shellQuote } from "../../shared/shell/shell-quote";
 import { elideMiddle } from "../../shared/text/elide-middle";
 import {
@@ -67,19 +68,25 @@ function createOpenCodeRunCommand(input: {
   sessionId?: string;
   workingDirectory: string;
 }): string {
-  return [
-    `mkdir -p ${shellQuote(input.configDir)} &&`,
-    "opencode run",
-    "--pure",
-    "--dangerously-skip-permissions",
-    "--format json",
-    `--dir ${shellQuote(input.workingDirectory)}`,
-    ...(input.sessionId === undefined
-      ? []
-      : [`--session ${shellQuote(input.sessionId)}`]),
-    `--model ${shellQuote(input.model)}`,
-    `"$(cat ${shellQuote(input.promptPath)})"`,
-  ].join(" ");
+  // The CPU-liveness bracket keeps the no-output inactivity watchdog fed
+  // while OpenCode works silently inside a long tool call (43 working
+  // agents killed in one matrix, 2026-08-09); a wedged, idle OpenCode
+  // still goes quiet and dies at the inactivity deadline.
+  return withCpuLivenessHeartbeat(
+    [
+      `mkdir -p ${shellQuote(input.configDir)} &&`,
+      "opencode run",
+      "--pure",
+      "--dangerously-skip-permissions",
+      "--format json",
+      `--dir ${shellQuote(input.workingDirectory)}`,
+      ...(input.sessionId === undefined
+        ? []
+        : [`--session ${shellQuote(input.sessionId)}`]),
+      `--model ${shellQuote(input.model)}`,
+      `"$(cat ${shellQuote(input.promptPath)})"`,
+    ].join(" "),
+  );
 }
 
 function createStageSecurityConfig(input: OpenCodeHarnessRunInput) {

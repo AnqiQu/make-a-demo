@@ -2751,6 +2751,46 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(runs).toBe(2);
   });
 
+  it("still detects a launch failure when only liveness heartbeats accompanied the bootstrap noise", async () => {
+    // The CPU-liveness sampler prints transport lines, not OpenCode output:
+    // a dead-at-launch agent whose PTY echoed a heartbeat must not read as
+    // "the agent spoke" and burn artifact attempts.
+    const workspace = repairableRepoPreparationWorkspace();
+    let runs = 0;
+    const harness = await createDefaultAgentHarnessDependencies({
+      agentLaunchRetryDelayMs: 1,
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run() {
+          runs += 1;
+          return {
+            exitCode: 1,
+            stderr: "",
+            stdout: `${ptyBootstrapNoise()}\r\n[makeademo:alive] cpu 412`,
+          };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const error: unknown = await harness.dependencies
+      .prepareRepo({
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        normalizedSupportingDocuments: undefined,
+        repoProfile: repoProfile(),
+        repoSourcePaths: ["package.json", "src/App.tsx"],
+        runPlan: runPlan(),
+        workspace,
+      })
+      .then(() => undefined)
+      .catch((thrown: unknown) => thrown);
+
+    expect(isAgentHarnessInfrastructureError(error)).toBe(true);
+    expect(String(error)).toMatch(/no OpenCode output/);
+    expect(runs).toBe(2);
+  });
+
   it("classifies a shell exec-diagnostic exit as infrastructure, not agent quality", async () => {
     // calcom/ghostfolio 2026-08-07: bash printed "bash: /root/.opencode/bin/
     // opencode: Argument list too long" and exited 126 in ~1s, three times —
@@ -3855,6 +3895,56 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(install).toContain("[makeademo:mem]");
     expect(install).toContain("memory.peak");
     expect(lifecycle).toContain("[makeademo:mem]");
+    // A silently compiling install or lifecycle must keep the no-output
+    // watchdog fed while it burns CPU (ghost's pnpm rebuild was killed
+    // mid-compile after 5 quiet minutes, 2026-08-09).
+    expect(install).toContain("[makeademo:alive] cpu");
+    expect(lifecycle).toContain("[makeademo:alive] cpu");
+  });
+
+  it("keeps liveness heartbeats out of failure evidence excerpts", async () => {
+    // Heartbeats are transport for the no-output watchdog, not evidence:
+    // a failing install's summary must carry the real error lines, not a
+    // line-per-minute of sampler output diluting the bounded tail.
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("npm ci")) {
+          return {
+            exitCode: 1,
+            stderr: "",
+            stdout: [
+              "[makeademo:alive] cpu 120",
+              "npm ERR! gyp ERR! build error better_sqlite3",
+              "[makeademo:alive] cpu 480",
+            ].join("\n"),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "install failure",
+      logsSummary: expect.stringContaining("build error better_sqlite3"),
+      status: "failed",
+    });
+    expect(report.logsSummary).not.toContain("[makeademo:alive]");
   });
 
   it("prunes package-manager caches after a successful offline lifecycle", async () => {
