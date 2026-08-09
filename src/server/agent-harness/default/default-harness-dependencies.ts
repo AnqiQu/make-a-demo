@@ -2360,6 +2360,7 @@ async function validateResolvedSubmittedCodeRuntime(
   const existingNodeOptions = manifest.envUsed.NODE_OPTIONS?.trim();
   const guardedRuntimeEnv = {
     ...manifest.envUsed,
+    ...sealedRuntimeTelemetryOptOuts,
     NODE_OPTIONS: [existingNodeOptions, `--require=${runtimeNetworkGuardPath}`]
       .filter(
         (value): value is string => value !== undefined && value.length > 0,
@@ -2666,12 +2667,36 @@ async function executeSubmitted(
 }
 
 /**
+ * A lifecycle command that goes quiet is hanging, not working: ghostfolio's
+ * `prisma generate` finished in ~200ms and a post-generate phone-home child
+ * then held stdio open against the sealed network until the 20-minute hard
+ * deadline — twice (2026-08-09). Matches the agent-command no-output policy.
+ * Builds that legitimately go quiet longer can raise it per call.
+ */
+const sealedCommandInactivityTimeoutMs = 5 * 60_000;
+
+/**
+ * Ecosystem-standard telemetry opt-outs, declared by the sealed runtime for
+ * every heavy submitted-code command and the managed app itself: the sealed
+ * network makes phone-homes fail slowly instead of succeeding, and their
+ * children hold stdio open (ghostfolio's prisma checkpoint, 2026-08-09).
+ * Industry conventions honored across tools — not per-repo patches.
+ */
+const sealedRuntimeTelemetryOptOuts = {
+  CHECKPOINT_DISABLE: "1",
+  DO_NOT_TRACK: "1",
+  NEXT_TELEMETRY_DISABLED: "1",
+};
+
+/**
  * Runs a heavy submitted-code command (install, lifecycle, build) so that a
  * deadline kill leaves explicit evidence instead of an opaque thrown error:
  * the result carries the partial streamed output with a `[makeademo:timeout]`
  * marker and exit code 124. Killed records previously just stopped
  * mid-stream, indistinguishable from complete output (calcom, 2026-08-08).
- * Non-timeout errors still propagate.
+ * A command producing no output for the inactivity window dies early with a
+ * marker naming the silence, distinguishing hang-after-quiet from
+ * deadline-overrun. Non-timeout errors still propagate.
  */
 async function executeSubmittedWithDeadlineEvidence(
   workspace: AgentHarnessWorkspace,
@@ -2681,7 +2706,9 @@ async function executeSubmittedWithDeadlineEvidence(
   const streamed: string[] = [];
   try {
     return await workspace.executeSubmittedCode(command, {
+      inactivityTimeoutMs: sealedCommandInactivityTimeoutMs,
       ...options,
+      env: { ...options.env, ...sealedRuntimeTelemetryOptOuts },
       onStdout: (chunk) => {
         streamed.push(chunk);
         options.onStdout?.(chunk);

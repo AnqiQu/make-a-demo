@@ -4263,6 +4263,97 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(report.logsSummary).toContain("gyp ERR! find Python");
   });
 
+  it("kills a quiet lifecycle command at the inactivity deadline with a no-output marker", async () => {
+    // ghostfolio (2026-08-09): `prisma generate` succeeded in ~200ms, then a
+    // post-generate phone-home child held stdio open against the sealed
+    // network until the 20-minute hard deadline — twice, ~40 minutes, and
+    // the record never said why. A quiet command dies at the inactivity
+    // window and names the silence.
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command, options) {
+        if (command.includes("npm rebuild")) {
+          if (options?.inactivityTimeoutMs === undefined) {
+            return { exitCode: 0, stderr: "", stdout: "" };
+          }
+          options.onStdout?.("prisma generate succeeded in 204ms");
+          throw new AgentHarnessCommandTimeoutError(
+            options.inactivityTimeoutMs,
+            "inactivity",
+          );
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "install failure",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain("[makeademo:timeout]");
+    expect(report.logsSummary).toContain("no output for 300000ms");
+    expect(report.logsSummary).toContain("prisma generate succeeded in 204ms");
+  });
+
+  it("declares standard telemetry opt-outs across the sealed runtime commands", async () => {
+    // Post-success phone-home children hold stdio open against the sealed
+    // network (ghostfolio's prisma checkpoint, 2026-08-09). The opt-outs are
+    // industry conventions honored across tools, so the sealed runtime
+    // declares them instead of patching per-repo.
+    let lifecycleEnv: Record<string, string> | undefined;
+    let startEnv: Record<string, string> | undefined;
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command, options) {
+        if (command.includes("npm rebuild")) {
+          lifecycleEnv = options?.env;
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async startSubmittedCodeApp(input) {
+        startEnv = input.env;
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    for (const env of [lifecycleEnv, startEnv]) {
+      expect(env).toMatchObject({
+        CHECKPOINT_DISABLE: "1",
+        DO_NOT_TRACK: "1",
+        NEXT_TELEMETRY_DISABLED: "1",
+      });
+    }
+  });
+
   it("leads lifecycle failure summaries with a legible tail, never the raw head", async () => {
     // Every surface of calcom's verdict showed `stty -echo` preamble and
     // bracketed-paste escapes instead of the failure: the summary embedded
@@ -4744,7 +4835,10 @@ describe("createDefaultAgentHarnessDependencies", () => {
           command: "npm run dev -- --host 0.0.0.0",
           cwd: "/workspace/repo",
           env: {
+            CHECKPOINT_DISABLE: "1",
+            DO_NOT_TRACK: "1",
             MAKEADEMO_OFFLINE: "1",
+            NEXT_TELEMETRY_DISABLED: "1",
             NODE_OPTIONS:
               "--require=/workspace/.makeademo/runtime-network-guard.cjs",
             npm_config_engine_strict: "false",
