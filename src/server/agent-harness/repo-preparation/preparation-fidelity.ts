@@ -292,10 +292,16 @@ export function validatePreparationFidelity(input: {
         message: `${path} changes authentication behavior through a created environment file; demo environment belongs in envUsed with a gated adaptation.`,
       });
     }
+    // Content decides, path suggests: the path prior nominates the file, but
+    // the veto requires positive presentation evidence in the file's own
+    // content — markup/JSX/styling, or a file type that is presentation by
+    // nature. Directory naming alone vetoed directus's one-line boolean gate
+    // because its frontend package is named `app/` (2026-08-09), and
+    // replacement UI must render something, so this loses no recall.
     if (
       isProductPresentationPath(path) &&
       !isVendoredAssetPath(path) &&
-      (!isDemoSeamPath(path) || addsProductPresentation(patch))
+      (isPresentationByFileType(path) || addsProductPresentation(patch))
     ) {
       violations.push({
         hint: repairHints.adaptOriginal,
@@ -552,6 +558,16 @@ function isProductPresentationPath(path: string) {
     ) ||
     /(?:^|\/)(?:app|components|pages|routes|screens|views)(?:\/|$)/i.test(path)
   );
+}
+
+/**
+ * File types that are presentation by nature: creating one authors UI
+ * regardless of what the diff shows. Deliberately excludes .jsx/.tsx —
+ * script files whose content may be a one-line gate; for them the content
+ * check decides.
+ */
+function isPresentationByFileType(path: string) {
+  return /\.(?:css|html|less|png|jpe?g|scss|svg|svelte|vue|webp)$/i.test(path);
 }
 
 function isDemoSeamPath(path: string) {

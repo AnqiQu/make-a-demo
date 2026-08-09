@@ -183,6 +183,50 @@ describe("validatePreparationFidelity", () => {
     expect(report.logsSummary).toContain(featurePath);
   });
 
+  it("allows a created content-free gate file under a presentation directory", () => {
+    // directus (2026-08-09): the whole frontend package is named `app/`, so
+    // `app/src/utils/is-demo.ts` — a one-line boolean gate with zero
+    // presentation content — was vetoed as "replacement product UI" and the
+    // repeated wrong verdict killed the run at the fingerprint cap. Content
+    // decides; the directory prior only nominates.
+    const report = validateDiff({
+      createdFiles: ["app/src/utils/is-demo.ts"],
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: ["app/src/api.ts"],
+      patch: [
+        "diff --git a/app/src/utils/is-demo.ts b/app/src/utils/is-demo.ts",
+        "new file mode 100644",
+        "+export const isDemo = import.meta.env.MAKEADEMO_DEMO === 'true';",
+        "diff --git a/app/src/api.ts b/app/src/api.ts",
+        "+import { isDemo } from '@/utils/is-demo';",
+        "+if (isDemo) api.defaults.adapter = demoApiAdapter;",
+      ].join("\n"),
+      sourceFiles: { "app/src/api.ts": "export const api = axios.create();" },
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("allows created content-free camelCase fixture modules under an app directory", () => {
+    // outline (2026-08-09): `app/utils/demoFixtures.ts` and `isDemoMode.ts`
+    // cost two repair rounds because camelCase names cannot match the
+    // delimiter-bound seam vocabulary while the `app/` prior vetoed them.
+    const report = validateDiff({
+      createdFiles: ["app/utils/demoFixtures.ts", "app/utils/isDemoMode.ts"],
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      patch: [
+        "diff --git a/app/utils/demoFixtures.ts b/app/utils/demoFixtures.ts",
+        "new file mode 100644",
+        "+export const demoDocuments = [{ id: 'demodoc0001', title: 'Getting started' }];",
+        "diff --git a/app/utils/isDemoMode.ts b/app/utils/isDemoMode.ts",
+        "new file mode 100644",
+        "+export const isDemoMode = () => process.env.MAKEADEMO_DEMO === 'true';",
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
   it("rejects newly authored replacement product routes", () => {
     const replacementPath = "src/pages/demo-dashboard.tsx";
     const report = validateDiff({
