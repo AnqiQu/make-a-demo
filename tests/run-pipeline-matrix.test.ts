@@ -208,6 +208,36 @@ describe("runPipelineMatrix", () => {
       "preparation-preflight failed: Submitted-code build failed: > cyberchef@11.3.0 build",
     );
   });
+
+  it("carries the trailing makeademo marker line and bounds a runaway first line", async () => {
+    // Ghost (2026-08-09): the report row was mid-word compiler-warning
+    // garbage while the informative fact — the exit=124 trailer — sat at
+    // the end of the message. Diagnosis required the JSONL every time.
+    const garbage = "readCoord(pCellData+8, &c); aCoord[2] = c.f; ".repeat(20);
+    const results = await runPipelineMatrix(
+      resolveMatrixEntries(
+        [{ name: "ghost", repoUrl: "https://github.com/example/ghost" }],
+        {},
+      ),
+      {
+        log: () => {},
+        runPipeline: async () => {
+          throw new Error(
+            [
+              `preparation-preflight failed: Network-closed lifecycle scripts failed after the dependency install: ite3 install: ${garbage}`,
+              ".../node_modules/sqlite3 install: gyp info ok",
+              "[makeademo:command-end] exit=124",
+            ].join("\n"),
+          );
+        },
+      },
+    );
+
+    const detail = results[0]?.detail ?? "";
+    expect(detail).toContain("Network-closed lifecycle scripts failed");
+    expect(detail).toContain("[makeademo:command-end] exit=124");
+    expect(detail.length).toBeLessThan(400);
+  });
 });
 
 describe("renderMatrixReport", () => {

@@ -164,15 +164,35 @@ export async function runPipelineMatrix(
   );
 }
 
+/** A report row stays scannable; anything longer belongs in the JSONL. */
+const failureDetailHeadChars = 240;
+
 /**
  * A failure's first line ends with a bare colon when the informative payload
  * (a subprocess's output) starts on a later line — keep that payload in the
- * one-line report detail instead of truncating to an empty suffix.
+ * one-line report detail instead of truncating to an empty suffix. A first
+ * line that inlines a whole command excerpt is bounded, and the message's
+ * last `[makeademo:…]` marker line rides along: markers are the recorded
+ * facts (exit codes, timeouts, peaks) that diagnosis actually needs
+ * (ghost's report row was mid-word compiler garbage while the exit=124
+ * trailer sat at the end, 2026-08-09).
  */
 function readFailureDetail(message: string): string {
   const firstLine = message.split("\n", 1)[0] ?? message;
-  if (!/:\s*$/.test(firstLine)) {
-    return firstLine;
+  const head =
+    firstLine.length > failureDetailHeadChars
+      ? `${firstLine.slice(0, failureDetailHeadChars)}…`
+      : firstLine;
+  const marker = message
+    .split("\n")
+    .filter((line) => line.trim().startsWith("[makeademo:"))
+    .at(-1)
+    ?.trim();
+  if (marker !== undefined && !head.includes(marker)) {
+    return `${head} … ${marker}`;
+  }
+  if (!/:\s*$/.test(head)) {
+    return head;
   }
   const continuation = message
     .split("\n")
@@ -180,8 +200,8 @@ function readFailureDetail(message: string): string {
     .map((line) => line.trim())
     .find((line) => line.length > 0);
   return continuation === undefined
-    ? firstLine
-    : `${firstLine.trimEnd()} ${continuation}`;
+    ? head
+    : `${head.trimEnd()} ${continuation}`;
 }
 
 /**
