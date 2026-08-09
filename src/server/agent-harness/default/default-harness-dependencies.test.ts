@@ -846,6 +846,48 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(prompts[1]).toContain("tagged interactions: open-dashboard");
   });
 
+  it("echoes what a rejected FlowSpec actually referenced", async () => {
+    // conduit burned three attempts on one byte-identical pairing rejection
+    // (2026-08-08): the message listed what was available, never what the
+    // candidate did, so neither the agent nor the diagnosis could see the
+    // mistake.
+    const completeFlowSpec = flowSpec();
+    const assertionOnly = {
+      ...completeFlowSpec,
+      features: completeFlowSpec.features.map((feature) => ({
+        ...feature,
+        referencedActionIds: ["dashboard"],
+      })),
+    };
+    const { prompts } = await runFlowPlanningScenario({
+      candidates: [assertionOnly, completeFlowSpec],
+    });
+
+    expect(prompts[1]).toContain("The FlowSpec referenced: dashboard (assert");
+  });
+
+  it("persists rejected FlowSpec candidates as attempt files", async () => {
+    const completeFlowSpec = flowSpec();
+    const assertionOnly = {
+      ...completeFlowSpec,
+      features: completeFlowSpec.features.map((feature) => ({
+        ...feature,
+        referencedActionIds: ["dashboard"],
+      })),
+    };
+    const { artifactJson } = await runFlowPlanningScenario({
+      candidates: [assertionOnly, completeFlowSpec],
+    });
+
+    const attemptFile = artifactJson.find((entry) =>
+      entry.path.includes("flow-planning/attempt-1"),
+    );
+    expect(attemptFile?.value).toMatchObject({
+      candidate: assertionOnly,
+      status: "failed",
+    });
+  });
+
   it("steers ungrounded action selections toward the feature's tagged ids", async () => {
     // Naming only the rejected id leaves the planner guessing across the
     // whole catalog; the retry prompt must enumerate the ids that would

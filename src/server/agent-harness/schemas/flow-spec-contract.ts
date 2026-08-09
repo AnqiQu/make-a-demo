@@ -31,6 +31,7 @@ export function createFlowSpecContract() {
       "every feature label must preserve the selected PreparationManifest feature label",
       "every feature must select at least one non-assert interaction and at least one visible assertion from ActionCatalog",
       "when ActionCatalog offers an assert on route-distinct visible content for a feature, the feature must select one; assertions on navigation labels repeated across routes do not evidence the feature",
+      "the route-distinct preference never overrides the tagged-set requirement: when a feature's only tagged asserts are navigation-flavored, select the best tagged one anyway rather than an assert tagged to another feature",
       "every feature must reference at least one ActionCatalog action not reused by another selected feature",
       "every feature must describe a visible browser outcome",
       "all array fields must be JSON arrays even when they are empty",

@@ -275,6 +275,8 @@ export async function createDefaultAgentHarnessDependencies(
     onAttemptRejected?: (rejected: {
       artifactError: string;
       attempt: number;
+      /** The parsed-but-rejected artifact, when one was readable. */
+      candidate?: unknown;
     }) => Promise<void>;
     onResult?: (result: OpenCodeHarnessRunResult) => Promise<void>;
     parse: (value: unknown) => Promise<T> | T;
@@ -367,10 +369,18 @@ export async function createDefaultAgentHarnessDependencies(
         stallRetriesRemaining -= 1;
         opencodeSessionId = undefined;
         artifactError = `${artifactError} The previous attempt was killed mid-work; the workspace may contain its unfinished edits — review them before finishing.`;
-        await stageInput.onAttemptRejected?.({ artifactError, attempt });
+        await stageInput.onAttemptRejected?.({
+          artifactError,
+          attempt,
+          ...(readResult.ok ? { candidate: readResult.value } : {}),
+        });
         continue;
       }
-      await stageInput.onAttemptRejected?.({ artifactError, attempt });
+      await stageInput.onAttemptRejected?.({
+        artifactError,
+        attempt,
+        ...(readResult.ok ? { candidate: readResult.value } : {}),
+      });
       if (!readResult.ok) {
         throwIfRequiredArtifactWriteWasDenied({
           artifactError,
@@ -856,11 +866,15 @@ export async function createDefaultAgentHarnessDependencies(
         displayName: () => "Flow Planning",
         freshSessionOnRetry: true,
         initialArtifactError: "FlowSpec was not produced.",
-        onAttemptRejected: async ({ artifactError, attempt }) => {
+        onAttemptRejected: async ({ artifactError, attempt, candidate }) => {
           await options.artifactStore.writeJson(
             `${artifactPaths.agentArtifactAttempts}/flow-planning/attempt-${attempt}.json`,
             {
               attempt,
+              // The rejected candidate is the other half of every rejection
+              // diagnosis: without it, identical-error loops are unreadable
+              // (conduit, 2026-08-08).
+              ...(candidate === undefined ? {} : { candidate }),
               error: artifactError,
               ...(opencodeSessionId === undefined ? {} : { opencodeSessionId }),
               route: "flow-planning",
@@ -2855,6 +2869,27 @@ function assertFlowSpecGrounded(input: {
       (action) => action.kind === "assert",
     )}; tagged interactions: ${ids((action) => action.kind !== "assert")}.`;
   };
+  // Echoing what the candidate did — not just what was available — is what
+  // breaks identical-rejection loops: conduit repeated one pairing mistake
+  // three times because the message never showed it (2026-08-08).
+  const referencedActionsSummary = (feature: {
+    featureId: string;
+    referencedActionIds: string[];
+  }) => {
+    if (feature.referencedActionIds.length === 0) {
+      return " The FlowSpec referenced no actions for this feature.";
+    }
+    const described = feature.referencedActionIds
+      .slice(0, 8)
+      .map((actionId) => {
+        const action = actionsById.get(actionId);
+        return action === undefined
+          ? `${actionId} (unknown)`
+          : `${actionId} (${action.kind})`;
+      })
+      .join(", ");
+    return ` The FlowSpec referenced: ${described}.`;
+  };
   // Planner-repairable quality violations are collected and reported
   // together: surfacing them one throw at a time made the planner discover
   // the constraint surface serially, one retry per rule (cyberchef,
@@ -2932,7 +2967,7 @@ function assertFlowSpecGrounded(input: {
     );
     if (!selectedActionKinds.has("assert")) {
       violations.push(
-        `FlowSpec feature ${feature.featureId} must select both an interaction and visible assertion from ActionCatalog. ${taggedActionSummary(feature.featureId)}`,
+        `FlowSpec feature ${feature.featureId} must select both an interaction and visible assertion from ActionCatalog. ${taggedActionSummary(feature.featureId)}${referencedActionsSummary(feature)}`,
       );
     }
     // Chrome-only asserts pass on a page that renders nothing: when the
@@ -2966,7 +3001,7 @@ function assertFlowSpecGrounded(input: {
       }
     } else if (!selectedActionKinds.has("navigate")) {
       violations.push(
-        `FlowSpec feature ${feature.featureId} must select both an interaction and visible assertion from ActionCatalog. ${taggedActionSummary(feature.featureId)}`,
+        `FlowSpec feature ${feature.featureId} must select both an interaction and visible assertion from ActionCatalog. ${taggedActionSummary(feature.featureId)}${referencedActionsSummary(feature)}`,
       );
     }
   }
