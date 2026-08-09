@@ -1396,9 +1396,17 @@ async function ensureValidPreparation(input: {
           preparationManifest,
           phaseRepairAttempts,
           fingerprintRepairAttempts,
+          // Exploration is the terminal preparation gate and always runs
+          // after every other phase, so earlier-stage churn can spend the
+          // whole global budget before exploration's first failure (ghost
+          // 2026-08-09: three preflight repairs plus two false fidelity
+          // vetoes starved the data-path steering). Its failures may spend
+          // up to two rounds beyond the global limit; no earlier stage
+          // gets a reservation because they already run first.
           repoPreparationRepairLimit:
             input.repoPreparationRepairLimit +
-            input.preparationRepairBudget.bonusRounds,
+            input.preparationRepairBudget.bonusRounds +
+            (phase === "app-exploration" ? explorationRepairReserveRounds : 0),
           repoProfile: input.repoProfile,
           runPlan: input.runPlan,
           stageStatuses: input.stageStatuses,
@@ -1876,6 +1884,13 @@ function readFailingCatalogActionId(
 }
 
 const preparationProgressBonusLimit = 2;
+
+/**
+ * Extra repair rounds only app-exploration failures may spend beyond the
+ * global preparation budget. Worst case stays bounded at
+ * repoPreparationRepairLimit + preparationProgressBonusLimit + this reserve.
+ */
+const explorationRepairReserveRounds = 2;
 
 /**
  * Grants a bonus repair round when a failure's failing-feature set strictly

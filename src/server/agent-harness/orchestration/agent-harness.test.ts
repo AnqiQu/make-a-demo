@@ -2650,6 +2650,14 @@ describe("runAgentHarnessPipeline", () => {
         failureClassification: "empty/unmeaningful app state",
         logsSummary: "Feature route rendered no content",
       },
+      {
+        failureClassification: "app route crashes",
+        logsSummary: "Feature route threw before rendering",
+      },
+      {
+        failureClassification: "browser console/page error",
+        logsSummary: "Feature route logged an uncaught error",
+      },
     ];
     const preflightFailures = [
       {
@@ -2735,14 +2743,90 @@ describe("runAgentHarnessPipeline", () => {
       ),
     ).rejects.toThrow("global retry budget");
 
+    // The three preflight repairs spend 3 of the global 5; exploration may
+    // spend the remaining 2 plus its own 2-round reserve (N93) before the
+    // fifth exploration failure exhausts the widened cap.
     expect(repairStages).toEqual([
       "preparation-preflight",
       "preparation-preflight",
       "preparation-preflight",
       "app-exploration",
       "app-exploration",
+      "app-exploration",
+      "app-exploration",
     ]);
-    expect(diffCaptures).toBe(6);
+    expect(diffCaptures).toBe(8);
+  });
+
+  it("reserves two exploration repair rounds when earlier stages spent the global budget", async () => {
+    // ghost (2026-08-09): three preflight repairs plus two false fidelity
+    // vetoes consumed the whole global budget of 5 before exploration ever
+    // got a repair round — the data-path steering never reached an agent.
+    // Exploration is the terminal preparation gate, so its failures may
+    // spend up to two rounds beyond the global limit; the widened cap
+    // stays hard and earlier stages get no reservation.
+    let explorationAttempts = 0;
+    let explorationRepairs = 0;
+    let preflightFailures = 0;
+    let repairAttempts = 0;
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({ runId: "run_exploration_reserve" }),
+        stubPipelineDependencies({
+          async capturePreparationWorkspaceDiff() {
+            return preparationWorkspaceDiff();
+          },
+          async exploreApp() {
+            explorationAttempts += 1;
+            return {
+              kind: "artifacts" as const,
+              actionCatalog: actionCatalog(),
+              appMap: appMap(),
+              validationReport: {
+                ...report("app-exploration", "failed"),
+                failureClassification: "empty/unmeaningful app state",
+                logsSummary: `Feature route rendered no content: probe ${"x".repeat(explorationAttempts)}`,
+              },
+            };
+          },
+          async prepareRepo() {
+            return { manifest: preparationManifest() };
+          },
+          async repairPreparation({ failureReport }) {
+            repairAttempts += 1;
+            if (failureReport.stage === "app-exploration") {
+              explorationRepairs += 1;
+            }
+            return {
+              manifest: {
+                ...preparationManifest(),
+                id: `prep_repaired_${repairAttempts}`,
+              },
+            };
+          },
+          async validatePreparation() {
+            if (preflightFailures < 2) {
+              preflightFailures += 1;
+              return {
+                ...report("preparation-preflight", "failed"),
+                failureClassification: "start failure",
+                logsSummary: `App is not ready: probe ${"y".repeat(preflightFailures)}`,
+              };
+            }
+            return report("preparation-preflight", "passed");
+          },
+        }),
+        { repoPreparationRepairLimit: 2 },
+      ),
+    ).rejects.toThrow("global retry budget exhausted");
+
+    // The two preflight repairs spend the whole global budget of 2; the
+    // reserve still grants exploration exactly two repair rounds before
+    // its third failure exhausts the widened cap.
+    expect(explorationRepairs).toBe(2);
+    expect(explorationAttempts).toBe(3);
+    expect(repairAttempts).toBe(4);
   });
 
   it("grants bonus repair rounds while the failing-feature set strictly shrinks, capped at two", async () => {
@@ -2754,6 +2838,8 @@ describe("runAgentHarnessPipeline", () => {
       ["feature-a", "feature-b", "feature-c"],
       ["feature-a", "feature-b"],
       ["feature-a"],
+      ["feature-b"],
+      ["feature-c"],
     ];
 
     await expect(
@@ -2802,10 +2888,11 @@ describe("runAgentHarnessPipeline", () => {
       ),
     ).rejects.toThrow("global retry budget exhausted");
 
-    // Base limit 2 plus one bonus per shrinking round, capped at +2: four
-    // repairs run before the fifth failure exhausts the budget.
-    expect(repairAttempts).toBe(4);
-    expect(explorationAttempts).toBe(5);
+    // Base limit 2, plus one bonus per shrinking round capped at +2, plus
+    // the exploration reserve of +2 (N93): six repairs run before the
+    // seventh failure exhausts the budget.
+    expect(repairAttempts).toBe(6);
+    expect(explorationAttempts).toBe(7);
   });
 
   it("grants no bonus round when the failing-feature set merely changes", async () => {
@@ -2815,6 +2902,8 @@ describe("runAgentHarnessPipeline", () => {
       ["feature-a", "feature-b"],
       ["feature-c", "feature-d"],
       ["feature-e", "feature-f"],
+      ["feature-g", "feature-h"],
+      ["feature-i", "feature-j"],
     ];
 
     await expect(
@@ -2863,8 +2952,11 @@ describe("runAgentHarnessPipeline", () => {
       ),
     ).rejects.toThrow("global retry budget exhausted");
 
-    expect(repairAttempts).toBe(2);
-    expect(explorationAttempts).toBe(3);
+    // Base limit 2 plus the exploration reserve of +2 (N93), and no bonus
+    // for merely-changing feature sets: four repairs, not the six a
+    // shrinking set earns.
+    expect(repairAttempts).toBe(4);
+    expect(explorationAttempts).toBe(5);
   });
 
   it("allows three script repairs independently in static and capture validation", async () => {
