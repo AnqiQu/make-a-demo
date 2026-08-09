@@ -2453,14 +2453,19 @@ async function validateResolvedSubmittedCodeRuntime(
       [buildResult.stderr, buildResult.stdout].filter(Boolean).join("\n"),
     );
     if (buildResult.exitCode !== 0 || blockedBuildAttempts.length > 0) {
+      const buildFileTail = await readCommandEvidenceTail(
+        input.workspace,
+        guardedBuild.evidenceLogPath,
+      );
+      // The teed file is the source of truth for hints as well as excerpts:
+      // twenty's EvalError naming the unbuilt package survived only there
+      // while the PTY stream dropped it, and the N67 steering never fired
+      // (2026-08-09).
       const unbuiltWorkspaceHints = readUnbuiltWorkspacePackageHints(
-        `${buildResult.stderr}\n${buildResult.stdout}`,
+        `${buildResult.stderr}\n${buildResult.stdout}\n${buildFileTail}`,
       );
       const buildExcerpt = legibleFailureExcerpt({
-        fileTail: await readCommandEvidenceTail(
-          input.workspace,
-          guardedBuild.evidenceLogPath,
-        ),
+        fileTail: buildFileTail,
         stderr: buildResult.stderr,
         stdout: buildResult.stdout,
       });
