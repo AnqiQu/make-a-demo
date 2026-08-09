@@ -2175,11 +2175,13 @@ try {
     if (/ERR_BLOCKED_BY_CLIENT|ERR_ABORTED/.test(failure)) return;
     recordFailedResource(request.url(), failure);
   });
+  let staleModule504 = false;
   page.on("response", (response) => {
     if (response.status() >= 400) recordFailedResource(response.url(), "HTTP " + response.status());
+    if (response.status() === 504 && response.request().resourceType() === "script") staleModule504 = true;
   });
   const remainingMs = () => Math.max(0, deadlineAtMs - Date.now());
-  const gotoRoute = async (url) => {
+  const gotoRouteOnce = async (url) => {
     // Dev servers compile each route on first hit; give the initial load a
     // cold-start budget and absorb one transient failure (mid-recompile
     // reloads surface as ERR_ABORTED) before treating the route as broken.
@@ -2215,6 +2217,18 @@ try {
     while (await page.evaluate(hasCoveringLoadingOverlay).catch(() => false)) {
       if (Date.now() >= overlayDeadlineAtMs) break;
       await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  };
+  const gotoRoute = async (url) => {
+    staleModule504 = false;
+    await gotoRouteOnce(url);
+    // A dev server answering a module fetch with HTTP 504 is re-optimizing
+    // its dependency bundle (Vite reports "Outdated Optimize Dep"); the page
+    // rendered its shell without that module, so one reload fetches the
+    // fresh bundle and the harvest sees the real route.
+    if (staleModule504 && remainingMs() > 1000) {
+      staleModule504 = false;
+      await gotoRouteOnce(url);
     }
   };
   const harvestPage = () => {

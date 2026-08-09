@@ -175,6 +175,76 @@ describe("generated exploration script", () => {
     }
   }, 30_000);
 
+  it("reloads once and re-harvests when a module fetch 504s", async () => {
+    // Vite answers module requests with HTTP 504 ("Outdated Optimize Dep")
+    // while its dependency optimizer re-bundles; the route renders its empty
+    // shell until one reload fetches the fresh module (directus, 2026-08-08).
+    const staleDepPage = `<!doctype html><html><head><title>Stale Dep App</title></head><body>
+<nav><a href="/">Ledger home</a></nav>
+<div id="root"></div>
+<script type="module" src="/app.js"></script>
+</body></html>`;
+    let moduleRequests = 0;
+    const server = createServer((request, response) => {
+      if ((request.url ?? "/").startsWith("/app.js")) {
+        moduleRequests += 1;
+        if (moduleRequests === 1) {
+          response.writeHead(504, { "content-type": "text/plain" });
+          response.end("Outdated Optimize Dep");
+          return;
+        }
+        response.writeHead(200, { "content-type": "text/javascript" });
+        response.end(
+          'document.getElementById("root").innerHTML = "<h1>Recovered ledger</h1><main><p>Quarterly invoice totals by customer</p></main>";',
+        );
+        return;
+      }
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(staleDepPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        routes: Array<{ headings: string[]; path?: string; text: string[] }>;
+      };
+
+      const route = result.routes.find(
+        (candidate) =>
+          !(candidate.path ?? "").includes("__makeademo-404-probe__"),
+      );
+      expect(route?.headings).toContain("Recovered ledger");
+      expect(route?.text.join(" ")).toContain(
+        "Quarterly invoice totals by customer",
+      );
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
   it("records the app's not-found page as a probe route and drops it on redirect", async () => {
     const contentFor = (path: string) =>
       path === "/"
