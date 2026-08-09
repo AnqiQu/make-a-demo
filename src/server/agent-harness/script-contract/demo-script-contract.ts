@@ -639,12 +639,25 @@ function assertBrowserActionsGrounded(input: {
         `Current browser Scene ${scene.id} must contain typed actions`,
       );
     }
+    // Revealed asserts target text that exists only after their revealing
+    // interaction runs, so the scene must replay that interaction first —
+    // asserted earlier, the capture fails deterministically.
+    const earlierSceneActionIds = new Set<string>();
     for (const action of scene.actions) {
       const sourceAction = readGroundedCatalogAction(
         action,
         catalogActionsById,
       );
       assertActionMatchesCatalog(action, sourceAction, selectedFeature, true);
+      if (
+        sourceAction.revealedBy !== undefined &&
+        !earlierSceneActionIds.has(sourceAction.revealedBy)
+      ) {
+        throw new Error(
+          `Browser action ${action.id} asserts text revealed by its interaction ${sourceAction.revealedBy}; the scene must run that interaction before this assert`,
+        );
+      }
+      earlierSceneActionIds.add(sourceAction.id);
       sourceActionIds.add(sourceAction.id);
     }
   }
@@ -652,6 +665,12 @@ function assertBrowserActionsGrounded(input: {
   for (const action of input.setupActions) {
     const sourceAction = readGroundedCatalogAction(action, catalogActionsById);
     assertActionMatchesCatalog(action, sourceAction, undefined, false);
+    // Setup runs off camera with no scene to pair the interaction into.
+    if (sourceAction.revealedBy !== undefined) {
+      throw new Error(
+        `Setup action ${action.id} uses revealed assert ${sourceAction.id}; revealed asserts belong on camera, after their revealing interaction`,
+      );
+    }
   }
 
   for (const feature of input.flowSpec.features) {

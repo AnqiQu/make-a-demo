@@ -825,6 +825,143 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(attempts).toBe(1);
   });
 
+  it("accepts a revealed assert paired with its revealing interaction as route-distinct evidence", async () => {
+    const catalog = chromeAndDataCatalog();
+    catalog.actions.push(
+      {
+        confidence: 0.98,
+        evidence: "Playwright exercised Run analysis on / and observed results",
+        exercised: true,
+        expectedResult: "Detected format: Base64 became visible",
+        featureIds: ["dashboard"],
+        id: "run-analysis",
+        kind: "click",
+        preferredLocator: {
+          name: "Run analysis",
+          strategy: "role",
+          value: "button",
+        },
+        risks: [],
+        route: "/",
+      },
+      {
+        confidence: 0.95,
+        evidence:
+          'Playwright observed "Detected format: Base64" appear after exercising Run analysis on /',
+        expectedResult:
+          "Detected format: Base64 becomes visible after Run analysis",
+        featureIds: ["dashboard"],
+        id: "assert-revealed",
+        kind: "assert",
+        preferredLocator: {
+          strategy: "text",
+          value: "Detected format: Base64",
+        },
+        revealedBy: "run-analysis",
+        risks: [],
+        route: "/",
+      },
+    );
+    const revealedPair = {
+      ...flowSpec(),
+      features: flowSpec().features.map((feature) => ({
+        ...feature,
+        referencedActionIds: ["run-analysis", "assert-revealed"],
+      })),
+    };
+
+    const { attempts, result } = await runFlowPlanningScenario({
+      actionCatalog: catalog,
+      appMap: sidebarAppMap(),
+      candidates: [revealedPair],
+    });
+
+    expect(result).toEqual(revealedPair);
+    expect(attempts).toBe(1);
+  });
+
+  it("rejects a revealed assert selected without its revealing interaction", async () => {
+    const catalog = chromeAndDataCatalog();
+    catalog.actions = catalog.actions.filter(
+      (action) => action.id !== "assert-data",
+    );
+    catalog.actions.push(
+      {
+        confidence: 0.98,
+        evidence: "Playwright exercised the dashboard filter",
+        exercised: true,
+        expectedResult: "Filtered dashboard results became visible",
+        featureIds: ["dashboard"],
+        id: "filter-dashboard",
+        kind: "click",
+        preferredLocator: {
+          name: "Filter",
+          strategy: "role",
+          value: "button",
+        },
+        risks: [],
+        route: "/",
+      },
+      {
+        confidence: 0.98,
+        evidence: "Playwright exercised Run analysis on / and observed results",
+        exercised: true,
+        expectedResult: "Detected format: Base64 became visible",
+        featureIds: ["dashboard"],
+        id: "run-analysis",
+        kind: "click",
+        preferredLocator: {
+          name: "Run analysis",
+          strategy: "role",
+          value: "button",
+        },
+        risks: [],
+        route: "/",
+      },
+      {
+        confidence: 0.95,
+        evidence:
+          'Playwright observed "Detected format: Base64" appear after exercising Run analysis on /',
+        expectedResult:
+          "Detected format: Base64 becomes visible after Run analysis",
+        featureIds: ["dashboard"],
+        id: "assert-revealed",
+        kind: "assert",
+        preferredLocator: {
+          strategy: "text",
+          value: "Detected format: Base64",
+        },
+        revealedBy: "run-analysis",
+        risks: [],
+        route: "/",
+      },
+    );
+    const wrongInteraction = {
+      ...flowSpec(),
+      features: flowSpec().features.map((feature) => ({
+        ...feature,
+        referencedActionIds: ["filter-dashboard", "assert-revealed"],
+      })),
+    };
+    const revealedPair = {
+      ...flowSpec(),
+      features: flowSpec().features.map((feature) => ({
+        ...feature,
+        referencedActionIds: ["run-analysis", "assert-revealed"],
+      })),
+    };
+
+    const { attempts, prompts, result } = await runFlowPlanningScenario({
+      actionCatalog: catalog,
+      appMap: sidebarAppMap(),
+      candidates: [wrongInteraction, revealedPair],
+    });
+
+    expect(result).toEqual(revealedPair);
+    expect(attempts).toBe(2);
+    expect(prompts[1]).toContain("revealing interaction run-analysis");
+  });
+
   it("repairs FlowSpecs that select an assertion without a feature interaction", async () => {
     const completeFlowSpec = flowSpec();
     const assertionOnly = {

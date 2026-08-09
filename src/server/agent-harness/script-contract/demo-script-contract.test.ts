@@ -349,6 +349,79 @@ describe("DemoScriptContract", () => {
     ).toMatchObject({ status: "passed" });
   });
 
+  it("requires a revealed assert to follow its revealing interaction in the scene", () => {
+    const catalog = actionCatalog();
+    const revealedAssert = catalog.actions.find(
+      (action) => action.id === "dashboard-visible",
+    ) as { revealedBy?: string } | undefined;
+    if (revealedAssert) {
+      revealedAssert.revealedBy = "open-dashboard";
+    }
+
+    expect(
+      validateDemoScriptCandidateContract({
+        actionCatalog: catalog,
+        flowSpec: flowSpec(),
+        preparationManifest: preparationManifest(),
+        scriptCandidate: scriptCandidate(validDemoScript()),
+      }),
+    ).toMatchObject({ status: "passed" });
+
+    const reversed = structuredClone(validDemoScript()) as {
+      scenes: Array<{ actions: unknown[] }>;
+    };
+    reversed.scenes[0]?.actions.reverse();
+    expect(
+      validateDemoScriptCandidateContract({
+        actionCatalog: catalog,
+        flowSpec: flowSpec(),
+        preparationManifest: preparationManifest(),
+        scriptCandidate: scriptCandidate(reversed),
+      }),
+    ).toMatchObject({
+      logsSummary: expect.stringContaining(
+        "revealed by its interaction open-dashboard",
+      ),
+      status: "failed",
+    });
+  });
+
+  it("rejects a revealed assert used as an off-camera setup action", () => {
+    const catalog = actionCatalog();
+    const revealedAssert = catalog.actions.find(
+      (action) => action.id === "dashboard-visible",
+    ) as { revealedBy?: string } | undefined;
+    if (revealedAssert) {
+      revealedAssert.revealedBy = "open-dashboard";
+    }
+
+    expect(
+      validateDemoScriptCandidateContract({
+        actionCatalog: catalog,
+        flowSpec: flowSpec(),
+        preparationManifest: preparationManifest(),
+        scriptCandidate: scriptCandidate({
+          ...validDemoScript(),
+          setupActions: [
+            {
+              id: "dashboard-visible-setup",
+              locator: {
+                name: "Dashboard",
+                role: "heading",
+                strategy: "role",
+              },
+              sourceActionId: "dashboard-visible",
+              type: "assert-visible",
+            },
+          ],
+        }),
+      }),
+    ).toMatchObject({
+      logsSummary: expect.stringContaining("revealed"),
+      status: "failed",
+    });
+  });
+
   it("rejects evidence-backed on-camera actions that Flow Planning did not select", () => {
     const catalog = actionCatalog();
     catalog.actions.push({

@@ -3002,23 +3002,54 @@ function assertFlowSpecGrounded(input: {
         `FlowSpec feature ${feature.featureId} must select both an interaction and visible assertion from ActionCatalog. ${taggedActionSummary(feature.featureId)}${referencedActionsSummary(feature)}`,
       );
     }
+    // A revealed assert's text exists only after its revealing interaction
+    // runs: selected with a different interaction, the demo would assert
+    // text that never appears on screen.
+    const selectedActionIds = new Set(feature.referencedActionIds);
+    const isRevealedPairAssert = (
+      action: ActionCatalog["actions"][number],
+    ): boolean =>
+      action.kind === "assert" &&
+      action.revealedBy !== undefined &&
+      selectedActionIds.has(action.revealedBy);
+    for (const action of selectedActions) {
+      if (
+        action.kind === "assert" &&
+        action.revealedBy !== undefined &&
+        !selectedActionIds.has(action.revealedBy)
+      ) {
+        violations.push(
+          `FlowSpec feature ${feature.featureId} selects assert ${action.id} without its revealing interaction ${action.revealedBy}; that text appears only after the interaction runs, so select ${action.revealedBy} for this feature too or choose a statically visible assert`,
+        );
+      }
+    }
     // Chrome-only asserts pass on a page that renders nothing: when the
     // catalog offers an assert on route-distinct content for this feature,
-    // the FlowSpec must use one. Enforced only when satisfiable, so the
-    // planning retry loop can never wedge on an evidence-poor catalog.
+    // the FlowSpec must use one. A revealed assert paired with its revealing
+    // interaction qualifies — post-interaction proof-text is the strongest
+    // route-distinct evidence a tool-shaped route can offer. Enforced only
+    // when satisfiable, so the planning retry loop can never wedge on an
+    // evidence-poor catalog.
     const qualifyingAsserts = input.actionCatalog.actions.filter(
       (action) =>
         action.featureIds?.includes(feature.featureId) &&
-        isRouteDistinctAssert(action),
+        (isRouteDistinctAssert(action) ||
+          (action.kind === "assert" && action.revealedBy !== undefined)),
     );
     if (
       qualifyingAsserts.length > 0 &&
-      !selectedActions.some(isRouteDistinctAssert)
+      !selectedActions.some(
+        (action) =>
+          isRouteDistinctAssert(action) || isRevealedPairAssert(action),
+      )
     ) {
       violations.push(
         `FlowSpec feature ${feature.featureId} asserts only globally-repeated navigation text. Select an assert targeting route-distinct visible content; qualifying ActionCatalog asserts: ${qualifyingAsserts
           .slice(0, 3)
-          .map((action) => `${action.id} ("${assertTargetText(action)}")`)
+          .map(
+            (action) =>
+              `${action.id} ("${assertTargetText(action)}"${action.revealedBy === undefined ? "" : ` after ${action.revealedBy}`})`,
+          )
           .join(", ")}`,
       );
     }
