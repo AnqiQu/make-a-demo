@@ -4,6 +4,7 @@ import type {
   PreparationManifest,
   ValidationReport,
 } from "../schemas/artifacts";
+import { analyzeDemoGateUsage } from "./demo-gate-analysis";
 import type { PreparationWorkspaceDiff } from "./preparation-workspace-diff";
 
 const dependencyConfigurationNames = new Set([
@@ -181,6 +182,7 @@ export function validatePreparationFidelity(input: {
         return (
           reference.test(stripComments(otherPatch.addedText)) &&
           hasConditionalDemoGate(
+            otherPath,
             otherPatch,
             demoGate,
             input.repoSourceFiles.get(otherPath) ?? "",
@@ -581,6 +583,14 @@ interface DemoGateEvidence {
   identifiers: string[];
 }
 
+/**
+ * Matches any spelling of the pipeline-owned gate token — prefixed
+ * (`VITE_`, `NEXT_PUBLIC_`), define-wrapped (`__MAKEADEMO_DEMO__`), or
+ * bare. Substring by design: the delimiter-bound variant rejected the
+ * Vite-required prefix and killed excalidraw's canonical repair (2026-08-09).
+ */
+const gateTokenPattern = /makeademo_demo/i;
+
 function readDemoGateEvidence(
   preparationManifest: PreparationManifest,
   repoSourceFiles: ReadonlyMap<string, string | undefined>,
@@ -602,23 +612,48 @@ function readDemoGateEvidence(
         ([path, source]) =>
           source !== undefined && isExecutableSourcePath(path),
       )
-      .map(([, source]) => source ?? ""),
+      .map(([path, source]) => ({ code: source ?? "", path })),
     ...workspaceDiff.changedPaths
       .map(toRepoRelativePath)
       .filter(isExecutableSourcePath)
-      .map((path) => filePatches.get(path)?.addedText ?? ""),
+      .map((path) => ({ code: filePatches.get(path)?.addedText ?? "", path })),
   ];
-  const flags = configuredFlags.filter((flag) =>
-    sources.some((source) => readsDemoFlag(source, flag)),
+  // Any genuine read of the gate token — under any prefixed spelling —
+  // validates every configured flag: the code owns the semantic, and
+  // demanding envUsed spell each prefixed variant is the treadmill this
+  // design retires. The AST decides what counts as a read (a bare string
+  // literal does not); the env-shaped textual fallback covers non-JS
+  // sources and commented-out reads the parser treats as trivia.
+  const evidence = sources.map(({ code, path }) => ({
+    analysis: gateTokenPattern.test(code)
+      ? analyzeDemoGateUsage({ fileName: path, source: code })
+      : undefined,
+    code,
+  }));
+  const flagsRead = evidence.some(
+    ({ analysis, code }) =>
+      (analysis?.gateNames.length ?? 0) > 0 || readsDemoFlagText(code),
   );
   return {
-    flags,
+    flags: flagsRead ? configuredFlags : [],
     identifiers: [
       ...new Set(
-        sources.flatMap((source) => readDemoGateIdentifiers(source, flags)),
+        evidence.flatMap(({ analysis }) => analysis?.gateBindings ?? []),
       ),
     ],
   };
+}
+
+/**
+ * Env-read-shaped textual mention of the gate token: an env/config accessor
+ * within reach of any spelling containing MAKEADEMO_DEMO. Deliberately
+ * front-unrestricted so prefixed spellings count; a bare string literal
+ * without an accessor shape does not.
+ */
+function readsDemoFlagText(code: string): boolean {
+  return /(?:\$\{?|(?:config|env(?:ironment)?|getenv|settings)\b[\s\S]{0,80})[A-Za-z0-9_]*MAKEADEMO_DEMO/i.test(
+    code,
+  );
 }
 
 function readDemoAdaptationViolation(
@@ -631,7 +666,7 @@ function readDemoAdaptationViolation(
   if (demoGate.flags.length === 0) {
     return missingDemoGateViolation(path, kind);
   }
-  if (!hasConditionalDemoGate(patch, demoGate, originalSource)) {
+  if (!hasConditionalDemoGate(path, patch, demoGate, originalSource)) {
     return `${path} does not conditionally use the repository's active MakeADemo demo gate for the ${kind} adaptation.`;
   }
   return undefined;
@@ -681,13 +716,6 @@ function isNonDirectiveCommentLine(line: string): boolean {
   );
 }
 
-function readsDemoFlag(source: string, flag: string) {
-  return new RegExp(
-    `(?:\\$\\{?|(?:config|env(?:ironment)?|getenv|settings)\\b[\\s\\S]{0,80})${escapeRegExp(flag)}(?![A-Za-z0-9_])`,
-    "i",
-  ).test(source);
-}
-
 function isAuthenticationAdaptation(path: string, patch: PatchSection) {
   return (
     isExecutableSourcePath(path) &&
@@ -728,73 +756,52 @@ function missingDemoGateViolation(
   return `${path} changes ${kind} behavior without an active MakeADemo demo flag recorded in envUsed.`;
 }
 
+/**
+ * Answers "do this patch's additions conditionally use the demo gate?" with
+ * an AST, not a regex window. The gate may appear as any spelling of the
+ * pipeline-owned token, a binding derived from it in this file's scope, or a
+ * repo-wide gate identifier this file imports or declares. Non-JS-family and
+ * unextractable sources fail open: "no gate found" without a parse must
+ * never veto (N92) — the adjudicating judge still reviews the candidate.
+ */
 function hasConditionalDemoGate(
+  path: string,
   patch: PatchSection,
   demoGate: DemoGateEvidence,
   originalSource: string,
 ) {
-  const additions = stripComments(patch.addedText);
-  const fileScope = `${stripComments(originalSource)}\n${additions}`;
-  const tokens = [
-    ...demoGate.flags.filter((flag) => readsDemoFlag(additions, flag)),
-    ...demoGate.identifiers.filter((identifier) =>
-      isBoundInFile(fileScope, identifier),
-    ),
-  ];
-  return tokens.some((token) => isConditionalUse(additions, token));
+  const additions = patch.addedText;
+  const fileScope = `${originalSource}\n${additions}`;
+  const scopeProbe = analyzeDemoGateUsage({
+    fileName: path,
+    source: fileScope,
+  });
+  if (scopeProbe === undefined) {
+    return true;
+  }
+  const importedGateIdentifiers = demoGate.identifiers.filter((identifier) =>
+    scopeProbe.boundNames.includes(identifier),
+  );
+  const scopeAnalysis =
+    analyzeDemoGateUsage({
+      fileName: path,
+      knownGateIdentifiers: importedGateIdentifiers,
+      source: fileScope,
+    }) ?? scopeProbe;
+  const additionsAnalysis = analyzeDemoGateUsage({
+    fileName: path,
+    knownGateIdentifiers: [
+      ...new Set([...importedGateIdentifiers, ...scopeAnalysis.gateBindings]),
+    ],
+    source: additions,
+  });
+  return additionsAnalysis?.hasConditionalGate ?? true;
 }
 
 function stripComments(source: string) {
   return source
     .replace(/\/\*[\s\S]*?\*\//g, " ")
     .replace(/(?:^|(?<=\s))(?:\/\/|#).*$/gm, " ");
-}
-
-/** A gate identifier only counts inside a file that imports or declares it. */
-function isBoundInFile(source: string, identifier: string) {
-  const name = escapeRegExp(identifier);
-  return (
-    new RegExp(`\\bimport\\b[^;]{0,300}[{,\\s]${name}\\s*[},\\s]`).test(
-      source,
-    ) ||
-    new RegExp(`\\b(?:const|let|var|final|bool|boolean)\\s+${name}\\b`).test(
-      source,
-    ) ||
-    new RegExp(`\\b(?:def|fn|func|function)\\s+${name}\\s*\\(`).test(source) ||
-    new RegExp(`\\bfrom\\b[^\\n]*\\bimport\\b[^\\n]*\\b${name}\\b`).test(source)
-  );
-}
-
-function readDemoGateIdentifiers(source: string, flags: string[]) {
-  const identifiers = new Set<string>();
-  for (const flag of flags) {
-    const name = escapeRegExp(flag);
-    const patterns = [
-      new RegExp(
-        `\\b(?:const|final|let|var|bool|boolean)\\s+([A-Za-z_$][\\w$]*)\\s*[:=][^;]{0,200}(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`,
-        "g",
-      ),
-      new RegExp(
-        `\\b(?:def|fn|func|function)\\s+([A-Za-z_$][\\w$]*)\\s*\\([^)]*\\)[^]{0,160}?(?<![A-Za-z0-9_])${name}(?![A-Za-z0-9_])`,
-        "g",
-      ),
-    ];
-    for (const pattern of patterns) {
-      for (const match of source.matchAll(pattern)) {
-        if (match[1] !== undefined) identifiers.add(match[1]);
-      }
-    }
-  }
-  return [...identifiers];
-}
-
-function isConditionalUse(source: string, token: string) {
-  const conditional = "(?:\\b(?:if|unless)\\b|\\?|&&|\\|\\|)";
-  const reference = `(?:^|[^A-Za-z0-9_$])${escapeRegExp(token)}(?![A-Za-z0-9_$])`;
-  return new RegExp(
-    `(?:${conditional}[^;]{0,160}${reference}|${reference}[^;]{0,160}${conditional})`,
-    "m",
-  ).test(source);
 }
 
 function isExecutableSourcePath(path: string) {

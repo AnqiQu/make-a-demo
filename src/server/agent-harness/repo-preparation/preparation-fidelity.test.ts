@@ -730,6 +730,52 @@ describe("validatePreparationFidelity", () => {
     expect(report.status).toBe("passed");
   });
 
+  it("recognizes a framework-prefixed gate binding in a presentation adaptation", () => {
+    // excalidraw attempt 7 (2026-08-09): the canonical repair — a demo scene
+    // seeded behind `import.meta.env.VITE_MAKEADEMO_DEMO` — was vetoed
+    // because the identifier extractor's lookbehind rejected the flag inside
+    // the Vite-required prefix. The pipeline owns the MAKEADEMO_DEMO token;
+    // any name containing it is the gate.
+    const appPath = "excalidraw-app/App.tsx";
+    const report = validateDiff({
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [appPath],
+      patch: [
+        `diff --git a/${appPath} b/${appPath}`,
+        '+const isMakeADemoDemo = import.meta.env.VITE_MAKEADEMO_DEMO === "true";',
+        "+if (isMakeADemoDemo) {",
+        "+  return { scene: getMakeADemoScene(), isExternalScene: false };",
+        "+}",
+      ].join("\n"),
+      sourceFiles: {
+        [appPath]: "export function App() { return initializeScene(); }",
+      },
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("recognizes a define-constant gate in a presentation adaptation", () => {
+    // excalidraw attempt 6: `__MAKEADEMO_DEMO__` from a vite define block hit
+    // the same underscore blind spot.
+    const appPath = "excalidraw-app/App.tsx";
+    const report = validateDiff({
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [appPath],
+      patch: [
+        `diff --git a/${appPath} b/${appPath}`,
+        "+if (__MAKEADEMO_DEMO__) {",
+        "+  seedMakeADemoScene();",
+        "+}",
+      ].join("\n"),
+      sourceFiles: {
+        [appPath]: "export function App() { return initializeScene(); }",
+      },
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
   it("exempts framework and build configuration from the demo gate requirement", () => {
     const report = validateDiff({
       modifiedFiles: ["vite.config.ts", "apps/dashboard/next.config.ts"],
