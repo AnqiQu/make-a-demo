@@ -4360,3 +4360,78 @@ stuck-loading cause with seam-level steering; ghost's rounds
 target its actual lifecycle behavior instead of a phantom
 install failure; twenty either builds under memory steering or
 its verdict cites the marker's ceiling reading.
+
+### Landed (2026-08-09, same day)
+
+`1637dfe` N98 liveness: new `shared/shell/cpu-liveness.ts`
+wraps a bash command with a background sampler that reads its
+own process group's live utime+stime from /proc once a minute
+and prints `[makeademo:alive] cpu <n>` only when the total
+changed — silence with CPU progress stays alive, silence
+without it still dies at the inactivity deadline. Wrapped at
+both seams: the OpenCode run command and the
+`withDiskMarkers` install/lifecycle/build bracket (heartbeats
+feed the PTY watchdog but never enter the teed evidence file).
+`hasOnlyPtyBootstrapOutput` treats alive lines as bootstrap so
+a dead-at-launch agent cannot look alive, and
+`legibleFailureExcerpt` filters them from evidence. Dead
+children are deliberately excluded from the sum: counting
+cutime would count the sampler's own short-lived awk/cat
+children and neutralize the watchdog. `ff35e45` N98
+classification: an exit-124 lifecycle kill now classifies as
+`lifecycle timeout` — routed to preparation repair with full
+repo latitude (never dependency-only edits), its summary leads
+with the kill and states that everything above the marker
+completed, and the N58 install-reuse list treats it as
+at-install so the unfinished lifecycle always re-runs.
+
+`b3232d5` N99 transports: `syncSubmittedCodeWorkspace` runs
+under the N94 transient retry (the whole archive → download →
+upload → extract chain is idempotent per attempt), and the
+transient signature learns Bun's "socket connection was
+closed" message. `a0c44c3` N99 exploration: a protocol
+timeout with the app still running returns a classified
+`render timeout` repairable failure instead of escaping as a
+raw Daytona error; unreadable app status still preserves the
+infrastructure timeout.
+
+N100 in three commits. `6384a7e` seams: `PreparedDemoFeature`
+gains optional `dataSeams` ({path, functionName,
+fixtureModule, shapeProbe?}), parsed with repo-relative path
+validation, described in the agent-facing contract (with an
+invariant) and the template, and checked referentially by the
+fidelity candidate generator — a declared fixture module
+absent from the diff, or a seam file existing nowhere, is a
+truthful-manifest candidate for the adjudication lane.
+`431e3d5` gate: the browser harvest counts textless body rows
+(`skeletonRows`), and the zero-row evidence names the third
+cause the two-cause message could not — rows mounted with no
+cell text mean the query never resolved — steering at the
+feature's declared seam by name. `2e8914c` playbook:
+`dataFixturePlaybookInstruction` (find the function the UI
+calls; author the fixture literal typed by its return type;
+return it immediately under the gate — never
+database-optional, never empty-on-missing; declare dataSeams;
+prove the shape with the repo's own tsc via a temporary probe
+file and record shapeProbe; then check dates, default filters,
+and relations no compiler can) interpolated into preparation,
+contract repair, and — for the empty-app class only, per the
+N65 prompt diet — runtime repair.
+
+N101 in four commits. `97f0b67` matrix report rows bound a
+runaway first line to 240 chars and append the message's last
+`[makeademo:…]` marker line. `10b45c9` chrome-only failures
+with same-origin 404s (page errors or failed-resource console
+errors against the local origin) append wrong-base steering —
+evidence-driven, hint-only. `1f07dd4` the N67
+unbuilt-workspace matcher reads the teed build evidence file,
+not just the lossy stream that dropped twenty's EvalError.
+`ccf92ee` world rule (8): the ~8GB ceiling kills what crosses
+it — bound old-space, disable sourcemaps, narrow the build
+target. `458974a` regenerated dependency graphs.
+
+Verification: TDD per item with each failing test verified red
+first; lint, typecheck, test, knip green per commit. Tests
+976→997 (+21; the remotion delayRender smoke test passed on
+every full run this window). The twelfth matrix remains the
+acceptance gate and awaits an explicit go-ahead.
