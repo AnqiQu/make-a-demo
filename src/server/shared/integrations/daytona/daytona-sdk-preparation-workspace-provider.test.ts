@@ -1266,6 +1266,63 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ).toHaveLength(2);
   });
 
+  it("retries the prepared-workspace sync after a transient submitted-code failure", async () => {
+    // Cyberchef died 71 minutes in when one control-plane socket dropped
+    // during a workspace reset (2026-08-09): the sync is idempotent, so a
+    // transport blip costs a bounded retry, never the run.
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      artifactTransferBackoffMs: [1, 1],
+      client: fakeLinkedClient(calls, {
+        submittedUploadFailuresBeforeSuccess: 1,
+      }),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.syncSubmittedCodeWorkspace(),
+    ).resolves.toBeUndefined();
+
+    const submittedUploads = calls.filter(
+      (call) =>
+        typeof call === "object" &&
+        call !== null &&
+        "uploadFiles" in call &&
+        (call as { uploadFiles: { sandbox: string } }).uploadFiles.sandbox ===
+          "submitted_sandbox",
+    );
+    expect(submittedUploads).toHaveLength(2);
+  });
+
+  it("treats an abruptly closed control-plane socket as a transient transfer failure", async () => {
+    // Bun's fetch reports a dropped Daytona API connection as "The socket
+    // connection was closed unexpectedly" — same transport blip as a 502,
+    // same bounded retry.
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      artifactTransferBackoffMs: [1, 1],
+      client: fakeClient(calls, {
+        uploadError: new Error(
+          "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+        ),
+        uploadFailuresBeforeSuccess: 1,
+      }),
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.writeTextFile(
+        "/workspace/.makeademo/repo-profile.json",
+        "{}",
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(calls.filter((call) => "uploadFiles" in Object(call))).toHaveLength(
+      2,
+    );
+  });
+
   it("reports a typed submitted-code artifact failure after bounded retries", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({

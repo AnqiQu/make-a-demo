@@ -826,6 +826,31 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
   }
 
   async syncSubmittedCodeWorkspace(): Promise<void> {
+    // The whole sync is idempotent (fresh archive name per attempt, full
+    // re-extract), so one transport blip anywhere in the archive → download
+    // → upload → extract chain costs a bounded retry, never the run
+    // (cyberchef's reset died on one dropped socket, 2026-08-09).
+    let attempts = 0;
+    await runWithTransientTransferRetry({
+      attempt: () => {
+        attempts += 1;
+        return this.syncSubmittedCodeWorkspaceOnce();
+      },
+      backoffMs: this.artifactTransferBackoffMs,
+      onRetry: (error) =>
+        this.writeArtifactTransferLogBestEffort({
+          attempt: attempts,
+          error: formatErrorDiagnostic(error),
+          event: "workspace.sync.retrying",
+          fileCount: 1,
+          level: "warn",
+          sandboxId:
+            this.submittedCodeSandboxId ?? "unknown-submitted-code-sandbox",
+        }),
+    });
+  }
+
+  private async syncSubmittedCodeWorkspaceOnce(): Promise<void> {
     if (this.submittedCodeSandbox === undefined) {
       throw new Error("Submitted-code Daytona sandbox is not configured.");
     }
@@ -1512,7 +1537,7 @@ function isTransientDaytonaArtifactTransferError(error: unknown): boolean {
   }
   return (
     /Connection|Timeout/i.test(error.name) ||
-    /ECONNREFUSED|ECONNRESET|ETIMEDOUT|Operation timed out|socket hang up|status code 5\d\d/i.test(
+    /ECONNREFUSED|ECONNRESET|ETIMEDOUT|Operation timed out|socket hang up|socket connection was closed|status code 5\d\d/i.test(
       error.message,
     )
   );
