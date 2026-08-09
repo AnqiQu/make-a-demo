@@ -2014,7 +2014,7 @@ async function validateResolvedSubmittedCodeRuntime(
         // The gate may append a lifecycle-script suppression flag, so the
         // executed string must be the gate's command, not the closure's.
         runCommand: (gateCommand) =>
-          executeSubmitted(
+          executeSubmittedWithDeadlineEvidence(
             input.workspace,
             commandInAppDirectory(
               runtimeTarget?.install.cwd ?? manifest.appDir,
@@ -2180,7 +2180,7 @@ async function validateResolvedSubmittedCodeRuntime(
         : { yarnVariant: input.repoProfile.yarnVariant }),
     });
     if (lifecycleCommand !== undefined) {
-      const lifecycle = await executeSubmitted(
+      const lifecycle = await executeSubmittedWithDeadlineEvidence(
         input.workspace,
         commandInAppDirectory(
           runtimeTarget?.install.cwd ?? manifest.appDir,
@@ -2227,6 +2227,9 @@ async function validateResolvedSubmittedCodeRuntime(
           logsSummary: [
             `Network-closed lifecycle scripts failed after the dependency install: ${lifecycle.stderr || lifecycle.stdout}`,
             ...buildLogEvidence,
+            // Proves the record saw the command end: output that merely
+            // stops (killed child, dropped stream) has no such trailer.
+            `[makeademo:command-end] exit=${lifecycle.exitCode}`,
           ].join("\n"),
           manifest,
           stage,
@@ -2289,7 +2292,7 @@ async function validateResolvedSubmittedCodeRuntime(
   };
 
   if (input.buildApp !== false && manifest.buildCommandUsed !== undefined) {
-    const buildResult = await executeSubmitted(
+    const buildResult = await executeSubmittedWithDeadlineEvidence(
       input.workspace,
       commandInAppDirectory(
         runtimeTarget?.build?.cwd ?? manifest.appDir,
@@ -2566,6 +2569,38 @@ async function executeSubmitted(
   options: AgentHarnessWorkspaceExecuteOptions = {},
 ) {
   return await workspace.executeSubmittedCode(command, options);
+}
+
+/**
+ * Runs a heavy submitted-code command (install, lifecycle, build) so that a
+ * deadline kill leaves explicit evidence instead of an opaque thrown error:
+ * the result carries the partial streamed output with a `[makeademo:timeout]`
+ * marker and exit code 124. Killed records previously just stopped
+ * mid-stream, indistinguishable from complete output (calcom, 2026-08-08).
+ * Non-timeout errors still propagate.
+ */
+async function executeSubmittedWithDeadlineEvidence(
+  workspace: AgentHarnessWorkspace,
+  command: string,
+  options: AgentHarnessWorkspaceExecuteOptions = {},
+): Promise<AgentHarnessWorkspaceCommandResult> {
+  const streamed: string[] = [];
+  try {
+    return await workspace.executeSubmittedCode(command, {
+      ...options,
+      onStdout: (chunk) => {
+        streamed.push(chunk);
+        options.onStdout?.(chunk);
+      },
+    });
+  } catch (error) {
+    if (!isAgentHarnessCommandTimeout(error)) throw error;
+    return {
+      exitCode: 124,
+      stderr: "",
+      stdout: `${streamed.join("")}\n[makeademo:timeout] ${readErrorMessage(error)} The command was killed at its deadline; output above is partial.`,
+    };
+  }
 }
 
 function commandInAppDirectory(appDir: string, command: string): string {

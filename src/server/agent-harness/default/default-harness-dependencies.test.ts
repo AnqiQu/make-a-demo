@@ -3636,6 +3636,84 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
   });
 
+  it("stamps a timeout marker with partial output when the install command is killed at its deadline", async () => {
+    // calcom's lifecycle records ended mid-stream with no error line and
+    // diagnosis had to infer the kill (2026-08-08 matrix). A deadline kill
+    // must leave explicit evidence instead of an opaque thrown error.
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command, options) {
+        if (command.includes("npm ci")) {
+          options?.onStdout?.("added 400 packages, linking");
+          throw new AgentHarnessCommandTimeoutError(1_200_000);
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "install failure",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain("[makeademo:timeout]");
+    expect(report.logsSummary).toContain("added 400 packages, linking");
+  });
+
+  it("stamps an explicit command-end marker on failed lifecycle output", async () => {
+    // Output that simply stops (a killed child, a dropped stream) is
+    // indistinguishable from a complete record unless the record proves it
+    // saw the command end.
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("npm rebuild")) {
+          return {
+            exitCode: 1,
+            stderr: "",
+            stdout: "must be built because it never has been before",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "install failure",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain("[makeademo:command-end] exit=1");
+  });
+
   it("reports the gate-executed install command when the install fails", async () => {
     // calcom's repair agents saw `yarn install --immutable` blamed for a
     // `--mode` flag they never passed: the report carried the manifest's
