@@ -1158,6 +1158,71 @@ describe("exploreSubmittedApp", () => {
     expect(revealedAssert?.featureIds).toContain("magic-analysis");
   });
 
+  it("grounds a feature whose only evidence is interaction-revealed text", async () => {
+    // cyberchef-shaped: a tool route whose static harvest is controls only —
+    // the proof-text renders on demand, after the interaction.
+    const feature = preparedFeature({
+      entryPaths: ["/analyzer"],
+      id: "magic-analysis",
+      label: "Magic analysis",
+      requestedFeature: "magic analysis",
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [feature],
+      requestedFeatures: ["magic analysis"],
+      routes: [
+        observedRoute({
+          buttons: ["Run analysis"],
+          featureIds: ["magic-analysis"],
+          interactions: [
+            {
+              kind: "click",
+              locator: {
+                name: "Run analysis",
+                strategy: "role",
+                value: "button",
+              },
+              locatorEvidence: {
+                locator: {
+                  name: "Run analysis",
+                  role: "button",
+                  strategy: "role",
+                },
+                verification: {
+                  matchCount: 1,
+                  route: "/analyzer",
+                  visible: true,
+                },
+              },
+              name: "Run analysis",
+              outcome: "Detected format: Base64 became visible",
+              revealedTexts: [
+                {
+                  locatorEvidence: {
+                    locator: {
+                      exact: true,
+                      strategy: "text",
+                      value: "Detected format: Base64",
+                    },
+                    verification: {
+                      matchCount: 1,
+                      route: "/analyzer",
+                      visible: true,
+                    },
+                  },
+                  value: "Detected format: Base64",
+                },
+              ],
+            },
+          ],
+          path: "/analyzer",
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("passed");
+  });
+
   it("lists the ungrounded feature ids on grounding failures", async () => {
     const searchFeature = preparedFeature({
       entryPaths: ["/search"],

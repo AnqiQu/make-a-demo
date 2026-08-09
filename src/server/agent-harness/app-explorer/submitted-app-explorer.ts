@@ -1420,6 +1420,15 @@ function readExplorationFailure(
       .filter(([, content]) => content.length > 0)
       .map(([path]) => path),
   );
+  // Interaction-revealed text is a route's content rendered on demand: for
+  // tool-shaped UIs it is the only content the route can ever show, so a
+  // route carrying a revealed assert is content-bearing for grounding and
+  // must never be classified hollow.
+  for (const action of actionCatalog.actions) {
+    if (action.revealedBy !== undefined) {
+      contentRoutePaths.add(action.route);
+    }
+  }
   // When no route anywhere renders route-distinct content, grounding failures
   // are a data-rendering defect, not a feature-selection problem: exercised
   // controls and chrome asserts exist identically in hollow and healthy apps.
