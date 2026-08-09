@@ -3591,3 +3591,113 @@ text steering the repair (a failed outline run validates N83 as
 much as a good video would); calcom clears its offline lifecycle;
 conduit's rejection becomes self-diagnosing; twenty's df markers
 prove or retire prong 3; midday/ghostfolio rerun clean.
+
+### Landed (2026-08-08, same day)
+
+All nine planned items, in the recommended order. `befd315` N86
+image: `python3-setuptools` restores the `distutils` shim that
+vendored node-gyp vintages import under the image's Python 3.12;
+the swapped-runtime verify check now imports
+`distutils.version.StrictVersion` on the live image. `e811609` N86
+markers: `executeSubmittedWithDeadlineEvidence` streams heavy
+submitted-code commands (install, lifecycle, build) and, on a
+provider deadline, synthesizes exit 124 with the streamed partial
+output plus a `[makeademo:timeout]` trailer — the PTY provider
+throws on deadline without returning output, so timeouts used to be
+indistinguishable from silent deaths; every lifecycle failure now
+also carries a `[makeademo:command-end] exit=N` trailer.
+Finding recorded during implementation: calcom's "silent" lifecycle
+deaths were **not** harness timeouts — the stored output genuinely
+ended mid-YN0007 with exit 1; the two trailers now make
+killed-at-deadline, crashed, and completed-with-failure legible at
+a glance. `b2cf63f` N84: `findRoutePlaceholder` (new module
+`tools/route-placeholders.ts`) rejects router patterns
+(`:param`, `*`, bracket segments; hash-router aware;
+query-string colons exempt) at three seams — the prepared-feature
+inventory gate (all offending paths in one error with the
+fixture-slug rule), the script contract's goto/assert-url
+validation, and exploration's feature-entry targets. `950a8d9`
+N83: the generated protocol harvests alert/status/live-region copy
+into a quarantined per-route `alerts` field (excluded from text,
+headings, controls, and the aria fallback lane), fires a synthetic
+`/__makeademo-404-probe__` probe (hash-form for hash routers;
+dropped on redirect, deadline pressure, or overlay-stuck runs) so
+the backend learns the app's not-found signature, and the backend
+taints routes via parsed page errors (with an ambient-noise filter
+mirroring the chrome rule) plus probe subset-matching with a
+root-route fallback guard; error-state routes contribute
+navigation only to the catalog, their evidence rides failed
+verdicts, and all-features-on-error-routes promotes to
+`empty/unmeaningful app state`. `ae754ce` N88: pairing rejections
+echo what the candidate referenced (`id (kind)` per action);
+rejected FlowSpec candidates persist in attempt files
+(`onAttemptRejected` carries the parsed candidate); the FlowSpec
+contract subordinates the route-distinct preference to the
+tagged-set requirement. `029fa39` N85: sealed-network world rule 6
+names boot-validated packages (themes, plugins, bundled dashboards)
+as prerequisite builds and states that the gated install re-runs
+with the network open whenever a change touches dependency inputs;
+rule 7 requires replaced APIs to reproduce the client's envelope
+exactly (pagination wrappers, array-vs-object data, required entity
+fields such as user.email) across every consumed endpoint.
+Deviation from the plan: the "escape hatch to a fresh preparation
+cycle" was dropped — code inspection showed `validatePreparation`
+already reopens the install window on every repair round whose
+dependency inputs changed (the N58 reuse only skips unchanged
+rounds), so ghost's six wasted rounds were a steering gap, not a
+capability gap. `323706b` N87: the three heavy commands are
+bracketed with `[makeademo:disk] <label> before|after` df markers
+(labels `deps`/`lifecycle`/`build` — "install" as a label collided
+with a test that greps commands for that substring) and
+yarn/npm/pnpm caches are pruned after the offline lifecycle
+completes, with corepack's cache preserved; prong 3
+(focused-install steering) is deferred until the markers say the
+peak is what the plan assumed. `bdedc8d` N90: exploration failures
+now carry a structured `failingFeatureIds` list (populated on every
+feature-scoped failure path); a repair round whose failing set is a
+proper subset of the previous feature-bearing failure's set earns a
+bonus global round, capped at +2 per run — churn (different
+features failing) and app-wide failures earn nothing. `71b70b8`
+N91: the generated protocol's `gotoRoute` reloads once when a
+route visit records an HTTP 504 on a script resource (Vite's
+"Outdated Optimize Dep" re-bundling window), then proceeds with
+whatever renders. N89 in four commits: `ca2880c` the protocol
+harvests text that newly appeared after each exercised interaction
+(headings, dialogs, non-alert text; verified live in the revealed
+state, where the demo script will assert it), for clicks and
+fills/selects alike; `12a135b` the catalog emits those as
+`assert-revealed-*` actions carrying `revealedBy:
+<interactionActionId>` (schema validates revealedBy references an
+interaction in the catalog); `1230c5b` routes bearing revealed
+asserts count as content-bearing at exploration grounding, so
+tool-shaped routes ground and are never classified hollow;
+`e8fcf5d` flow validation accepts a revealed assert only together
+with its revealing interaction (a mismatched pair is a violation
+naming the required interaction), the revealed pair satisfies the
+route-distinct assert preference, the script contract requires the
+scene to run the interaction before the assert and rejects
+revealed asserts in the off-camera setup lane, and the FlowSpec
+contract states the pairing invariant. `afeb4ee` regenerated
+dependency graphs for the new route-placeholders module.
+
+Verification: TDD per item, failing test verified red first; lint,
+typecheck, test, knip green per commit. Tests 903→934 (+31). One
+full-suite run flaked on the remotion-video-renderer delayRender
+timeout under parallel background load; it passed in isolation and
+in the following clean run.
+
+**N86 operational rollout executed (2026-08-08).**
+`makeademo-submitted-code-browser-ca-20260808-distutils` built
+server-side from the updated Dockerfile (2 CPU / 4GB / 10GB disk),
+`.env` repointed, and `bun run verify:daytona-image` passed on the
+live snapshot — including the new swapped-runtime check that
+imports `distutils.version.StrictVersion` under the image's
+Python, proving vendored node-gyp vintages can resolve their
+distutils imports on every baked Node line. The tenth matrix run
+is the acceptance gate for the batch: outline must fail at
+exploration with quarantined toast text steering the repair,
+calcom's lifecycle verdicts must be legible via the command-end
+trailers, conduit's flow rejection must echo its own referenced
+ids, twenty's disk markers must prove or retire N87 prong 3, and
+cyberchef-class tool UIs now have the revealed-evidence lane to
+ground and script against.
