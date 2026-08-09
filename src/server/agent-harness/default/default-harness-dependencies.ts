@@ -4268,6 +4268,15 @@ const sealedNetworkWorldRulesInstruction =
   "(6) Packages the app validates at boot — themes, plugins, bundled dashboards — are prerequisite builds: produce their assets through declared build commands, adding any missing tooling to devDependencies. The gated install re-runs with the network open whenever your changes touch dependency inputs (package.json, lockfiles, the install command), so tooling installs are always achievable during preparation and repair; runtime downloads never are. " +
   "(7) A replaced API must reproduce the client's expected response envelope exactly — copy the shape from the app's own client/store/transport code (pagination wrappers, array-vs-object data, required entity fields such as user.email) and cover every endpoint the demo routes call. A partially covered or mis-shaped adapter renders skeletons and error toasts and fails exploration as an empty app.";
 
+const dataFixturePlaybookInstruction =
+  "In-code fixture playbook for every data-backed feature — the fixture is the data; nothing is fetched: " +
+  "(1) Find the exact function the UI calls for the feature's data surface (server query function, API route handler, or client fetch hook). " +
+  "(2) Author the fixture as an in-code literal typed by that function's declared return type, in its own module. " +
+  "(3) Under the demo gate, return that fixture from the function immediately (a resolved value, not a pending transport). Never leave the original database, ORM, HTTP, or RPC call in the demo path, and never make the store 'optional' with an empty-on-missing fallback — a query left pending renders skeleton rows forever and fails exploration. " +
+  "(4) Declare each wired surface in that feature's dataSeams entries: path and functionName of the function returning fixtures, and fixtureModule of the fixture file. The backend verifies these files exist in your diff. " +
+  "(5) In a TypeScript repo, prove each fixture's shape with the repo's own compiler before finishing: write a temporary probe file inside the app (for example .makeademo-fixture-probe.ts) containing `const check: Awaited<ReturnType<typeof theFunction>> = theFixture;` per seam, typecheck it with the app's tsconfig (a temporary config that extends it with a files entry for the probe, run through the repo's own tsc --noEmit), record the outcome in that seam's shapeProbe field ('passed', 'failed: <first diagnostic>', or 'not-run: <reason>'), fix failures, and delete the probe and temporary config afterwards. " +
+  "(6) Then check what no compiler can: fixture dates inside the surface's default visible range, status/enum values that survive its default filters, and consistent relations between fixture entities — a shape-correct fixture that the default view filters out still renders an empty table.";
+
 const appDirShapeInstruction =
   'appDir must be relative to /workspace/repo: use "." for the repo root or a path such as "frontend"; never use an absolute path.';
 
@@ -4357,6 +4366,7 @@ function createRepoPreparationPrompt(input: {
       "When keyProductFeatures is empty, select and fully prepare up to three strong source-backed browser features. Each selected feature must be reachable with deterministic local authentication and data fixtures where needed; candidate identification alone is not sufficient.",
       offCameraAuthenticationInstruction,
       offlineFeatureStateInstruction,
+      dataFixturePlaybookInstruction,
       sealedNetworkWorldRulesInstruction,
       "Do not invent core product behavior that is absent from the source. If a requested capability is truly absent, leave concrete evidence in knownLimitations rather than fabricating it.",
       "Every feature sourcePaths list must cite at least one original browser route, page, component, or UI module used by the prepared route. If the original app cannot be prepared through the allowed seams, do not synthesize a substitute product.",
@@ -4406,6 +4416,7 @@ function createRepoPreparationRepairPrompt(input: {
       "Inspect the source paths needed to replace productContext placeholders. Every requested feature must have one source-backed inventory entry and at least one browser entry path; do not solve validation by deleting a requested feature.",
       offCameraAuthenticationInstruction,
       offlineFeatureStateInstruction,
+      dataFixturePlaybookInstruction,
       "Preserve original routes, UI components, styles, brand assets, and interaction logic. Repair only authentication, data, external-service, fixture, seed, asset-vendoring, environment, or configuration seams; never create a replacement app or standalone demo server.",
       "Do not finish until the manifest exists at that exact path.",
       "Do not write secrets into files. Replace external services with local fixtures or mocks.",
@@ -4495,6 +4506,12 @@ function createRuntimePreparationRepairPrompt(input: {
       "Preserve every selected productContext feature, including every requested feature, and retain its source evidence and entryPaths.",
       offCameraAuthenticationInstruction,
       offlineFeatureStateInstruction,
+      // The playbook is long; interpolate it only for the data-surface
+      // failure class it exists to repair (prompt diet, N65).
+      ...(input.failureReport.failureClassification ===
+      "empty/unmeaningful app state"
+        ? [dataFixturePlaybookInstruction]
+        : []),
       sealedNetworkWorldRulesInstruction,
       "Read /workspace/.makeademo/preparation-manifest-contract.json and use /workspace/.makeademo/preparation-manifest-template.json as the canonical shape.",
       "Do not patch only the reported failure. Revalidate the complete manifest and every productContext.featureInventory entry before finishing.",
