@@ -2787,8 +2787,13 @@ function withDiskMarkers(
   const evidenceLogPath = `/tmp/makeademo/${label}-${randomUUID()}.log`;
   const marker = (phase: string) =>
     `df -k /workspace 2>/dev/null | tail -1 | sed "s|^|[makeademo:disk] ${label} ${phase} |"`;
+  // The cgroup's running memory peak (v2 first, v1 fallback), read after the
+  // command so capacity diagnoses see peaks on the transcript instead of
+  // inferring them (midday's dev-server OOM, 2026-08-09). Best-effort: a
+  // host without a readable cgroup emits no line.
+  const memoryMarker = `cat /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory/memory.max_usage_in_bytes 2>/dev/null | head -1 | sed "s|^|[makeademo:mem] ${label} peak-bytes |"`;
   return {
-    command: `${marker("before")}; mkdir -p /tmp/makeademo; { ${command}; } 2>&1 | tee ${shellQuote(evidenceLogPath)}; makeademo_disk_status=\${PIPESTATUS[0]}; ${marker("after")}; sh -c "exit \${makeademo_disk_status}"`,
+    command: `${marker("before")}; mkdir -p /tmp/makeademo; { ${command}; } 2>&1 | tee ${shellQuote(evidenceLogPath)}; makeademo_disk_status=\${PIPESTATUS[0]}; ${marker("after")}; ${memoryMarker}; sh -c "exit \${makeademo_disk_status}"`,
     evidenceLogPath,
   };
 }

@@ -3849,6 +3849,12 @@ describe("createDefaultAgentHarnessDependencies", () => {
       command.includes("npm rebuild"),
     );
     expect(lifecycle).toContain("[makeademo:disk]");
+    // Capacity diagnoses must read memory peaks off the transcript instead
+    // of inferring them (midday's dev-server OOM, 2026-08-09): the wrapper
+    // also reports the cgroup's peak after each heavy command.
+    expect(install).toContain("[makeademo:mem]");
+    expect(install).toContain("memory.peak");
+    expect(lifecycle).toContain("[makeademo:mem]");
   });
 
   it("prunes package-manager caches after a successful offline lifecycle", async () => {
