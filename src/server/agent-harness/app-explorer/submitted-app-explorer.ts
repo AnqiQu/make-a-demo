@@ -109,6 +109,15 @@ type ObservedRoute = {
    * path, never at feature wording (cyberchef, 2026-08-08 matrix).
    */
   loadingOverlay?: boolean;
+  /**
+   * Text harvested from alert/status/live regions (toasts, banners). Error
+   * copy is what an app shows when it fails, so these strings are
+   * quarantined from `headings`/`text` at harvest: they can never ground a
+   * feature or seed an assert, but they name the broken contract better
+   * than any inference, so failed verdicts carry them as repair evidence
+   * ("Could not load shared documents" — outline, 2026-08-08).
+   */
+  alerts?: string[];
   path: string;
   primaryNavigation: string[];
   requestedPath?: string;
@@ -414,11 +423,26 @@ function createExplorationArtifacts(input: {
       )
       .map(({ id }) => id),
   );
-  const distinctContentByRoute = readRouteDistinctContent(
-    input.observation.routes,
+  // The 404 probe exists only to teach the backend the app's not-found
+  // signature; it must never appear in the AppMap or ground anything.
+  const probeRoute = input.observation.routes.find((route) =>
+    route.path.includes(notFoundProbePathMarker),
   );
+  const observedRoutes = input.observation.routes.filter(
+    (route) => route !== probeRoute,
+  );
+  const distinctContentByRoute = readRouteDistinctContent(observedRoutes);
+  const errorState = readErrorStateRoutes({
+    distinctContentByRoute,
+    pageErrors: input.observation.pageErrors,
+    ...(probeRoute === undefined ? {} : { probeRoute }),
+    routes: observedRoutes,
+  });
+  for (const path of errorState.suppressedRoutePaths) {
+    distinctContentByRoute.set(path, []);
+  }
   const stuckLoadingRoutes = new Set(
-    input.observation.routes
+    observedRoutes
       .filter((route) => route.loadingOverlay === true)
       .map((route) => route.path),
   );
@@ -426,7 +450,7 @@ function createExplorationArtifacts(input: {
   const loginOrAuthWalls: string[] = [];
   const emptyDataTablesByRoute = new Map<string, number>();
   const populatedTableRoutes = new Set<string>();
-  for (const route of input.observation.routes) {
+  for (const route of observedRoutes) {
     routes.push({
       buttons: route.buttons,
       ...(route.featureIds === undefined
@@ -472,10 +496,11 @@ function createExplorationArtifacts(input: {
   });
   const actionCatalog = readActionCatalog({
     actions: createActions(
-      input.observation.routes,
+      observedRoutes,
       input.featureInventory,
       explicitAuthenticationFeatureIds,
       distinctContentByRoute,
+      errorState.suppressedRoutePaths,
     ),
     appMapId,
     id: actionCatalogId,
@@ -485,6 +510,7 @@ function createExplorationArtifacts(input: {
     appMap,
     distinctContentByRoute,
     emptyDataTablesByRoute,
+    errorEvidenceByRoute: errorState.evidenceByRoute,
     explicitAuthenticationFeatureIds,
     featureInventory: input.featureInventory,
     networkAttempts,
@@ -664,6 +690,135 @@ export function readRouteDistinctContent(
   );
 }
 
+/**
+ * The synthetic path the explorer visits before real routes to learn what
+ * this app renders for a URL that cannot exist. The harvested page is kept
+ * out of the AppMap; its content is only the app's not-found signature.
+ */
+const notFoundProbePathMarker = "__makeademo-404-probe__";
+
+/**
+ * Identifies routes whose harvested evidence describes failure rather than
+ * product behavior, so grounding and assert selection never build on it
+ * (outline's demo asserted its own error boundary, 2026-08-08). Two
+ * framework-agnostic signals: a route rendering nothing beyond the 404
+ * probe's content is a not-found page wearing a valid URL, and a route with
+ * a route-specific uncaught page error is a crash surface. Guards: the
+ * probe is uninformative when it matches the app's root route (apps that
+ * render home for unknown URLs), and an error message repeated on more
+ * than half of ≥4 routes is ambient noise, not a route defect. Returns the
+ * suppressed route paths plus per-route evidence strings (alerts, page
+ * errors, the not-found verdict) for repair steering.
+ */
+function readErrorStateRoutes(input: {
+  distinctContentByRoute: ReadonlyMap<string, string[]>;
+  pageErrors: string[];
+  probeRoute?: {
+    headings: string[];
+    path: string;
+    primaryNavigation?: string[];
+    text: string[];
+  };
+  routes: ReadonlyArray<{
+    alerts?: string[];
+    headings: string[];
+    path: string;
+    primaryNavigation?: string[];
+    text: string[];
+  }>;
+}): {
+  evidenceByRoute: Map<string, string[]>;
+  suppressedRoutePaths: Set<string>;
+} {
+  const evidenceByRoute = new Map<string, string[]>();
+  const suppressedRoutePaths = new Set<string>();
+  const addEvidence = (path: string, values: string[]) => {
+    if (values.length === 0) return;
+    evidenceByRoute.set(path, [
+      ...(evidenceByRoute.get(path) ?? []),
+      ...values,
+    ]);
+  };
+  for (const route of input.routes) {
+    addEvidence(route.path, unique(route.alerts ?? []));
+  }
+
+  const shellCount = new Set(
+    input.routes.map((route) => routeShellKey(route.path)),
+  ).size;
+  const errorShells = new Map<string, Set<string>>();
+  const parsedErrors: Array<{ message: string; shell: string }> = [];
+  for (const pageError of input.pageErrors) {
+    const separator = pageError.indexOf(": ");
+    if (separator === -1 || !pageError.startsWith("http")) continue;
+    const message = pageError.slice(separator + 2);
+    let shell: string;
+    try {
+      const url = new URL(pageError.slice(0, separator));
+      shell = routeShellKey(url.pathname + url.search + url.hash);
+    } catch {
+      continue;
+    }
+    parsedErrors.push({ message, shell });
+    const shells = errorShells.get(message) ?? new Set<string>();
+    shells.add(shell);
+    errorShells.set(message, shells);
+  }
+  const ambient = (message: string) =>
+    shellCount >= 4 && (errorShells.get(message)?.size ?? 0) > shellCount / 2;
+  for (const route of input.routes) {
+    const shell = routeShellKey(route.path);
+    const routeErrors = unique(
+      parsedErrors
+        .filter((error) => error.shell === shell && !ambient(error.message))
+        .map((error) => error.message),
+    );
+    if (routeErrors.length === 0) continue;
+    suppressedRoutePaths.add(route.path);
+    addEvidence(
+      route.path,
+      routeErrors.map((message) => `uncaught page error: ${message}`),
+    );
+  }
+
+  if (input.probeRoute !== undefined) {
+    const probeDistinct = new Set(
+      readRouteDistinctContent([...input.routes, input.probeRoute]).get(
+        input.probeRoute.path,
+      ) ?? [],
+    );
+    const rootRoute = input.routes.find(
+      (route) => routeShellKey(route.path) === "/",
+    );
+    const rootDistinct = new Set(
+      rootRoute === undefined
+        ? []
+        : (input.distinctContentByRoute.get(rootRoute.path) ?? []),
+    );
+    const probeMatchesRoot =
+      rootRoute !== undefined &&
+      probeDistinct.size === rootDistinct.size &&
+      [...probeDistinct].every((value) => rootDistinct.has(value));
+    if (probeDistinct.size > 0 && !probeMatchesRoot) {
+      for (const route of input.routes) {
+        const distinct = input.distinctContentByRoute.get(route.path) ?? [];
+        if (
+          distinct.length === 0 ||
+          !distinct.every((value) => probeDistinct.has(value))
+        ) {
+          continue;
+        }
+        suppressedRoutePaths.add(route.path);
+        addEvidence(route.path, [
+          "renders the app's not-found page (its content matches what an unknown URL shows)",
+        ]);
+      }
+    }
+  }
+
+  return { evidenceByRoute, suppressedRoutePaths };
+}
+
 // One shell per pathname: the query is state, and a fragment is state unless
 // it begins with "#/" (hash routing), in which case the hashed path — minus
 // its own query — is part of the page identity.
@@ -682,9 +837,26 @@ function createActions(
   featureInventory: PreparedDemoFeature[],
   explicitAuthenticationFeatureIds: ReadonlySet<string>,
   distinctContentByRoute: ReadonlyMap<string, string[]>,
+  errorStateRoutePaths: ReadonlySet<string> = new Set(),
 ) {
   const actions: Array<Record<string, unknown>> = [];
-  routes.forEach((route, routeIndex) => {
+  routes.forEach((fullRoute, routeIndex) => {
+    // A crashed or not-found page's controls are not product surface: the
+    // 2026-08-08 outline demo clicked its error boundary's "Reload" button
+    // as the feature interaction. Navigation stays observable; everything
+    // else on an error-state route is off the catalog.
+    const route = errorStateRoutePaths.has(fullRoute.path)
+      ? {
+          ...fullRoute,
+          buttons: [],
+          headings: [],
+          inputLocators: [],
+          inputs: [],
+          interactions: [],
+          scrollTargets: [],
+          text: [],
+        }
+      : fullRoute;
     const matchFeatureIds = (evidence: string) =>
       matchActionFeatureIds(
         route,
@@ -998,6 +1170,7 @@ function createExplorationValidationReport(input: {
   appMap: AppMap;
   distinctContentByRoute: ReadonlyMap<string, string[]>;
   emptyDataTablesByRoute?: ReadonlyMap<string, number>;
+  errorEvidenceByRoute?: ReadonlyMap<string, string[]>;
   explicitAuthenticationFeatureIds: ReadonlySet<string>;
   featureInventory: PreparedDemoFeature[];
   networkAttempts: NetworkAttempt[];
@@ -1015,6 +1188,7 @@ function createExplorationValidationReport(input: {
     input.distinctContentByRoute,
     input.populatedTableRoutes ?? new Set(),
     input.stuckLoadingRoutes ?? new Set(),
+    input.errorEvidenceByRoute ?? new Map(),
   );
   // Load-breaking runtime evidence outranks grounding counts: a route that
   // crashes before rendering cannot ground anything, and only the dependency
@@ -1107,6 +1281,7 @@ function readExplorationFailure(
   distinctContentByRoute: ReadonlyMap<string, string[]>,
   populatedTableRoutes: ReadonlySet<string>,
   stuckLoadingRoutes: ReadonlySet<string>,
+  errorEvidenceByRoute: ReadonlyMap<string, string[]> = new Map(),
 ): { classification: string; message: string } | undefined {
   const unreachableFailure = (features: PreparedDemoFeature[]) => {
     const featureIds = new Set(features.map(({ id }) => id));
@@ -1385,14 +1560,25 @@ function readExplorationFailure(
           vetoedByEmptyTable: false,
         };
       }
+      // Error-state evidence names the actual breakage (toast text, the
+      // uncaught exception, the not-found verdict); with it, the repair
+      // agent fixes the contract instead of guessing at wording.
+      const errorEvidence = unique(
+        routes.flatMap((route) => errorEvidenceByRoute.get(route) ?? []),
+      ).slice(0, 6);
       return {
+        errorState: errorEvidence.length > 0,
         sentence: ` Requested feature "${feature.requestedFeature}" routes ${routes
           .slice(0, 4)
           .join(", ")} ${chromeOnlyExplanation(
           `; repair the prepared app's data path for these routes.${emptyTableEvidence(
             routes,
           )}`,
-        )}`,
+        )}${
+          errorEvidence.length === 0
+            ? ""
+            : ` Error-state evidence on these routes: ${errorEvidence.join(" | ")}.`
+        }`,
         vetoedByEmptyTable: false,
       };
     });
@@ -1409,10 +1595,20 @@ function readExplorationFailure(
             classification: "empty/unmeaningful app state",
             message: `Every requested feature's data surface rendered as a zero-row table: ${requestedFeatureNames}.${routeEvidence}`,
           }
-        : {
-            classification: "requested feature not observable",
-            message: `App Exploration found no browser evidence for requested features: ${requestedFeatureNames}.${routeEvidence}`,
-          })
+        : featureEvidence.every(
+              (entry) => "errorState" in entry && entry.errorState === true,
+            )
+          ? {
+              // Every missing feature failed on an error-state route: the
+              // app is broken, not mis-worded — steer at the runtime/data
+              // contract with the error evidence.
+              classification: "empty/unmeaningful app state",
+              message: `Every requested feature's routes rendered error states instead of content: ${requestedFeatureNames}.${routeEvidence}`,
+            }
+          : {
+              classification: "requested feature not observable",
+              message: `App Exploration found no browser evidence for requested features: ${requestedFeatureNames}.${routeEvidence}`,
+            })
     );
   }
   // Exploration grounds a feature on exercised evidence alone, but flow
@@ -1988,33 +2184,20 @@ try {
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
   };
-  const queue = [
-    ...featureEntryTargets,
-    { featureIds: [], requestedPath: new URL(baseUrl).pathname, url: new URL(baseUrl).toString() },
-  ];
-  const seen = new Set();
-  const harvestedOnEarlierRoutes = new Set();
-  const maxRoutes = Math.min(30, featureEntryTargets.length + 9);
-  await mkdir(outputDirectory, { recursive: true });
-  while (queue.length > 0 && seen.size < maxRoutes && Date.now() < deadlineAtMs) {
-    const target = queue.shift();
-    if (!target) continue;
-    const targetUrl = normalizeCrawlUrl(target.url);
-    if (seen.has(targetUrl)) continue;
-    seen.add(normalizeCrawlUrl(target.url));
-    try {
-      await gotoRoute(target.url);
-      const landedUrl = normalizeCrawlUrl(page.url());
-      if (landedUrl !== targetUrl && seen.has(landedUrl)) continue;
-      seen.add(landedUrl);
-      const observed = await page.evaluate(() => {
+  const harvestPage = () => {
         const clean = (value) => (value || "").replace(/\\s+/g, " ").trim();
         const visible = (element) => {
           const style = getComputedStyle(element);
           const box = element.getBoundingClientRect();
           return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
         };
-        const texts = (selector, limit = 40) => Array.from(document.querySelectorAll(selector)).filter(visible).map((element) => clean(element.innerText || element.getAttribute("aria-label"))).filter(Boolean).slice(0, limit);
+        // Toast/banner copy is failure narration, not product content: it is
+        // harvested into its own field and quarantined from every content
+        // and control harvest (outline grounded features on its own error
+        // toasts, 2026-08-08).
+        const alertContainerSelector = "[role=alert], [role=status], [role=alertdialog], [aria-live]:not([aria-live=off])";
+        const inAlert = (element) => element.closest(alertContainerSelector) !== null;
+        const texts = (selector, limit = 40) => Array.from(document.querySelectorAll(selector)).filter(visible).filter((element) => !inAlert(element)).map((element) => clean(element.innerText || element.getAttribute("aria-label"))).filter(Boolean).slice(0, limit);
         const links = Array.from(document.querySelectorAll("a[href]")).filter(visible).map((element) => {
           const target = new URL(element.href, location.href);
           const explicitName = clean(element.getAttribute("aria-label"));
@@ -2085,8 +2268,9 @@ try {
           const cellTexts = Array.from(row.querySelectorAll("td, [role=cell], [role=gridcell]")).filter(visible).map((cell) => clean(cell.innerText)).filter(Boolean);
           return cellTexts[0] || clean(row.innerText);
         })))].filter((value) => value.length >= 2 && value.length <= 80).slice(0, 9);
-        const paragraphTexts = Array.from(document.querySelectorAll("main p, main li, article p, [role=main] p")).filter(visible).map((element) => clean(element.innerText)).filter(Boolean).slice(0, 80);
+        const paragraphTexts = Array.from(document.querySelectorAll("main p, main li, article p, [role=main] p")).filter(visible).filter((element) => !inAlert(element)).map((element) => clean(element.innerText)).filter(Boolean).slice(0, 80);
         return {
+          alerts: Array.from(document.querySelectorAll(alertContainerSelector)).filter(visible).map((element) => clean(element.innerText)).filter(Boolean).slice(0, 12),
           buttons: texts("button, [role=button]", 16),
           emptyDataTables,
           forms: Array.from(document.querySelectorAll("form")).filter(visible).map((element) => clean(element.getAttribute("aria-label") || element.getAttribute("name") || element.id || "form")).slice(0, 20),
@@ -2100,7 +2284,27 @@ try {
           text: [...paragraphTexts, ...dataTableRowTexts.filter((value) => !paragraphTexts.includes(value))],
           title: document.title || clean(document.querySelector("h1")?.textContent) || location.pathname,
         };
-      });
+  };
+  const queue = [
+    ...featureEntryTargets,
+    { featureIds: [], requestedPath: new URL(baseUrl).pathname, url: new URL(baseUrl).toString() },
+  ];
+  const seen = new Set();
+  const harvestedOnEarlierRoutes = new Set();
+  const maxRoutes = Math.min(30, featureEntryTargets.length + 9);
+  await mkdir(outputDirectory, { recursive: true });
+  while (queue.length > 0 && seen.size < maxRoutes && Date.now() < deadlineAtMs) {
+    const target = queue.shift();
+    if (!target) continue;
+    const targetUrl = normalizeCrawlUrl(target.url);
+    if (seen.has(targetUrl)) continue;
+    seen.add(normalizeCrawlUrl(target.url));
+    try {
+      await gotoRoute(target.url);
+      const landedUrl = normalizeCrawlUrl(page.url());
+      if (landedUrl !== targetUrl && seen.has(landedUrl)) continue;
+      seen.add(landedUrl);
+      const observed = await page.evaluate(harvestPage);
       observed.loadingOverlay = await page.evaluate(hasCoveringLoadingOverlay).catch(() => false);
       const current = new URL(page.url());
       const path = current.pathname + current.search + current.hash;
@@ -2176,7 +2380,7 @@ try {
           const ariaTextCandidates = [...new Set([
             ...[...aria.matchAll(/-\\s+[a-z]+ "([^"\\n]{3,80})"/g)].map((match) => match[1]),
             ...[...aria.matchAll(/-\\s+text: (\\S[^\\n]{2,399})$/gm)].map((match) => cleanAriaText(match[1])),
-          ])].filter((candidate) => !observed.text.includes(candidate) && !observed.headings.includes(candidate) && !isEmptyTableStructure(candidate)).slice(0, 24);
+          ])].filter((candidate) => !observed.text.includes(candidate) && !observed.headings.includes(candidate) && !isEmptyTableStructure(candidate) && !(observed.alerts || []).some((alert) => alert.includes(candidate))).slice(0, 24);
           observed.text.push(...ariaTextCandidates);
         } catch {}
       }
@@ -2337,6 +2541,36 @@ try {
       if (isAppUnavailableError(error)) break;
     }
   }
+  // Learn the app's not-found signature: what renders for a URL that cannot
+  // exist. Recorded as a marker route the backend strips from the AppMap;
+  // dropped when the app redirects the probe onto a real route (such apps
+  // never show a 404 page, so the probe teaches nothing). Skipped past the
+  // deadline and on overlay-stuck apps, where the probe would pay the full
+  // overlay wait to harvest a page that renders nothing.
+  if (Date.now() < deadlineAtMs && !result.routes.some((route) => route.loadingOverlay === true)) try {
+    const probeMarker = ${JSON.stringify(notFoundProbePathMarker)};
+    const probeUrl = featureEntryTargets.some((target) => target.url.includes("#/"))
+      ? new URL("#/" + probeMarker, baseUrl).toString()
+      : new URL("/" + probeMarker, baseUrl).toString();
+    await gotoRoute(probeUrl);
+    if (page.url().includes(probeMarker)) {
+      const probeObserved = await page.evaluate(harvestPage);
+      result.routes.push({
+        alerts: [],
+        buttons: [],
+        forms: [],
+        headings: probeObserved.headings,
+        inputs: [],
+        links: [],
+        path: "/" + probeMarker,
+        primaryNavigation: probeObserved.primaryNavigation,
+        screenshot: "",
+        snapshot: "",
+        text: probeObserved.text,
+        title: probeObserved.title,
+      });
+    }
+  } catch {}
 } catch (error) {
   result.fatalError = error instanceof Error ? error.message : String(error);
 } finally {

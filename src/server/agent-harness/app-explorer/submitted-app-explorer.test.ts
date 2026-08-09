@@ -480,6 +480,245 @@ describe("exploreSubmittedApp", () => {
     expect(result.validationReport.status).toBe("passed");
   });
 
+  it("quarantines routes with route-specific page errors from grounding evidence", async () => {
+    // Outline's crashed /search rendered its error boundary ("Something
+    // Unexpected Happened") and the demo asserted that heading as feature
+    // proof (2026-08-08). A route that threw an uncaught exception supplies
+    // no evidence and no asserts; its page error steers the repair.
+    const chrome = ["Home", "Search", "Settings", "Archive"];
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          entryPaths: ["/search?q=knowledge"],
+          id: "search-documents",
+          label: "Search documents",
+          requestedFeature: "Search documents",
+        }),
+      ],
+      pageErrors: [
+        "http://127.0.0.1:4000/search?q=knowledge: Cannot read properties of undefined (reading 'toLocaleLowerCase')",
+      ],
+      requestedFeatures: ["Search documents"],
+      routes: [
+        observedRoute({
+          featureIds: ["search-documents"],
+          headings: ["Something Unexpected Happened"],
+          path: "/search?q=knowledge",
+          primaryNavigation: chrome,
+          text: [...chrome, "Clear cache + reload", "Show detail…"],
+        }),
+        observedRoute({
+          headings: ["Welcome"],
+          path: "/",
+          primaryNavigation: chrome,
+          text: [...chrome, "Latest documents"],
+        }),
+        observedRoute({
+          headings: ["Archive"],
+          path: "/archive",
+          primaryNavigation: chrome,
+          text: chrome,
+        }),
+        observedRoute({
+          headings: ["Settings"],
+          path: "/settings",
+          primaryNavigation: chrome,
+          text: chrome,
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "empty/unmeaningful app state",
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain("toLocaleLowerCase");
+    const assertValues = requireArtifacts(result)
+      .actionCatalog.actions.filter((action) => action.kind === "assert")
+      .map((action) => action.preferredLocator.value ?? "")
+      .join(" ");
+    expect(assertValues).not.toContain("Something Unexpected Happened");
+  });
+
+  it("does not taint routes whose page error repeats across most of the app", async () => {
+    // An analytics rejection logged on every route is ambient noise, not a
+    // route defect — tainting on it would fail every healthy app that logs
+    // one benign error per page.
+    const chrome = ["Home", "Search", "Settings", "Archive"];
+    const ambientError = (path: string) =>
+      `http://127.0.0.1:4000${path}: Failed to fetch telemetry`;
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          entryPaths: ["/search"],
+          id: "search-documents",
+          label: "Search documents",
+          requestedFeature: "Search documents",
+        }),
+      ],
+      pageErrors: [
+        ambientError("/search"),
+        ambientError("/"),
+        ambientError("/archive"),
+        ambientError("/settings"),
+      ],
+      requestedFeatures: ["Search documents"],
+      routes: [
+        observedRoute({
+          featureIds: ["search-documents"],
+          headings: ["Search documents"],
+          path: "/search",
+          primaryNavigation: chrome,
+          text: [...chrome, "Quarterly planning notes"],
+        }),
+        observedRoute({
+          headings: ["Welcome"],
+          path: "/",
+          primaryNavigation: chrome,
+          text: [...chrome, "Latest documents"],
+        }),
+        observedRoute({
+          headings: ["Archive"],
+          path: "/archive",
+          primaryNavigation: chrome,
+          text: chrome,
+        }),
+        observedRoute({
+          headings: ["Settings"],
+          path: "/settings",
+          primaryNavigation: chrome,
+          text: chrome,
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("passed");
+  });
+
+  it("marks routes matching the 404-probe signature as not content-bearing", async () => {
+    // The probe page's content is what the app shows for a URL that cannot
+    // exist; a real route showing nothing beyond that is a not-found page
+    // wearing a valid URL (outline's fixture doc slug, 2026-08-08).
+    const chrome = ["Home", "Search", "Settings"];
+    const notFoundContent = {
+      headings: ["Not found"],
+      text: [...chrome, "The page you’re looking for cannot be found."],
+    };
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          entryPaths: ["/doc/welcome"],
+          id: "read-document",
+          label: "Read a document",
+          requestedFeature: "Read a document",
+        }),
+      ],
+      requestedFeatures: ["Read a document"],
+      routes: [
+        observedRoute({
+          ...notFoundContent,
+          path: "/__makeademo-404-probe__",
+          primaryNavigation: chrome,
+        }),
+        observedRoute({
+          ...notFoundContent,
+          featureIds: ["read-document"],
+          path: "/doc/welcome",
+          primaryNavigation: chrome,
+        }),
+        observedRoute({
+          headings: ["Welcome"],
+          path: "/",
+          primaryNavigation: chrome,
+          text: [...chrome, "Latest documents"],
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "empty/unmeaningful app state",
+      status: "failed",
+    });
+    const appMapPaths = requireArtifacts(result).appMap.discoveredRoutes.map(
+      (route) => route.path,
+    );
+    expect(appMapPaths).not.toContain("/__makeademo-404-probe__");
+  });
+
+  it("ignores the 404 probe when unknown URLs render the app's default route", async () => {
+    // Apps that render home for any URL make the probe indistinguishable
+    // from the default route; flagging on it would fail healthy homes.
+    const chrome = ["Home", "Search", "Settings"];
+    const homeContent = {
+      headings: ["Dashboard overview"],
+      text: [...chrome, "Latest activity"],
+    };
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          entryPaths: ["/"],
+          id: "dashboard",
+          label: "Dashboard overview",
+          requestedFeature: "Dashboard overview",
+        }),
+      ],
+      requestedFeatures: ["Dashboard overview"],
+      routes: [
+        observedRoute({
+          ...homeContent,
+          path: "/__makeademo-404-probe__",
+          primaryNavigation: chrome,
+        }),
+        observedRoute({
+          ...homeContent,
+          featureIds: ["dashboard"],
+          path: "/",
+          primaryNavigation: chrome,
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("passed");
+  });
+
+  it("carries alert text as repair evidence for routes that rendered none of their own content", async () => {
+    // The toast literally names the broken contract ("Could not load shared
+    // documents") — it must reach the repair prompt while never grounding
+    // the feature it describes failing.
+    const chrome = ["Home", "Search", "Settings", "Archive"];
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          entryPaths: ["/home"],
+          id: "browse-workspace",
+          label: "Browse the workspace",
+          requestedFeature: "Browse the workspace",
+        }),
+      ],
+      requestedFeatures: ["Browse the workspace"],
+      routes: [
+        observedRoute({
+          alerts: ["Could not load shared documents"],
+          featureIds: ["browse-workspace"],
+          path: "/home",
+          primaryNavigation: chrome,
+          text: chrome,
+        }),
+        observedRoute({
+          headings: ["Archive"],
+          path: "/archive",
+          primaryNavigation: chrome,
+          text: chrome,
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.logsSummary).toContain(
+      "Could not load shared documents",
+    );
+  });
+
   it("fails features that browser evidence cannot distinguish before flow planning", async () => {
     const feature = (id: string, label: string, entryPath: string) => ({
       authStrategy: "none" as const,

@@ -87,13 +87,19 @@ describe("generated exploration script", () => {
         fatalError?: string;
         routes: Array<{
           interactions: Array<{ kind: string; name: string }>;
+          path?: string;
           text: string[];
           textLocatorEvidence: Array<object | null>;
         }>;
       };
 
       expect(result.fatalError).toBeUndefined();
-      expect(result.routes).toHaveLength(1);
+      expect(
+        result.routes.filter(
+          (route: { path?: string }) =>
+            !(route.path ?? "").includes("__makeademo-404-probe__"),
+        ),
+      ).toHaveLength(1);
       const route = result.routes[0];
       expect(route?.text.join(" ")).toContain("Ledger entries");
       expect(route?.textLocatorEvidence.filter(Boolean).length).toBeGreaterThan(
@@ -106,6 +112,146 @@ describe("generated exploration script", () => {
       server.close();
     }
   }, 30_000);
+
+  it("quarantines alert text from the content harvest into a separate alerts field", async () => {
+    // Error toasts are what an app shows when it fails; harvested as text
+    // they ground features on failure copy (outline, 2026-08-08).
+    const toastPage = `<!doctype html><html><head><title>Docs App</title></head><body>
+<h1>Team wiki</h1>
+<main><p>Quarterly planning notes</p></main>
+<div role="alert">Could not load shared documents<button>Close toast</button></div>
+<div aria-live="polite">Saving draft…</div>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(toastPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        routes: Array<{
+          alerts?: string[];
+          buttons: string[];
+          headings: string[];
+          text: string[];
+        }>;
+      };
+
+      const route = result.routes[0];
+      expect(route?.alerts?.join(" ")).toContain(
+        "Could not load shared documents",
+      );
+      expect(route?.alerts?.join(" ")).toContain("Saving draft…");
+      expect(route?.headings).toEqual(["Team wiki"]);
+      expect(route?.text.join(" ")).toContain("Quarterly planning notes");
+      expect(route?.text.join(" ")).not.toContain("Could not load");
+      expect(route?.buttons).not.toContain("Close toast");
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
+  it("records the app's not-found page as a probe route and drops it on redirect", async () => {
+    const contentFor = (path: string) =>
+      path === "/"
+        ? "<h1>Team wiki</h1><main><p>Quarterly planning notes</p></main>"
+        : "<h1>Not found</h1><main><p>The page cannot be found.</p></main>";
+    const server = createServer((request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(
+        `<!doctype html><html><head><title>Docs App</title></head><body>${contentFor(request.url ?? "/")}</body></html>`,
+      );
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    const redirectServer = createServer((request, response) => {
+      if ((request.url ?? "/") !== "/") {
+        response.writeHead(302, { location: "/" });
+        response.end();
+        return;
+      }
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(
+        "<!doctype html><html><head><title>Docs App</title></head><body><h1>Team wiki</h1></body></html>",
+      );
+    });
+    await new Promise<void>((resolve) =>
+      redirectServer.listen(0, "127.0.0.1", resolve),
+    );
+    const redirectAddress = redirectServer.address();
+    if (redirectAddress === null || typeof redirectAddress === "string") {
+      throw new Error("redirect test server did not expose a port");
+    }
+    try {
+      const run = async (port: number) => {
+        const outputDirectory = await mkdtemp(
+          join(tmpdir(), "makeademo-explorer-"),
+        );
+        const script = (
+          await buildExplorerScript(`http://127.0.0.1:${port}`)
+        ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+        const scriptPath = join(outputDirectory, "explore-app.mjs");
+        await writeFile(scriptPath, script);
+        const { stdout } = await execFileAsync("bun", [scriptPath], {
+          env: {
+            ...process.env,
+            NODE_PATH: join(process.cwd(), "node_modules"),
+          },
+          timeout: 25_000,
+        });
+        const marker = stdout.split("[makeademo:exploration] ")[1];
+        expect(marker).toBeDefined();
+        return JSON.parse((marker ?? "").trim()) as {
+          routes: Array<{ headings: string[]; path: string }>;
+        };
+      };
+
+      const withNotFound = await run(address.port);
+      const probeRoute = withNotFound.routes.find((route) =>
+        route.path.includes("__makeademo-404-probe__"),
+      );
+      expect(probeRoute?.headings).toContain("Not found");
+
+      const redirected = await run(redirectAddress.port);
+      expect(
+        redirected.routes.some((route) =>
+          route.path.includes("__makeademo-404-probe__"),
+        ),
+      ).toBe(false);
+    } finally {
+      server.close();
+      redirectServer.close();
+    }
+  }, 60_000);
 
   it("flags a route that never leaves its full-page loading overlay", async () => {
     // cyberchef (2026-08-08 matrix): a full-viewport loader that never
