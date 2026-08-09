@@ -573,8 +573,14 @@ function isPresentationByFileType(path: string) {
 }
 
 function isDemoSeamPath(path: string) {
-  return /(?:^|[./_-])(?:adapters?|api|auth|caches?|clients?|configs?|data|databases?|db|env|fixtures?|gateways?|graphql|integrations?|middleware|mocks?|providers?|proxy|repositor(?:y|ies)|rpc|seeds?|services?|sessions?|stores?|trpc)(?:[./_-]|$)/i.test(
-    path,
+  // The `demo` clause is an owned convention, not vocabulary: the pipeline's
+  // own prompts direct agents to build demo-gated adaptations under
+  // demo-named files, and casing must not matter (outline's camelCase
+  // demoFixtures.ts missed every delimiter-bound token, 2026-08-09).
+  return (
+    /(?:^|[./_-])(?:adapters?|api|auth|caches?|clients?|configs?|data|databases?|db|env|fixtures?|gateways?|graphql|integrations?|middleware|mocks?|providers?|proxy|repositor(?:y|ies)|rpc|seeds?|services?|sessions?|stores?|trpc)(?:[./_-]|$)/i.test(
+      path,
+    ) || /demo/i.test(path)
   );
 }
 

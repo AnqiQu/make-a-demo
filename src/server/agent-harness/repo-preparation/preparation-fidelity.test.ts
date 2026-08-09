@@ -227,6 +227,47 @@ describe("validatePreparationFidelity", () => {
     expect(report.status).toBe("passed");
   });
 
+  it("treats a demo-named camelCase module as a demo seam", () => {
+    // The pipeline's own prompts direct agents to build demo-gated
+    // adaptations under demo-named files — an owned convention, not vocab
+    // chasing. outline's camelCase helpers missed every delimiter-bound
+    // token and a properly gated change read as "outside a seam".
+    const report = validateDiff({
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: ["src/utils/demoContent.ts"],
+      patch: [
+        "diff --git a/src/utils/demoContent.ts b/src/utils/demoContent.ts",
+        "+if (process.env.MAKEADEMO_DEMO === 'true') {",
+        "+  content.push(demoDocument);",
+        "+}",
+      ].join("\n"),
+      sourceFiles: {
+        "src/utils/demoContent.ts": "export const content = [];",
+      },
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("allows package commands to wire a created demo-named module", () => {
+    const report = validateDiff({
+      createdFiles: ["scripts/demoSeed.ts"],
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: ["package.json"],
+      patch: [
+        "diff --git a/scripts/demoSeed.ts b/scripts/demoSeed.ts",
+        "new file mode 100644",
+        "+if (process.env.MAKEADEMO_DEMO === 'true') {",
+        "+  await seedDemoDatabase();",
+        "+}",
+        "diff --git a/package.json b/package.json",
+        '+    "predev": "bun run scripts/demoSeed.ts",',
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
   it("rejects newly authored replacement product routes", () => {
     const replacementPath = "src/pages/demo-dashboard.tsx";
     const report = validateDiff({
