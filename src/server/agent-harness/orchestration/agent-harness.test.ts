@@ -1602,6 +1602,195 @@ describe("runAgentHarnessPipeline", () => {
     );
   });
 
+  it("overturns a false fidelity veto through the adjudicator", async () => {
+    // The judge-on-veto lane (N92): heuristic candidates are proposals, and
+    // an agent judge with the diff in front of it can overturn a false veto
+    // before it costs a repair round.
+    const judged: unknown[] = [];
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_fidelity_adjudicated" }),
+      stubPipelineDependencies({
+        async adjudicateFidelityCandidates({ candidates }) {
+          judged.push(candidates);
+          return candidates.map((_, candidateIndex) => ({
+            candidateIndex,
+            quotedEvidence: [],
+            verdict: "overturn" as const,
+          }));
+        },
+        async capturePreparationWorkspaceDiff() {
+          return presentationVetoWorkspaceDiff();
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    expect(judged).toHaveLength(1);
+    const fidelityReport = result.validationReports.find(
+      (entry) => entry.stage === "preparation-fidelity",
+    );
+    expect(fidelityReport).toMatchObject({
+      fidelityAdjudication: {
+        outcomes: [expect.objectContaining({ outcome: "overturned" })],
+        status: "adjudicated",
+      },
+      status: "passed",
+    });
+  });
+
+  it("keeps the veto and reports unadjudicated when the judge fails", async () => {
+    let diffAttempts = 0;
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_fidelity_judge_failed" }),
+      stubPipelineDependencies({
+        async adjudicateFidelityCandidates() {
+          throw new Error("judge unavailable");
+        },
+        async capturePreparationWorkspaceDiff() {
+          diffAttempts += 1;
+          return diffAttempts === 1
+            ? presentationVetoWorkspaceDiff()
+            : unchangedWorkspaceDiff();
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation() {
+          return { manifest: preparationManifest() };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    const failedFidelity = result.validationReports.find(
+      (entry) =>
+        entry.stage === "preparation-fidelity" && entry.status === "failed",
+    );
+    expect(failedFidelity).toMatchObject({
+      failureClassification: "product fidelity violation",
+      fidelityAdjudication: {
+        outcomes: [expect.objectContaining({ outcome: "unjudged" })],
+        status: "unadjudicated",
+      },
+    });
+  });
+
+  it("discards the adjudication when the workspace diff changes under the judge", async () => {
+    let diffAttempts = 0;
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_fidelity_diff_changed" }),
+      stubPipelineDependencies({
+        async adjudicateFidelityCandidates({ candidates }) {
+          return candidates.map((_, candidateIndex) => ({
+            candidateIndex,
+            quotedEvidence: [],
+            verdict: "overturn" as const,
+          }));
+        },
+        async capturePreparationWorkspaceDiff() {
+          diffAttempts += 1;
+          if (diffAttempts === 1) {
+            return presentationVetoWorkspaceDiff();
+          }
+          if (diffAttempts === 2) {
+            return {
+              ...presentationVetoWorkspaceDiff(),
+              patchSha256: `sha256:${"e".repeat(64)}` as const,
+            };
+          }
+          return unchangedWorkspaceDiff();
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation() {
+          return { manifest: preparationManifest() };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    const failedFidelity = result.validationReports.find(
+      (entry) =>
+        entry.stage === "preparation-fidelity" && entry.status === "failed",
+    );
+    expect(failedFidelity).toMatchObject({
+      fidelityAdjudication: { status: "discarded-diff-changed" },
+    });
+  });
+
   it("records a completed repair session when follow-up fidelity still fails", async () => {
     const artifacts: Record<string, unknown> = {};
 
@@ -3003,6 +3192,23 @@ function replacementWorkspaceDiff() {
       '+  "dev": "bun run demo/server.ts"',
     ].join("\n"),
     patchSha256: `sha256:${"b".repeat(64)}` as const,
+    sourceCommitSha: "abc123def456",
+  };
+}
+
+/** A diff that trips exactly one fidelity candidate: new markup in an original UI file. */
+function presentationVetoWorkspaceDiff() {
+  return {
+    changedFileSha256: {
+      "src/page.tsx": `sha256:${"d".repeat(64)}` as const,
+    },
+    changedPaths: ["/workspace/repo/src/page.tsx"],
+    patch: [
+      "diff --git a/src/page.tsx b/src/page.tsx",
+      "-export default 1",
+      "+export default <main>Demo banner</main>;",
+    ].join("\n"),
+    patchSha256: `sha256:${"d".repeat(64)}` as const,
     sourceCommitSha: "abc123def456",
   };
 }

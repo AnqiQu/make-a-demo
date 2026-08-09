@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { PreparationManifest } from "../schemas/artifacts";
-import { validatePreparationFidelity } from "./preparation-fidelity";
+import {
+  reconcileFidelityAdjudication,
+  validatePreparationFidelity,
+} from "./preparation-fidelity";
 
 const routePath = "apps/dashboard/src/app/tracker/page.tsx";
 
@@ -1501,3 +1504,94 @@ function manifest(
     ...overrides,
   };
 }
+
+describe("reconcileFidelityAdjudication", () => {
+  const candidate = {
+    hint: "Adapt the original application.",
+    message: "app/App.tsx modifies original product UI.",
+    path: "app/App.tsx",
+  };
+  const patch = [
+    "diff --git a/app/App.tsx b/app/App.tsx",
+    "+const isDemo = true;",
+    "+if (isDemo) { render(); }",
+    "diff --git a/src/other.ts b/src/other.ts",
+    "+export const elsewhere = 'unrelated evidence';",
+  ].join("\n");
+
+  it("keeps a confirmed candidate whose quotes exist in the named file's diff", () => {
+    const { record, steering, surviving } = reconcileFidelityAdjudication({
+      candidates: [candidate],
+      patch,
+      verdicts: [
+        {
+          candidateIndex: 0,
+          quotedEvidence: ["if (isDemo) { render(); }"],
+          steering: "Gate the render call behind the demo flag.",
+          verdict: "confirm",
+        },
+      ],
+    });
+
+    expect(surviving).toEqual([candidate]);
+    expect(record.outcomes).toEqual([
+      expect.objectContaining({ candidateIndex: 0, outcome: "confirmed" }),
+    ]);
+    expect(steering).toEqual(["Gate the render call behind the demo flag."]);
+  });
+
+  it("overturns a confirmation whose quotes are not in the named file's diff", () => {
+    // A hallucinated veto cannot survive: quotes from another file's section
+    // (or from nowhere) fail verification and the candidate is dropped.
+    const { record, surviving } = reconcileFidelityAdjudication({
+      candidates: [candidate],
+      patch,
+      verdicts: [
+        {
+          candidateIndex: 0,
+          quotedEvidence: ["export const elsewhere = 'unrelated evidence';"],
+          verdict: "confirm",
+        },
+      ],
+    });
+
+    expect(surviving).toEqual([]);
+    expect(record.outcomes).toEqual([
+      expect.objectContaining({
+        candidateIndex: 0,
+        outcome: "overturned-unverifiable",
+      }),
+    ]);
+  });
+
+  it("drops overturned candidates and keeps unjudged ones", () => {
+    const second = {
+      hint: "Gate it.",
+      message: "src/other.ts is ungated.",
+      path: "src/other.ts",
+    };
+    const { record, surviving } = reconcileFidelityAdjudication({
+      candidates: [candidate, second],
+      patch,
+      verdicts: [
+        { candidateIndex: 0, quotedEvidence: [], verdict: "overturn" },
+      ],
+    });
+
+    expect(surviving).toEqual([second]);
+    expect(record.outcomes).toEqual([
+      expect.objectContaining({ candidateIndex: 0, outcome: "overturned" }),
+      expect.objectContaining({ candidateIndex: 1, outcome: "unjudged" }),
+    ]);
+  });
+
+  it("requires at least one quote to confirm", () => {
+    const { surviving } = reconcileFidelityAdjudication({
+      candidates: [candidate],
+      patch,
+      verdicts: [{ candidateIndex: 0, quotedEvidence: [], verdict: "confirm" }],
+    });
+
+    expect(surviving).toEqual([]);
+  });
+});

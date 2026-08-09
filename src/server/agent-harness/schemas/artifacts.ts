@@ -191,11 +191,44 @@ export type PreparationManifest = {
  * diagnoses, all currently-known violations per attempt, and no
  * infrastructure errors — those are the harness's to retry or surface.
  */
+/**
+ * How one preparation-fidelity candidate violation fared under agent
+ * adjudication. `overturned-unverifiable` records a confirmation whose
+ * quoted evidence did not literally appear in the named file's diff — a
+ * hallucinated confirmation must not sustain a veto.
+ */
+type FidelityAdjudicationOutcome = {
+  candidateIndex: number;
+  message: string;
+  outcome: "confirmed" | "overturned" | "overturned-unverifiable" | "unjudged";
+};
+
+/**
+ * The adjudication record carried by a preparation-fidelity report so later
+ * diagnoses can audit the judge: `unadjudicated` means the judge failed and
+ * every candidate verdict stood; `discarded-diff-changed` means the
+ * workspace diff changed while the judge ran, so its verdicts were unsafe
+ * to apply.
+ */
+export type FidelityAdjudicationRecord = {
+  outcomes: FidelityAdjudicationOutcome[];
+  status: "adjudicated" | "discarded-diff-changed" | "unadjudicated";
+};
+
+/** One candidate's verdict from the adjudication agent's artifact. */
+export type FidelityAdjudicationVerdict = {
+  candidateIndex: number;
+  quotedEvidence: string[];
+  steering?: string;
+  verdict: "confirm" | "overturn";
+};
+
 export type ValidationReport = {
   status: "failed" | "passed";
   stage: string;
   attemptedCommand?: string;
   exitCode?: number;
+  fidelityAdjudication?: FidelityAdjudicationRecord;
   logsSummary: string;
   stdoutExcerpts: string[];
   stderrExcerpts: string[];
@@ -762,6 +795,54 @@ function readLocalAppPathArray(
   });
 }
 
+function readFidelityAdjudicationRecord(
+  value: unknown,
+): FidelityAdjudicationRecord {
+  const record = assertRecord(value, "FidelityAdjudicationRecord");
+  return {
+    outcomes: readArray(record.outcomes, "outcomes", (item, index) => {
+      const outcome = assertRecord(item, `outcomes[${index}]`);
+      return {
+        candidateIndex: readNonNegativeInteger(outcome, "candidateIndex"),
+        message: readNonEmptyString(outcome, "message"),
+        outcome: readEnum(outcome, "outcome", [
+          "confirmed",
+          "overturned",
+          "overturned-unverifiable",
+          "unjudged",
+        ]),
+      };
+    }),
+    status: readEnum(record, "status", [
+      "adjudicated",
+      "discarded-diff-changed",
+      "unadjudicated",
+    ]),
+  };
+}
+
+/**
+ * Validates the adjudication agent's own artifact
+ * (`fidelity-adjudication.json`): one verdict per judged candidate index.
+ * Callers must treat a parse failure as a failed judge — the candidate
+ * verdicts stand — and must verify every confirm's quoted evidence against
+ * the actual diff before applying it; this reader checks shape only.
+ */
+export function readFidelityAdjudicationVerdicts(
+  value: unknown,
+): FidelityAdjudicationVerdict[] {
+  const record = assertRecord(value, "FidelityAdjudication");
+  return readArray(record.verdicts, "verdicts", (item, index) => {
+    const verdict = assertRecord(item, `verdicts[${index}]`);
+    return {
+      candidateIndex: readNonNegativeInteger(verdict, "candidateIndex"),
+      quotedEvidence: readStringArray(verdict, "quotedEvidence"),
+      ...optionalKey(verdict, "steering", readNonEmptyString),
+      verdict: readEnum(verdict, "verdict", ["confirm", "overturn"]),
+    };
+  });
+}
+
 export function readValidationReport(value: unknown): ValidationReport {
   const record = assertRecord(value, "ValidationReport");
   return {
@@ -776,6 +857,13 @@ export function readValidationReport(value: unknown): ValidationReport {
     ...optionalKey(record, "exitCode", readNonNegativeNumber),
     ...optionalKey(record, "failingFeatureIds", readStringArray),
     ...optionalKey(record, "failureClassification", readNonEmptyString),
+    ...(record.fidelityAdjudication === undefined
+      ? {}
+      : {
+          fidelityAdjudication: readFidelityAdjudicationRecord(
+            record.fidelityAdjudication,
+          ),
+        }),
     logsSummary: readNonEmptyString(record, "logsSummary"),
     networkAttempts: readNetworkAttempts(record, "networkAttempts"),
     pageErrors: readStringArray(record, "pageErrors"),

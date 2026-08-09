@@ -1,6 +1,8 @@
 import { escapeRegExp } from "../../shared/text/escape-regexp";
 import { isEnvironmentSecretFileName } from "../repo-security/secret-predicates";
 import type {
+  FidelityAdjudicationRecord,
+  FidelityAdjudicationVerdict,
   PreparationManifest,
   ValidationReport,
 } from "../schemas/artifacts";
@@ -51,6 +53,18 @@ export function readDependencyRepairDelta(
 }
 
 /**
+ * One candidate fidelity violation from the pure generator. `path` names the
+ * file whose diff carries the evidence, when the violation is file-scoped —
+ * adjudication verifies a judge's quoted evidence against exactly that
+ * file's diff section.
+ */
+export type FidelityCandidate = {
+  hint: string;
+  message: string;
+  path?: string;
+};
+
+/**
  * Verifies that Repo Preparation adapted the screened product rather than
  * replacing it with a newly authored demo application. During dependency
  * repair, executable source must remain unchanged from the accepted baseline.
@@ -58,7 +72,7 @@ export function readDependencyRepairDelta(
  * Presentation files accept only external-asset localization or a demo-gated
  * wrap that re-introduces existing markup without adding new presentation.
  */
-type FidelityViolation = { hint: string; message: string };
+type FidelityViolation = FidelityCandidate;
 
 const repairHints = {
   adaptOriginal:
@@ -90,6 +104,25 @@ export function validatePreparationFidelity(input: {
   repoSourceFiles: ReadonlyMap<string, string | undefined>;
   workspaceDiff: PreparationWorkspaceDiff;
 }): ValidationReport {
+  return createPreparationFidelityReport({
+    candidates: readPreparationFidelityCandidates(input),
+  });
+}
+
+/**
+ * The pure candidate generator behind preparation-fidelity validation: every
+ * returned candidate is a proposed veto, and callers with an adjudication
+ * seam may have an agent judge confirm or overturn each one before the
+ * verdict becomes a report. Candidates carry the evidence-bearing file path
+ * whenever the violation is file-scoped.
+ */
+export function readPreparationFidelityCandidates(input: {
+  dependencyRepair?: boolean;
+  preparationManifest: PreparationManifest;
+  repairBaseline?: PreparationWorkspaceDiff;
+  repoSourceFiles: ReadonlyMap<string, string | undefined>;
+  workspaceDiff: PreparationWorkspaceDiff;
+}): FidelityCandidate[] {
   const violations: FidelityViolation[] = [];
   // A manifest may only claim prepared content the workspace carries:
   // give-up repairs after agent stalls wrote fixture claims onto empty
@@ -150,6 +183,7 @@ export function validatePreparationFidelity(input: {
       violations.push({
         hint: repairHints.packageManagerIdentity,
         message: `${path} changes the package-manager identity (the packageManager pin or a manager configuration file); the backend pins the detected manager and regenerates lockfiles with it.`,
+        path,
       });
     }
   }
@@ -194,6 +228,7 @@ export function validatePreparationFidelity(input: {
     violations.push({
       hint: repairHints.dependencyScope,
       message: `${path} was modified by dependency installation repair, which may change only package manifests or recognized package-manager configuration.`,
+      path,
     });
   }
   const createdPaths = input.workspaceDiff.changedPaths
@@ -214,6 +249,7 @@ export function validatePreparationFidelity(input: {
       violations.push({
         hint: repairHints.selfRequest,
         message: `${path} calls back through its own listener from server-side code, which can recursively stall rendering. Use the fixture or adapter directly instead.`,
+        path,
       });
       continue;
     }
@@ -265,6 +301,7 @@ export function validatePreparationFidelity(input: {
       violations.push({
         hint: repairHints.seam,
         message: `${path} modifies original feature logic outside an authentication, data, service, or configuration seam.`,
+        path,
       });
     }
   }
@@ -282,6 +319,7 @@ export function validatePreparationFidelity(input: {
       violations.push({
         hint: repairHints.selfRequest,
         message: `${path} calls back through its own listener from server-side code, which can recursively stall rendering. Use the fixture or adapter directly instead.`,
+        path,
       });
       continue;
     }
@@ -292,6 +330,7 @@ export function validatePreparationFidelity(input: {
       violations.push({
         hint: repairHints.envUsed,
         message: `${path} changes authentication behavior through a created environment file; demo environment belongs in envUsed with a gated adaptation.`,
+        path,
       });
     }
     // Content decides, path suggests: the path prior nominates the file, but
@@ -308,12 +347,14 @@ export function validatePreparationFidelity(input: {
       violations.push({
         hint: repairHints.adaptOriginal,
         message: `${path} creates replacement product UI instead of adapting the original application.`,
+        path,
       });
     }
     if (isStandaloneReplacementRuntime(patch)) {
       violations.push({
         hint: repairHints.adaptOriginal,
         message: `${path} creates a standalone server with replacement product markup or styling.`,
+        path,
       });
     }
     if (
@@ -324,6 +365,7 @@ export function validatePreparationFidelity(input: {
       violations.push({
         hint: repairHints.adaptOriginal,
         message: `The prepared start command launches newly created application entrypoint ${path}.`,
+        path,
       });
     }
   }
@@ -333,6 +375,7 @@ export function validatePreparationFidelity(input: {
       hint: repairHints.keepWorkspaces,
       message:
         "package.json removes the original workspace configuration instead of adapting the original app.",
+      path: "package.json",
     });
   }
   for (const path of createdPaths) {
@@ -340,11 +383,68 @@ export function validatePreparationFidelity(input: {
       violations.push({
         hint: repairHints.adaptOriginal,
         message: `package.json redirects an application command to newly created file ${path}.`,
+        path: "package.json",
       });
     }
   }
 
-  return createFidelityReport(violations);
+  return violations;
+}
+
+/**
+ * Applies an adjudication agent's verdicts to the candidate vetoes with the
+ * evidence bar the judge cannot lower: a confirmation stands only when every
+ * quoted evidence line literally appears in the named file's diff section
+ * (or anywhere in the patch for candidates without a file), and at least one
+ * quote was given. Unjudged candidates always survive — the judge can only
+ * rescue from false vetoes, never weaken the gate.
+ */
+export function reconcileFidelityAdjudication(input: {
+  candidates: FidelityCandidate[];
+  patch: string;
+  verdicts: FidelityAdjudicationVerdict[];
+}): {
+  record: FidelityAdjudicationRecord;
+  steering: string[];
+  surviving: FidelityCandidate[];
+} {
+  const sections = parsePatchSections(input.patch);
+  const surviving: FidelityCandidate[] = [];
+  const steering: string[] = [];
+  const outcomes = input.candidates.map((candidate, candidateIndex) => {
+    const outcomeOf = (
+      outcome: FidelityAdjudicationRecord["outcomes"][number]["outcome"],
+    ) => ({ candidateIndex, message: candidate.message, outcome });
+    const verdict = input.verdicts.find(
+      (entry) => entry.candidateIndex === candidateIndex,
+    );
+    if (verdict === undefined) {
+      surviving.push(candidate);
+      return outcomeOf("unjudged");
+    }
+    if (verdict.verdict === "overturn") {
+      return outcomeOf("overturned");
+    }
+    const evidenceText =
+      candidate.path === undefined
+        ? input.patch
+        : (sections.get(candidate.path)?.text ?? "");
+    const quotes = verdict.quotedEvidence
+      .map((quote) => quote.trim())
+      .filter((quote) => quote.length > 0);
+    if (
+      quotes.length === 0 ||
+      !quotes.every((quote) => evidenceText.includes(quote))
+    ) {
+      return outcomeOf("overturned-unverifiable");
+    }
+    surviving.push(candidate);
+    if (verdict.steering !== undefined && verdict.steering.trim().length > 0) {
+      steering.push(verdict.steering);
+    }
+    return outcomeOf("confirmed");
+  });
+  return { record: { outcomes, status: "adjudicated" }, steering, surviving };
 }
 
 /**
@@ -365,6 +465,7 @@ function readGatedAdaptationViolation(input: {
     return {
       hint: repairHints.preserveUi,
       message: `${input.path} modifies original product UI, styling, or brand assets instead of preserving them.`,
+      path: input.path,
     };
   }
   const gateExempt = isGateExemptDataPath(input.path);
@@ -377,7 +478,11 @@ function readGatedAdaptationViolation(input: {
       input.originalSource,
     );
     if (gateViolation !== undefined) {
-      return { hint: repairHints.gate, message: gateViolation };
+      return {
+        hint: repairHints.gate,
+        message: gateViolation,
+        path: input.path,
+      };
     }
   }
   const unpreserved = readUnpreservedRemovedLine(input.patch);
@@ -388,6 +493,7 @@ function readGatedAdaptationViolation(input: {
     return {
       hint: repairHints.preserveBehavior,
       message: `${input.path} removes original content (\`${unpreserved}\`); this file cannot carry the demo gate, so demo adaptations there must be additive.`,
+      path: input.path,
     };
   }
   return {
@@ -396,6 +502,7 @@ function readGatedAdaptationViolation(input: {
       input.kind === "presentation"
         ? `${input.path} removes original presentation (\`${unpreserved}\`) instead of preserving it behind the demo gate.`
         : `${input.path} removes original ${input.kind} behavior (\`${unpreserved}\`) instead of preserving it behind the demo gate.`,
+    path: input.path,
   };
 }
 
@@ -442,9 +549,17 @@ export function isPackageManagerLockfilePath(path: string): boolean {
   return lockfileNames.has(path.split("/").at(-1) ?? path);
 }
 
-function createFidelityReport(
-  violations: FidelityViolation[],
-): ValidationReport {
+/**
+ * Builds the preparation-fidelity report from the surviving candidates,
+ * carrying the adjudication record (when a judge ran) and any judge
+ * steering so repairs are told what to change, not just that a rule fired.
+ */
+export function createPreparationFidelityReport(input: {
+  adjudication?: FidelityAdjudicationRecord;
+  candidates: FidelityCandidate[];
+  steering?: string[];
+}): ValidationReport {
+  const violations = input.candidates;
   const passed = violations.length === 0;
   return {
     artifactReferences: [
@@ -455,6 +570,9 @@ function createFidelityReport(
     browserObservations: [],
     consoleErrors: [],
     ...(passed ? {} : { failureClassification: "product fidelity violation" }),
+    ...(input.adjudication === undefined
+      ? {}
+      : { fidelityAdjudication: input.adjudication }),
     logsSummary: passed
       ? "Prepared runtime preserves the screened product application."
       : `Prepared runtime does not preserve the screened product: ${violations
@@ -469,7 +587,10 @@ function createFidelityReport(
     stderrExcerpts: [],
     stdoutExcerpts: [],
     suggestedRepairHints: [
-      ...new Set(violations.map((violation) => violation.hint)),
+      ...new Set([
+        ...violations.map((violation) => violation.hint),
+        ...(input.steering ?? []),
+      ]),
     ],
   };
 }
@@ -915,6 +1036,19 @@ function parsePatchSections(patch: string): Map<string, PatchSection> {
   return new Map(
     [...sections].map(([path, text]) => [path, createPatchSection(text)]),
   );
+}
+
+/**
+ * Returns the named file's slice of a unified diff, or undefined when the
+ * diff carries no section for that path. Callers that present one candidate's
+ * evidence (such as the fidelity adjudication prompt) use this to show the
+ * flagged file's own changes instead of the whole preparation patch.
+ */
+export function readPatchSectionText(
+  patch: string,
+  path: string,
+): string | undefined {
+  return parsePatchSections(patch).get(path)?.text;
 }
 
 function createPatchSection(text: string): PatchSection {

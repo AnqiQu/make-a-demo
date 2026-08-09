@@ -64,6 +64,11 @@ import type {
 } from "../orchestration/agent-harness";
 import { isDependencyRepairFailure } from "../repair/repair-router";
 import {
+  type FidelityCandidate,
+  readPatchSectionText,
+} from "../repo-preparation/preparation-fidelity";
+import type { PreparationWorkspaceDiff } from "../repo-preparation/preparation-workspace-diff";
+import {
   assertPreparedFeatureInventory,
   countNormalizedFeatures,
   normalizeFeature,
@@ -96,6 +101,7 @@ import {
   type RuntimeProbeDiagnostics,
   type ScriptCandidate,
   type ValidationReport,
+  readFidelityAdjudicationVerdicts,
   readFlowSpec,
   readPreparationManifest,
 } from "../schemas/artifacts";
@@ -175,6 +181,7 @@ const misplacedPreparationManifestPath =
   "/workspace/repo/.makeademo/preparation-manifest.json";
 const openCodeConfigDirectory = "/tmp/makeademo/opencode";
 const openCodeInactivityTimeoutMs = 5 * 60_000;
+const fidelityAdjudicationTimeoutMs = 10 * 60_000;
 const preparationDiffCommandTimeoutMs = 60_000;
 const preparationHashMarker = "\0MAKEADEMO_HASHES\0";
 const preparationPatchMarker = "\0MAKEADEMO_PATCH\0";
@@ -693,6 +700,45 @@ export async function createDefaultAgentHarnessDependencies(
   };
 
   const dependencies: AgentHarnessPipelineDependencies = {
+    async adjudicateFidelityCandidates({
+      candidates,
+      preparationManifest,
+      workspace,
+      workspaceDiff,
+    }) {
+      try {
+        await removeWorkspaceFile(
+          workspace,
+          artifactPaths.fidelityAdjudication,
+        );
+        const result = await runOpenCode({
+          availableTools: ["read", "write"],
+          configDir: openCodeConfigDirectory,
+          model: `${providerID}/${modelID}`,
+          prompt: createFidelityAdjudicationPrompt({
+            candidates,
+            preparationManifest,
+            workspaceDiff,
+          }),
+          stage: "preparation-fidelity-adjudication",
+          timeoutMs: fidelityAdjudicationTimeoutMs,
+          workingDirectory: workspaceRepoDirectory,
+          workspace,
+        });
+        if (result.exitCode !== 0) return undefined;
+        const readResult = await tryReadWorkspaceJson(
+          workspace,
+          artifactPaths.fidelityAdjudication,
+        );
+        if (!readResult.ok) return undefined;
+        return readFidelityAdjudicationVerdicts(readResult.value);
+      } catch (error) {
+        // A failed judge must never veto or rescue anything: the caller
+        // treats undefined as "unadjudicated" and keeps every candidate.
+        if (isAgentHarnessInfrastructureError(error)) throw error;
+        return undefined;
+      }
+    },
     artifactStore: options.artifactStore,
     async capturePreparationWorkspaceDiff({ workspace }) {
       const patchStartedAt = Date.now();
@@ -4201,6 +4247,49 @@ const sceneDescriptionOptionalInstruction =
 
 const scenePresentationDefaultsInstruction =
   "presentation.music, presentation.textOverlays, and presentation.transitions are optional; when omitted they default to disabled music, no overlays, and direct back-to-back Scene playback.";
+
+function createFidelityAdjudicationPrompt(input: {
+  candidates: FidelityCandidate[];
+  preparationManifest: PreparationManifest;
+  workspaceDiff: PreparationWorkspaceDiff;
+}): string {
+  const candidateSections = input.candidates.map((candidate, index) => {
+    const section =
+      candidate.path === undefined
+        ? undefined
+        : readPatchSectionText(input.workspaceDiff.patch, candidate.path);
+    return [
+      `Candidate ${index}: ${candidate.message}`,
+      ...(candidate.path === undefined ? [] : [`File: ${candidate.path}`]),
+      ...(section === undefined
+        ? []
+        : ["Diff section:", elideMiddle(section, 16_000)]),
+    ].join("\n");
+  });
+  const manifestContext = {
+    authBypassOrDemoIdentity:
+      input.preparationManifest.authBypassOrDemoIdentity,
+    envUsed: input.preparationManifest.envUsed,
+    localDemoModeChanges: input.preparationManifest.localDemoModeChanges,
+    mocksAndFixturesAdded: input.preparationManifest.mocksAndFixturesAdded,
+  };
+  return createStagePrompt({
+    artifactPaths: [artifactPaths.fidelityAdjudication],
+    instructions: [
+      "Preparation-fidelity candidates below are heuristic proposals, not verdicts. Judge each one against the actual prepared workspace: does the flagged change replace or fabricate product experience, or is it a legitimate demo adaptation (gating, fixtures, local adapters, configuration) that preserves the original product?",
+      "You may read any file under /workspace/repo to understand the change in context. Do not modify any file; your only write is the verdict artifact.",
+      'For each candidate, return {"candidateIndex": <number>, "verdict": "confirm" | "overturn", "quotedEvidence": [<strings>], "steering": <string, optional>}.',
+      "A confirm verdict must quote at least one verbatim line from that candidate's own diff section as quotedEvidence — the caller mechanically verifies every quote against the diff and discards verdicts whose quotes do not appear — and should include steering that tells the repair agent what to change.",
+      "An overturn verdict clears a false positive: use it when the flagged change is a faithful demo adaptation. Include steering explaining why, so later validation rounds keep the context.",
+      `Write only the completed JSON object {"verdicts": [...]} to ${artifactPaths.fidelityAdjudication}. After writing it, do not call another tool.`,
+      "",
+      `Preparation manifest context: ${elideMiddle(JSON.stringify(manifestContext), 8_000)}`,
+      "",
+      ...candidateSections,
+    ].join("\n"),
+    stage: "preparation-fidelity-adjudication",
+  });
+}
 
 function createRepoPreparationPrompt(input: {
   demoBrief: AgentHarnessPipelineInput["demoBrief"];

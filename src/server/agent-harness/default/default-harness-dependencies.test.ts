@@ -4141,6 +4141,157 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
   });
 
+  it("adjudicates fidelity candidates through a sandbox judge and returns its verdicts", async () => {
+    // The judge-on-veto lane (N92): one agent command in the preparation
+    // sandbox reads the flagged diff and writes a schema-validated verdict
+    // artifact; the caller applies it only after quote verification.
+    const commands: string[] = [];
+    const runs: Array<{ prompt: string; stage: string }> = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async execute(command) {
+        commands.push(command);
+        if (
+          command.includes("cat") &&
+          command.includes("fidelity-adjudication.json")
+        ) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: JSON.stringify({
+              verdicts: [
+                {
+                  candidateIndex: 0,
+                  quotedEvidence: ["+export const isDemo = true;"],
+                  steering: "The gate file is content-free; keep it.",
+                  verdict: "overturn",
+                },
+              ],
+            }),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(input) {
+          runs.push({ prompt: input.prompt, stage: input.stage });
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const verdicts = await harness.dependencies.adjudicateFidelityCandidates?.({
+      candidates: [
+        {
+          hint: "Adapt the original application.",
+          message: "app/is-demo.ts creates replacement product UI.",
+          path: "app/is-demo.ts",
+        },
+      ],
+      preparationManifest: preparationManifest(),
+      workspace,
+      workspaceDiff: {
+        changedFileSha256: {},
+        changedPaths: ["/workspace/repo/app/is-demo.ts"],
+        patch:
+          "diff --git a/app/is-demo.ts b/app/is-demo.ts\n+export const isDemo = true;",
+        patchSha256: `sha256:${"a".repeat(64)}`,
+        sourceCommitSha: "abc123",
+      },
+    });
+
+    expect(verdicts).toEqual([
+      expect.objectContaining({ candidateIndex: 0, verdict: "overturn" }),
+    ]);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.stage).toBe("preparation-fidelity-adjudication");
+    expect(runs[0]?.prompt).toContain(
+      "app/is-demo.ts creates replacement product UI.",
+    );
+    expect(runs[0]?.prompt).toContain("+export const isDemo = true;");
+    // A stale artifact from a prior attempt must never be read back as this
+    // round's verdicts.
+    expect(
+      commands.some(
+        (command) =>
+          command.includes("rm -f") &&
+          command.includes("fidelity-adjudication.json"),
+      ),
+    ).toBe(true);
+  });
+
+  it("returns no verdicts when the judge fails or writes an invalid artifact", async () => {
+    const buildHarness = async (runnerExitCode: number, artifact: string) => {
+      const harness = await createDefaultAgentHarnessDependencies({
+        artifactStore: { async writeJson() {} },
+        openCodeRunner: {
+          async run() {
+            // Real agent output distinguishes "the judge ran and failed"
+            // from a zero-output launch failure, which escalates instead.
+            return {
+              exitCode: runnerExitCode,
+              stderr: "",
+              stdout: "judge finished",
+            };
+          },
+        },
+        outputRoot: "/tmp/makeademo-test",
+        repoSourceArchive: await repoSourceArchive(),
+      });
+      return {
+        harness,
+        workspace: createFakeAgentHarnessWorkspace({
+          async execute(command) {
+            if (
+              command.includes("cat") &&
+              command.includes("fidelity-adjudication.json")
+            ) {
+              return { exitCode: 0, stderr: "", stdout: artifact };
+            }
+            return { exitCode: 0, stderr: "", stdout: "" };
+          },
+        }),
+      };
+    };
+    const adjudicationInput = (workspace: AgentHarnessWorkspace) => ({
+      candidates: [
+        {
+          hint: "Adapt the original application.",
+          message: "app/is-demo.ts creates replacement product UI.",
+          path: "app/is-demo.ts",
+        },
+      ],
+      preparationManifest: preparationManifest(),
+      workspace,
+      workspaceDiff: {
+        changedFileSha256: {},
+        changedPaths: ["/workspace/repo/app/is-demo.ts"],
+        patch:
+          "diff --git a/app/is-demo.ts b/app/is-demo.ts\n+export const isDemo = true;",
+        patchSha256: `sha256:${"a".repeat(64)}` as const,
+        sourceCommitSha: "abc123",
+      },
+    });
+
+    const failedCommand = await buildHarness(1, "{}");
+    await expect(
+      failedCommand.harness.dependencies.adjudicateFidelityCandidates?.(
+        adjudicationInput(failedCommand.workspace),
+      ),
+    ).resolves.toBeUndefined();
+
+    const invalidArtifact = await buildHarness(0, '{"verdicts": "nope"}');
+    await expect(
+      invalidArtifact.harness.dependencies.adjudicateFidelityCandidates?.(
+        adjudicationInput(invalidArtifact.workspace),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
   it("carries the lifecycle evidence file tail when the stream drops the failure", async () => {
     // calcom (2026-08-09): the PTY stream ended at YN0007 "must be built" —
     // yarn's actual YN0009 failure report never reached the record, so the

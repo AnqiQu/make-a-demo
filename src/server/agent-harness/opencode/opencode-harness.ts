@@ -6,6 +6,7 @@ import type {
 export type OpenCodeHarnessStage =
   | "app-exploration"
   | "flow-planning"
+  | "preparation-fidelity-adjudication"
   | "repo-preparation"
   | "repo-preparation-repair"
   | "runtime-target-selection"

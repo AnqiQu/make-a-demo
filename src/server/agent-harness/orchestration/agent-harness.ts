@@ -11,9 +11,12 @@ import {
   repairBudgetExhaustedMessage,
 } from "../repair/repair-router";
 import {
+  type FidelityCandidate,
+  createPreparationFidelityReport,
   isPackageManagerLockfilePath,
   readDependencyRepairDelta,
-  validatePreparationFidelity,
+  readPreparationFidelityCandidates,
+  reconcileFidelityAdjudication,
 } from "../repo-preparation/preparation-fidelity";
 import type { PreparationWorkspaceDiff } from "../repo-preparation/preparation-workspace-diff";
 import { assertPreparedFeatureInventory } from "../repo-preparation/prepared-feature-inventory";
@@ -29,6 +32,7 @@ import {
   type ActionCatalog,
   type AppMap,
   DEMO_SCRIPT_OUTPUT_PATH,
+  type FidelityAdjudicationVerdict,
   type FlowSpec,
   type PipelineRunManifest,
   type PreparationManifest,
@@ -79,6 +83,21 @@ type AgentHarnessArtifactStore = {
 };
 
 export type AgentHarnessPipelineDependencies = {
+  /**
+   * Adjudicates preparation-fidelity candidate vetoes with one agent judge
+   * command in the preparation sandbox. Implementations must source verdicts
+   * from a schema-validated artifact the judge wrote and return one verdict
+   * per candidate index they judged; returning undefined (or throwing a
+   * non-infrastructure error) reports the stage unadjudicated and every
+   * candidate verdict stands. The judge can only rescue false vetoes — its
+   * absence must never weaken the gate.
+   */
+  adjudicateFidelityCandidates?(input: {
+    candidates: FidelityCandidate[];
+    preparationManifest: PreparationManifest;
+    workspace: AgentHarnessWorkspace;
+    workspaceDiff: PreparationWorkspaceDiff;
+  }): Promise<FidelityAdjudicationVerdict[] | undefined>;
   artifactStore?: AgentHarnessArtifactStore;
   /**
    * Fingerprints every workspace path Script Writing may have touched. The
@@ -1472,8 +1491,8 @@ async function ensureValidPreparation(input: {
       input.validationReports,
       input.stageStatuses,
       input.stageTimings,
-      async () =>
-        validatePreparationFidelity({
+      async () => {
+        const candidates = readPreparationFidelityCandidates({
           ...(repairBaseline === undefined
             ? {}
             : { dependencyRepair, repairBaseline }),
@@ -1482,7 +1501,64 @@ async function ensureValidPreparation(input: {
             input.input.files.map((file) => [file.path, file.text] as const),
           ),
           workspaceDiff,
-        }),
+        });
+        const adjudicate = input.dependencies.adjudicateFidelityCandidates;
+        if (candidates.length === 0 || adjudicate === undefined) {
+          return createPreparationFidelityReport({ candidates });
+        }
+        // Cost lands only on the veto path: the judge runs once per failing
+        // attempt, never on clean validations.
+        const unjudgedRecord = () => ({
+          outcomes: candidates.map((candidate, candidateIndex) => ({
+            candidateIndex,
+            message: candidate.message,
+            outcome: "unjudged" as const,
+          })),
+        });
+        let verdicts: FidelityAdjudicationVerdict[] | undefined;
+        try {
+          verdicts = await adjudicate({
+            candidates,
+            preparationManifest,
+            workspace: input.workspace,
+            workspaceDiff,
+          });
+        } catch (error) {
+          if (isAgentHarnessInfrastructureError(error)) throw error;
+          verdicts = undefined;
+        }
+        if (verdicts === undefined) {
+          return createPreparationFidelityReport({
+            adjudication: { ...unjudgedRecord(), status: "unadjudicated" },
+            candidates,
+          });
+        }
+        // A judge that edited the workspace judged a diff that no longer
+        // exists; its verdicts are unsafe to apply.
+        const diffAfterAdjudication =
+          await input.dependencies.capturePreparationWorkspaceDiff({
+            workspace: input.workspace,
+          });
+        if (diffAfterAdjudication.patchSha256 !== workspaceDiff.patchSha256) {
+          return createPreparationFidelityReport({
+            adjudication: {
+              ...unjudgedRecord(),
+              status: "discarded-diff-changed",
+            },
+            candidates,
+          });
+        }
+        const { record, steering, surviving } = reconcileFidelityAdjudication({
+          candidates,
+          patch: workspaceDiff.patch,
+          verdicts,
+        });
+        return createPreparationFidelityReport({
+          adjudication: record,
+          candidates: surviving,
+          steering,
+        });
+      },
       input.validationAttemptCounts,
       input.preparationRepairAttemptsByPhase["preparation-fidelity"] ?? 0,
     );

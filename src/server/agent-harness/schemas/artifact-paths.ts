@@ -25,6 +25,7 @@ export const makeADemoArtifactPaths = {
   demoScriptContract: `${makeADemoDirectory}/demo-script-contract.json`,
   externalResourceHydrationReport: `${makeADemoDirectory}/external-resource-hydration-report.json`,
   externalResourceManifest: `${makeADemoDirectory}/external-resource-manifest.json`,
+  fidelityAdjudication: `${makeADemoDirectory}/fidelity-adjudication.json`,
   flowSpec: `${makeADemoDirectory}/flow-spec.json`,
   flowSpecContract: `${makeADemoDirectory}/flow-spec-contract.json`,
   pipelineRunManifest: `${makeADemoDirectory}/pipeline-run-manifest.json`,
@@ -64,6 +65,8 @@ export function stageWriteableArtifactPaths(
       ];
     case "flow-planning":
       return [makeADemoArtifactPaths.flowSpec];
+    case "preparation-fidelity-adjudication":
+      return [makeADemoArtifactPaths.fidelityAdjudication];
     case "runtime-target-selection":
       return [makeADemoArtifactPaths.runtimeTargetSelection];
     case "script-repair":
