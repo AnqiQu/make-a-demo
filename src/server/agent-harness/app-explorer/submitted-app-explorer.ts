@@ -139,6 +139,16 @@ type ObservedInteraction = {
   locatorEvidence?: ObservedLocatorEvidence | null;
   name: string;
   outcome: string;
+  /**
+   * Text that became visible only after this interaction, verified as a
+   * unique visible locator in the revealed state. Tool-shaped UIs render
+   * their proof-text on demand, so these are the only assertable evidence
+   * such routes can offer; alert/status copy never qualifies.
+   */
+  revealedTexts?: Array<{
+    locatorEvidence?: ObservedLocatorEvidence | null;
+    value: string;
+  }>;
 };
 type UnreachableRoute = {
   error: string;
@@ -2121,6 +2131,7 @@ try {
       .filter(Boolean)
       .slice(0, 80);
     return {
+      alerts: read("[role=alert], [role=status], [role=alertdialog], [aria-live]:not([aria-live=off])"),
       dialogs: read("[role=dialog], dialog[open]"),
       headings: read("h1, h2, h3, [role=heading]"),
       text: read("main p, main li, article p, [role=main] p, [role=status], [role=alert]"),
@@ -2141,6 +2152,27 @@ try {
     if (newText) return newText + " became visible";
     if (after.title !== before.title) return after.title + " became visible";
     return undefined;
+  };
+  // Text that appears only after an interaction is that interaction's proof:
+  // tool-shaped UIs render results, not pages, so the static harvest can
+  // never catalog an assert for them. Each candidate is verified in the
+  // revealed state — exactly the state the demo script asserts in after
+  // replaying the interaction. Alert/status copy stays quarantined.
+  const harvestRevealedTexts = async (before, after, route) => {
+    if (after.url !== before.url) return [];
+    const alreadyVisible = new Set([...before.headings, ...before.dialogs, ...before.text]);
+    const candidates = [...new Set([...after.headings, ...after.dialogs, ...after.text])]
+      .filter((value) => value.length >= 3 && !alreadyVisible.has(value) && !after.alerts.includes(value))
+      .slice(0, 4);
+    const revealed = [];
+    for (const value of candidates) {
+      const locatorEvidence = await createVerifiedDirectLocatorEvidence({
+        locator: { exact: true, strategy: "text", value },
+        route,
+      });
+      if (locatorEvidence) revealed.push({ locatorEvidence, value });
+    }
+    return revealed;
   };
   const pushBounded = (list, value) => {
     if (list.length < 50) list.push(value);
@@ -2479,12 +2511,14 @@ try {
               });
             }
           }
+          const revealedTexts = await harvestRevealedTexts(before, after, path);
           observed.interactions.push({
             kind: "click",
             locator: { name, strategy: "role", value: "button" },
             locatorEvidence,
             name,
             outcome,
+            ...(revealedTexts.length > 0 ? { revealedTexts } : {}),
           });
         } catch (error) {
           if (isAppUnavailableError(error)) throw error;
@@ -2497,6 +2531,7 @@ try {
           await gotoRoute(routeUrl);
           const interactionLocator = createInteractionLocator(input.locator);
           if (await interactionLocator.count() !== 1 || !(await interactionLocator.isVisible())) continue;
+          const before = await readVisibleState();
           let outcome;
           if (input.controlKind === "select") {
             const options = await interactionLocator.locator("option").evaluateAll((entries) => entries.map((option) => ({
@@ -2520,12 +2555,16 @@ try {
             if (await interactionLocator.inputValue() !== value) continue;
             outcome = input.name + " contained the observed demo value";
           }
+          await waitForQuietDom(250, 1500);
+          const after = await readVisibleState();
+          const revealedTexts = await harvestRevealedTexts(before, after, path);
           observed.interactions.push({
             kind: input.controlKind,
             locator: input.locator,
             locatorEvidence: input.locatorEvidence,
             name: input.name,
             outcome,
+            ...(revealedTexts.length > 0 ? { revealedTexts } : {}),
           });
         } catch (error) {
           if (isAppUnavailableError(error)) throw error;

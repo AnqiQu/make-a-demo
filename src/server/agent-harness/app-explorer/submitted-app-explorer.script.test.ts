@@ -424,6 +424,75 @@ describe("generated exploration script", () => {
     }
   }, 30_000);
 
+  it("harvests text revealed by an exercised interaction with verified locators", async () => {
+    // Tool-shaped UIs (cyberchef's Magic search) reveal their proof-text
+    // only after an interaction: the static harvest can never catalog an
+    // assert for them, so exploration must capture what newly appeared.
+    const toolPage = `<!doctype html><html><head><title>Analyzer</title></head><body>
+<nav><a href="/">Analyzer home</a></nav>
+<main><div id="result"></div></main>
+<button onclick="document.getElementById('result').innerHTML='<p>Detected format: Base64</p>'">Run analysis</button>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(toolPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-revealed-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        routes: Array<{
+          interactions?: Array<{
+            name: string;
+            revealedTexts?: Array<{
+              locatorEvidence: object | null;
+              value: string;
+            }>;
+          }>;
+          text: string[];
+        }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      const interaction = result.routes[0]?.interactions?.find(
+        (candidate) => candidate.name === "Run analysis",
+      );
+      const revealed = interaction?.revealedTexts?.find(
+        (candidate) => candidate.value === "Detected format: Base64",
+      );
+      expect(revealed).toBeDefined();
+      expect(revealed?.locatorEvidence).not.toBeNull();
+      // The revealed text exists only post-interaction: it must not leak
+      // into the static route harvest that seeds ordinary asserts.
+      expect(result.routes[0]?.text).not.toContain("Detected format: Base64");
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
   it("harvests table content on a route whose selector text is only its own navigation", async () => {
     // The sidebar renders as main li entries, so the primary text harvest is
     // non-empty but carries only nav names; the data rows live in a table the
