@@ -4028,3 +4028,94 @@ failing build with a legible tail, ghostfolio must fail fast with
 the inactivity marker or pass outright, homer/twenty must survive
 a 502 blip, midday must explore under 8GB, and ghost/outline must
 spend ≥2 repair rounds on their real data bugs.
+
+### Landed (2026-08-09, same day)
+
+`2b1a96c` N94: `writeTextFile`, `uploadFiles`, and the
+submitted-code artifact transfer share one bounded retry (3
+attempts, ~1s/4s backoff) that fires only on transport-transient
+failures — HTTP 5xx read from `statusCode`/`status`/
+`response.status` or a `status code 5xx` message, plus the
+ECONNRESET/ETIMEDOUT class. Every `writeTextFile` attempt uses a
+fresh remote temp path and all attempted temp paths are cleaned;
+non-transient errors and agent commands never retry, and the
+original error message survives exhaustion. `f51b78f` N95:
+`withDiskMarkers` tees each heavy command's combined output to
+`/tmp/makeademo/<label>-<uuid>.log` (exit code preserved through
+PIPESTATUS); failed lifecycle/install/build summaries lead with an
+ANSI-stripped, tail-biased ~4KB excerpt read back from that file,
+ending at the `[makeademo:command-end] exit=N` trailer, and the
+manager's own logs (newest `$TMPDIR/xfs-*/build.log` globs, newest
+`/root/.npm/_logs/*-debug-0.log`) are harvested whether or not the
+stream referenced them. Shared `shared/text/strip-ansi.ts` strips
+escapes at every excerpt seam. `22ac201` N96:
+`executeSubmittedWithDeadlineEvidence` now defaults a 300s
+inactivity deadline — a quiet lifecycle command is killed with
+`[makeademo:timeout] no output for …ms` instead of burning the
+20-minute hard deadline — and the sealed runtime env declares
+`DO_NOT_TRACK=1`, `CHECKPOINT_DISABLE=1`,
+`NEXT_TELEMETRY_DISABLED=1` so phone-home children never hold
+stdio open against the sealed network.
+
+N92 in five commits. `9c84d68` a: a created file can be vetoed as
+replacement UI only on positive presentation evidence in its own
+content — presentation-by-file-type (.css/.html/.svelte/.vue/
+images; deliberately not .jsx/.tsx) or `addsProductPresentation`
+markup in its diff; the directory prior only nominates. `7990257`
+b: new pure `repo-preparation/demo-gate-analysis.ts` parses
+changed files with the TypeScript compiler API — a gate name is
+any identifier/env-property/define-constant containing
+`makeademo_demo` (substring, case-insensitive; `VITE_`/
+`NEXT_PUBLIC_`/`__…__` variants come free), gate bindings follow
+initializers transitively, gatedness climbs AST ancestors
+(if/ternary/&&/||/guard clauses), `.vue`/`.svelte` script blocks
+are extracted first, and unparseable or non-JS input fails open.
+A textual env-accessor-shaped fallback keeps comment mentions
+validating configured flags while bare string literals do not
+(typescript moved to runtime dependencies). `7bce9a0` d: the seam
+vocabulary survives only as a candidate classifier, plus one owned
+convention — any path segment containing `demo` is a demo seam.
+`c643ad4` c: `validatePreparationFidelity` is now a pure candidate
+generator; when candidates exist the harness runs one adjudication
+agent in the preparation sandbox (stage
+`preparation-fidelity-adjudication`, artifact
+`fidelity-adjudication.json`, fresh session, 10-minute timeout).
+A confirm verdict must quote verbatim lines that mechanically
+verify against the named file's diff section — hallucinated quotes
+downgrade to `overturned-unverifiable` and drop the veto; overturn
+drops it with the judge's steering recorded; judge failure or a
+`patchSha256` change during adjudication keeps every candidate and
+records `unadjudicated`/`discarded-diff-changed`. Outcomes land in
+the fidelity report for future judge audits, and confirmed vetoes
+finally carry steering that says what to change. `1e8e0d9` e:
+regression fixtures — the ghost-shaped gated gravatar
+neutralization generates its candidate and is cleared by an
+overturn verdict, and the plan-shaped true positive (ungated
+created .tsx whose export takes over an original import) still
+vetoes even under a demo-named path.
+
+`0111de5` N93: app-exploration failures may spend up to 2 repair
+rounds beyond the global limit (`explorationRepairReserveRounds`,
+stacking with the N90 bonus; fingerprint caps unchanged; earlier
+stages get no reservation). The three existing budget tests were
+re-pinned to the widened arithmetic. `50f7ecb` N97 code half:
+`withDiskMarkers` also emits `[makeademo:mem] <label> peak-bytes`
+from the cgroup's `memory.peak` (v2, with the v1
+`memory.max_usage_in_bytes` fallback) after each wrapped command.
+`02dc0d7` regenerated dependency graphs for the new modules.
+
+Verification: TDD per item, failing test verified red first; lint,
+typecheck, test, knip green per commit. Tests 935→976 (+41). The
+remotion-video-renderer delayRender smoke test failed on every
+full run this window; a stash-and-run control on clean HEAD
+reproduced it on this memory-starved host (~34MB free RAM), so it
+is environment-bound, not a regression — tracked as its own
+hardening task.
+
+**N97 operational rollout executed (2026-08-09).**
+`makeademo-submitted-code-browser-ca-20260809-mem8` built via
+`daytona snapshot create` (CPU 2, memory 8GB, disk 10GB) from the
+unchanged Dockerfile; `.env` repointed;
+`bun run verify:daytona-image` passed (one retry after a transient
+sandbox DNS failure on the first attempt). The eleventh matrix
+remains the acceptance gate and awaits an explicit go-ahead.
