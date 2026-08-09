@@ -253,7 +253,18 @@ export async function exploreSubmittedApp(input: {
     recoveredObservation = await readExplorationProtocolFile(input.workspace);
     if (recoveredObservation === undefined) {
       const appStatus = await readAppStatus(input.workspace);
-      if (appStatus?.running !== false) throw error;
+      // Unreadable status is genuinely ambiguous (the sandbox itself may be
+      // gone) — preserve the infrastructure timeout. A live app that never
+      // yielded a protocol is a wedged route, which an agent can repair
+      // (outline's 420s hang killed the whole run unclassified, 2026-08-09).
+      if (appStatus === undefined) throw error;
+      if (appStatus.running !== false) {
+        return createHungExplorationFailure({
+          appStatus,
+          baseUrl: input.baseUrl,
+          timeoutError: error,
+        });
+      }
       return (
         (await capacityFailure(appStatus)) ??
         createExitedAppExplorationFailure({
@@ -413,6 +424,23 @@ function createExitedAppExplorationFailure(input: {
       "Repair the app crash or reduce its runtime resource usage, then rerun browser exploration.",
     ],
     summary: `The prepared app exited${input.appStatus.exitCode === undefined ? "" : ` with code ${input.appStatus.exitCode}`} while App Exploration was running: ${diagnostics.output || input.timeoutError.message}`,
+  });
+}
+
+function createHungExplorationFailure(input: {
+  appStatus: AgentHarnessSubmittedCodeAppStatus;
+  baseUrl: string;
+  timeoutError: AgentHarnessCommandTimeoutError;
+}): Extract<SubmittedAppExplorationResult, { kind: "repairable-failure" }> {
+  const diagnostics = createAppStatusDiagnostics(input.appStatus);
+  return explorationFailure({
+    baseUrl: input.baseUrl,
+    classification: "render timeout",
+    diagnostics,
+    hints: [
+      "The app serves requests but at least one explored route or interaction never settles. Repair the prepared app's hanging data or navigation path — a request that waits forever on missing backend state is the usual cause — then rerun browser exploration.",
+    ],
+    summary: `App Exploration timed out after ${Math.round(input.timeoutError.timeoutMs / 1000)}s with the prepared app still running: the browser protocol never completed, so a route or interaction is hanging rather than failing.${diagnostics.output ? ` App output: ${diagnostics.output}` : ""}`,
   });
 }
 

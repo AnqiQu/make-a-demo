@@ -2787,6 +2787,40 @@ describe("exploreSubmittedApp", () => {
     });
   });
 
+  it("classifies an exploration timeout with the app still up as a repairable render timeout", async () => {
+    // Outline (2026-08-09): the final exploration attempt hung for the full
+    // 420s protocol budget and the raw Daytona timeout escaped unclassified,
+    // killing the run and forfeiting its reserved repair rounds. An app
+    // that is up but never yields a protocol is a wedged route, not
+    // infrastructure.
+    const result = await exploreSubmittedApp({
+      baseUrl,
+      preparationManifestId: "prep_001",
+      workspace: createFakeAgentHarnessWorkspace({
+        async executeSubmittedCode(_command, options) {
+          throw new AgentHarnessCommandTimeoutError(options?.timeoutMs ?? 0);
+        },
+        async readSubmittedCodeAppStatus() {
+          return {
+            running: true,
+            stderr: "GET /collection/product-handbook-demo pending",
+            stdout: "",
+          };
+        },
+      }),
+    });
+
+    expect(result).toMatchObject({
+      kind: "repairable-failure",
+      validationReport: {
+        failureClassification: "render timeout",
+        logsSummary: expect.stringContaining("still running"),
+        status: "failed",
+      },
+    });
+    expect(result.validationReport.logsSummary).toContain("never completed");
+  });
+
   it("preserves an exploration timeout when managed app status is unavailable", async () => {
     const exploration = exploreSubmittedApp({
       baseUrl,
