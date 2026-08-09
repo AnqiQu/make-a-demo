@@ -3,6 +3,7 @@ import type {
   RepoProfile,
   RunPlan,
 } from "../schemas/artifacts";
+import { findRoutePlaceholder } from "../tools/route-placeholders";
 
 const templateValuePattern = /^replace-with-/i;
 
@@ -60,6 +61,26 @@ export function assertPreparedFeatureInventory(input: {
       `PreparationManifest cites paths outside the screened repository: ${unknownSourcePaths.join(
         "; ",
       )}. Product evidence must cite files that exist in the original screened repository — files added during preparation (fixtures, demo gates, mock endpoints) are never product evidence; cite the original modules the demo adapts instead.`,
+    );
+  }
+  // One error names every pattern route (repair-evidence contract clause 4):
+  // the 2026-08-08 outline demo opened on /collection/:collectionSlug — a
+  // router pattern navigated verbatim is a guaranteed 404.
+  const placeholderEntryPaths = context.featureInventory.flatMap(
+    (feature, index) =>
+      feature.entryPaths.flatMap((entryPath, entryIndex) =>
+        findRoutePlaceholder(entryPath) === undefined
+          ? []
+          : [
+              `productContext.featureInventory[${index}].entryPaths[${entryIndex}] ${entryPath}`,
+            ],
+      ),
+  );
+  if (placeholderEntryPaths.length > 0) {
+    throw new Error(
+      `PreparationManifest declares router patterns as demo routes: ${placeholderEntryPaths.join(
+        "; ",
+      )}. Demo routes must be concrete URLs reachable in the prepared app — substitute the fixture slugs your preparation created (for example /collection/demo-collection, never /collection/:collectionSlug).`,
     );
   }
   for (const [index, feature] of context.featureInventory.entries()) {

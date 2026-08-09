@@ -2114,6 +2114,47 @@ describe("exploreSubmittedApp", () => {
     });
   });
 
+  it("never navigates router-pattern entry paths that slip past the manifest gate", async () => {
+    // Defense in depth behind the manifest rejection: a placeholder like
+    // /collection/:collectionSlug navigated verbatim is a guaranteed 404
+    // (outline, 2026-08-08). The generated script must only receive
+    // concrete targets.
+    const protocol = JSON.stringify({
+      blockedNetworkAttempts: [],
+      consoleErrors: [],
+      pageErrors: [],
+      routes: [observedRoute({ headings: ["Dashboard"] })],
+      unreachableRoutes: [],
+    });
+    let explorerScript = "";
+    await exploreSubmittedApp({
+      baseUrl,
+      featureInventory: [
+        preparedFeature({
+          entryPaths: ["/collection/demo-collection", "/doc/:documentSlug"],
+        }),
+      ],
+      preparationManifestId: "prep_001",
+      workspace: createFakeAgentHarnessWorkspace({
+        async executeSubmittedCode(command) {
+          if (command.includes("explore-app.mjs")) {
+            const encoded = /printf %s '([^']+)' \| base64 -d/.exec(command);
+            explorerScript = Buffer.from(encoded?.[1] ?? "", "base64").toString(
+              "utf8",
+            );
+            return { exitCode: 0, stderr: "", stdout: "" };
+          }
+          return command.includes("exploration.json")
+            ? { exitCode: 0, stderr: "", stdout: protocol }
+            : { exitCode: 0, stderr: "", stdout: "" };
+        },
+      }),
+    });
+
+    expect(explorerScript).toContain("/collection/demo-collection");
+    expect(explorerScript).not.toContain("/doc/:documentSlug");
+  });
+
   it("returns a repairable failure instead of throwing when the explorer crashes", async () => {
     const result = await exploreSubmittedApp({
       baseUrl,

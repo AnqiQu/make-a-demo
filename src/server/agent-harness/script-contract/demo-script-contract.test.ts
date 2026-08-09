@@ -521,6 +521,54 @@ describe("DemoScriptContract", () => {
     ).toBe(candidate);
   });
 
+  it("rejects a goto whose path is a router pattern even when the catalog agrees", () => {
+    // Last line of defense: the 2026-08-08 outline video literally opened
+    // on /collection/:collectionSlug because catalog and script carried the
+    // placeholder in agreement.
+    const catalog = actionCatalog();
+    catalog.actions.push({
+      confidence: 1,
+      evidence: "Playwright loaded the route",
+      expectedResult: "Collection becomes visible",
+      featureIds: ["dashboard"],
+      id: "navigate-collection",
+      kind: "navigate",
+      preferredLocator: {
+        name: "Collection",
+        strategy: "role",
+        value: "main",
+      },
+      risks: [],
+      route: "/collection/:collectionSlug",
+    });
+    const selectedFlow = flowSpec();
+    selectedFlow.features[0]?.referencedActionIds.unshift(
+      "navigate-collection",
+    );
+    const script = validDemoScript();
+    const actions = script.scenes[0]?.actions as unknown as Array<
+      Record<string, unknown>
+    >;
+    actions.unshift({
+      id: "navigate-collection",
+      path: "/collection/:collectionSlug",
+      sourceActionId: "navigate-collection",
+      type: "goto",
+    });
+
+    expect(
+      validateDemoScriptCandidateContract({
+        actionCatalog: catalog,
+        flowSpec: selectedFlow,
+        preparationManifest: preparationManifest(),
+        scriptCandidate: scriptCandidate(script),
+      }),
+    ).toMatchObject({
+      logsSummary: expect.stringContaining("router pattern"),
+      status: "failed",
+    });
+  });
+
   it("rejects a grounded goto action whose target differs from its observed route", () => {
     const catalog = actionCatalog();
     catalog.actions.push({

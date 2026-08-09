@@ -95,6 +95,61 @@ describe("assertPreparedFeatureInventory", () => {
     expect(message).toContain("files added during preparation");
   });
 
+  it("rejects router-pattern entry paths across all features in one error", () => {
+    // The 2026-08-08 outline video opened on /collection/:collectionSlug —
+    // a router pattern navigated verbatim is a guaranteed 404, and only the
+    // agent knows the fixture slugs that belong in its place.
+    const manifest = manifestWithFeatures([
+      {
+        entryPaths: ["/home", "/collection/:collectionSlug"],
+        id: "browse",
+        label: "Browse",
+      },
+      { entryPaths: ["/docs/[...slug]"], id: "docs", label: "Docs" },
+    ]);
+
+    let message = "";
+    try {
+      assertPreparedFeatureInventory({
+        demoBrief: {},
+        preparationManifest: manifest,
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain(
+      "productContext.featureInventory[0].entryPaths[1] /collection/:collectionSlug",
+    );
+    expect(message).toContain(
+      "productContext.featureInventory[1].entryPaths[0] /docs/[...slug]",
+    );
+    expect(message).toContain("concrete");
+    expect(message).toContain("fixture slugs");
+    expect(message).not.toContain("/home");
+  });
+
+  it("accepts concrete entry paths including hash routes and queries", () => {
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: {},
+        preparationManifest: manifestWithFeatures([
+          {
+            entryPaths: [
+              "/collection/demo-collection",
+              "/#/editor",
+              "/search?q=knowledge",
+            ],
+            id: "browse",
+            label: "Browse",
+          },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).not.toThrow();
+  });
+
   it("requires every prepared feature to cite original product UI source", () => {
     expect(() =>
       assertPreparedFeatureInventory({
@@ -313,6 +368,7 @@ function manifestWithFeatures(
   features: Array<{
     authStrategy?: "bypass" | "demo-identity" | "none";
     description?: string;
+    entryPaths?: string[];
     id: string;
     label: string;
     requestedFeature?: string;

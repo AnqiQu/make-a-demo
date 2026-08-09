@@ -32,6 +32,7 @@ import {
   readScriptCandidate,
   readValidationReport,
 } from "../schemas/artifacts";
+import { findRoutePlaceholder } from "../tools/route-placeholders";
 import { assertCanonicalDemoNarrative } from "./demo-narrative";
 import { assertCaptureReadyScriptQuality } from "./script-quality";
 
@@ -709,6 +710,17 @@ function assertActionMatchesCatalog(
     throw new Error(
       `Browser action ${action.id} targets ${action.path} but its observed ActionCatalog route is ${sourceAction.route}`,
     );
+  }
+  // Catalog agreement is no defense: when both carry a placeholder the
+  // capture would navigate it verbatim into a guaranteed 404 (outline,
+  // 2026-08-08).
+  if (action.type === "goto" || action.type === "assert-url") {
+    const placeholder = findRoutePlaceholder(action.path);
+    if (placeholder !== undefined) {
+      throw new Error(
+        `Browser action ${action.id} targets ${action.path}, a router pattern (${placeholder}); demo navigation requires the concrete fixture route`,
+      );
+    }
   }
   if (
     action.type === "scroll" &&

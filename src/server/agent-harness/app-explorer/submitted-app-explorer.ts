@@ -18,6 +18,7 @@ import {
   readAppMap,
   readValidationReport,
 } from "../schemas/artifacts";
+import { findRoutePlaceholder } from "../tools/route-placeholders";
 import {
   type SandboxCapacityEvidence,
   readSandboxCapacityEvidence,
@@ -2357,6 +2358,11 @@ function createFeatureEntryTargets(
   const baseOrigin = new URL(baseUrl).origin;
   for (const feature of featureInventory) {
     for (const entryPath of feature.entryPaths) {
+      // A router pattern navigated verbatim is a guaranteed 404; the
+      // manifest gate rejects these, and any that slip through legacy
+      // artifacts are dropped here rather than explored (outline,
+      // 2026-08-08 — /collection/:collectionSlug opened the demo).
+      if (findRoutePlaceholder(entryPath) !== undefined) continue;
       const url = new URL(entryPath, baseUrl);
       // Agent-authored entry paths must stay inside the prepared app; an
       // absolute URL to another origin is never a valid crawl target.
