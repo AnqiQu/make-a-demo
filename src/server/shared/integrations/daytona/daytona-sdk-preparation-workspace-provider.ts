@@ -126,6 +126,8 @@ type ManagedSubmittedCodeApp = {
 
 export type DaytonaSdkPreparationWorkspaceProviderOptions = {
   apiKey?: string;
+  /** Waits between artifact-transfer retries; its length bounds the retries. */
+  artifactTransferBackoffMs?: number[];
   client?: DaytonaSdkClient;
   commandTimeoutMs?: number;
   diskGB?: number;
@@ -164,7 +166,13 @@ const sandboxCreateConnectionRetryLimit = 2;
  */
 const agentSandboxAutoDeleteMinutes = 150;
 const ptyStartupRetryLimit = 2;
-const artifactTransferRetryLimit = 2;
+/**
+ * One transient 502 during an artifact upload killed two matrix runs inside
+ * the 11-way parallel launch window (homer, twenty, 2026-08-09). Transfers
+ * are idempotent by design, so transport blips get absorbed by a short
+ * bounded retry instead of ending the run.
+ */
+const defaultArtifactTransferBackoffMs = [1_000, 4_000];
 const makeADemoArtifactDirectory = "/tmp/makeademo";
 const workspaceMakeADemoDirectory = "/workspace/.makeademo";
 const sandboxAuditLogPath = `${makeADemoArtifactDirectory}/sandbox-log.jsonl`;
@@ -197,6 +205,7 @@ export async function createDaytonaSdkPreparationWorkspaceHandle(input: {
   const sandbox = await client.get(input.sandboxId);
 
   return createPreparationWorkspaceHandle({
+    artifactTransferBackoffMs: defaultArtifactTransferBackoffMs,
     client,
     commandTimeoutMs: input.commandTimeoutMs ?? defaultCommandTimeoutMs,
     id: input.sandboxId,
@@ -211,6 +220,7 @@ export async function createDaytonaSdkPreparationWorkspaceHandle(input: {
 export class DaytonaSdkPreparationWorkspaceProvider
   implements AgentHarnessWorkspaceProvider
 {
+  private readonly artifactTransferBackoffMs: number[];
   private readonly client: DaytonaSdkClient;
   private readonly commandTimeoutMs: number;
   private readonly diskGB: number;
@@ -228,6 +238,8 @@ export class DaytonaSdkPreparationWorkspaceProvider
       (new Daytona(
         options.apiKey === undefined ? undefined : { apiKey: options.apiKey },
       ) as DaytonaSdkClient);
+    this.artifactTransferBackoffMs =
+      options.artifactTransferBackoffMs ?? defaultArtifactTransferBackoffMs;
     this.commandTimeoutMs = options.commandTimeoutMs ?? defaultCommandTimeoutMs;
     this.secrets = options.secrets;
     this.snapshot = options.snapshot;
@@ -286,6 +298,7 @@ export class DaytonaSdkPreparationWorkspaceProvider
     }
 
     return createPreparationWorkspaceHandle({
+      artifactTransferBackoffMs: this.artifactTransferBackoffMs,
       client: this.client,
       commandTimeoutMs: this.commandTimeoutMs,
       id,
@@ -377,6 +390,7 @@ export async function destroyAllDaytonaWorkspaces(): Promise<void> {
 }
 
 function createPreparationWorkspaceHandle(input: {
+  artifactTransferBackoffMs: number[];
   client: DaytonaSdkClient;
   commandTimeoutMs: number;
   id: string;
@@ -394,6 +408,7 @@ function createPreparationWorkspaceHandle(input: {
     input.commandTimeoutMs,
     input.logWriteTimeoutMs,
     input.ptyConnectionTimeoutMs,
+    input.artifactTransferBackoffMs,
     input.sandboxLogSinks ?? [],
   );
 
@@ -427,6 +442,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     private readonly commandTimeoutMs: number,
     private readonly logWriteTimeoutMs: number,
     private readonly ptyConnectionTimeoutMs: number,
+    private readonly artifactTransferBackoffMs: number[],
     sandboxLogSinks: PipelineLogSink[],
   ) {
     this.agentSandboxId = workspaceId;
@@ -941,13 +957,17 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
           `Failed to download reconciled lockfile ${failed.source}: ${failed.error}`,
         );
       }
-      await this.sandbox.fs.uploadFiles(
-        transfers.map(({ destination, localPath }) => ({
-          destination,
-          source: localPath,
-        })),
-        defaultArtifactTransferTimeoutSeconds,
-      );
+      await runWithTransientTransferRetry({
+        attempt: () =>
+          this.sandbox.fs.uploadFiles(
+            transfers.map(({ destination, localPath }) => ({
+              destination,
+              source: localPath,
+            })),
+            defaultArtifactTransferTimeoutSeconds,
+          ),
+        backoffMs: this.artifactTransferBackoffMs,
+      });
     } finally {
       await rm(localDirectory, { force: true, recursive: true });
     }
@@ -984,46 +1004,63 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       destination: file.destinationPath,
       source: file.sourcePath,
     }));
-    await this.sandbox.fs.uploadFiles(uploadedFiles);
-    await this.submittedCodeSandbox?.fs.uploadFiles(uploadedFiles);
+    const submittedCodeSandbox = this.submittedCodeSandbox;
+    await runWithTransientTransferRetry({
+      attempt: () => this.sandbox.fs.uploadFiles(uploadedFiles),
+      backoffMs: this.artifactTransferBackoffMs,
+    });
+    if (submittedCodeSandbox !== undefined) {
+      await runWithTransientTransferRetry({
+        attempt: () => submittedCodeSandbox.fs.uploadFiles(uploadedFiles),
+        backoffMs: this.artifactTransferBackoffMs,
+      });
+    }
   }
 
   async writeTextFile(path: string, contents: string): Promise<void> {
-    const transferId = randomUUID();
     const localDirectory = await mkdtemp(
       join(tmpdir(), "makeademo-agent-artifact-"),
     );
-    const localPath = join(localDirectory, transferId);
-    const remoteTemporaryPath = `${path}.upload-${transferId}`;
+    const localPath = join(localDirectory, "payload");
     const payloadBytes = Buffer.byteLength(contents);
+    const attemptedRemoteTemporaryPaths: string[] = [];
     try {
       await writeFile(localPath, contents, "utf8");
-      const directoryResult = await this.sandbox.process.executeCommand(
-        `mkdir -p ${shellQuote(dirname(path))}`,
-      );
-      if ((directoryResult.exitCode ?? 0) !== 0) {
-        throw new Error(
-          formatCommandFailure(
-            `Failed to create Daytona artifact directory for ${path}`,
-            directoryResult,
-          ),
-        );
-      }
-      await this.sandbox.fs.uploadFiles(
-        [{ destination: remoteTemporaryPath, source: localPath }],
-        defaultArtifactTransferTimeoutSeconds,
-      );
-      const promotionResult = await this.sandbox.process.executeCommand(
-        `mv -f -- ${shellQuote(remoteTemporaryPath)} ${shellQuote(path)}`,
-      );
-      if ((promotionResult.exitCode ?? 0) !== 0) {
-        throw new Error(
-          formatCommandFailure(
-            `Failed to promote Daytona artifact ${path}`,
-            promotionResult,
-          ),
-        );
-      }
+      await runWithTransientTransferRetry({
+        attempt: async () => {
+          // A fresh temp path per attempt keeps a timed-out upload that lands
+          // late from racing the retry's in-flight transfer.
+          const remoteTemporaryPath = `${path}.upload-${randomUUID()}`;
+          attemptedRemoteTemporaryPaths.push(remoteTemporaryPath);
+          const directoryResult = await this.sandbox.process.executeCommand(
+            `mkdir -p ${shellQuote(dirname(path))}`,
+          );
+          if ((directoryResult.exitCode ?? 0) !== 0) {
+            throw new Error(
+              formatCommandFailure(
+                `Failed to create Daytona artifact directory for ${path}`,
+                directoryResult,
+              ),
+            );
+          }
+          await this.sandbox.fs.uploadFiles(
+            [{ destination: remoteTemporaryPath, source: localPath }],
+            defaultArtifactTransferTimeoutSeconds,
+          );
+          const promotionResult = await this.sandbox.process.executeCommand(
+            `mv -f -- ${shellQuote(remoteTemporaryPath)} ${shellQuote(path)}`,
+          );
+          if ((promotionResult.exitCode ?? 0) !== 0) {
+            throw new Error(
+              formatCommandFailure(
+                `Failed to promote Daytona artifact ${path}`,
+                promotionResult,
+              ),
+            );
+          }
+        },
+        backoffMs: this.artifactTransferBackoffMs,
+      });
     } catch (error) {
       throw new Error(
         `Daytona agent artifact filesystem transfer failed for ${path} (${payloadBytes} bytes): ${error instanceof Error ? error.message : String(error)}`,
@@ -1032,9 +1069,11 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     } finally {
       await rm(localDirectory, { force: true, recursive: true });
       try {
-        await this.sandbox.process.executeCommand(
-          `rm -f -- ${shellQuote(remoteTemporaryPath)}`,
-        );
+        if (attemptedRemoteTemporaryPaths.length > 0) {
+          await this.sandbox.process.executeCommand(
+            `rm -f -- ${attemptedRemoteTemporaryPaths.map((remotePath) => shellQuote(remotePath)).join(" ")}`,
+          );
+        }
       } catch {
         // The sandbox is ephemeral and promotion already removed this path on success.
       }
@@ -1090,62 +1129,55 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
   }): Promise<T> {
     const sandboxId =
       this.submittedCodeSandboxId ?? "unknown-submitted-code-sandbox";
-    let lastError: unknown;
-    for (
-      let attempt = 1;
-      attempt <= artifactTransferRetryLimit + 1;
-      attempt += 1
-    ) {
-      await this.writeArtifactTransferLogBestEffort({
-        attempt,
-        event: `artifact.transfer.${input.operation}.started`,
-        fileCount: input.fileCount,
-        level: "info",
-        sandboxId,
-      });
-      try {
-        const result = await input.run();
-        await this.writeArtifactTransferLogBestEffort({
-          attempt,
-          event: `artifact.transfer.${input.operation}.succeeded`,
-          fileCount: input.fileCount,
-          level: "info",
-          sandboxId,
-        });
-        return result;
-      } catch (error) {
-        lastError = error;
-        const willRetry =
-          attempt <= artifactTransferRetryLimit &&
-          isTransientDaytonaArtifactTransferError(error);
-        await this.writeArtifactTransferLogBestEffort({
-          attempt,
-          error: formatErrorDiagnostic(error),
-          event: willRetry
-            ? `artifact.transfer.${input.operation}.retrying`
-            : `artifact.transfer.${input.operation}.failed`,
-          fileCount: input.fileCount,
-          level: willRetry ? "warn" : "error",
-          sandboxId,
-        });
-        if (!willRetry) {
-          throw new AgentHarnessArtifactTransferError({
-            attempts: attempt,
-            cause: error,
-            operation: input.operation,
+    let attempts = 0;
+    try {
+      return await runWithTransientTransferRetry({
+        attempt: async () => {
+          attempts += 1;
+          await this.writeArtifactTransferLogBestEffort({
+            attempt: attempts,
+            event: `artifact.transfer.${input.operation}.started`,
+            fileCount: input.fileCount,
+            level: "info",
             sandboxId,
           });
-        }
-        await wait(250 * attempt);
-      }
+          const result = await input.run();
+          await this.writeArtifactTransferLogBestEffort({
+            attempt: attempts,
+            event: `artifact.transfer.${input.operation}.succeeded`,
+            fileCount: input.fileCount,
+            level: "info",
+            sandboxId,
+          });
+          return result;
+        },
+        backoffMs: this.artifactTransferBackoffMs,
+        onRetry: (error) =>
+          this.writeArtifactTransferLogBestEffort({
+            attempt: attempts,
+            error: formatErrorDiagnostic(error),
+            event: `artifact.transfer.${input.operation}.retrying`,
+            fileCount: input.fileCount,
+            level: "warn",
+            sandboxId,
+          }),
+      });
+    } catch (error) {
+      await this.writeArtifactTransferLogBestEffort({
+        attempt: attempts,
+        error: formatErrorDiagnostic(error),
+        event: `artifact.transfer.${input.operation}.failed`,
+        fileCount: input.fileCount,
+        level: "error",
+        sandboxId,
+      });
+      throw new AgentHarnessArtifactTransferError({
+        attempts,
+        cause: error,
+        operation: input.operation,
+        sandboxId,
+      });
     }
-
-    throw new AgentHarnessArtifactTransferError({
-      attempts: artifactTransferRetryLimit + 1,
-      cause: lastError,
-      operation: input.operation,
-      sandboxId,
-    });
   }
 
   private async writeArtifactTransferLogBestEffort(input: {
@@ -1471,15 +1503,67 @@ function readSandboxId(sandbox: DaytonaSdkSandbox): string {
 }
 
 function isTransientDaytonaArtifactTransferError(error: unknown): boolean {
+  const statusCode = readHttpStatusCode(error);
+  if (statusCode !== undefined) {
+    return statusCode >= 500;
+  }
   if (!(error instanceof Error)) {
     return false;
   }
   return (
     /Connection|Timeout/i.test(error.name) ||
-    /ECONNREFUSED|ECONNRESET|ETIMEDOUT|Operation timed out|socket hang up/i.test(
+    /ECONNREFUSED|ECONNRESET|ETIMEDOUT|Operation timed out|socket hang up|status code 5\d\d/i.test(
       error.message,
     )
   );
+}
+
+function readHttpStatusCode(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null) {
+    return undefined;
+  }
+  const candidate = error as {
+    response?: { status?: unknown };
+    status?: unknown;
+    statusCode?: unknown;
+  };
+  for (const value of [
+    candidate.statusCode,
+    candidate.status,
+    candidate.response?.status,
+  ]) {
+    if (typeof value === "number") {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Runs an idempotent Daytona transfer, retrying transport-transient failures
+ * (HTTP 5xx, connection resets, timeouts) once per backoff entry. Anything
+ * else — and exhaustion — rethrows the attempt's own error unchanged.
+ */
+async function runWithTransientTransferRetry<T>(input: {
+  attempt: () => Promise<T>;
+  backoffMs: readonly number[];
+  onRetry?: (error: unknown) => Promise<void> | void;
+}): Promise<T> {
+  for (let attemptNumber = 1; ; attemptNumber += 1) {
+    try {
+      return await input.attempt();
+    } catch (error) {
+      const delayMs = input.backoffMs[attemptNumber - 1];
+      if (
+        delayMs === undefined ||
+        !isTransientDaytonaArtifactTransferError(error)
+      ) {
+        throw error;
+      }
+      await input.onRetry?.(error);
+      await wait(delayMs);
+    }
+  }
 }
 
 function formatErrorDiagnostic(error: unknown): string {

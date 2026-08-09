@@ -314,6 +314,100 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ).rejects.toThrow(
       "Daytona agent artifact filesystem transfer failed for /workspace/.makeademo/action-catalog.json (13 bytes): filesystem upload rejected",
     );
+    expect(calls.filter((call) => "uploadFiles" in Object(call))).toHaveLength(
+      1,
+    );
+  });
+
+  it("retries a transient 502 while writing a text artifact", async () => {
+    // homer and twenty each lost a whole matrix run to one transient 502
+    // during an artifact upload (2026-08-09); a single retry absorbs the blip.
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      artifactTransferBackoffMs: [1, 1],
+      client: fakeClient(calls, {
+        uploadError: Object.assign(
+          new Error("Request failed with status code 502"),
+          { statusCode: 502 },
+        ),
+        uploadFailuresBeforeSuccess: 1,
+      }),
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.writeTextFile(
+      "/workspace/.makeademo/repo-profile.json",
+      "{}",
+    );
+
+    const uploads = calls.filter(
+      (call) => "uploadFiles" in Object(call),
+    ) as Array<{ uploadFiles: Array<{ destination: string }> }>;
+    expect(uploads).toHaveLength(2);
+    expect(uploads[0]?.uploadFiles[0]?.destination).not.toBe(
+      uploads[1]?.uploadFiles[0]?.destination,
+    );
+    expect(
+      calls.filter(
+        (call) =>
+          "executeCommand" in Object(call) &&
+          String((call as { executeCommand: string }).executeCommand).includes(
+            "mv -f",
+          ),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("fails a persistent 502 text artifact transfer after bounded retries", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      artifactTransferBackoffMs: [1, 1],
+      client: fakeClient(calls, {
+        uploadError: Object.assign(
+          new Error("Request failed with status code 502"),
+          { statusCode: 502 },
+        ),
+      }),
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.writeTextFile(
+        "/workspace/.makeademo/repo-profile.json",
+        "{}",
+      ),
+    ).rejects.toThrow(
+      "Daytona agent artifact filesystem transfer failed for /workspace/.makeademo/repo-profile.json (2 bytes): Request failed with status code 502",
+    );
+    expect(calls.filter((call) => "uploadFiles" in Object(call))).toHaveLength(
+      3,
+    );
+  });
+
+  it("retries a transient 502 while uploading screened workspace files", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      artifactTransferBackoffMs: [1, 1],
+      client: fakeClient(calls, {
+        uploadError: Object.assign(
+          new Error("Request failed with status code 502"),
+          { statusCode: 502 },
+        ),
+        uploadFailuresBeforeSuccess: 1,
+      }),
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.uploadFiles([
+      {
+        destinationPath: "/workspace/package.json",
+        sourcePath: "/tmp/repo/package.json",
+      },
+    ]);
+
+    expect(calls.filter((call) => "uploadFiles" in Object(call))).toHaveLength(
+      2,
+    );
   });
 
   it("reconnects to an existing sandbox as a preparation workspace", async () => {
@@ -1143,6 +1237,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
   it("retries a transient submitted-code artifact upload", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      artifactTransferBackoffMs: [1, 1],
       client: fakeLinkedClient(calls, {
         submittedUploadFailuresBeforeSuccess: 1,
       }),
@@ -1174,6 +1269,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
   it("reports a typed submitted-code artifact failure after bounded retries", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      artifactTransferBackoffMs: [1, 1],
       client: fakeLinkedClient(calls, {
         submittedUploadFailuresBeforeSuccess: 99,
       }),
@@ -2277,9 +2373,11 @@ function fakeClient(
     sandboxLogContents?: string;
     sandboxRestartDoesNotRecover?: boolean;
     uploadError?: Error;
+    uploadFailuresBeforeSuccess?: number;
   } = {},
 ) {
   let submittedCodeInitializationFailures = 0;
+  let uploadFailures = 0;
   let ptyConnectionFailures = 0;
   let sandboxStarted =
     options.ptyRequiresSandboxRestart !== true &&
@@ -2301,7 +2399,12 @@ function fakeClient(
       },
       async uploadFiles(files: unknown[]) {
         calls.push({ uploadFiles: files });
-        if (options.uploadError !== undefined) {
+        if (
+          options.uploadError !== undefined &&
+          (options.uploadFailuresBeforeSuccess === undefined ||
+            uploadFailures < options.uploadFailuresBeforeSuccess)
+        ) {
+          uploadFailures += 1;
           throw options.uploadError;
         }
       },
