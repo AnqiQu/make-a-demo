@@ -1660,6 +1660,52 @@ describe("exploreSubmittedApp", () => {
     });
   });
 
+  it("steers at the serving base when chrome-only routes carry same-origin 404s", async () => {
+    // Directus (2026-08-09): the admin SPA was served at a base it does not
+    // expect — its own links resolved to concatenated 404 routes and its
+    // session endpoint 404'd — and every repair round steered at fixtures.
+    // Same-origin 404s on a chrome-only route are browser evidence that the
+    // serving arrangement, not the data, is wrong.
+    const dataModel = preparedFeature({
+      description: "Create a collection in the data model",
+      entryPaths: ["/settings/data-model"],
+      id: "data-model",
+      label: "Data model",
+      requestedFeature: "data model",
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [dataModel],
+      pageErrors: [
+        "http://127.0.0.1:5173/settings/data-model: Request failed with status code 404",
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["data-model"],
+          path: "/settings/data-model",
+          primaryNavigation: ["Settings", "Content"],
+          requestedPath: "/settings/data-model",
+          text: ["Settings", "Content"],
+        }),
+        observedRoute({
+          headings: [],
+          path: "/content",
+          primaryNavigation: ["Settings", "Content"],
+          requestedPath: "/content",
+          text: ["Settings", "Content"],
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "empty/unmeaningful app state",
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain(
+      "same-origin request(s) returned 404",
+    );
+    expect(result.validationReport.logsSummary).toContain("base path");
+  });
+
   it("names what a content-bearing route showed when the feature's wording matched nothing", async () => {
     const encode = preparedFeature({
       description: "Paste input and add an encoding operation",

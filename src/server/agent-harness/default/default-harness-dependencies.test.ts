@@ -3953,6 +3953,55 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(report.logsSummary).toContain("gyp info ok");
   });
 
+  it("derives unbuilt-workspace hints from the teed build evidence, not only the stream", async () => {
+    // Twenty (2026-08-09): the EvalError naming twenty-ui/dist survived
+    // only in the teed evidence file — the PTY stream dropped it — so the
+    // N67 steering never fired and five repair rounds missed the
+    // prerequisite build. The file is the source of truth for hints too.
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("tail -c")) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout:
+              "EvalError: Cannot find module '/workspace/repo/node_modules/twenty-ui/dist/theme-constants.cjs' in/workspace/repo/packages/twenty-front/src/modules/ui/AuthFlowLayout.tsx",
+          };
+        }
+        if (command.includes("vite build")) {
+          return { exitCode: 1, stderr: "", stdout: "" };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        buildCommandUsed: "vite build",
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "build failure",
+      status: "failed",
+    });
+    expect(report.suggestedRepairHints.join("\n")).toContain("twenty-ui");
+    expect(report.suggestedRepairHints.join("\n")).toContain(
+      "build output was never produced",
+    );
+  });
+
   it("keeps liveness heartbeats out of failure evidence excerpts", async () => {
     // Heartbeats are transport for the no-output watchdog, not evidence:
     // a failing install's summary must carry the real error lines, not a

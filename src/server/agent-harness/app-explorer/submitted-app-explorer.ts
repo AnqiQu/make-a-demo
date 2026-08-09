@@ -1389,8 +1389,25 @@ function readExplorationFailure(
         .join(" | ")}.`,
     };
   };
+  // Same-origin 404s alongside chrome-only routes are browser evidence that
+  // the serving arrangement, not the data, is wrong: an SPA served at a base
+  // path it does not expect resolves its own links and session endpoints to
+  // 404 (directus, 2026-08-09). Steering only — dev servers also 404 benign
+  // probes, so this never gates.
+  const sameOrigin404Count = [
+    ...appMap.pageErrors.filter((error) => /\b404\b/.test(error)),
+    ...appMap.consoleErrors.filter((error) =>
+      /failed resource http:\/\/(?:127\.0\.0\.1|localhost|0\.0\.0\.0)\S* \(HTTP 404\)/.test(
+        error,
+      ),
+    ),
+  ].length;
+  const wrongBaseSteering =
+    sameOrigin404Count === 0
+      ? ""
+      : ` ${sameOrigin404Count} same-origin request(s) returned 404 during exploration — when the app's own links or session endpoints 404, the app is likely served at a base path or API base it does not expect; align the prepared serving arrangement (base path, API base URL) with how the app builds its own URLs before touching fixtures.`;
   const chromeOnlyExplanation = (tail: string) =>
-    `rendered only globally-repeated navigation chrome — no route-distinct headings, text, or data${tail}`;
+    `rendered only globally-repeated navigation chrome — no route-distinct headings, text, or data${tail}${wrongBaseSteering}`;
   const emptyTableEvidence = (
     routePaths: readonly string[],
     feature?: PreparedDemoFeature,
