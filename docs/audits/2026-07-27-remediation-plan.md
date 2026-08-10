@@ -5085,3 +5085,114 @@ its logger into the provider — `7a78f7f` threads a
 `controlPlaneLogger` through so envelope events land in
 `pipeline-log.jsonl`. Wave 2 (N106 → N105 → N107 → N108) is
 unblocked.
+
+### Landed (2026-08-10, wave 2: verification learns behavior)
+
+N106 in four commits. `d0296e2` schema: the FeatureVerdict
+ledger parses on validation reports (one verdict per
+feature, grounded-by or failed-because, evidence ids,
+decisive detail). `e9265c0` the ledger becomes the
+grounding computation itself: `readFeatureVerdicts` walks
+auth-wall → grounded (transition > interaction > assert) →
+app-unreachable → stuck-overlay → skeleton-rows →
+route-shared-with-winners → token-mismatch →
+error-state-route → no-assert-candidates, and the failure
+message is derived per-feature from the verdicts instead of
+recomputed prose; suppressed routes blank their content so
+error evidence outranks wording. `c9c5002` the stderr
+runtime-error hint fires only when an error-class line
+survives the warning and zero-errors filters — watch-mode
+toolchains narrate success on stderr. `dd566e3` the
+preparation fallback prompt renders the ledger and hints
+generically (`- id: failed (enum) — detail`), so every
+later enum flows through without renderer edits.
+
+N105 in seven commits. `b9960fe` control transitions
+(self-renames, disabled→enabled) become exercised evidence
+with stored-locator re-proof. `8b72856` the accessibility
+tree is the canonical assert-candidate source on every
+route — cross-route repetition, not nav position, marks
+chrome, so single-shell products keep their product
+content. `6147d7e` text asserts emit on every route, not
+only heading-free ones. `61c9e43` the assert floor: a
+route-tagged feature the winners out-scored keeps its
+best-scoring assert instead of losing the wording lottery
+(floors, not gates). `947ebf7` the control budget spends
+its slots on feature-token-matching names first, so a dense
+toolbar cannot crowd out the feature's own control.
+`1e5e83a` error-state outranks wording: 4xx/5xx document
+responses (401/403 exempt on auth-wall routes) and
+error-shaped bare bodies suppress wording verdicts and
+carry their own diagnosis; the stderr signal now matches
+compound error-class names (TypeError) the way rendered
+error bodies spell them. `eef83f2` the stability rider: a
+bounded network-quiet wait per navigation plus one fresh
+re-harvest for any feature route about to be reported thin,
+so streaming-SSR content stops reading as absence.
+
+N107 in four commits. `9fac748` schema: PreparedDemoFeature
+gains a typed `expectedProof` (visible-text |
+element-appears | state-transition) and the verdict
+vocabulary gains declared-proof-failed. `05eeb14` the
+manifest contract and template teach the declaration —
+per-kind required fields, accessible-name-space invariants,
+seeding guidance. `46783cb` preparation validates declared
+proofs referentially with batched steering: template
+values, selector-shaped names, disabled-start transitions,
+and indistinguishable proofs each die at authoring time
+with the fix in the message; requiredness is checked after
+coverage so agents prepare the right features before
+declaring proofs. `f06494d` exploration executes each
+declared proof from a fresh navigation of the feature's
+entry route and the ledger treats results as first-class:
+a passed proof grounds the feature regardless of wording, a
+failed proof fails it even when wording would ground, and
+an absent result (deadline, unreachable route) is missing
+evidence — the wording chain still applies.
+
+Deviation from plan (N107): the drafted hard check "entry
+route claimed by no other feature" is contract guidance
+rather than a validation gate. Single-page tools would be
+unpreparable — cyberchef's every feature enters "/" — so
+the hard checks are proof requiredness for maker-requested
+features, per-kind proof validity, and cross-feature proof
+distinctness; route uniqueness stays advice in the contract
+invariants.
+
+N108 in three commits. `9381992` exploration gains a
+feature-entries crawl scope: entry routes plus the base URL
+only, no link or navigation discovery, everything else —
+harvest, interactions, declared proofs, ledger — identical
+to the gate. `c885cdc` validatePreparation runs that probe
+against the still-running app after the runtime curl
+passes: a feature the gate would fail now fails preparation
+minutes in with the gate's own classification, ledger, and
+steering; a crashed or hung explorer passes through as
+inconclusive (weather, not evidence) so the probe can never
+fail a preparation the gate has not judged, and probe
+evidence persists under feature-probe-evidence/ so the
+later gate run does not overwrite it. `a1ebb91` the
+feature-verification playbook ships as a harness-written
+workspace artifact generated from the gate's own exported
+vocabulary (featureVerdictFailureCauses, expectedProofKinds
+— a new cause cannot compile without its agent-facing
+explanation), and every preparation prompt names its path.
+
+Deviation from plan (N108): the drafted verify-features
+workspace tool and skills-lock pinned skill assumed the
+sandbox agent could run a CLI. It cannot — availableTools
+stays ["read","write"] with bash denied (a security seam
+the probe must not weaken), and skills are never restored
+inside the Daytona sandbox. The adaptation keeps the plan's
+intent through the harness: the probe runs harness-side in
+the preparation loop (same gate code, so iterating against
+it is legitimate convergence), and the playbook arrives as
+a workspace artifact referenced by path from prompts (the
+N65 pattern) instead of an installable skill.
+
+`028819b` regenerates the dependency graphs for the wave-2
+modules. Full suite at wave end: 1092 tests green, lint,
+typecheck, and knip clean. Suggested gate before wave 3
+(N109–N111): rerun the ghostfolio + homer mini-matrix —
+ghostfolio's "evidence exists, verifier cannot ground it"
+frontier is exactly what N105–N108 exist to move.
