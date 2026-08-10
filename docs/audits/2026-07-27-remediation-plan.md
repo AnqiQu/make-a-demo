@@ -5054,3 +5054,34 @@ classification (a beat-then-crash OpenCode stays a launch
 failure, never an artifact-repair burn) and in
 failure-evidence excerpts. `a6a0453` regenerates the
 dependency graphs for the three new modules.
+
+### Mini-matrix checkpoint (2026-08-10, ghostfolio + homer, wave-1 gate)
+
+Homer: passed end-to-end in 13.5 minutes — final video, zero
+warnings, zero kills, six stages without a repair round.
+
+Ghostfolio: preparation now completes in 11.5 minutes where
+the twelfth run died on false exit-124 kills — the app
+builds, starts, and gets browsed. Nine routes harvested with
+aria + screenshots (including /en/portfolio and
+/en/portfolio/allocations, with "portfolio", "allocation",
+and "performance" present in the aria text), yet exploration
+still failed the run with "no browser evidence for requested
+features" after seven runtime-repair rounds (36 minutes).
+The frontier moved exactly to the wave-2 boundary: the
+evidence exists and the verifier cannot ground it — N105's
+aria-first crediting, N106's ledger, and N107's declared
+proof obligations are the fix, not another harness pass.
+
+Instrument readings: zero exit-124 verdicts anywhere in
+either run (N102 holds); zero inactivity kills (N104
+consistent — beats are filtered from durable logs by
+design, so their proof is the absence of false kills); the
+launch stagger held ghostfolio 37s behind homer (N103 rider
+fired); no control-plane deaths. One wave-1 gap surfaced and
+closed the same day: every `daytona.<operation>.*`
+attribution event ran dark because the harness never carried
+its logger into the provider — `7a78f7f` threads a
+`controlPlaneLogger` through so envelope events land in
+`pipeline-log.jsonl`. Wave 2 (N106 → N105 → N107 → N108) is
+unblocked.
