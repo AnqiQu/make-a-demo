@@ -1331,6 +1331,12 @@ async function ensureValidPreparation(input: {
   let dependencyRepair = false;
   let reconcileLockfile = false;
   let repairBaseline: PreparationWorkspaceDiff | undefined;
+  let manifestBaseline: PreparationManifest | undefined;
+  // Set when a repair ran this round; applied only once the repair proves
+  // real. A no-op repair is a non-attempt and spends no budget (N109),
+  // apart from the grace-bounded safeguard below.
+  let pendingRepairCharge: (() => void) | undefined;
+  let unchargedNoopRepairs = 0;
   let lastWorkspaceDiff = acceptedPreparation?.workspaceDiff;
   // The preflight attempt whose gated install last succeeded in this
   // sandbox. Repair rounds whose diff leaves dependency inputs unchanged
@@ -1415,10 +1421,13 @@ async function ensureValidPreparation(input: {
           totalRepairAttempts: input.preparationRepairBudget.totalAttempts,
           workspace: input.workspace,
         });
-        input.preparationRepairBudget.attemptsByFingerprint[fingerprint] =
-          fingerprintRepairAttempts + 1;
-        input.preparationRepairBudget.totalAttempts += 1;
-        input.preparationRepairAttemptsByPhase[phase] = phaseRepairAttempts + 1;
+        pendingRepairCharge = () => {
+          input.preparationRepairBudget.attemptsByFingerprint[fingerprint] =
+            fingerprintRepairAttempts + 1;
+          input.preparationRepairBudget.totalAttempts += 1;
+          input.preparationRepairAttemptsByPhase[phase] =
+            phaseRepairAttempts + 1;
+        };
         input.recordOpenCodeSessionId(repair.opencodeSessionId);
         const repairedManifest = readPreparationManifest(repair.manifest);
         // A dependency repair's manifest is discarded below in favor of the
@@ -1443,6 +1452,7 @@ async function ensureValidPreparation(input: {
         activeRepairFailure = failure;
         dependencyRepair = repairingDependencies;
         repairBaseline = workspaceDiffBeforeRepair;
+        manifestBaseline = manifestBeforeRepair;
       }
     }
 
@@ -1461,6 +1471,47 @@ async function ensureValidPreparation(input: {
 
     const workspaceDiff = await input.capturePreparationWorkspaceDiff();
     lastWorkspaceDiff = workspaceDiff;
+    const repairDelta =
+      repairBaseline === undefined
+        ? undefined
+        : readDependencyRepairDelta(repairBaseline, workspaceDiff);
+    reconcileLockfile = repairDelta?.dependencyInputsChanged ?? false;
+    if (
+      pendingRepairCharge !== undefined &&
+      activeRepairFailure !== undefined
+    ) {
+      const workspaceUnchanged =
+        repairDelta !== undefined
+          ? repairDelta.changedPaths.length === 0
+          : workspaceDiff.changedPaths.length === 0;
+      // A dependency repair's manifest is discarded, so its only channel of
+      // effect is the workspace; a runtime repair may legitimately change
+      // only the manifest (commands, ports, envUsed), which counts as real.
+      const manifestUnchanged =
+        manifestBaseline !== undefined &&
+        JSON.stringify(preparationManifest) ===
+          JSON.stringify(manifestBaseline);
+      if (workspaceUnchanged && (dependencyRepair || manifestUnchanged)) {
+        if (unchargedNoopRepairs >= noopRepairGraceRounds) {
+          pendingRepairCharge();
+        } else {
+          unchargedNoopRepairs += 1;
+        }
+        pendingRepairCharge = undefined;
+        failure = appendNoopRepairRejection(
+          activeRepairFailure,
+          dependencyRepair,
+        );
+        activeRepairFailure = undefined;
+        dependencyRepair = false;
+        repairBaseline = undefined;
+        manifestBaseline = undefined;
+        continue;
+      }
+      unchargedNoopRepairs = 0;
+      pendingRepairCharge();
+      pendingRepairCharge = undefined;
+    }
     const fidelityAttempt =
       (input.validationAttemptCounts["preparation-fidelity"] ?? 0) + 1;
     await writeArtifact(
@@ -1486,13 +1537,6 @@ async function ensureValidPreparation(input: {
               : "runtime",
       },
     );
-    const repairDelta =
-      repairBaseline === undefined
-        ? undefined
-        : readDependencyRepairDelta(repairBaseline, workspaceDiff);
-    const unchangedDependencyRepair =
-      dependencyRepair && repairDelta?.changedPaths.length === 0;
-    reconcileLockfile = repairDelta?.dependencyInputsChanged ?? false;
     const fidelityValidation = await runValidationStage(
       "preparation-fidelity",
       input.dependencies,
@@ -1573,6 +1617,7 @@ async function ensureValidPreparation(input: {
     );
     dependencyRepair = false;
     repairBaseline = undefined;
+    manifestBaseline = undefined;
     if (fidelityValidation.status === "failed") {
       if (
         acceptedPreparation !== undefined &&
@@ -1596,18 +1641,6 @@ async function ensureValidPreparation(input: {
       } else {
         failure = fidelityValidation;
       }
-      continue;
-    }
-    if (unchangedDependencyRepair && activeRepairFailure !== undefined) {
-      failure = {
-        ...activeRepairFailure,
-        logsSummary: `${activeRepairFailure.logsSummary} Rejected repair: no package manifest or recognized package-manager configuration changed.`,
-        suggestedRepairHints: [
-          ...activeRepairFailure.suggestedRepairHints,
-          "Change the dependency metadata responsible for the reported install failure; do not rewrite the manifest or executable source.",
-        ],
-      };
-      activeRepairFailure = undefined;
       continue;
     }
     acceptedPreparation = { manifest: preparationManifest, workspaceDiff };
@@ -1693,6 +1726,50 @@ async function ensureValidPreparation(input: {
             ],
           };
   }
+}
+
+/**
+ * Free rounds before consecutive no-op repairs start charging the repair
+ * budgets. A repair that changed nothing did no work worth charging — but
+ * only twice, so an agent that keeps returning untouched workspaces still
+ * runs into the repeated-failure limit instead of looping forever.
+ */
+const noopRepairGraceRounds = 2;
+
+const dependencyNoopRejection =
+  "no package manifest or recognized package-manager configuration changed.";
+const dependencyNoopHint =
+  "Change the dependency metadata responsible for the reported install failure; do not rewrite the manifest or executable source.";
+const runtimeNoopRejection =
+  "the repair produced no change: the workspace and the preparation manifest match the state that already failed.";
+const runtimeNoopHint =
+  "Make a concrete change that addresses the failure: edit the files responsible or correct the preparation manifest's commands, ports, baseUrl, or envUsed. Resubmitting the same state will be rejected again.";
+
+/**
+ * Builds the failure a no-op repair loops back on. A repair that returns
+ * the workspace and manifest untouched is a non-attempt: the original
+ * failure stands, annotated so the next dispatch knows resubmission was
+ * already rejected. Appending is idempotent — consecutive no-ops must not
+ * stack duplicate rejections or hints.
+ */
+function appendNoopRepairRejection(
+  originalFailure: ValidationReport,
+  dependencyRepair: boolean,
+): ValidationReport {
+  const rejection = dependencyRepair
+    ? dependencyNoopRejection
+    : runtimeNoopRejection;
+  const hint = dependencyRepair ? dependencyNoopHint : runtimeNoopHint;
+  const rejectionSuffix = ` Rejected repair: ${rejection}`;
+  return {
+    ...originalFailure,
+    logsSummary: originalFailure.logsSummary.endsWith(rejectionSuffix)
+      ? originalFailure.logsSummary
+      : `${originalFailure.logsSummary}${rejectionSuffix}`,
+    suggestedRepairHints: originalFailure.suggestedRepairHints.includes(hint)
+      ? originalFailure.suggestedRepairHints
+      : [...originalFailure.suggestedRepairHints, hint],
+  };
 }
 
 function appendRepairRejection(

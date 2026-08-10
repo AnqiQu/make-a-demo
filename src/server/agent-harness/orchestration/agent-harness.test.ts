@@ -1288,7 +1288,7 @@ describe("runAgentHarnessPipeline", () => {
         "new file mode 100644",
         `+export const fixtureRows = [${round}];`,
       ].join("\n"),
-      patchSha256: `sha256:${"d".repeat(64)}` as const,
+      patchSha256: `sha256:${String(round).repeat(64).slice(0, 64)}` as const,
       sourceCommitSha: "abc123def456",
     });
 
@@ -1297,11 +1297,10 @@ describe("runAgentHarnessPipeline", () => {
       stubPipelineDependencies({
         async capturePreparationWorkspaceDiff() {
           diffCalls += 1;
-          // Call order: initial fidelity diff; before-repair baseline;
-          // after-repair diff; before-repair-2 baseline; after-repair-2.
-          if (diffCalls <= 2) return unchangedWorkspaceDiff();
-          if (diffCalls === 3) return diffAfterRepair(1);
-          if (diffCalls === 4) return diffAfterRepair(1);
+          // Call order: initial fidelity diff; after repair 1; after
+          // repair 2. Each repair lands a fresh source-only change.
+          if (diffCalls === 1) return unchangedWorkspaceDiff();
+          if (diffCalls === 2) return diffAfterRepair(1);
           return diffAfterRepair(2);
         },
         async exploreApp() {
@@ -1971,6 +1970,9 @@ describe("runAgentHarnessPipeline", () => {
         },
         async capturePreparationWorkspaceDiff() {
           diffAttempt += 1;
+          // Call order: initial fidelity diff; the failed install's
+          // post-validation lockfile check; after the no-op dependency
+          // repair; after the invalid repair; after the valid repair.
           const diff = [
             approvedDiff,
             approvedDiff,
@@ -2047,9 +2049,11 @@ describe("runAgentHarnessPipeline", () => {
     ]);
     expect(reconcileRequests).toEqual([undefined, true]);
     expect(result.preparationManifest).toEqual(approvedManifest);
+    // The no-op repair round ran no fidelity validation, so the vetoed
+    // diff lands at attempt 2.
     expect(
       artifacts[
-        "/workspace/.makeademo/validation-attempts/preparation-fidelity/attempt-3-workspace-diff.json"
+        "/workspace/.makeademo/validation-attempts/preparation-fidelity/attempt-2-workspace-diff.json"
       ],
     ).toMatchObject({
       acceptedBaselinePatchSha256: approvedDiff.patchSha256,
@@ -2085,6 +2089,18 @@ describe("runAgentHarnessPipeline", () => {
       patchSha256: `sha256:${"f".repeat(64)}` as const,
       sourceCommitSha: "abc123def456",
     };
+    // The third repair heeds the veto: it re-applies only the fixtures
+    // change, a real diff that violates nothing.
+    const heededVetoDiff = {
+      changedFileSha256: {
+        "src/demo/fixtures.ts": `sha256:${"d".repeat(64)}` as const,
+      },
+      changedPaths: ["/workspace/repo/src/demo/fixtures.ts"],
+      patch:
+        "diff --git a/src/demo/fixtures.ts b/src/demo/fixtures.ts\n+export const fixtures = [];",
+      patchSha256: `sha256:${"d".repeat(64)}` as const,
+      sourceCommitSha: "abc123def456",
+    };
     const repairHintLists: string[][] = [];
     let diffAttempt = 0;
     let explorationAttempt = 0;
@@ -2102,9 +2118,9 @@ describe("runAgentHarnessPipeline", () => {
       stubPipelineDependencies({
         async capturePreparationWorkspaceDiff() {
           diffAttempt += 1;
-          return diffAttempt === 2 || diffAttempt === 3
-            ? invalidDiff
-            : unchangedWorkspaceDiff();
+          if (diffAttempt === 2 || diffAttempt === 3) return invalidDiff;
+          if (diffAttempt >= 4) return heededVetoDiff;
+          return unchangedWorkspaceDiff();
         },
         async exploreApp() {
           explorationAttempt += 1;
@@ -2188,6 +2204,18 @@ describe("runAgentHarnessPipeline", () => {
       patchSha256: `sha256:${"f".repeat(64)}` as const,
       sourceCommitSha: "abc123def456",
     };
+    // The second repair replaces the vetoed change with a fixtures-only
+    // diff, so it counts as a real attempt rather than a bare revert.
+    const heededVetoDiff = {
+      changedFileSha256: {
+        "src/demo/fixtures.ts": `sha256:${"d".repeat(64)}` as const,
+      },
+      changedPaths: ["/workspace/repo/src/demo/fixtures.ts"],
+      patch:
+        "diff --git a/src/demo/fixtures.ts b/src/demo/fixtures.ts\n+export const fixtures = [];",
+      patchSha256: `sha256:${"d".repeat(64)}` as const,
+      sourceCommitSha: "abc123def456",
+    };
     const repairStages: string[] = [];
     const restored: string[] = [];
     let diffAttempt = 0;
@@ -2205,7 +2233,9 @@ describe("runAgentHarnessPipeline", () => {
       stubPipelineDependencies({
         async capturePreparationWorkspaceDiff() {
           diffAttempt += 1;
-          return diffAttempt === 2 ? invalidDiff : unchangedWorkspaceDiff();
+          if (diffAttempt === 2) return invalidDiff;
+          if (diffAttempt >= 3) return heededVetoDiff;
+          return unchangedWorkspaceDiff();
         },
         async exploreApp() {
           explorationAttempt += 1;
@@ -2430,9 +2460,7 @@ describe("runAgentHarnessPipeline", () => {
           runId: "run_noisy_repeated_failure",
         }),
         stubPipelineDependencies({
-          async capturePreparationWorkspaceDiff() {
-            return unchangedWorkspaceDiff();
-          },
+          capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
           async prepareRepo() {
             return { manifest: preparationManifest() };
           },
@@ -2474,9 +2502,7 @@ describe("runAgentHarnessPipeline", () => {
           runId: "run_repeated_failure_budget",
         }),
         stubPipelineDependencies({
-          async capturePreparationWorkspaceDiff() {
-            return unchangedWorkspaceDiff();
-          },
+          capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
           async prepareRepo() {
             return { manifest: preparationManifest() };
           },
@@ -2510,7 +2536,6 @@ describe("runAgentHarnessPipeline", () => {
     // fire while the causes keep changing.
     let preflightAttempts = 0;
     let repairAttempts = 0;
-    let diffCaptures = 0;
     const causes = [
       "Error: NEXTAUTH_SECRET must be set",
       "SyntaxError: Unexpected token '}' in /workspace/config.json",
@@ -2520,15 +2545,7 @@ describe("runAgentHarnessPipeline", () => {
     const result = await runAgentHarnessPipeline(
       pipelineInput({ runId: "run_shared_symptom_distinct_causes" }),
       stubPipelineDependencies({
-        async capturePreparationWorkspaceDiff() {
-          diffCaptures += 1;
-          const digit = String(diffCaptures % 10);
-          return {
-            ...preparationWorkspaceDiff(),
-            patch: `diff --git a/src/demo.ts b/src/demo.ts\n+// repair round ${diffCaptures}`,
-            patchSha256: `sha256:${digit.repeat(64)}` as const,
-          };
-        },
+        capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
         async exploreApp() {
           return {
             kind: "artifacts" as const,
@@ -2594,9 +2611,7 @@ describe("runAgentHarnessPipeline", () => {
       runAgentHarnessPipeline(
         pipelineInput({ runId: "run_drifting_symptom_same_cause" }),
         stubPipelineDependencies({
-          async capturePreparationWorkspaceDiff() {
-            return unchangedWorkspaceDiff();
-          },
+          capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
           async prepareRepo() {
             return { manifest: preparationManifest() };
           },
@@ -2637,9 +2652,7 @@ describe("runAgentHarnessPipeline", () => {
       runAgentHarnessPipeline(
         pipelineInput({ runId: "run_debug_log_timestamp_noise" }),
         stubPipelineDependencies({
-          async capturePreparationWorkspaceDiff() {
-            return unchangedWorkspaceDiff();
-          },
+          capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
           async prepareRepo() {
             return { manifest: preparationManifest() };
           },
@@ -2669,6 +2682,203 @@ describe("runAgentHarnessPipeline", () => {
     ).rejects.toThrow("repeated failure");
 
     expect(repairAttempts).toBe(2);
+  });
+
+  it("rejects a repair that changes nothing without spending the repair budget", async () => {
+    // Rounds 1-2 return the workspace and manifest untouched: non-attempts
+    // that must not burn the (deliberately tiny) global budget and must not
+    // re-run the preflight. Round 3 fixes the manifest alone — a real
+    // repair even though the workspace still did not change.
+    let preflightAttempts = 0;
+    const repairSummaries: string[] = [];
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_noop_repair_non_attempt" }),
+      stubPipelineDependencies({
+        async capturePreparationWorkspaceDiff() {
+          return unchangedWorkspaceDiff();
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation({ failureReport }) {
+          repairSummaries.push(failureReport.logsSummary);
+          if (repairSummaries.length < 3) {
+            return { manifest: preparationManifest() };
+          }
+          return {
+            manifest: { ...preparationManifest(), envUsed: { DEMO_MODE: "1" } },
+          };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          if (preflightAttempts === 1) {
+            return {
+              ...report("preparation-preflight", "failed"),
+              attemptedCommand: "bun run dev",
+              failureClassification: "start failure",
+              logsSummary:
+                "Start command was not reachable: connection refused",
+            };
+          }
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      { repoPreparationRepairLimit: 1 },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(preflightAttempts).toBe(2);
+    expect(repairSummaries).toHaveLength(3);
+    expect(repairSummaries[1]).toContain(
+      "Rejected repair: the repair produced no change",
+    );
+    expect(repairSummaries[2]).toContain(
+      "Rejected repair: the repair produced no change",
+    );
+  });
+
+  it("charges no-op repairs after two free rounds so they still terminate", async () => {
+    let preflightAttempts = 0;
+    let repairAttempts = 0;
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({ runId: "run_endless_noop_repairs" }),
+        stubPipelineDependencies({
+          async capturePreparationWorkspaceDiff() {
+            return unchangedWorkspaceDiff();
+          },
+          async prepareRepo() {
+            return { manifest: preparationManifest() };
+          },
+          async repairPreparation() {
+            repairAttempts += 1;
+            return { manifest: preparationManifest() };
+          },
+          async resetCaptureRuntime() {
+            throw new Error("Capture reset must not run.");
+          },
+          async validatePreparation() {
+            preflightAttempts += 1;
+            return {
+              ...report("preparation-preflight", "failed"),
+              attemptedCommand: "bun run dev",
+              failureClassification: "start failure",
+              logsSummary:
+                "Start command was not reachable: connection refused",
+            };
+          },
+        }),
+        { repoPreparationRepairLimit: 5 },
+      ),
+    ).rejects.toThrow("repeated failure");
+
+    // Two free rounds, then two charged rounds against the rejected
+    // failure's fingerprint; the fifth dispatch trips the repeated-failure
+    // limit. The preflight never re-ran for any of them.
+    expect(repairAttempts).toBe(4);
+    expect(preflightAttempts).toBe(1);
+  });
+
+  it("rejects a dependency repair that changes nothing with the dependency-lane steering", async () => {
+    const dependencyDiff = {
+      changedFileSha256: {
+        "package.json": `sha256:${"3".repeat(64)}` as const,
+      },
+      changedPaths: ["/workspace/repo/package.json"],
+      patch:
+        'diff --git a/package.json b/package.json\n+  "dependencies": { "missing-package": "1.0.0" }',
+      patchSha256: `sha256:${"3".repeat(64)}` as const,
+      sourceCommitSha: "abc123def456",
+    };
+    let preflightAttempts = 0;
+    let realRepairDone = false;
+    const repairSummaries: string[] = [];
+    const repairHints: string[][] = [];
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_noop_dependency_repair" }),
+      stubPipelineDependencies({
+        async capturePreparationWorkspaceDiff() {
+          return realRepairDone ? dependencyDiff : unchangedWorkspaceDiff();
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation({ failureReport }) {
+          repairSummaries.push(failureReport.logsSummary);
+          repairHints.push([...failureReport.suggestedRepairHints]);
+          if (repairSummaries.length === 2) {
+            realRepairDone = true;
+          }
+          return { manifest: preparationManifest() };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          if (realRepairDone) {
+            return report("preparation-preflight", "passed");
+          }
+          return {
+            ...report("preparation-preflight", "failed"),
+            attemptedCommand: "bun install --frozen-lockfile",
+            failureClassification: "install failure",
+            logsSummary: "Install failed: error: lockfile had changes",
+          };
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      { repoPreparationRepairLimit: 1 },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(preflightAttempts).toBe(2);
+    expect(repairSummaries).toHaveLength(2);
+    expect(repairSummaries[1]).toContain(
+      "Rejected repair: no package manifest or recognized package-manager configuration changed.",
+    );
+    expect(repairHints[1]).toContain(
+      "Change the dependency metadata responsible for the reported install failure; do not rewrite the manifest or executable source.",
+    );
   });
 
   it("reports the terminal validation stage after an earlier stage also failed", async () => {
@@ -3555,6 +3765,27 @@ function unchangedWorkspaceDiff() {
     patch: "",
     patchSha256: `sha256:${"c".repeat(64)}` as const,
     sourceCommitSha: "abc123def456",
+  };
+}
+
+/**
+ * A capture stub whose diff advances on every call, so each repair round
+ * reads as a real workspace change rather than a no-op resubmission.
+ */
+function advancingWorkspaceDiffCapture() {
+  let captures = 0;
+  return async () => {
+    captures += 1;
+    const digit = String(captures % 10);
+    return {
+      changedFileSha256: {
+        "src/demo.ts": `sha256:${digit.repeat(64)}` as const,
+      },
+      changedPaths: ["/workspace/repo/src/demo.ts"],
+      patch: `diff --git a/src/demo.ts b/src/demo.ts\n+// capture ${captures}`,
+      patchSha256: `sha256:${digit.repeat(64)}` as const,
+      sourceCommitSha: "abc123def456",
+    };
   };
 }
 
