@@ -126,6 +126,116 @@ describe("validatePreparationFidelity", () => {
     expect(report.status).toBe("passed");
   });
 
+  it("routes an unverified fixture shape behind a declared observable state to the judge", () => {
+    // Excalidraw claimed "Undo enabled immediately" through a declared
+    // proof while the seam's shapeProbe read not-run; the harvested control
+    // state read [disabled] (2026-08-08). A proof obligation rests on the
+    // fixture rendering — a shape nobody verified cannot back it.
+    const report = validateDiff({
+      createdFiles: ["src/demo/tracker-fixtures.ts"],
+      manifestOverrides: {
+        envUsed: { MAKEADEMO_DEMO: "true" },
+        productContext: {
+          evidencePaths: [routePath],
+          featureInventory: [
+            {
+              authStrategy: "bypass",
+              dataSeams: [
+                {
+                  fixtureModule: "src/demo/tracker-fixtures.ts",
+                  functionName: "getTrackerEntries",
+                  path: routePath,
+                  shapeProbe: "not-run: tsc unavailable in the sandbox",
+                },
+              ],
+              description: "Track project time.",
+              entryPaths: ["/tracker"],
+              expectedProof: {
+                from: "disabled",
+                kind: "state-transition",
+                locator: "Undo",
+                to: "enabled",
+              },
+              fixtureNotes: [],
+              id: "tracker",
+              label: "Tracker",
+              sourcePaths: [routePath],
+            },
+          ],
+          name: "Product",
+          summary: "The original product.",
+        },
+      },
+      modifiedFiles: [routePath],
+      patch: [
+        "diff --git a/src/demo/tracker-fixtures.ts b/src/demo/tracker-fixtures.ts",
+        "new file mode 100644",
+        "+export const getTrackerEntries = () => trackerFixtures;",
+        `diff --git a/${routePath} b/${routePath}`,
+        "+import { getTrackerEntries } from '../demo/tracker-fixtures';",
+        "+const entries = process.env.MAKEADEMO_DEMO === 'true' ? getTrackerEntries() : await fetchTrackerEntries();",
+      ].join("\n"),
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "product fidelity violation",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain("shapeProbe");
+    expect(report.logsSummary).toContain("not-run");
+    expect(report.logsSummary).toContain("tracker");
+  });
+
+  it("accepts a compiler-verified fixture shape behind a declared observable state", () => {
+    const report = validateDiff({
+      createdFiles: ["src/demo/tracker-fixtures.ts"],
+      manifestOverrides: {
+        envUsed: { MAKEADEMO_DEMO: "true" },
+        productContext: {
+          evidencePaths: [routePath],
+          featureInventory: [
+            {
+              authStrategy: "bypass",
+              dataSeams: [
+                {
+                  fixtureModule: "src/demo/tracker-fixtures.ts",
+                  functionName: "getTrackerEntries",
+                  path: routePath,
+                  shapeProbe: "passed",
+                },
+              ],
+              description: "Track project time.",
+              entryPaths: ["/tracker"],
+              expectedProof: {
+                from: "disabled",
+                kind: "state-transition",
+                locator: "Undo",
+                to: "enabled",
+              },
+              fixtureNotes: [],
+              id: "tracker",
+              label: "Tracker",
+              sourcePaths: [routePath],
+            },
+          ],
+          name: "Product",
+          summary: "The original product.",
+        },
+      },
+      modifiedFiles: [routePath],
+      patch: [
+        "diff --git a/src/demo/tracker-fixtures.ts b/src/demo/tracker-fixtures.ts",
+        "new file mode 100644",
+        "+export const getTrackerEntries = () => trackerFixtures;",
+        `diff --git a/${routePath} b/${routePath}`,
+        "+import { getTrackerEntries } from '../demo/tracker-fixtures';",
+        "+const entries = process.env.MAKEADEMO_DEMO === 'true' ? getTrackerEntries() : await fetchTrackerEntries();",
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
   it("rejects removing the packageManager pin", () => {
     // outline (2026-08-08): the prep agent deleted `"packageManager":
     // "yarn@4.11.0"`, silently downgrading the repo to yarn classic;

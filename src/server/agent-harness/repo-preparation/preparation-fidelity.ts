@@ -195,6 +195,24 @@ export function readPreparationFidelityCandidates(input: {
           message: `Feature ${feature.id} declares data seam file ${seam.path}, which exists neither in the repository nor in the prepared diff.`,
         });
       }
+      // A declared proof rests on what the fixture renders, so a fixture
+      // shape nobody verified — or one the compiler rejected — cannot back
+      // it: excalidraw claimed "Undo enabled immediately" over a not-run
+      // probe while the harvested control state read [disabled]
+      // (2026-08-08). Legitimately unprobeable repos survive the judge by
+      // saying why the claim holds anyway.
+      const probeOutcome = seam.shapeProbe?.trim().toLowerCase();
+      if (
+        feature.expectedProof !== undefined &&
+        probeOutcome !== undefined &&
+        (probeOutcome.startsWith("not-run") ||
+          probeOutcome.startsWith("failed"))
+      ) {
+        violations.push({
+          hint: repairHints.truthfulManifest,
+          message: `Feature ${feature.id} declares an expectedProof observable state, but its data seam ${seam.path} records shapeProbe "${seam.shapeProbe}" — an unverified fixture shape cannot back a claimed observable state. Run the fixture-shape probe and record its outcome, or state in the probe entry why the claim holds without the compiler's check.`,
+        });
+      }
     }
   }
   const repairPaths = readInvalidRepairPaths(input);
