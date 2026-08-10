@@ -6,6 +6,7 @@ import {
   makeADemoDirectory,
   stageWriteableArtifactPaths,
 } from "../schemas/artifact-paths";
+import { createAgentLivenessPluginSource } from "./agent-liveness-plugin";
 import type {
   OpenCodeHarnessRunInput,
   OpenCodeHarnessRunResult,
@@ -25,6 +26,13 @@ export class DefaultOpenCodeHarnessRunner implements OpenCodeHarnessRunner {
     await input.workspace.writeTextFile(
       promptPath,
       elideMiddle(input.prompt, 96_000),
+    );
+    // OpenCode auto-loads plugins from `<configDir>/plugin/`; this one
+    // turns model event-bus activity into throttled stderr beats so a
+    // PTY-silent but working agent keeps feeding the inactivity watchdog.
+    await input.workspace.writeTextFile(
+      `${input.configDir}/plugin/agent-liveness.js`,
+      createAgentLivenessPluginSource(),
     );
     const result = await input.workspace.execute(
       createOpenCodeRunCommand({

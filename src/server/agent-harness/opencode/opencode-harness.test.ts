@@ -127,6 +127,44 @@ describe("OpenCode harness seam", () => {
     expect(command).toContain('sh -c "exit $makeademo_alive_status"');
   });
 
+  it("installs the agent-liveness plugin in the config dir before launching", async () => {
+    // A model can stream tokens for longer than the inactivity window
+    // without touching the terminal (silent tool calls, long thinking);
+    // the plugin turns event-bus activity into throttled stderr beats the
+    // PTY watchdog can hear. OpenCode auto-loads `<configDir>/plugin/`.
+    const events: string[] = [];
+    const writes: Array<{ contents: string; path: string }> = [];
+
+    await new DefaultOpenCodeHarnessRunner().run({
+      availableTools: ["read", "write"],
+      configDir: "/tmp/makeademo/opencode",
+      model: "openai/gpt-5",
+      prompt: "Prepare the repo.",
+      stage: "repo-preparation",
+      timeoutMs: 1000,
+      workingDirectory: "/workspace/repo",
+      workspace: createFakeAgentHarnessWorkspace({
+        async execute() {
+          events.push("execute");
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+        async writeTextFile(path, contents) {
+          events.push("write");
+          writes.push({ contents, path });
+        },
+      }),
+    });
+
+    const pluginWrite = writes.find(
+      (write) =>
+        write.path === "/tmp/makeademo/opencode/plugin/agent-liveness.js",
+    );
+    expect(pluginWrite?.contents).toContain("[makeademo:agent-alive]");
+    expect(events.indexOf("execute")).toBeGreaterThan(
+      events.lastIndexOf("write"),
+    );
+  });
+
   it("applies stage deadlines and streams OpenCode output to the caller", async () => {
     const runner = new DefaultOpenCodeHarnessRunner();
     let executeOptions: AgentHarnessWorkspaceExecuteOptions | undefined;
