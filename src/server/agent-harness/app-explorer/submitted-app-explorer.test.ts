@@ -183,6 +183,20 @@ describe("exploreSubmittedApp", () => {
     expect(script).toContain("element.innerText");
   });
 
+  it("spends the control budget on feature-matching names before positional picks", async () => {
+    const { commands } = await exploreObservation({
+      featureInventory: [preparedFeature({})],
+      routes: [observedRoute({ headings: ["Dashboard"] })],
+    });
+    const script = readExplorerScript(commands);
+
+    // N105: the 16-control budget is kept, but controls whose accessible
+    // names token-match a prepared feature outrank purely positional picks —
+    // a control-dense page's 17th button is often the feature's own.
+    expect(script).toContain("featureControlTokenGroups");
+    expect(script).toContain("prioritizeFeatureControls");
+  });
+
   it("names grounded routes when prepared features are not observable", async () => {
     const { result } = await exploreObservation({
       featureInventory: [

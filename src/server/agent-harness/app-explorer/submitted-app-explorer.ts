@@ -2499,6 +2499,21 @@ const isAppUnavailableError = (error) => /(?:ERR_CONNECTION_(?:CLOSED|REFUSED|RE
   error instanceof Error ? error.message : String(error),
 );
 const normalizeCrawlUrl = ${normalizeCrawlUrl.toString()};
+const semanticTokens = ${semanticTokens.toString()};
+const featureControlTokenGroups = ${JSON.stringify(
+    featureInventory.map((feature) => featureSemanticTokens(feature)),
+  )};
+// Within the 16-control budget, controls whose accessible names share a
+// semantic token with any prepared feature outrank purely positional picks:
+// on control-dense tools the page's 17th button is often the feature's own,
+// and it must reach both the catalog and the click loop's exercise window.
+const prioritizeFeatureControls = (buttons) => {
+  const matchesFeature = (name) => {
+    const tokens = semanticTokens(name);
+    return featureControlTokenGroups.some((group) => tokens.some((token) => group.includes(token)));
+  };
+  return [...buttons.filter(matchesFeature), ...buttons.filter((name) => !matchesFeature(name))].slice(0, 16);
+};
 let browser;
 try {
   browser = await chromium.launch({ headless: true });
@@ -2857,7 +2872,7 @@ try {
         const paragraphTexts = Array.from(document.querySelectorAll("main p, main li, article p, [role=main] p")).filter(visible).filter((element) => !inAlert(element)).map((element) => clean(element.innerText)).filter(Boolean).slice(0, 80);
         return {
           alerts: Array.from(document.querySelectorAll(alertContainerSelector)).filter(visible).map((element) => clean(element.innerText)).filter(Boolean).slice(0, 12),
-          buttons: texts("button, [role=button]", 16),
+          buttons: texts("button, [role=button]", 48),
           emptyDataTables,
           forms: Array.from(document.querySelectorAll("form")).filter(visible).map((element) => clean(element.getAttribute("aria-label") || element.getAttribute("name") || element.id || "form")).slice(0, 20),
           headings: texts("h1, h2, h3, [role=heading]"),
@@ -2891,6 +2906,7 @@ try {
       if (landedUrl !== targetUrl && seen.has(landedUrl)) continue;
       seen.add(landedUrl);
       const observed = await page.evaluate(harvestPage);
+      observed.buttons = prioritizeFeatureControls(observed.buttons);
       observed.loadingOverlay = await page.evaluate(hasCoveringLoadingOverlay).catch(() => false);
       const current = new URL(page.url());
       const path = current.pathname + current.search + current.hash;
@@ -3169,6 +3185,7 @@ try {
     await gotoRoute(probeUrl);
     if (page.url().includes(probeMarker)) {
       const probeObserved = await page.evaluate(harvestPage);
+      probeObserved.buttons = prioritizeFeatureControls(probeObserved.buttons);
       result.routes.push({
         alerts: [],
         buttons: [],

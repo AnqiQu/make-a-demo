@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { createFakeAgentHarnessWorkspace } from "../daytona/workspace.test-helpers";
+import type { PreparedDemoFeature } from "../schemas/artifacts";
 import { exploreSubmittedApp } from "./submitted-app-explorer";
 
 const execFileAsync = promisify(execFile);
@@ -25,10 +26,14 @@ setTimeout(() => {
 </script>
 </body></html>`;
 
-async function buildExplorerScript(baseUrl: string): Promise<string> {
+async function buildExplorerScript(
+  baseUrl: string,
+  featureInventory?: PreparedDemoFeature[],
+): Promise<string> {
   const commands: string[] = [];
   await exploreSubmittedApp({
     baseUrl,
+    ...(featureInventory === undefined ? {} : { featureInventory }),
     preparationManifestId: "prep_script_test",
     workspace: createFakeAgentHarnessWorkspace({
       async executeSubmittedCode(command: string) {
@@ -739,6 +744,72 @@ describe("generated exploration script", () => {
 
       expect(result.fatalError).toBeUndefined();
       expect(result.routes[0]?.text).toContain("Total balance $12,400");
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
+  it("keeps a feature-named control inside the harvest budget on a control-dense page", async () => {
+    // Seventeen filler buttons precede the one control the prepared feature
+    // is about. A positional cut would drop it; the budget must spend its
+    // slots on feature-matching accessible names first.
+    const fillers = Array.from(
+      { length: 17 },
+      (_, index) => `<button>Filler action ${index + 1}</button>`,
+    ).join("\n");
+    const controlDensePage = `<!doctype html><html><head><title>Dense App</title></head><body>
+<main>
+${fillers}
+<button>Export report</button>
+</main>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(controlDensePage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-controls-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`, [
+          {
+            authStrategy: "none",
+            description: "Export the monthly report.",
+            entryPaths: ["/"],
+            fixtureNotes: [],
+            id: "export-report",
+            label: "Export report",
+            sourcePaths: ["src/export.ts"],
+          },
+        ])
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        routes: Array<{ buttons: string[] }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      expect(result.routes[0]?.buttons).toContain("Export report");
+      expect(result.routes[0]?.buttons.length).toBeLessThanOrEqual(16);
     } finally {
       server.close();
     }
