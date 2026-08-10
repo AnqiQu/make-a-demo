@@ -4435,3 +4435,555 @@ first; lint, typecheck, test, knip green per commit. Tests
 976→997 (+21; the remotion delayRender smoke test passed on
 every full run this window). The twelfth matrix remains the
 acceptance gate and awaits an explicit go-ahead.
+
+## Addendum (2026-08-09, twelfth 11-repo matrix — the false-kill and wording-lottery classes; verification learns behavior; N102–N111)
+
+Run `matrix-2026-08-09T23-40-32-270Z` / report
+`matrix-report-2026-08-10T00-41-35-405Z.json`. Two passed:
+homer (21min), cyberchef (58min — its first pass since the
+reset-socket death; the one N94/N99-covered seam held under
+load). Nine failed. Scorecard against the N98–N101 gates:
+agent inactivity kills fell 43 → 11 but not to near zero, and
+ghostfolio died from three false ones of a shape N98 never
+suspected; the control-plane gate failed at two new seams
+(midday 409, outline 502); the exploration-hang gate went
+untested; midday never reached its data gate — its
+preparation passed fidelity with an empty workspace diff;
+ghost's gate passed (preparation cleared in ~20min and the
+frontier moved to exploration); twenty's memory steering
+landed and worked, exposing the disk wall behind the memory
+wall. N101's report-row marker rider worked — calcom,
+directus, and ghostfolio rows carried their `[makeademo:…]`
+markers. The frontier this cycle: the harness's own transport
+and envelope still manufacture failures (a stolen PTY
+sentinel, an unclassified 409, a silent 27-minute
+provisioning gap), and beneath them feature verification is a
+wording lottery — grounded when the agent's naming happens to
+collide with on-screen text, failed (or vacuously passed)
+when it does not.
+
+### Diagnoses
+
+**The false-kill class (ghostfolio killed; the sentinel was
+stolen, not the CPU stalled).** All three preflight attempts
+died identically: lifecycle `npm rebuild && npm run
+--if-present postinstall`, exit 124, "5 minutes of silence
+with no CPU progress." The teed evidence proves the command
+finished ~50s in: npm's debug log records `17 verbose exit 0`
+/ `18 info ok`, the `[makeademo:disk] lifecycle after` and
+`[makeademo:mem]` markers printed (they print only after the
+wrapped command completes), and the last real bytes are a
+fresh interactive `root@…:/workspace#` prompt. Mechanism:
+`executeStreamingInSandbox` pre-queues the exit-sentinel and
+`exit` lines into the tty input buffer for the command's
+whole duration, nothing detaches the command's stdin, and a
+stdin-draining child (prisma's ora spinner, `discardStdin:
+true`; a prior run's tail carries a live spinner frame `⠙`)
+ate the queued lines — bash printed its prompt and waited
+forever for input that no longer exists. The pre-N98 run has
+a byte-identical tail classified "install failure": N98
+renamed this failure; it did not change it. Both repair
+rounds chased repo phantoms (a husky shim for a hook the
+lifecycle never invokes) and round 2 silently dropped
+`buildCommandUsed` — re-arming the previous run's missing
+`dist/apps/api/main` defect behind the transport bug. Two
+aggravations: the kill message's "with no CPU progress" is
+unearned (`timeoutSummary` never consults alive lines), and
+`[makeademo:alive]` appears zero times across the entire
+11-entry batch — with a concrete suspect: the sampler
+captures its pgid via command substitution, which under an
+interactive job-controlled bash inherits the login shell's
+process group while the foreground pipeline gets its own, and
+`cpu-liveness.test.ts` asserts only on the generated string,
+never executing it. N98's sampler may never have fired.
+
+**Daytona envelope gaps (midday killed; outline killed).**
+Midday died at `pipeline.failed: "An operation is already in
+progress for this resource"` — a 409 thrown in the 79-second
+preflight window between the fidelity report and death (the
+sync → network-toggle sequence; no agent command in flight).
+`setSandboxNetworkAccess` carries no retry; the conflict
+class is handled only at sandbox delete, and even there the
+message regex (`state change in progress|state is changing`)
+does not match this text. The raw 409 was then laundered into
+a maker-facing fallback prompt: "Resolve these observed
+blockers: 1. An operation is already in progress for this
+resource." Outline died at `"Request failed with status code
+502"` after a 27-minute completely silent gap at the
+provisioning/repo-upload seam — `/workspace/repo` never came
+to exist (`cd: /workspace/repo: No such file or directory`
+from the failure-path diff capture). Three compounding gaps:
+`createSandboxWithConnectionRetry` retries only
+ECONNREFUSED/RESET/TIMEDOUT (a 502 during create is instantly
+fatal); the transfer ladder is `[1_000, 4_000]` — three
+attempts over five seconds, blip-scale against a bad window;
+and no control-plane call emits a pipeline-log event, so the
+27 minutes are unattributable dead air and the terminal error
+names no seam. Both deaths sit inside the batch's own
+thundering herd: 22 sandbox creates plus 11 archive uploads
+launched in the same millisecond.
+
+**The agent-seam kill residue (11 kills; ~66 minutes).** Six
+of eleven entries lost their first `repo-preparation` command
+to the 300s watchdog (midday mid-file-write — the partial
+stdout ends inside a TSX table cell); homer ate three and
+still passed. The mechanism is structural: an OpenCode
+process blocked on a long model-stream wait burns no local
+CPU and prints nothing, so the N98 jiffies heartbeat is blind
+to remote work by construction. Each kill costs ~6 minutes
+plus a repair-resume round.
+
+**The wording lottery (conduit and excalidraw regressed on
+luck, not preparation).** Grounding is a lexical bridge:
+observed = an exercised interaction OR an assert sharing ≥1
+semantic token (lowercase, ≥4 chars, stopword-filtered,
+5-char-truncated) with the feature's wording. Conduit's
+`/#/profile/ada-lovelace` rendered exactly the feature's
+evidence ("My Articles", "Favorited Articles") but the
+`route.headings.length === 0` gate disables all text asserts
+on any route with headings, and the two headings present are
+article titles sharing zero tokens with `view-author-articles`.
+Its Follow/Favorite clicks were exercised and then discarded:
+the click renames the control (`Follow ada-lovelace ( 42 )` →
+`Unfollow … ( 43 )` in the aria — the state demonstrably
+advanced) so the exact-name re-proof found nothing and
+`interactions: []` shipped. Both prior conduit passes were
+lexical accidents (a feature named after an on-screen
+headline; a `condu` token collision). Excalidraw put all
+three features on `/`; winner-take-all tagging gave the one
+shared heading ("Canvas actions") to `theme-and-image-export`
+2–1, starving the requested undo/redo feature; "Undo"/"Redo"
+exist only as aria-labels on icon buttons past the 16-button
+harvest cap; and Undo was `[disabled]` anyway — the
+manifest's "Undo is enabled immediately" claim is contradicted
+by the harvested aria, and fidelity accepted `shapeProbe:
+"not-run"` behind it. Its prior pass proved nothing about
+undo/redo either: the ≤1-feature-per-route short-circuit
+grounded it on a route whose Undo was also disabled. Steering
+compounded both lanes: "Server-side runtime errors were
+observed" fires on any non-empty stderr (npm warnings;
+ESLint's literal `Found 0 errors`), and conduit's
+default-demo branch told repair to "reselect entryPaths onto"
+a route list already containing the failing route — the
+wording-alignment message is gated to maker-requested
+features.
+
+**ghost (past preparation at last; three stacked faults;
+verification called them wording).** Preparation cleared in
+~20 minutes and exploration ran six attempts — the N98-cycle
+acceptance expectation met. The faults, in series: the Ember
+admin client was never built (the install filter excluded it
+and the harness itself steered the agent away —
+`apps/ember-admin/app/router.js belongs to non-selected
+browser application` — while its build output is the selected
+app's `adminAssets`; every `/ghost/` route 400d on the missing
+template); a fixture used `uuid: 'demo-post-uuid'` (422 →
+crash); the injected demo-session middleware required
+`'../../../services/auth'` — one level too deep — turning
+every admin route into a raw stack-trace 500. Preflight had
+gone green the whole time because the agent patched the
+maintenance page `503 → isMakeADemoDemo ? 200 : 503` and the
+probe checks status only — a reward-hack shape, not an app
+fix. The harvester read the stack-trace pages as `headings:
+[], text: []` (raw `<pre>` bodies match no `main p`/heading
+selector), the not-found probe rendered the same broken page
+as `/` so error suppression disabled itself, and the
+classifier's headline told six repair rounds to "align the
+featureInventory wording" with "We'll be right back." The run
+died on the attempt that finally surfaced the decisive
+`Cannot find module` stderr, and the cross-run fallback
+prompt renders only `logsSummary` — the hints and stderr
+excerpts never reach the next session.
+
+**calcom, directus (lanes killed while converging).**
+Calcom: attempts 1–2 repeated the known `'@calcom/website'`
+missing-workspace failure — repair 1 was a no-op
+(`changedPaths: []`) accepted as a success and charged a
+budget slot — and attempt 3 failed on a new cause,
+`NEXTAUTH_SECRET` unset, which `repo-profile.json`'s
+`requiredEnvHints` had predicted and nothing surfaced. The
+run-planner had chosen `apps/web` + `yarn run dev`; the
+preparation agent escalated to root `dev:all` and dragged the
+missing workspace in. Directus: attempts 1–2 failed on
+`Failed to resolve entry for package "@directus/extensions"`
+— the N67 matcher's regex misses Vite's phrasing though the
+function's own comment names this exact directus case;
+repair 2 fixed it (a demo-gated predev build) and the server
+came up; attempt 3 was the wrong-base failure (SPA served at
+`/admin`, probe at `/`, proxy to an API that was never
+planned — `localServices: []` against a manifest assumption
+that requires one); repair 3 made the right multi-file fix
+and left a stray closing brace (`vite.config.js:93:6`), and
+the parse error's fingerprint collapsed back onto the generic
+first line — `curl: (7) Failed to connect…` — so the
+repeated-failure limiter killed the lane on its first
+genuinely novel, trivially fixable cause. The N101 wrong-base
+steering was structurally unreachable: it lives in the
+exploration stage (directus died in preflight) and its
+trigger requires a 404 (the proxy emitted 502). Recorded
+repair candidates also diverge from the executed manifest on
+exactly `appDir`/`startCommandUsed`, making the attempt
+artifacts misleading for diagnosis.
+
+**twenty (the disk wall behind the memory wall).** The
+N101/N67 steering landed in the accepted diff (nx
+prerequisite build, `--max-old-space-size=6144`,
+`VITE_BUILD_SOURCEMAP=false`) and the build stopped dying at
+the ceiling — so the run paid four preflight attempts and ≥4
+yarn passes into a 10GiB overlay (the org per-sandbox
+maximum; `/tmp` shares the filesystem, so yarn's `xfs-*` zip
+staging competes with the repo). Three copies of the
+dependency tree coexisted: the 3.14GiB global cache, the
+unpacked `node_modules`, and the stale `node_modules` the
+workspace reset deliberately preserves. The only cache prune
+runs on the success path, so failing attempts got no
+headroom; attempt 4 re-fetched everything from a pruned cache
+and died ENOSPC in fetch/zip-convert. At repair round 1 the
+agent found the correct halving fix — `nodeLinker: pnp` — and
+the fidelity `mutatesManagerIdentity` rule vetoed it. The
+`[makeademo:disk]` markers recorded the whole arc and reached
+no repair hint; the `before` marker never survives the
+tail-biased excerpt.
+
+**midday's manifest passed fidelity empty.** The accepted
+preparation carries an empty workspace diff (the patch hashes
+to the empty string), `localDemoModeChanges: []`,
+`mocksAndFixturesAdded: []`, `dataSeams: []`, two features
+(the gate later needs three), and `authStrategy: "none"` on
+surfaces its own descriptions call authenticated. Fidelity
+passed it — "Prepared runtime preserves the screened product
+application," trivially true of a preparation that changed
+nothing. The N100 referential check verifies declared seams
+appear in the diff; it is silent when nothing is declared.
+The 409 killed the run before preflight could expose the
+sham.
+
+### N102 (Critical, bugfix) — PTY transport truth: sealed stdin, one-line sentinel, completed-means-harness-fault
+
+Four coordinated pieces. (1) Detach stdin on every sealed
+install/lifecycle/build command — `{ command; } </dev/null` in
+the `withDiskMarkers` bracket and the install path, and on
+`withCpuLivenessHeartbeat`'s wrapped payload — so no child
+spinner (ora/inquirer/prisma) can drain the tty. (2) Stop
+pre-queueing the sentinel as separate tty lines: send one
+line carrying the command and its own `printf` trailer, so no
+unconsumed input sits in the buffer across a multi-minute
+command. (3) Classify "completed but sentinel lost" as a
+harness fault: when the teed evidence file ends with the
+wrapper's own after-markers, the command demonstrably
+finished — re-run it; never charge a repair round or the
+fingerprint budget, and never blame the repo. The timeout
+summary says "with no CPU progress" only when the alive-line
+record actually supports it. (4) Give `cpu-liveness` a
+Linux-only execution test — the wrapper around a ~2-minute
+CPU burner under an interactive pty, asserting at least one
+heartbeat — settling the pgid-capture suspicion; fix the
+capture if it sums the wrong group. Ghostfolio's three false
+kills and both wasted repair rounds are the cost basis; the
+prior-run byte-identical tail says this class predates N98.
+
+### N103 (Critical, bugfix + infra) — one Daytona envelope: classify, wait, retry, attribute
+
+Every control-plane touch (create, delete, start/stop,
+network update, fs transfer, command transport) goes through
+one wrapper with one classifier. The classifier extends the
+N94 transient signature with the conflict class — HTTP 409,
+`errorCode: Conflict`, and the message shapes `state change
+in progress` / `An operation is already in progress` —
+handled as wait-and-poll for settlement (an in-progress
+operation means wait for it, not blindly re-issue: a
+retry-after-timeout can itself manufacture the 409). 5xx gets
+an escalating jittered ladder sized for windows, not blips
+(the current five-second total budget dies against any
+multi-minute control-plane event). Every attempt emits a
+seam-attributed pipeline-log event
+(`daytona.<operation>.attempt/retrying/failed` with sandbox
+id), so a 27-minute gap can never again be unattributable and
+`pipeline.failed` names its seam. Infrastructure-classified
+errors never become Preparation Fallback Prompts — they fail
+as infrastructure with retry-the-job semantics; midday's
+maker-facing 409 prompt is the forbidden shape. Rider: the
+matrix runner staggers entry launches by 30–60s jitter to
+stop self-inflicting a 22-create herd in one millisecond.
+
+### N104 (High, feature, infra) — agent liveness from the model stream, not the CPU
+
+The jiffies heartbeat cannot attest remote work: an OpenCode
+process awaiting a long model generation is silent and idle
+by design, and that state is the agent seam's normal working
+condition, not a wedge. Feed the existing PTY watchdog from
+OpenCode's own event stream instead — a minimal plugin (or
+event-bus tap) that prints a `[makeademo:agent-alive]` marker
+on any streamed session/message-part event, filtered from
+evidence and bootstrap detection exactly like
+`[makeademo:alive]`. A provider stream that ticks keeps the
+command alive through silent tool-argument generation; a
+session that has genuinely stopped emitting events still dies
+at the deadline. Fallback only if the event tap proves
+impractical: a longer inactivity window scoped to agent
+commands alone, documented as a stopgap (the blanket-raise
+rejection stands for lifecycle commands). Cost basis: 11
+kills this run, six of them the first preparation command,
+~66 minutes plus repair-resume rounds.
+
+### N105 (Critical, feature, largest) — verification believes behavior: aria-first harvest, transition evidence, floors not gates
+
+The grounding currency changes from "the agent's words
+collided with the screen's words" to "typed evidence
+observed on the accessibility tree." Seven coordinated
+pieces. (1) Harvest from the accessibility tree as the
+canonical source — roles plus accessible names, the same
+name-space Playwright locators resolve — with the CSS
+selector harvest demoted to fallback; this admits icon-button
+labels (excalidraw's Undo/Redo), unstyled error bodies
+(ghost's stack traces), and is framework-agnostic. (2) Admit
+behavioral evidence: an exercised action whose observed delta
+is recorded — control rename, counter change,
+disabled→enabled, element appearing, row-count change,
+URL/hash change, dialog open. The interaction re-proof falls
+back to the stored locator evidence when the exact-name
+lookup returns zero matches, and a self-renaming control is
+recorded as a state transition, never discarded — a toggle
+that renames itself is proof of behavior, wording-free and
+stack-free. (3) Disabled-state evidence is admissible
+(`Undo [disabled] → [enabled]` is the canonical
+history/save/submit demo beat). (4) The
+`route.headings.length === 0` gate is lifted: headings stay
+the primary assert candidates, and the per-feature text
+top-up runs unconditionally so a tagged feature can take one
+verified text assert when no heading token-matches it. (5)
+Winner-take-all tagging gains a per-feature floor: after
+scoring, every route-tagged feature with a non-zero score
+keeps at least one assert; ties multi-tag instead of
+zero-sum. (6) Control harvesting stays bounded but becomes
+feature-aware: within the existing budget, controls whose
+accessible names token-match any tagged feature are always
+included, then positional fill — no magic-number cap raise.
+(7) Error-state detection runs before wording logic and is
+probe-independent: a 4xx/5xx document response routes to
+error-state evidence unconditionally with a "runtime fault,
+not a wording fault" summary, and a route harvesting zero
+headings and zero text with a non-empty body captures a
+bounded `innerText` sample so a bare stack trace carries its
+own diagnosis. Stability rider: harvest waits for
+network-quiet plus a short DOM-stable window, and a feature
+about to be declared unobserved earns one fresh-navigation
+re-harvest of its routes first — flaky misses become
+confirmed misses for seconds, not rounds.
+
+### N106 (High, feature) — the verdict ledger: verification explains itself
+
+The gate emits a structured per-feature verdict, not prose:
+`grounded-by: interaction | state-transition | assert |
+declared-proof` with evidence references, or `failed-because:
+error-state-route | no-assert-candidates | token-mismatch
+(best score, best string) | route-shared-with-winners |
+auth-wall | skeleton-rows | app-unreachable`, one enum per
+feature per attempt, persisted in the validation report.
+Steering is derived from the enum: `route-shared` says "give
+this feature an entry route no other feature claims";
+`error-state-route` says the runtime is broken and wording
+cannot help; the wording-alignment message extends to
+default-demo features (conduit's branch currently falls to a
+generic reselect message pointing at a list containing the
+failing route). The false hint dies: "Server-side runtime
+errors were observed" only when stderr carries an error-class
+line after filtering warning-only and `Found 0 errors`-shape
+content. The cross-run fallback prompt carries the ledger,
+the suggested hints, and the decisive stderr excerpt — the
+current prompt renders `logsSummary` alone and hands the next
+session the misleading half. The ledger is also the output
+format of N108's probe and the input to N109's fingerprints —
+it lands first so every later change in this batch is
+measurable per feature across matrix runs instead of by
+re-mining attempt JSONs.
+
+### N107 (High, feature) — declared proof obligations: the feature says how to prove it
+
+The N100 move applied to observability. Each prepared feature
+may declare `expectedProof` — a typed expected outcome in
+Action Catalog vocabulary (`expectVisibleText`,
+`expectStateTransition {locator, from, to}`,
+`expectElementAppears`) — and for maker-requested features
+the declaration is required. The validator checks
+referentially: each feature's entry route is claimed by no
+other feature; obligations are present where required; a
+declared locator uses the same accessible-name space the
+harvest produces. The gate executes declared proofs as
+first-class grounding (they subsume the wording bridge where
+present; the token match remains the default for undeclared
+read-only features), which closes the vacuous-pass hole from
+both prior excalidraw runs — "undo/redo" must pass its
+declared transition, not ride a nearby heading. The same
+typed outcome is the currency Browser Scenes already require,
+so Script Generation and Capture Path Validation consume the
+proofs verification already executed — one assertion language
+across three stages instead of three heuristics.
+
+### N108 (High, feature) — the feature-verification skill and its probe
+
+The user-facing task of this batch: teach the preparation
+agent the rules it currently learns by dying. Two pieces,
+tool first. (1) `verify-features`, a harness tool exposed in
+the workspace (the Runtime Network Lockdown iterative-check
+precedent): it runs the gate's own harvest and grounding code
+against the agent's running prepared app and returns the N106
+ledger. Because it executes the same code as the gate,
+iterating against it is legitimate convergence — failures die
+at authoring time, minutes in, instead of 40 minutes later at
+exploration. (2) The `feature-verification` skill, pinned via
+`skills-lock.json` and restored into the OpenCode sandbox
+like the existing repo skills: a thin authoring playbook in
+the N100 rider style — name features in on-screen vocabulary;
+give each feature an entry route no other feature claims;
+declare `expectedProof` per feature; design for behavioral
+evidence (seed state so a demonstrable transition exists on
+camera: history pre-populated so Undo starts enabled, a
+followable author whose control will rename, a row to add to
+a visibly non-empty table); then run `verify-features`, read
+the ledger, fix, resubmit. Two stated guards: drift — the
+skill is a client of the contract, thin on rules, sourcing
+any stated rule from the gate's own constants, letting the
+probe's ledger do the teaching; gaming — the authoritative
+gate still reruns from fresh deterministic state in the
+sealed sandbox, and content legitimacy stays with the
+fidelity lane (error-state quarantine, the N92 judge), so the
+probe narrows the loop without weakening the boundary.
+Loading the skill on demand respects the N65 prompt diet
+better than growing the preparation prompt again.
+
+### N109 (High, bugfix) — repair lanes converge: cause fingerprints, no-op rejection, patch checks, wider prerequisite evidence
+
+Five pieces. (1) `preparationFailureFingerprint` hashes the
+decisive cause line extracted from the managed output (the
+last error-class line: `Error:` / `x No package found` /
+`[PARSE_ERROR]` / ENOSPC family), falling back to today's
+normalized summary line when none exists — calcom's new
+`NEXTAUTH_SECRET` cause and directus's novel parse error must
+not collapse onto the invariant `curl: (7)` symptom that
+killed both lanes mid-convergence. (2) A repair whose
+workspace diff has `changedPaths.length === 0` is a
+non-attempt: it charges no budget and fails fast with
+"repair produced no change" (two of five repairs across
+calcom/directus changed zero bytes and were accepted). (3)
+After a repair patch lands, changed files get a cheap parse
+check with the repo's own loader where one exists (`node
+--check`, the config loader) — steering on failure, routed
+back to the same session as an in-session correction, never a
+hard veto where no parser applies (the N100 probe
+philosophy); directus's stray brace must not cost a preflight
+cycle again. (4) The N67 prerequisite matcher learns the
+`Failed to resolve entry for package "<pkg>"` shape
+cross-checked against `workspacePackages`, and the closure
+evidence category widens from missing-module to
+missing-asset: when the selected app's runtime error names a
+file under a path a sibling workspace's build produces
+(ghost's `adminAssets` template), that sibling enters the
+build closure — the same sanctioned evidence family, one
+notch wider, no app-shape special case. (5)
+`requiredEnvHints` surfaces at preflight: a hinted variable
+absent from `envUsed` is stated before the app starts —
+calcom's attempt-3 failure was predictable from inputs the
+harness already held.
+
+### N110 (High, feature) — disk headroom is managed, not hoped for
+
+Six pieces, all inside the fixed 10GiB org maximum. (1) The
+package-manager cache prune runs before every install, not
+only after a successful one — the attempts that need headroom
+are the failing ones. (2) When an install is not reusing a
+prior attempt's tree, the preserved `node_modules` is dead
+weight and is dropped first. (3) Package-manager staging
+moves off `/tmp`'s shared overlay onto the cache volume
+(TMPDIR / the manager's own staging setting) so fetch churn
+cannot race the repo for the same blocks. (4) An ENOSPC
+classifier joins the failure readers, and the
+`[makeademo:disk]` markers reach `suggestedRepairHints` on
+install and build failures — this run they reached nothing
+across five rounds; the `before` marker must survive the
+tail-biased excerpt (filter markers explicitly, not
+positionally). (5) World rule (9), mirroring the memory rule:
+~10GB holds the repo, the cache, and `node_modules` at once;
+prune dev-only weight rather than adding it. (6) For Yarn
+Berry repos that ENOSPC at install, the harness itself may
+apply the storage-halving linker fallback under the demo gate
+— harness-owned, so `mutatesManagerIdentity` fidelity stays
+intact; the agent still may not mutate manager identity.
+Raising disk stays rejected: 10GiB is the measured org
+ceiling, and doubling per-sandbox resources would halve
+matrix parallelism for a repo that doubles its footprint on
+the next reinstall.
+
+### N111 (Medium, feature) — fidelity rejects vacuity and status games
+
+Four adjudication candidates, all evidence-shaped. (1) An
+accepted preparation whose workspace diff is empty while its
+manifest claims demoable features with empty
+`dataSeams`/`mocksAndFixturesAdded` is a truthful-manifest
+candidate — midday's sham must reach the judge, not pass
+trivially. (2) A `shapeProbe: "not-run"` cannot back a
+feature whose manifest claims an observable state (excalidraw
+claimed "Undo enabled immediately" against harvested
+`[disabled]`). (3) Exploration observing an auth wall on a
+route whose feature declares `authStrategy: "none"` is a
+candidate — evidence-driven, no prose grepping. (4) An agent
+edit that rewrites an HTTP status code on a harness-probed
+path is a rejected-adaptation candidate (ghost's maintenance
+page 503→200 is the shape: it converts a probe into a lie
+while fixing nothing).
+
+### Rejected as non-general
+
+Preflight body fingerprinting (SPAs legitimately serve one
+identical shell for every route; the general forms are
+N111's status-edit candidate and N105's document-status
+error detection); raising the button-harvest cap by constant
+(a magic number tuned to excalidraw — feature-aware selection
+within the existing budget instead); an admin-app carve-out
+for ghost (app-shape special case — the missing-asset closure
+evidence in N109 is the general form); grepping descriptions
+for "authenticated" (wording-dependent — the auth-wall
+observation in N111 is the evidence-driven form); the LLM
+judge as a primary grounder (confirm-only on near-misses at
+most; the deterministic gate stays the truth for every
+stack); pixel-delta evidence (deferred, corroborating-only if
+ever: once N105 transitions and N107 declared proofs exist,
+excalidraw's class grounds on DOM-visible outcomes — revisit
+only if a canvas feature genuinely cannot declare one);
+blanket inactivity-window raises (unchanged for lifecycle
+commands; N104's scoped agent-seam window is a documented
+stopgap behind the event tap); retrying agent commands
+wholesale (unchanged: not idempotent).
+
+### Recommended order
+
+N102 → N103 → N104 (stop the harness manufacturing failures:
+transport truth, envelope, agent liveness — mechanical,
+independently testable, and every later measurement is noise
+until they land) → N106 (the ledger: the shared output format
+of gate and probe, the input to fingerprints, and the
+instrument that makes the rest of the batch measurable) →
+N105 (the evidence core) → N107 (proof obligations) → N108
+(the probe and the skill teach the finished contract, so they
+land after the contract exists) → N109 (economics; its
+fingerprints consume N106's enums) → N110 → N111. TDD per
+item with the failing test verified red first; full gauntlet
+per commit. The thirteenth matrix is the acceptance gate:
+zero exit-124 verdicts whose evidence tail carries the
+wrapper's own completion markers, and ghostfolio reaches its
+real build/start frontier; no run dies on an unretried
+control-plane error, conflict and 5xx windows cost logged,
+seam-attributed waits, and no infrastructure text appears in
+any fallback prompt; total inactivity kills at or under
+three with the agent seam near zero; conduit and excalidraw
+ground on transition or aria evidence — or fail with
+enum-named causes — and no lane sees a "server-side runtime
+errors" hint without an error line; a 5xx document can never
+be diagnosed as a wording problem; no budget slot is charged
+to an empty-diff repair and no lane dies while its cause
+line is changing; twenty completes two sequential installs
+inside 10GiB or fails citing ENOSPC with disk hints present;
+no fidelity pass on an empty-diff manifest claiming demoable
+features; and preparation transcripts show `verify-features`
+runs before submission with exploration attempt counts
+falling.
