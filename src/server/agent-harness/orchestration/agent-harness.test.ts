@@ -2503,6 +2503,174 @@ describe("runAgentHarnessPipeline", () => {
     expect(repairAttempts).toBe(2);
   });
 
+  it("does not collapse failures that share a symptom line but hide different causes", async () => {
+    // The probe symptom (`curl: (7)`) is identical on every attempt; the
+    // decisive cause buried in the managed output differs each time. Each
+    // failure is new information, so the repeated-failure limit must not
+    // fire while the causes keep changing.
+    let preflightAttempts = 0;
+    let repairAttempts = 0;
+    let diffCaptures = 0;
+    const causes = [
+      "Error: NEXTAUTH_SECRET must be set",
+      "SyntaxError: Unexpected token '}' in /workspace/config.json",
+      'x No package found for "react-email"',
+    ];
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_shared_symptom_distinct_causes" }),
+      stubPipelineDependencies({
+        async capturePreparationWorkspaceDiff() {
+          diffCaptures += 1;
+          const digit = String(diffCaptures % 10);
+          return {
+            ...preparationWorkspaceDiff(),
+            patch: `diff --git a/src/demo.ts b/src/demo.ts\n+// repair round ${diffCaptures}`,
+            patchSha256: `sha256:${digit.repeat(64)}` as const,
+          };
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation() {
+          repairAttempts += 1;
+          return { manifest: preparationManifest() };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          const cause = causes[preflightAttempts - 1];
+          if (cause === undefined) {
+            return report("preparation-preflight", "passed");
+          }
+          return {
+            ...report("preparation-preflight", "failed"),
+            attemptedCommand: "bun run dev",
+            failureClassification: "start failure",
+            logsSummary: `Start command was not reachable: curl: (7) Failed to connect to 127.0.0.1 port 3000\n$ next start\n${cause}`,
+          };
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      { repoPreparationRepairLimit: 5 },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(repairAttempts).toBe(3);
+    expect(preflightAttempts).toBe(4);
+  });
+
+  it("collapses failures whose symptom lines differ while the decisive cause repeats", async () => {
+    // The curl exit code drifts run to run, but every attempt dies on the
+    // same EADDRINUSE cause line — the same wall, so the repeated-failure
+    // limit must fire instead of burning the whole repair budget.
+    let preflightAttempts = 0;
+    let repairAttempts = 0;
+    const symptoms = [
+      "curl: (7) Failed to connect to 127.0.0.1 port 3000",
+      "curl: (56) Recv failure: Connection reset by peer",
+      "curl: (28) Operation timed out after 30001 milliseconds",
+    ];
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({ runId: "run_drifting_symptom_same_cause" }),
+        stubPipelineDependencies({
+          async capturePreparationWorkspaceDiff() {
+            return unchangedWorkspaceDiff();
+          },
+          async prepareRepo() {
+            return { manifest: preparationManifest() };
+          },
+          async repairPreparation() {
+            repairAttempts += 1;
+            return { manifest: preparationManifest() };
+          },
+          async resetCaptureRuntime() {
+            throw new Error("Capture reset must not run.");
+          },
+          async validatePreparation() {
+            preflightAttempts += 1;
+            const symptom =
+              symptoms[Math.min(preflightAttempts, symptoms.length) - 1];
+            return {
+              ...report("preparation-preflight", "failed"),
+              attemptedCommand: "bun run dev",
+              failureClassification: "start failure",
+              logsSummary: `Start command was not reachable: ${symptom}\nError: listen EADDRINUSE: address already in use 0.0.0.0:3000`,
+            };
+          },
+        }),
+        { repoPreparationRepairLimit: 5 },
+      ),
+    ).rejects.toThrow("repeated failure");
+
+    expect(repairAttempts).toBe(2);
+  });
+
+  it("collapses repeats whose cause line varies only by a debug-log timestamp path", async () => {
+    // npm's terminal error line points at a per-run debug log whose file
+    // name embeds an underscore-separated timestamp. That noise must not
+    // make the same failure look new to the repeated-failure limit.
+    let preflightAttempts = 0;
+    let repairAttempts = 0;
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({ runId: "run_debug_log_timestamp_noise" }),
+        stubPipelineDependencies({
+          async capturePreparationWorkspaceDiff() {
+            return unchangedWorkspaceDiff();
+          },
+          async prepareRepo() {
+            return { manifest: preparationManifest() };
+          },
+          async repairPreparation() {
+            repairAttempts += 1;
+            return { manifest: preparationManifest() };
+          },
+          async resetCaptureRuntime() {
+            throw new Error("Capture reset must not run.");
+          },
+          async validatePreparation() {
+            preflightAttempts += 1;
+            return {
+              ...report("preparation-preflight", "failed"),
+              attemptedCommand: "npm start",
+              failureClassification: "start failure",
+              logsSummary: [
+                "Start command exited before the app became reachable",
+                "npm ERR! code ELIFECYCLE",
+                `npm ERR! A complete log of this run can be found in: /root/.npm/_logs/2026-08-10T21_0${preflightAttempts}_49_340Z-debug-0.log`,
+              ].join("\n"),
+            };
+          },
+        }),
+        { repoPreparationRepairLimit: 5 },
+      ),
+    ).rejects.toThrow("repeated failure");
+
+    expect(repairAttempts).toBe(2);
+  });
+
   it("reports the terminal validation stage after an earlier stage also failed", async () => {
     const artifacts: Record<string, unknown> = {};
     let state: "initial-fidelity-failure" | "install-failure" | "source-edit" =

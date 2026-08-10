@@ -1,3 +1,4 @@
+import { readLastErrorCauseLine } from "../app-explorer/stderr-error-signal";
 import type { SubmittedAppExplorationResult } from "../app-explorer/submitted-app-explorer";
 import {
   AgentHarnessJobDeadlineError,
@@ -1928,13 +1929,24 @@ function recordFailingFeatureProgress(
   }
 }
 
+/**
+ * Identifies a failure for the repeated-failure limit. The identity-bearing
+ * line is the decisive cause extracted from the managed output — its last
+ * error-class line — not the summary's first line, which is usually the
+ * outermost symptom (a probe's `curl: (7)`) and collapses distinct causes
+ * into one fingerprint. Summaries whose lines never name an error (render
+ * timeouts, listen failures) fall back to the first line.
+ */
 function preparationFailureFingerprint(report: ValidationReport): string {
   const rejectionParts = report.logsSummary.split(" Rejected repair:");
+  const failureBody = rejectionParts[0] ?? "";
   return [
     report.stage,
     report.failureClassification ?? "unknown",
     report.attemptedCommand ?? "",
-    normalizeFailureSummaryLine(rejectionParts[0] ?? ""),
+    normalizeFailureSummaryLine(
+      readLastErrorCauseLine(failureBody) ?? failureBody,
+    ),
     normalizeFailureSummaryLine(
       rejectionParts.length === 1 ? "" : (rejectionParts.at(-1) ?? ""),
     ),
@@ -1942,15 +1954,20 @@ function preparationFailureFingerprint(report: ValidationReport): string {
 }
 
 /**
- * Reduces a failure summary to its identity-bearing first line: run-varying
- * noise (timestamps, ids, durations, ports, temp paths) must not make the
- * same failure look new, or the repeated-failure limit never triggers.
+ * Reduces a failure line to its identity-bearing form: run-varying noise
+ * (timestamps, ids, durations, ports, temp paths) must not make the same
+ * failure look new, or the repeated-failure limit never triggers. The
+ * timestamp scrub accepts `_`-separated clock digits because npm debug-log
+ * file names embed them that way.
  */
 function normalizeFailureSummaryLine(summary: string): string {
   return (summary.split("\n", 1)[0] ?? "")
     .trim()
     .toLowerCase()
-    .replace(/\b\d{4}-\d{2}-\d{2}t\d{2}:\d{2}:\d{2}(?:\.\d+)?z\b/g, "<time>")
+    .replace(
+      /\b\d{4}-\d{2}-\d{2}t\d{2}[:_]\d{2}[:_]\d{2}(?:[._]\d+)?z\b/g,
+      "<time>",
+    )
     .replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/g, "<id>")
     .replace(
       /\b\d+(?:\.\d+)?\s*(?:ms|milliseconds?|s|seconds?|minutes?)\b/g,

@@ -19,6 +19,11 @@ const zeroErrorsPattern = /\b(?:found\s+)?(?:0|no)\s+errors?\b/i;
 // DeprecationWarning:" shape, which may mention errors in their prose.
 const warningOnlyPattern =
   /^\s*(?:\(node:\d+\)\s*)?(?:\[[A-Z]+\d*\]\s*)?\[?(?:deprecation|experimental)?warn(?:ing)?\b/i;
+// Failure shapes that name a root cause without an error word or errno
+// code: bun's package-resolution failure ("x No package found ...") and the
+// kernel's disk-exhaustion prose, which archive and install tools relay
+// verbatim ("tar: ...: No space left on device").
+const causeProsePattern = /^x\s+no package found\b|no space left on device/i;
 
 /**
  * Extracts the error-class lines from a managed app's stderr tail. Dev
@@ -51,4 +56,33 @@ export function readStderrErrorSignal(
     return undefined;
   }
   return errorLines.slice(0, 6).join("\n");
+}
+
+/**
+ * Returns the last error-class line of a command-output excerpt — the
+ * decisive cause of a failure, as opposed to the first line, which is
+ * usually the outermost symptom (a probe's `curl: (7)`, a wrapper's exit
+ * status). Toolchains print root causes below their symptoms and excerpts
+ * are tail-biased, so the last qualifying line is the closest to why the
+ * command died. Recognizes the same error-word and errno shapes as
+ * {@link readStderrErrorSignal} plus package-resolution and disk-exhaustion
+ * prose, and returns undefined when no line qualifies so callers can fall
+ * back to their own summary line.
+ */
+export function readLastErrorCauseLine(
+  outputExcerpt: string,
+): string | undefined {
+  return outputExcerpt
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(
+      (line) =>
+        line.length > 0 &&
+        !zeroErrorsPattern.test(line) &&
+        !warningOnlyPattern.test(line) &&
+        (errorWordPattern.test(line) ||
+          errorCodePattern.test(line) ||
+          causeProsePattern.test(line)),
+    )
+    .at(-1);
 }
