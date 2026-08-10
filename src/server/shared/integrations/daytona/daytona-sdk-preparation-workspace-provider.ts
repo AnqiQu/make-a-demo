@@ -28,6 +28,7 @@ import {
   type PipelineLogSink,
   createPipelineEventLogger,
 } from "../../logging/pipeline-event-logger";
+import { createPtyCommandPayload } from "../../shell/pty-command-payload";
 import { shellQuote } from "../../shell/shell-quote";
 
 type DaytonaSdkClient = {
@@ -1264,9 +1265,10 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
 
     const timeoutMs = options.timeoutMs ?? this.commandTimeoutMs;
     try {
-      await pty.sendInput(
-        `stty -echo\n${command}\nprintf '\\n${exitSentinel}:%s\\n' $?\nexit\n`,
-      );
+      // The payload is consumed by the shell upfront and the command runs
+      // with stdin sealed, so no queued input (the exit sentinel above all)
+      // survives into the command's lifetime for a child to steal.
+      await pty.sendInput(createPtyCommandPayload({ command, exitSentinel }));
       inactivityDeadline.touch();
       const result = await withTimeout(
         Promise.race([pty.wait(), inactivityDeadline.expired]),

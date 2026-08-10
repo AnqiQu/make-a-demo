@@ -545,8 +545,12 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       },
       { waitForConnection: true },
       {
+        // One upfront-consumed heredoc script with the command's stdin
+        // sealed and the exit trailer inside: no queued input survives
+        // into the command's lifetime for a child to steal (the stolen
+        // sentinel false-kill class, ghostfolio 2026-08-09).
         sendInput: expect.stringMatching(
-          /^stty -echo\nopencode run hello\nprintf '\\n__MAKEADEMO_EXIT_[A-Za-z0-9]{16,}__:%s\\n' \$\?\nexit\n$/,
+          /^stty -echo\nexec bash -s <<'__MAKEADEMO_SCRIPT_[A-Za-z0-9]+__' \|\| exit\n\{\nopencode run hello\n\} <\/dev\/null\nprintf '\\n__MAKEADEMO_EXIT_[A-Za-z0-9]{16,}__:%s\\n' \$\?\n__MAKEADEMO_SCRIPT_[A-Za-z0-9]+__\n$/,
         ),
       },
       { wait: true },

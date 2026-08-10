@@ -1789,14 +1789,16 @@ function appendTail(current: string, chunk: string, maxLength: number): string {
 }
 
 // A PTY line that is shell bootstrap rather than OpenCode output: a prompt
-// (optionally carrying the echoed command), a bare continuation prompt, the
+// (optionally carrying the echoed command), a continuation prompt (bare, or
+// carrying an echoed heredoc-script line — the sealed transport ships the
+// command as a heredoc, so racing echo puts script body on PS2 lines), the
 // command exit marker, the shell's own exec diagnostic ("bash: <path>:
 // Argument list too long" — the 2026-08-07 E2BIG launches), the session
 // teardown echo, or a CPU-liveness heartbeat (transport from the harness's
 // own sampler, never the agent). Each proves the shell spoke and OpenCode
 // never did.
 const ptyBootstrapLinePattern =
-  /^(?:[^@\s]+@[^\n#]*#.*|>\s*|__MAKEADEMO_EXIT(?:_[A-Za-z0-9]+)?__:\d+|bash: [^:\n]+: .+|logout|\[makeademo:alive\] cpu \d+)$/;
+  /^(?:[^@\s]+@[^\n#]*#.*|>.*|__MAKEADEMO_EXIT(?:_[A-Za-z0-9]+)?__:\d+|bash: [^:\n]+: .+|logout|\[makeademo:alive\] cpu \d+)$/;
 
 function hasOnlyPtyBootstrapOutput(result: {
   stderr: string;

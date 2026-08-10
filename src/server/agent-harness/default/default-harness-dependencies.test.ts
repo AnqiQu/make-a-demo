@@ -2751,6 +2751,47 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(runs).toBe(2);
   });
 
+  it("classifies a zero-output agent exit as infrastructure under heredoc-transport bootstrap noise", async () => {
+    // The sealed PTY transport ships the command as a heredoc script, so
+    // bootstrap echo can carry script-body text on continuation prompts
+    // ("> {", "> } </dev/null"). Those are still the shell speaking, never
+    // OpenCode — a nonzero exit behind them stays a launch failure.
+    const workspace = repairableRepoPreparationWorkspace();
+    let runs = 0;
+    const harness = await createDefaultAgentHarnessDependencies({
+      agentLaunchRetryDelayMs: 1,
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run() {
+          runs += 1;
+          return {
+            exitCode: 1,
+            stderr: "",
+            stdout: heredocPtyBootstrapNoise(),
+          };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const error: unknown = await harness.dependencies
+      .prepareRepo({
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        normalizedSupportingDocuments: undefined,
+        repoProfile: repoProfile(),
+        repoSourcePaths: ["package.json", "src/App.tsx"],
+        runPlan: runPlan(),
+        workspace,
+      })
+      .then(() => undefined)
+      .catch((thrown: unknown) => thrown);
+
+    expect(isAgentHarnessInfrastructureError(error)).toBe(true);
+    expect(String(error)).toMatch(/no OpenCode output/);
+    expect(runs).toBe(2);
+  });
+
   it("still detects a launch failure when only liveness heartbeats accompanied the bootstrap noise", async () => {
     // The CPU-liveness sampler prints transport lines, not OpenCode output:
     // a dead-at-launch agent whose PTY echoed a heartbeat must not read as
@@ -7490,6 +7531,22 @@ function ptyBootstrapNoise(): string {
     "\u001b[?2004l\r\u001b[?2004hroot@14ae8c70-2520:/workspace# ",
     "\u001b[?2004h> \u001b[?2004l",
     "\u001b[?2004h> \u001b[?2004l",
+    "__MAKEADEMO_EXIT_9f2c1d0a4b6e8f31__:1",
+  ].join("\r\n");
+}
+
+// The heredoc-transport variant: when input echo races `stty -echo`, the
+// continuation prompts carry echoed script-body lines instead of arriving
+// bare — still shell bootstrap, never OpenCode output.
+function heredocPtyBootstrapNoise(): string {
+  return [
+    "\u001b[?2004hroot@14ae8c70-2520:/workspace# stty -echo",
+    "\u001b[?2004l\r\u001b[?2004hroot@14ae8c70-2520:/workspace# ",
+    "\u001b[?2004h> {\u001b[?2004l",
+    "> opencode run --pure --format json",
+    "> } </dev/null",
+    "> printf '\\n__MAKEADEMO_EXIT_9f2c1d0a4b6e8f31__:%s\\n' $?",
+    "> __MAKEADEMO_SCRIPT_0aa11bb22cc33dd4__",
     "__MAKEADEMO_EXIT_9f2c1d0a4b6e8f31__:1",
   ].join("\r\n");
 }
