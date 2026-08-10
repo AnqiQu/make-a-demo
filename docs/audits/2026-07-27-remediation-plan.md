@@ -4987,3 +4987,70 @@ no fidelity pass on an empty-diff manifest claiming demoable
 features; and preparation transcripts show `verify-features`
 runs before submission with exploration attempt counts
 falling.
+
+### Landed (2026-08-10, wave 1: the instruments)
+
+N102 in seven commits. `06595d1` seal: the CPU-liveness
+bracket runs its wrapped command as `{ command; } </dev/null`
+so a stdin-draining child (prisma's ora spinner, any
+readline prompt) inherits /dev/null instead of the PTY's
+queued input — the exit sentinel can no longer be stolen.
+`8b1a93d` makes the sampler interval injectable for the
+execution proof. `c37c902` transport: the provider ships
+every streamed command as one `exec bash -s <<'nonce' ||
+exit` heredoc payload — the interactive shell consumes all
+input up front (an empty tty buffer defeats /dev/tty
+openers), and the exec'd bash is non-interactive with job
+control off, so the whole pipeline shares one process group
+and the CPU sampler finally watches the command instead of
+an idle shell (why `[makeademo:alive]` was silent
+batch-wide). `5146ad6` recovery: the teed
+`[makeademo:command-end] exit=N` beacon lets a lost sentinel
+resolve to the recorded true exit code — a completed command
+killed as exit-124 becomes its real verdict with zero budget
+charged; a recovered 124 stays ambiguous (the command may
+run `timeout` itself) and is not recovered over. `a6c2392`
+honesty: "with no CPU progress" appears in a timeout summary
+only when heartbeat lines are actually on the record.
+`5dc8ae3` proof: a Linux-gated real-PTY execution test
+(stdin/tty drains survive; a busy loop heartbeats at 1s
+sampling), plus the bootstrap pattern widened for heredoc
+continuation echo.
+
+N103 in four commits. `e62a580` the forbidden shape:
+`AgentHarnessControlPlaneError` joins the infrastructure
+family, so a control-plane failure rethrows at the reset
+seam instead of becoming a maker-facing preparation fallback
+prompt (midday's 409). `3f1cdf9` the envelope:
+`daytona-control-plane.ts` classifies every failure conflict
+(409 / errorCode Conflict / the in-progress message shapes —
+wait 5s and re-issue, up to 24 polls) | transient (5xx,
+connection loss — jittered 2s→90s ladder sized for
+control-plane windows, not blips) | fatal (everything else,
+always rethrown raw so the policy/not-found/not-started
+matchers keep firing), with seam-attributed
+`daytona.<op>.attempt/retrying/failed` events to local sinks
+only. `c80c2ea` the wiring: sandbox create/delete/start,
+network updates, PTY creation, and all filesystem transfers
+run through it (transfers keep their own
+infrastructure wrapping via `wrapExhausted: false`; PTY
+creation absorbs transients only, leaving conflicts raw for
+the stale-id loop; command execution stays excluded by
+design — re-issue could double side effects). The bespoke
+per-seam retry helpers are deleted. `b4061b4` the rider:
+matrix entries launch 30–60s apart (cumulative jitter,
+opt-in, enabled by the CLI) so one batch stops being its own
+control-plane herd.
+
+N104 in two commits. `c1b906c` the plugin: every stage
+config dir gets an auto-loaded OpenCode plugin that turns
+model event-bus activity into throttled (25s)
+`[makeademo:agent-alive]` beats on stderr; the PTY merges
+them into the stream, so a thinking-but-terminal-silent
+agent feeds the inactivity watchdog and a truly wedged
+OpenCode still dies at the deadline. `0bfbe92` the filters:
+beats join the CPU heartbeat in bootstrap-noise
+classification (a beat-then-crash OpenCode stays a launch
+failure, never an artifact-repair burn) and in
+failure-evidence excerpts. `a6a0453` regenerates the
+dependency graphs for the three new modules.
