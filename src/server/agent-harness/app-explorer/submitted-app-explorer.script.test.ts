@@ -863,6 +863,114 @@ ${fillers}
     }
   }, 30_000);
 
+  it("executes declared proofs and records pass and fail outcomes", async () => {
+    // N107: two declared proofs against a live page — a visible-text proof
+    // that holds and a state-transition proof whose control never renames.
+    // Both verdicts must reach the observation with honest details.
+    const proofPage = `<!doctype html><html><head><title>Proof App</title></head><body>
+<main>
+<h1>Editor</h1>
+<p>Published demo article</p>
+<button onclick="this.textContent='Unfollow'">Follow</button>
+<button>Stubborn</button>
+</main>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(proofPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-proofs-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`, [
+          {
+            authStrategy: "none",
+            description: "Publish a demo article.",
+            entryPaths: ["/"],
+            expectedProof: {
+              kind: "visible-text",
+              text: "Published demo article",
+            },
+            fixtureNotes: [],
+            id: "post-article",
+            label: "Posting an article",
+            sourcePaths: ["src/editor.tsx"],
+          },
+          {
+            authStrategy: "none",
+            description: "Follow an author.",
+            entryPaths: ["/"],
+            expectedProof: {
+              from: "Follow",
+              kind: "state-transition",
+              locator: "Follow",
+              to: "Unfollow",
+            },
+            fixtureNotes: [],
+            id: "follow-author",
+            label: "Following an author",
+            sourcePaths: ["src/profile.tsx"],
+          },
+          {
+            authStrategy: "none",
+            description: "Rename the stubborn control.",
+            entryPaths: ["/"],
+            expectedProof: {
+              from: "Stubborn",
+              kind: "state-transition",
+              locator: "Stubborn",
+              to: "Convinced",
+            },
+            fixtureNotes: [],
+            id: "stubborn-control",
+            label: "Stubborn control",
+            sourcePaths: ["src/stubborn.tsx"],
+          },
+        ])
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 30_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        declaredProofs?: Array<{
+          detail: string;
+          featureId: string;
+          passed: boolean;
+        }>;
+        fatalError?: string;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      const byFeature = new Map(
+        (result.declaredProofs ?? []).map((proof) => [proof.featureId, proof]),
+      );
+      expect(byFeature.get("post-article")?.passed).toBe(true);
+      expect(byFeature.get("follow-author")?.passed).toBe(true);
+      expect(byFeature.get("follow-author")?.detail).toContain("Unfollow");
+      expect(byFeature.get("stubborn-control")?.passed).toBe(false);
+      expect(byFeature.get("stubborn-control")?.detail).toContain("Convinced");
+    } finally {
+      server.close();
+    }
+  }, 40_000);
+
   it("re-harvests a feature entry route whose first paint rendered nothing", async () => {
     // The first hit races a cold compile and serves only a skeleton; every
     // later hit renders the real page. A feature entry route about to be

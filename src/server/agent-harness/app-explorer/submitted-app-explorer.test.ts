@@ -3196,6 +3196,153 @@ describe("feature verdict ledger", () => {
     expect(script).toContain("resolveStoredLocator");
   });
 
+  it("grounds a feature through its passed declared proof regardless of wording", async () => {
+    // N107: the proof is the evidence. The route's rendered wording shares
+    // nothing with the feature, and grounding must not depend on it.
+    const { result } = await exploreObservation({
+      declaredProofs: [
+        {
+          detail: '"Published demo article" is visible on /#/editor',
+          featureId: "post-article",
+          passed: true,
+        },
+      ],
+      featureInventory: [
+        preparedFeature({
+          expectedProof: {
+            kind: "visible-text",
+            text: "Published demo article",
+          },
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["post-article"],
+          headings: ["Wombat maintenance schedule"],
+          path: "/#/editor",
+          requestedPath: "/#/editor",
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    expect(artifacts.validationReport.status).toBe("passed");
+    expect(artifacts.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        featureId: "post-article",
+        groundedBy: "declared-proof",
+        verdict: "grounded",
+      }),
+    ]);
+    expect(artifacts.actionCatalog.actions).toContainEqual(
+      expect.objectContaining({
+        featureIds: ["post-article"],
+        id: "declared-proof-post-article",
+        kind: "assert",
+        preferredLocator: {
+          strategy: "text",
+          value: "Published demo article",
+        },
+      }),
+    );
+  });
+
+  it("fails a feature whose declared proof failed even when wording would ground it", async () => {
+    // The excalidraw vacuous-pass hole: "undo/redo" must pass its declared
+    // transition, not ride a nearby heading. A failed proof subsumes every
+    // wording bridge.
+    const { result } = await exploreObservation({
+      declaredProofs: [
+        {
+          detail:
+            'control "Follow" reads "Follow" after the click; declared to "Unfollow"',
+          featureId: "post-article",
+          passed: false,
+        },
+      ],
+      featureInventory: [
+        preparedFeature({
+          expectedProof: {
+            from: "Follow",
+            kind: "state-transition",
+            locator: "Follow",
+            to: "Unfollow",
+          },
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["post-article"],
+          headings: ["Posting an article"],
+          path: "/#/editor",
+          requestedPath: "/#/editor",
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        detail: expect.stringContaining('declared to "Unfollow"'),
+        failedBecause: "declared-proof-failed",
+        featureId: "post-article",
+        verdict: "failed",
+      }),
+    ]);
+    expect(result.validationReport.logsSummary).toContain("declared proof");
+  });
+
+  it("falls back to wording grounding when a declared proof was never executed", async () => {
+    // An unexecuted proof (deadline, unreachable entry) is missing
+    // evidence, not failed evidence: the wording chain still applies.
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          expectedProof: {
+            kind: "visible-text",
+            text: "Published demo article",
+          },
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["post-article"],
+          headings: ["Posting an article"],
+          path: "/#/editor",
+          requestedPath: "/#/editor",
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    expect(artifacts.validationReport.status).toBe("passed");
+    expect(artifacts.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        featureId: "post-article",
+        groundedBy: "assert",
+        verdict: "grounded",
+      }),
+    ]);
+  });
+
+  it("embeds declared proof targets in the generated script", async () => {
+    const { commands } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          expectedProof: {
+            kind: "visible-text",
+            text: "Published demo article",
+          },
+        }),
+      ],
+      routes: [observedRoute({ headings: ["Dashboard"] })],
+    });
+    const script = readExplorerScript(commands);
+
+    expect(script).toContain("declaredProofTargets");
+    expect(script).toContain("result.declaredProofs");
+  });
+
   it("names the winning feature and steers at an unclaimed entry route when the crawl never tagged the feature", async () => {
     // The untagged corner: allocation-chart's entry route rendered content
     // whose tokens overlap the feature, but the crawl tagged the route to
@@ -3715,6 +3862,11 @@ async function exploreObservation(input: {
   }>;
   capacityProbeOutput?: string;
   consoleErrors?: string[];
+  declaredProofs?: Array<{
+    detail: string;
+    featureId: string;
+    passed: boolean;
+  }>;
   featureInventory?: PreparedDemoFeature[];
   pageErrors?: string[];
   readSubmittedCodeAppStatus?: AgentHarnessWorkspace["readSubmittedCodeAppStatus"];
@@ -3752,6 +3904,9 @@ async function exploreObservation(input: {
           stdout: `\n[makeademo:exploration] ${JSON.stringify({
             blockedNetworkAttempts: input.blockedNetworkAttempts ?? [],
             consoleErrors: input.consoleErrors ?? [],
+            ...(input.declaredProofs === undefined
+              ? {}
+              : { declaredProofs: input.declaredProofs }),
             pageErrors: input.pageErrors ?? [],
             routes: input.routes,
             unreachableRoutes: input.unreachableRoutes ?? [],

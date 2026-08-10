@@ -187,11 +187,26 @@ type UnreachableRoute = {
   featureIds?: string[];
   url: string;
 };
+/**
+ * One declared proof's execution verdict (N107), recorded from a fresh
+ * navigation of the feature's first entry route after the crawl. Where a
+ * result exists it subsumes wording-based grounding for that feature:
+ * `passed` grounds it, `!passed` fails it as declared-proof-failed. An
+ * absent result (deadline, unreachable entry route) is missing evidence,
+ * not failed evidence — the wording chain still applies.
+ */
+type DeclaredProofResult = {
+  detail: string;
+  featureId: string;
+  locatorEvidence?: ObservedLocatorEvidence | null;
+  passed: boolean;
+};
 type BrowserExplorationProtocol = {
   blockedNetworkAttempts: Array<
     Pick<NetworkAttempt, "host"> & Partial<NetworkAttempt>
   >;
   consoleErrors: string[];
+  declaredProofs?: DeclaredProofResult[];
   fatalError?: string;
   pageErrors: string[];
   routes: ObservedRoute[];
@@ -579,20 +594,33 @@ function createExplorationArtifacts(input: {
     networkAttempts,
     pageErrors: unique(input.observation.pageErrors),
   });
+  const declaredProofResults = new Map(
+    (input.observation.declaredProofs ?? []).map((proof) => [
+      proof.featureId,
+      proof,
+    ]),
+  );
   const actionCatalog = readActionCatalog({
-    actions: createActions(
-      observedRoutes,
-      input.featureInventory,
-      explicitAuthenticationFeatureIds,
-      distinctContentByRoute,
-      errorState.suppressedRoutePaths,
-    ),
+    actions: [
+      ...createActions(
+        observedRoutes,
+        input.featureInventory,
+        explicitAuthenticationFeatureIds,
+        distinctContentByRoute,
+        errorState.suppressedRoutePaths,
+      ),
+      ...createDeclaredProofActions(
+        input.featureInventory,
+        declaredProofResults,
+      ),
+    ],
     appMapId,
     id: actionCatalogId,
   });
   const validationReport = createExplorationValidationReport({
     actionCatalog,
     appMap,
+    declaredProofResults,
     distinctContentByRoute,
     emptyDataTablesByRoute,
     errorEvidenceByRoute: errorState.evidenceByRoute,
@@ -1292,6 +1320,77 @@ function createActions(
   return actions;
 }
 
+/**
+ * Passed declared proofs become first-class catalog actions: the same typed
+ * outcome Script Generation and Capture consume, so the assertion language
+ * is one across all three stages. A state-transition proof is an exercised
+ * click carrying its transition; the other kinds are asserts.
+ */
+function createDeclaredProofActions(
+  featureInventory: PreparedDemoFeature[],
+  declaredProofResults: ReadonlyMap<string, DeclaredProofResult>,
+): Array<Record<string, unknown>> {
+  return featureInventory.flatMap((feature): Array<Record<string, unknown>> => {
+    const proof = feature.expectedProof;
+    const proofResult =
+      proof === undefined ? undefined : declaredProofResults.get(feature.id);
+    if (
+      proof === undefined ||
+      proofResult === undefined ||
+      !proofResult.passed
+    ) {
+      return [];
+    }
+    const id = `declared-proof-${feature.id}`;
+    const route = feature.entryPaths[0] ?? "/";
+    if (proof.kind === "state-transition") {
+      return [
+        {
+          confidence: 1,
+          evidence: `Declared proof executed: ${proofResult.detail}`,
+          exercised: true,
+          expectedResult: proofResult.detail,
+          featureIds: [feature.id],
+          id,
+          kind: "click",
+          preferredLocator: {
+            name: proof.locator,
+            strategy: "role",
+            value: "button",
+          },
+          risks: [],
+          route,
+          stateTransition: {
+            control: proof.locator,
+            from: proof.from,
+            to: proof.to,
+          },
+        },
+      ];
+    }
+    return [
+      {
+        confidence: 1,
+        evidence: `Declared proof executed: ${proofResult.detail}`,
+        expectedResult:
+          proof.kind === "visible-text"
+            ? `${proof.text} remains visible`
+            : `${proof.name} remains visible`,
+        featureIds: [feature.id],
+        id,
+        kind: "assert",
+        ...createLocatorCandidateFields(id, proofResult.locatorEvidence),
+        preferredLocator:
+          proof.kind === "visible-text"
+            ? { strategy: "text", value: proof.text }
+            : { name: proof.name, strategy: "role", value: "button" },
+        risks: [],
+        route,
+      },
+    ];
+  });
+}
+
 function matchActionFeatureIds(
   route: ObservedRoute,
   actionEvidence: string,
@@ -1452,6 +1551,7 @@ function readFeatureVerdicts(input: {
   actionsByFeatureId: ReadonlyMap<string, CatalogAction[]>;
   authWallFeatureIds: ReadonlySet<string>;
   contentRoutePaths: ReadonlySet<string>;
+  declaredProofResults: ReadonlyMap<string, DeclaredProofResult>;
   distinctContentByRoute: ReadonlyMap<string, string[]>;
   emptyDataTablesByRoute: ReadonlyMap<
     string,
@@ -1493,6 +1593,31 @@ function readFeatureVerdicts(input: {
         feature,
         "auth-wall",
         "entry routes redirected to authentication the maker did not request footage of",
+        feature.entryPaths,
+      );
+    }
+    // A declared proof's executed verdict subsumes the wording bridge
+    // (N107): "undo/redo" must pass its declared transition, not ride a
+    // nearby heading. An absent result is missing evidence, not failed
+    // evidence — the wording chain below still applies.
+    const proofResult =
+      feature.expectedProof === undefined
+        ? undefined
+        : input.declaredProofResults.get(feature.id);
+    if (proofResult !== undefined) {
+      if (proofResult.passed) {
+        return {
+          detail: proofResult.detail,
+          evidence: [`declared-proof-${feature.id}`],
+          featureId: feature.id,
+          groundedBy: "declared-proof",
+          verdict: "grounded",
+        } satisfies FeatureVerdict;
+      }
+      return failed(
+        feature,
+        "declared-proof-failed",
+        proofResult.detail,
         feature.entryPaths,
       );
     }
@@ -1666,6 +1791,7 @@ function readFeatureVerdicts(input: {
 function createExplorationValidationReport(input: {
   actionCatalog: ActionCatalog;
   appMap: AppMap;
+  declaredProofResults?: ReadonlyMap<string, DeclaredProofResult>;
   distinctContentByRoute: ReadonlyMap<string, string[]>;
   emptyDataTablesByRoute?: ReadonlyMap<
     string,
@@ -1687,6 +1813,7 @@ function createExplorationValidationReport(input: {
   const featureVerdicts = readFeatureVerdicts({
     actionCatalog: input.actionCatalog,
     actionsByFeatureId,
+    declaredProofResults: input.declaredProofResults ?? new Map(),
     authWallFeatureIds: readAuthWallFeatureIds(
       input.appMap,
       input.featureInventory,
@@ -2053,6 +2180,15 @@ function readExplorationFailure(input: {
           verdict,
         };
       }
+    }
+    // A failed declared proof already names the exact observed gap; the
+    // repair either fixes the app state so the declared outcome is real or
+    // corrects the declaration — wording alignment is never the answer.
+    if (verdict.failedBecause === "declared-proof-failed") {
+      return {
+        sentence: ` ${featureName} failed its declared proof on routes ${routeList}: ${verdict.detail ?? "the declared outcome was not observed"}. Fix the prepared app state so the declared outcome really happens, or correct the expectedProof declaration to what the feature actually shows.`,
+        verdict,
+      };
     }
     const contentRoutes = routes.filter((route) =>
       contentRoutePaths.has(route),
@@ -2550,9 +2686,10 @@ import { mkdir, readFile as makeADemoReadReplayFile, writeFile } from "node:fs/p
 const baseUrl = ${JSON.stringify(baseUrl)};
 const baseOrigin = new URL(baseUrl).origin;
 const featureEntryTargets = ${JSON.stringify(featureEntryTargets)};
+const declaredProofTargets = ${JSON.stringify(createDeclaredProofTargets(baseUrl, featureInventory))};
 const outputDirectory = ${JSON.stringify(explorerDirectory)};
 const deadlineAtMs = Date.now() + ${Math.floor(explorationCommandTimeoutMs * 0.7)};
-const result = { blockedNetworkAttempts: [], consoleErrors: [], pageErrors: [], routes: [], unreachableRoutes: [] };
+const result = { blockedNetworkAttempts: [], consoleErrors: [], declaredProofs: [], pageErrors: [], routes: [], unreachableRoutes: [] };
 const isAppUnavailableError = (error) => /(?:ERR_CONNECTION_(?:CLOSED|REFUSED|RESET)|Target page, context or browser has been closed)/i.test(
   error instanceof Error ? error.message : String(error),
 );
@@ -3296,6 +3433,94 @@ try {
       if (isAppUnavailableError(error)) break;
     }
   }
+  // N107: declared proofs execute on fresh navigations after the crawl.
+  // Each feature's typed obligation is checked from clean state — the crawl
+  // above may have already exercised and mutated these routes — and the
+  // verdict, not nearby wording, becomes the feature's grounding evidence.
+  for (const target of declaredProofTargets) {
+    if (Date.now() >= deadlineAtMs) break;
+    try {
+      await gotoRoute(target.url);
+      const proof = target.proof;
+      if (proof.kind === "visible-text") {
+        const locator = page.getByText(proof.text, { exact: true });
+        const count = await locator.count();
+        const visible = count > 0 && await locator.first().isVisible().catch(() => false);
+        const locatorEvidence = count === 1 && visible
+          ? await createVerifiedDirectLocatorEvidence({ locator: { exact: true, strategy: "text", value: proof.text }, route: target.path })
+          : undefined;
+        result.declaredProofs.push({
+          detail: visible
+            ? JSON.stringify(proof.text) + " is visible on " + target.path
+            : JSON.stringify(proof.text) + " was not found on " + target.path,
+          featureId: target.featureId,
+          ...(locatorEvidence ? { locatorEvidence } : {}),
+          passed: visible,
+        });
+      } else if (proof.kind === "element-appears") {
+        const candidates = [
+          page.getByRole("button", { exact: true, name: proof.name }),
+          page.getByRole("link", { exact: true, name: proof.name }),
+          page.getByRole("heading", { exact: true, name: proof.name }),
+          page.getByLabel(proof.name, { exact: true }),
+          page.getByText(proof.name, { exact: true }),
+        ];
+        let visible = false;
+        for (const candidate of candidates) {
+          if (await candidate.count().catch(() => 0) > 0 && await candidate.first().isVisible().catch(() => false)) { visible = true; break; }
+        }
+        result.declaredProofs.push({
+          detail: visible
+            ? "a visible element named " + JSON.stringify(proof.name) + " appeared on " + target.path
+            : "no visible element with accessible name " + JSON.stringify(proof.name) + " on " + target.path,
+          featureId: target.featureId,
+          passed: visible,
+        });
+      } else {
+        const exact = page.getByRole("button", { exact: true, name: proof.locator });
+        const control = (await exact.count()) === 1 ? exact : page.getByRole("button", { exact: false, name: proof.locator });
+        const matches = await control.count();
+        if (matches !== 1) {
+          result.declaredProofs.push({
+            detail: "control " + JSON.stringify(proof.locator) + " matched " + matches + " elements on " + target.path + "; the proof needs exactly one",
+            featureId: target.featureId,
+            passed: false,
+          });
+          continue;
+        }
+        const enabledBefore = await control.isEnabled().catch(() => false);
+        const nameBefore = ((await control.innerText().catch(() => "")) || "").trim();
+        const fromIsState = /^(?:enabled|disabled)$/i.test(proof.from);
+        const fromHolds = fromIsState
+          ? /^enabled$/i.test(proof.from) === enabledBefore
+          : nameBefore === "" || nameBefore === proof.from;
+        if (!fromHolds || !enabledBefore) {
+          result.declaredProofs.push({
+            detail: "control " + JSON.stringify(proof.locator) + " read " + JSON.stringify(nameBefore || (enabledBefore ? "enabled" : "disabled")) + " before the click; declared from " + JSON.stringify(proof.from) + (enabledBefore ? "" : " — a disabled control cannot be clicked; seed state so it starts enabled"),
+            featureId: target.featureId,
+            passed: false,
+          });
+          continue;
+        }
+        await control.click({ timeout: 4000 });
+        await waitForQuietDom(250, 1500);
+        const reachedTo = /^disabled$/i.test(proof.to)
+          ? await control.isDisabled().catch(() => false)
+          : /^enabled$/i.test(proof.to)
+            ? await control.isEnabled().catch(() => false)
+            : (await page.getByRole("button", { exact: true, name: proof.to }).count().catch(() => 0)) > 0;
+        result.declaredProofs.push({
+          detail: reachedTo
+            ? JSON.stringify(proof.locator) + ": " + proof.from + " → " + proof.to + " observed on " + target.path
+            : "control " + JSON.stringify(proof.locator) + " did not reach " + JSON.stringify(proof.to) + " after the click on " + target.path,
+          featureId: target.featureId,
+          passed: reachedTo,
+        });
+      }
+    } catch (error) {
+      if (isAppUnavailableError(error)) break;
+    }
+  }
   // Learn the app's not-found signature: what renders for a URL that cannot
   // exist. Recorded as a marker route the backend strips from the AppMap;
   // dropped when the app redirects the probe onto a real route (such apps
@@ -3335,6 +3560,34 @@ try {
 await writeFile(outputDirectory + "/exploration.json", JSON.stringify(result)).catch(() => {});
 process.stdout.write("\\n[makeademo:exploration] " + JSON.stringify(result) + "\\n");
 `;
+}
+
+/**
+ * One executable proof target per proof-declaring feature: its first entry
+ * path resolved against the app origin. Placeholder routes and off-origin
+ * paths are dropped the same way entry targets drop them.
+ */
+function createDeclaredProofTargets(
+  baseUrl: string,
+  featureInventory: PreparedDemoFeature[],
+): Array<{
+  featureId: string;
+  path: string;
+  proof: NonNullable<PreparedDemoFeature["expectedProof"]>;
+  url: string;
+}> {
+  const baseOrigin = new URL(baseUrl).origin;
+  return featureInventory.flatMap((feature) => {
+    const proof = feature.expectedProof;
+    const entryPath = feature.entryPaths[0];
+    if (proof === undefined || entryPath === undefined) return [];
+    if (findRoutePlaceholder(entryPath) !== undefined) return [];
+    const url = new URL(entryPath, baseUrl);
+    if (url.origin !== baseOrigin) return [];
+    return [
+      { featureId: feature.id, path: entryPath, proof, url: url.toString() },
+    ];
+  });
 }
 
 function createFeatureEntryTargets(
