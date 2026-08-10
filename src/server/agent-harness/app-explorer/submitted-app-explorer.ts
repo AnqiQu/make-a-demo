@@ -247,6 +247,12 @@ const explorationCommandTimeoutMs = 7 * 60_000;
  * Explores the real prepared app with Playwright inside the secret-free
  * submitted-code sandbox. Implementations consuming this result can trust that
  * routes and locators came from browser observations rather than agent memory.
+ *
+ * `scope: "feature-entries"` restricts the crawl to the manifest's declared
+ * entry routes plus the base URL — no discovered link or navigation is
+ * followed — while keeping every other gate behavior (harvest, interactions,
+ * declared proofs, verdict ledger) identical. This is the N108 preparation
+ * probe: same judgment as the gate, cost proportional to the feature count.
  */
 export async function exploreSubmittedApp(input: {
   baseUrl: string;
@@ -254,12 +260,14 @@ export async function exploreSubmittedApp(input: {
   featureInventory?: PreparedDemoFeature[];
   preparationManifestId: string;
   requestedFeatures?: string[];
+  scope?: "feature-entries" | "full";
   workspace: AgentHarnessWorkspace;
 }): Promise<SubmittedAppExplorationResult> {
   const script = createExplorerScript(
     input.baseUrl,
     input.featureInventory ?? [],
     input.externalResourceManifest,
+    input.scope ?? "full",
   );
   const encodedScript = Buffer.from(script).toString("base64");
   const capacityFailure = async (
@@ -2673,6 +2681,7 @@ function createExplorerScript(
   baseUrl: string,
   featureInventory: PreparedDemoFeature[],
   externalResourceManifest?: ExternalResourceManifest,
+  scope: "feature-entries" | "full" = "full",
 ): string {
   const featureEntryTargets = createFeatureEntryTargets(
     baseUrl,
@@ -2685,6 +2694,7 @@ import { mkdir, readFile as makeADemoReadReplayFile, writeFile } from "node:fs/p
 
 const baseUrl = ${JSON.stringify(baseUrl)};
 const baseOrigin = new URL(baseUrl).origin;
+const crawlScope = ${JSON.stringify(scope)};
 const featureEntryTargets = ${JSON.stringify(featureEntryTargets)};
 const declaredProofTargets = ${JSON.stringify(createDeclaredProofTargets(baseUrl, featureInventory))};
 const outputDirectory = ${JSON.stringify(explorerDirectory)};
@@ -3096,7 +3106,9 @@ try {
   ];
   const seen = new Set();
   const harvestedOnEarlierRoutes = new Set();
-  const maxRoutes = Math.min(30, featureEntryTargets.length + 9);
+  const maxRoutes = crawlScope === "feature-entries"
+    ? featureEntryTargets.length + 1
+    : Math.min(30, featureEntryTargets.length + 9);
   await mkdir(outputDirectory, { recursive: true });
   while (queue.length > 0 && seen.size < maxRoutes && Date.now() < deadlineAtMs) {
     const target = queue.shift();
@@ -3237,7 +3249,7 @@ try {
           const stateTransition = readStateTransition(before, after);
           if (after.url !== before.url) {
             const landed = new URL(after.url);
-            if (landed.origin === baseOrigin && !seen.has(normalizeCrawlUrl(landed.href))) {
+            if (crawlScope === "full" && landed.origin === baseOrigin && !seen.has(normalizeCrawlUrl(landed.href))) {
               queue.push({
                 featureIds: [],
                 requestedPath: landed.pathname + landed.search + landed.hash,
@@ -3367,6 +3379,7 @@ try {
         (a, b) => Number(primaryNames.has(b.name)) - Number(primaryNames.has(a.name)),
       );
       for (const link of orderedLinks) {
+        if (crawlScope !== "full") break;
         const linkTarget = new URL(link.href, baseUrl);
         if (link.sameOrigin && linkTarget.origin === baseOrigin && !seen.has(normalizeCrawlUrl(linkTarget.toString()))) {
           queue.push({

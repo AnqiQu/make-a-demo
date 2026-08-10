@@ -29,12 +29,14 @@ setTimeout(() => {
 async function buildExplorerScript(
   baseUrl: string,
   featureInventory?: PreparedDemoFeature[],
+  scope?: "feature-entries",
 ): Promise<string> {
   const commands: string[] = [];
   await exploreSubmittedApp({
     baseUrl,
     ...(featureInventory === undefined ? {} : { featureInventory }),
     preparationManifestId: "prep_script_test",
+    ...(scope === undefined ? {} : { scope }),
     workspace: createFakeAgentHarnessWorkspace({
       async executeSubmittedCode(command: string) {
         commands.push(command);
@@ -1593,6 +1595,96 @@ document.body.appendChild(document.createElement("vite-error-overlay"));
       expect(result.routes[0]?.text.join(" ")).toContain(
         "Failed to resolve import",
       );
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
+  it("crawls only declared feature entry routes in feature-entries scope", async () => {
+    // N108: the preparation-time feature probe re-runs the gate's own
+    // harvest, but scoped to the manifest's entry routes — a link the full
+    // crawl would follow must stay unvisited so the probe's cost tracks the
+    // feature count, not the app's link graph.
+    const pages = new Map([
+      [
+        "/",
+        `<!doctype html><html><head><title>Home</title></head><body>
+<h1>Control room</h1><a href="/hidden">Archived reports</a>
+<main><p>Operations overview for the demo workspace</p></main>
+</body></html>`,
+      ],
+      [
+        "/hidden",
+        "<!doctype html><html><head><title>Hidden</title></head><body><h1>Archived reports</h1></body></html>",
+      ],
+      [
+        "/panel",
+        `<!doctype html><html><head><title>Panel</title></head><body>
+<h1>Signal panel</h1><main><p>Live signal strength for every relay</p></main>
+</body></html>`,
+      ],
+    ]);
+    const server = createServer((request, response) => {
+      const page = pages.get(new URL(request.url ?? "/", "http://s").pathname);
+      response.writeHead(page === undefined ? 404 : 200, {
+        "content-type": "text/html; charset=utf-8",
+      });
+      response.end(page ?? "<!doctype html><html><body>missing</body></html>");
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-scope-"),
+      );
+      const script = (
+        await buildExplorerScript(
+          `http://127.0.0.1:${address.port}`,
+          [
+            {
+              authStrategy: "none",
+              description: "Watch live relay signal strength.",
+              entryPaths: ["/panel"],
+              fixtureNotes: [],
+              id: "signal-panel",
+              label: "Signal panel",
+              sourcePaths: ["src/panel.tsx"],
+            },
+          ],
+          "feature-entries",
+        )
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        routes: Array<{ headings: string[]; path: string }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      const crawledPaths = result.routes
+        .map((route) => route.path)
+        .filter((path) => !path.includes("__makeademo-404-probe__"));
+      expect(crawledPaths).toContain("/panel");
+      expect(crawledPaths).toContain("/");
+      expect(crawledPaths).not.toContain("/hidden");
+      expect(
+        result.routes.find((route) => route.path === "/panel")?.headings,
+      ).toContain("Signal panel");
     } finally {
       server.close();
     }
