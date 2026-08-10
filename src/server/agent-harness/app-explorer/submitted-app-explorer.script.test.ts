@@ -687,6 +687,63 @@ describe("generated exploration script", () => {
     }
   }, 30_000);
 
+  it("harvests accessibility-tree text even when the selector harvest is rich", async () => {
+    // A dashboard's headline metric often renders in a bare div the
+    // paragraph/list selectors never reach. A rich selector harvest must not
+    // suppress the aria harvest, or exactly the string a feature needs for
+    // grounding goes unseen while filler paragraphs fill the report.
+    const richDashboardPage = `<!doctype html><html><head><title>Fleet App</title></head><body>
+<h1>Fleet dashboard</h1><h2>Vehicles</h2><h3>Maintenance</h3>
+<main>
+<p>Seven vehicles are currently active</p>
+<p>Two vehicles are charging at depot four</p>
+<p>One vehicle needs a tire rotation</p>
+<p>Route coverage is nominal today</p>
+<p>Depot four reports full capacity</p>
+</main>
+<div>Total balance $12,400</div>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(richDashboardPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-aria-rich-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        routes: Array<{ text: string[] }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      expect(result.routes[0]?.text).toContain("Total balance $12,400");
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
   it("reports a headers-only table as an empty data table and a populated one as none", async () => {
     // A data query that resolves empty or mis-shaped renders a table shell
     // with headers and no rows — silently, with no error and no request.
@@ -868,11 +925,11 @@ describe("generated exploration script", () => {
     }
   }, 30_000);
 
-  it("discounts strings repeated from earlier routes when deciding a thin harvest", async () => {
+  it("harvests a later route's plain-div content despite chrome repeated from earlier routes", async () => {
     // Icon-ligature and skip-link strings escape the nav selectors and
-    // repeat on every route. On later routes they must not make a thin
-    // harvest look rich, or the accessibility-tree fallback never fires and
-    // a data page's real content (here, text in a plain div) goes unseen.
+    // repeat on every route. They must not crowd the aria candidate budget
+    // on later routes, where a data page's real content (here, text in a
+    // plain div) still has to be seen.
     const junk =
       "<ul><li>people_alt</li><li>folder</li><li>insights</li><li>bookmark</li><li>translate</li><li>public</li><li>storage</li><li>tune</li></ul>";
     const navigation =

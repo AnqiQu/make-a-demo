@@ -165,20 +165,19 @@ describe("exploreSubmittedApp", () => {
     expect(script.split("deadlineAtMs").length).toBeGreaterThanOrEqual(5);
   });
 
-  it("harvests assert text from the aria snapshot when a route renders only navigation names", async () => {
+  it("harvests assert text from the aria snapshot on every route", async () => {
     const { commands } = await exploreObservation({
       routes: [observedRoute({ headings: [] })],
     });
     const script = readExplorerScript(commands);
 
-    // The harvest must fire whenever the primary selectors found nothing
-    // beyond the route's own nav and link names — not only on fully empty
-    // pages: data tables render outside the paragraph/list selectors.
-    expect(script).toContain("routeNavNames");
+    // N105: the accessibility tree is the canonical name-space — the same
+    // one Playwright locators resolve — so its text candidates join every
+    // route's harvest, not only thin-route fallbacks. Cross-route repeats
+    // are still chrome and stay excluded.
     expect(script).toContain("ariaTextCandidates");
-    expect(script).not.toContain(
-      "observed.headings.length === 0 && observed.text.length === 0",
-    );
+    expect(script).not.toContain("distinctHarvestCount");
+    expect(script).toContain("harvestedOnEarlierRoutes.has(candidate)");
     // Rendered text only: textContent would admit <style> and <script> text
     // as heading or paragraph evidence.
     expect(script).toContain("element.innerText");

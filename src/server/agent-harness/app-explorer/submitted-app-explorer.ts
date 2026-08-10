@@ -2876,45 +2876,38 @@ try {
           })) ?? null,
         };
       }));
-      const routeNavNames = new Set([...observed.primaryNavigation, ...observed.links.map((link) => link.name)].filter(Boolean));
-      // Strings repeated from previously-visited routes are site chrome —
-      // icon ligatures, skip links, rail labels — even when they escape the
-      // nav selectors: they must not make a thin harvest look rich, or the
-      // accessibility-tree fallback never fires on data pages.
-      const distinctHarvestCount = [...new Set([...observed.headings, ...observed.text])].filter((value) => value && !routeNavNames.has(value) && !harvestedOnEarlierRoutes.has(value)).length;
-      if (distinctHarvestCount < 8) {
-        // Routes whose selector harvest stays thin beyond their own nav and
-        // link names — display-only dashboards, data tables outside the
-        // paragraph/list selectors, and control-centric tools whose pane
-        // titles live in unlabeled containers — get assert candidates from
-        // the accessibility tree so rendered content can still ground
-        // features. Each candidate is verified as a unique visible text
-        // locator below.
-        try {
-          const aria = typeof page.locator("body").ariaSnapshot === "function" ? await page.locator("body").ariaSnapshot() : "";
-          // A zero-row table's column headers reach the aria tree as header
-          // cells and as the combined header-row name; both are table
-          // structure, not rendered data, and must not enter route text.
-          const emptyTableHeaderTokens = new Set((observed.emptyDataTables ?? []).flatMap((table) => (table.headerTexts ?? []).flatMap((text) => text.toLowerCase().split(/\\s+/).filter(Boolean))));
-          const isEmptyTableStructure = (candidate) =>
-            emptyTableHeaderTokens.size > 0 && candidate.toLowerCase().split(/\\s+/).filter(Boolean).every((token) => emptyTableHeaderTokens.has(token));
-          // The aria tree pierces open shadow roots (error overlays,
-          // web-component apps), and their content often arrives as one long
-          // text run — accept it and truncate instead of dropping it.
-          const cleanAriaText = (raw) => {
-            const trimmed = raw.trim();
-            const unquoted = trimmed.startsWith('"') && trimmed.endsWith('"')
-              ? trimmed.slice(1, -1).replaceAll('\\\\"', '"')
-              : trimmed;
-            return unquoted.slice(0, 120).trim();
-          };
-          const ariaTextCandidates = [...new Set([
-            ...[...aria.matchAll(/-\\s+[a-z]+ "([^"\\n]{3,80})"/g)].map((match) => match[1]),
-            ...[...aria.matchAll(/-\\s+text: (\\S[^\\n]{2,399})$/gm)].map((match) => cleanAriaText(match[1])),
-          ])].filter((candidate) => !observed.text.includes(candidate) && !observed.headings.includes(candidate) && !isEmptyTableStructure(candidate) && !(observed.alerts || []).some((alert) => alert.includes(candidate))).slice(0, 24);
-          observed.text.push(...ariaTextCandidates);
-        } catch {}
-      }
+      // The accessibility tree is the canonical assert-candidate source: its
+      // accessible names are exactly the name-space Playwright locators
+      // resolve, and it reaches content the paragraph/list selectors never
+      // will — bare-div metrics, unlabeled pane titles, open shadow roots.
+      // It runs on every route; strings repeated from previously-visited
+      // routes are site chrome (icon ligatures, skip links, rail labels)
+      // and stay out so chrome cannot crowd the candidate budget. Each
+      // candidate is verified as a unique visible text locator below.
+      try {
+        const aria = typeof page.locator("body").ariaSnapshot === "function" ? await page.locator("body").ariaSnapshot() : "";
+        // A zero-row table's column headers reach the aria tree as header
+        // cells and as the combined header-row name; both are table
+        // structure, not rendered data, and must not enter route text.
+        const emptyTableHeaderTokens = new Set((observed.emptyDataTables ?? []).flatMap((table) => (table.headerTexts ?? []).flatMap((text) => text.toLowerCase().split(/\\s+/).filter(Boolean))));
+        const isEmptyTableStructure = (candidate) =>
+          emptyTableHeaderTokens.size > 0 && candidate.toLowerCase().split(/\\s+/).filter(Boolean).every((token) => emptyTableHeaderTokens.has(token));
+        // The aria tree pierces open shadow roots (error overlays,
+        // web-component apps), and their content often arrives as one long
+        // text run — accept it and truncate instead of dropping it.
+        const cleanAriaText = (raw) => {
+          const trimmed = raw.trim();
+          const unquoted = trimmed.startsWith('"') && trimmed.endsWith('"')
+            ? trimmed.slice(1, -1).replaceAll('\\\\"', '"')
+            : trimmed;
+          return unquoted.slice(0, 120).trim();
+        };
+        const ariaTextCandidates = [...new Set([
+          ...[...aria.matchAll(/-\\s+[a-z]+ "([^"\\n]{3,80})"/g)].map((match) => match[1]),
+          ...[...aria.matchAll(/-\\s+text: (\\S[^\\n]{2,399})$/gm)].map((match) => cleanAriaText(match[1])),
+        ])].filter((candidate) => !observed.text.includes(candidate) && !observed.headings.includes(candidate) && !harvestedOnEarlierRoutes.has(candidate) && !isEmptyTableStructure(candidate) && !(observed.alerts || []).some((alert) => alert.includes(candidate))).slice(0, 24);
+        observed.text.push(...ariaTextCandidates);
+      } catch {}
       for (const value of [...observed.headings, ...observed.text]) {
         if (value) harvestedOnEarlierRoutes.add(value);
       }
