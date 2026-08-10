@@ -2715,6 +2715,9 @@ async function validateResolvedSubmittedCodeRuntime(
               appDir: manifest.appDir,
               workspacePackages: input.repoProfile.workspacePackages,
             })),
+        ...(probeSucceeded
+          ? []
+          : readMissingRequiredEnvHints(manifest, input.repoProfile)),
       ];
       return hints.length > 0 ? { suggestedRepairHints: hints } : {};
     })(),
@@ -2819,6 +2822,30 @@ function readUnbuiltWorkspacePackageHints(
 function normalizeRepoRelativeDir(dir: string): string {
   const trimmed = dir.replace(/^\.\//, "").replace(/\/+$/, "");
   return trimmed === "." ? "" : trimmed;
+}
+
+// requiredEnvHints are discovered candidates (.env examples, quarantined
+// keys), not proven requirements, so the hint points at the gap instead of
+// commanding a fix. The gap is known before the app starts; every failed
+// preflight states it (N109, calcom's silent NEXTAUTH_SECRET crash).
+function readMissingRequiredEnvHints(
+  manifest: PreparationManifest,
+  repoProfile: RepoProfile,
+): string[] {
+  const missing = repoProfile.requiredEnvHints.filter(
+    (name) => !(name in manifest.envUsed),
+  );
+  if (missing.length === 0) {
+    return [];
+  }
+  const shown = missing.slice(0, 8);
+  const suffix =
+    missing.length > shown.length
+      ? ` (and ${missing.length - shown.length} more in the repo profile)`
+      : "";
+  return [
+    `The repository reads environment variables that envUsed does not set: ${shown.join(", ")}${suffix}. If the failure traces to missing configuration, set the relevant ones in envUsed with local demo values before changing code.`,
+  ];
 }
 
 function classifyPreparationRuntimeFailure(

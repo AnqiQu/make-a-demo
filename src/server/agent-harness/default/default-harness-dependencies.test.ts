@@ -4178,6 +4178,66 @@ describe("createDefaultAgentHarnessDependencies", () => {
     }
   });
 
+  it("names profiled env vars that envUsed leaves unset on a failed preflight", async () => {
+    // calcom class: the app dies for want of a variable the repo profile
+    // already discovered. The gap between requiredEnvHints and envUsed is
+    // known before the app starts, so every failed preflight states it.
+    vi.useFakeTimers();
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (!command.includes("curl -")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        return {
+          exitCode: 7,
+          stderr: "curl: (7) Failed to connect to 127.0.0.1 port 3000",
+          stdout: "",
+        };
+      },
+      async readSubmittedCodeAppStatus() {
+        return {
+          exitCode: 1,
+          running: false,
+          startedAt: "2026-08-06T00:00:00.000Z",
+          stderr: "the app exited during boot",
+          stdout: "",
+        };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    try {
+      const validation = harness.dependencies.validatePreparation({
+        preparationManifest: {
+          ...preparationManifest(),
+          envUsed: { DATABASE_URL: "postgres://127.0.0.1:5432/demo" },
+        },
+        repoProfile: {
+          ...repoProfile(),
+          requiredEnvHints: ["DATABASE_URL", "NEXTAUTH_SECRET"],
+        },
+        runPlan: runPlan(),
+        workspace,
+      });
+      await vi.advanceTimersByTimeAsync(200_000);
+      const report = await validation;
+
+      expect(report.status).toBe("failed");
+      const hints = report.suggestedRepairHints.join("\n");
+      expect(hints).toContain("NEXTAUTH_SECRET");
+      expect(hints).toContain("envUsed");
+      // Variables envUsed already sets are not re-listed.
+      expect(hints).not.toContain("DATABASE_URL");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("runs the manager's rebuild after the install window is resealed", async () => {
     const commands: string[] = [];
     const networkEnabledAtCommand: boolean[] = [];
