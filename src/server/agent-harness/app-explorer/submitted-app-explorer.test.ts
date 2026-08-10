@@ -920,6 +920,38 @@ describe("exploreSubmittedApp", () => {
     );
   });
 
+  it("keeps stderr as evidence but withholds the runtime-error hint when stderr carries only warnings", async () => {
+    // N106: tsc watch mode narrates "Found 0 errors" on stderr forever, so
+    // stderr bytes alone must never steer repair at server-side errors.
+    const { result } = await exploreObservation({
+      featureInventory: [preparedFeature()],
+      readSubmittedCodeAppStatus: async () => ({
+        running: true,
+        stderr: [
+          "warn  - You have enabled experimental features.",
+          "Found 0 errors. Watching for file changes.",
+        ].join("\n"),
+        stdout: "",
+      }),
+      routes: [
+        observedRoute({
+          featureIds: ["post-article"],
+          headings: [],
+          path: "/#/editor",
+          text: [],
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.stderrExcerpts.join("\n")).toContain(
+      "Found 0 errors",
+    );
+    expect(
+      result.validationReport.suggestedRepairHints.join(" "),
+    ).not.toContain("Server-side runtime errors");
+  });
+
   it("redacts secrets from managed-app output before they enter the exploration verdict", async () => {
     const { result } = await exploreObservation({
       featureInventory: [preparedFeature()],

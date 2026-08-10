@@ -25,6 +25,7 @@ import {
   readSandboxCapacityEvidence,
   sandboxCapacityProbeCommand,
 } from "../tools/sandbox-capacity";
+import { readStderrErrorSignal } from "./stderr-error-signal";
 
 /**
  * The typed outcome of browser exploration. `repairable-failure` deliberately
@@ -323,18 +324,27 @@ export async function exploreSubmittedApp(input: {
   // Browser-side evidence cannot see server-side render failures: an SSR
   // throw leaves pageErrors and consoleErrors empty while routes stream no
   // content. The managed app's stderr is evidence, never a gate — dev
-  // servers also log benign errors.
+  // servers also log benign errors, and watch-mode toolchains narrate
+  // success on stderr, so the runtime-error hint fires only when an
+  // error-class line survives the warning and zero-errors filters (N106).
   const diagnostics = createAppStatusDiagnostics(
     await readAppStatus(input.workspace),
   );
   if (diagnostics.stderrExcerpts.length === 0) return artifacts;
+  const errorSignal = readStderrErrorSignal(
+    diagnostics.stderrExcerpts.join("\n"),
+  );
   return {
     ...artifacts,
     validationReport: {
       ...artifacts.validationReport,
       stderrExcerpts: diagnostics.stderrExcerpts,
       suggestedRepairHints: [
-        "Server-side runtime errors were observed while routes rendered; inspect the stderr evidence before changing feature selection.",
+        ...(errorSignal === undefined
+          ? []
+          : [
+              "Server-side runtime errors were observed while routes rendered; inspect the stderr evidence before changing feature selection.",
+            ]),
         ...artifacts.validationReport.suggestedRepairHints,
       ],
     },
