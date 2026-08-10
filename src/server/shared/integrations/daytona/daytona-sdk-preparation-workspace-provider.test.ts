@@ -15,6 +15,8 @@ import { promisify } from "node:util";
 
 import { describe, expect, it, vi } from "vitest";
 
+import { AgentHarnessControlPlaneError } from "../../../agent-harness/daytona/workspace.interface";
+import { createDaytonaControlPlaneEnvelope } from "./daytona-control-plane";
 import {
   DaytonaSdkPreparationWorkspaceProvider,
   createDaytonaSdkPreparationWorkspaceHandle,
@@ -22,6 +24,19 @@ import {
 } from "./daytona-sdk-preparation-workspace-provider";
 
 const execFileAsync = promisify(execFile);
+
+/** The real envelope with waits removed, so retry paths run at test speed. */
+function instantControlPlane() {
+  return createDaytonaControlPlaneEnvelope({
+    logger: {
+      error: async () => {},
+      info: async () => {},
+      warn: async () => {},
+    },
+    random: () => 0.5,
+    wait: async () => {},
+  });
+}
 
 describe("DaytonaSdkPreparationWorkspaceProvider", () => {
   it("creates a non-auto-stopping agent sandbox from the configured snapshot", async () => {
@@ -128,6 +143,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
           }
         },
       } as never,
+      controlPlane: instantControlPlane(),
     });
     const handle = await provider.create();
 
@@ -179,6 +195,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
           calls.push({ delete: input.id ?? input.name });
         },
       } as never,
+      controlPlane: instantControlPlane(),
       sandboxCreateTimeoutSeconds: 180,
     });
 
@@ -195,6 +212,143 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         options: { timeout: 180 },
       },
     ]);
+  });
+
+  it("retries sandbox creation past a transient 502 window", async () => {
+    // Outline (2026-08-09): one 502 at an unretried create seam ended the
+    // whole run inside the parallel launch window.
+    const calls: unknown[] = [];
+    const sandbox = fakeLinkedSandbox(calls, "sandbox_123", "ok");
+    let creates = 0;
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: {
+        async create(input: unknown) {
+          calls.push({ create: input });
+          creates += 1;
+          if (creates === 1) {
+            throw Object.assign(
+              new Error("Request failed with status code 502"),
+              { statusCode: 502 },
+            );
+          }
+          return sandbox;
+        },
+        async delete() {},
+      } as never,
+      controlPlane: instantControlPlane(),
+    });
+
+    const handle = await provider.create();
+
+    expect(handle.id).toBe("sandbox_123");
+    expect(creates).toBe(2);
+  });
+
+  it("waits out the in-progress conflict message during deletion", async () => {
+    // The message shape midday actually died on (2026-08-09) — carried by
+    // a plain 409 body, not the older "state change in progress" wording.
+    const calls: unknown[] = [];
+    let deletes = 0;
+    const parentSandbox = fakeLinkedSandbox(calls, "sandbox_123", "ok");
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: {
+        async create(input: unknown) {
+          calls.push({ create: input });
+          return parentSandbox;
+        },
+        async delete() {
+          deletes += 1;
+          if (deletes < 3) {
+            throw Object.assign(
+              new Error(
+                "An operation is already in progress for this resource",
+              ),
+              { statusCode: 409 },
+            );
+          }
+        },
+      } as never,
+      controlPlane: instantControlPlane(),
+    });
+    const handle = await provider.create();
+
+    await handle.destroy();
+
+    expect(deletes).toBe(3);
+  });
+
+  it("retries the submitted-code network toggle through a conflict and succeeds", async () => {
+    // Midday (2026-08-09): the network toggle's first 409 killed the run
+    // and surfaced to the maker as a repair prompt. The toggle is
+    // re-issuable: wait for the in-progress operation, then re-issue.
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, {
+        networkError: Object.assign(
+          new Error("An operation is already in progress for this resource"),
+          { statusCode: 409 },
+        ),
+        networkFailuresBeforeSuccess: 2,
+      }),
+      controlPlane: instantControlPlane(),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.setSubmittedCodeNetworkAccess(true);
+
+    expect(
+      calls.filter((call) => "updateNetworkSettings" in Object(call)),
+    ).toHaveLength(3);
+  });
+
+  it("surfaces an exhausted control-plane retry as a typed infrastructure failure", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, {
+        networkError: Object.assign(
+          new Error("An operation is already in progress for this resource"),
+          { statusCode: 409 },
+        ),
+      }),
+      controlPlane: instantControlPlane(),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    const thrown: unknown = await handle.workspace
+      .setSubmittedCodeNetworkAccess(true)
+      .then(() => undefined)
+      .catch((error: unknown) => error);
+
+    expect(thrown).toBeInstanceOf(AgentHarnessControlPlaneError);
+    expect(thrown).toMatchObject({ operation: "sandbox.network-update" });
+  });
+
+  it("attributes every control-plane attempt to its seam in the pipeline log", async () => {
+    // A 27-minute silent gap must never again be unattributable: each
+    // attempt names its operation and sandbox before the SDK call starts.
+    const lines: string[] = [];
+    const calls: unknown[] = [];
+    const sandbox = fakeLinkedSandbox(calls, "sandbox_123", "ok");
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: {
+        async create(input: unknown) {
+          calls.push({ create: input });
+          return sandbox;
+        },
+        async delete() {},
+      } as never,
+      sandboxLogSinks: [{ write: (line) => void lines.push(line) }],
+    });
+
+    await provider.create();
+
+    expect(
+      lines.some((line) =>
+        line.includes('"event":"daytona.agent-sandbox.create.attempt"'),
+      ),
+    ).toBe(true);
   });
 
   it("attaches configured Daytona secrets to the parent sandbox", async () => {
@@ -756,7 +910,7 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     const execution = handle.workspace.execute("opencode run slow", {
       onStdout: () => {},
     });
-    await Promise.resolve();
+    await waitForCall(calls, "sendInput");
     await handle.destroy();
 
     await expect(execution).resolves.toMatchObject({ exitCode: 7 });
@@ -1064,8 +1218,13 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       workspaceId: "workspace_123",
     });
 
-    expect(relayedLogs).toHaveLength(1);
-    expect(JSON.parse(relayedLogs[0] ?? "{}")).toMatchObject({
+    // The same sinks also carry daytona-control-plane attribution events;
+    // this test pins the sandbox-audit relay specifically.
+    const sandboxAuditLogs = relayedLogs.filter((line) =>
+      line.includes('"component":"daytona-sandbox"'),
+    );
+    expect(sandboxAuditLogs).toHaveLength(1);
+    expect(JSON.parse(sandboxAuditLogs[0] ?? "{}")).toMatchObject({
       component: "daytona-sandbox",
       event: "project-validation.dependency-install.started",
       message: "project-validation.dependency-install.started",
@@ -2423,6 +2582,7 @@ function fakeClient(
     failSubmittedCodeNetworkDisable?: boolean;
     missingSubmittedCodeImage?: boolean;
     networkError?: Error;
+    networkFailuresBeforeSuccess?: number;
     ptyConnectionFailuresBeforeSuccess?: number;
     ptyDisconnectNeverResolves?: boolean;
     ptyForgedExitSentinel?: string;
@@ -2439,6 +2599,7 @@ function fakeClient(
 ) {
   let submittedCodeInitializationFailures = 0;
   let uploadFailures = 0;
+  let networkFailures = 0;
   let ptyConnectionFailures = 0;
   let sandboxStarted =
     options.ptyRequiresSandboxRestart !== true &&
@@ -2668,7 +2829,12 @@ function fakeClient(
     },
     async updateNetworkSettings(settings: unknown) {
       calls.push({ updateNetworkSettings: settings });
-      if (options.networkError !== undefined) {
+      if (
+        options.networkError !== undefined &&
+        (options.networkFailuresBeforeSuccess === undefined ||
+          networkFailures < options.networkFailuresBeforeSuccess)
+      ) {
+        networkFailures += 1;
         throw options.networkError;
       }
     },

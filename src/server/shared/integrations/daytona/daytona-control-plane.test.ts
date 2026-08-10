@@ -69,9 +69,9 @@ describe("classifyDaytonaControlPlaneError", () => {
 
   it("classifies 5xx and connection-transport failures as transient", () => {
     expect(classifyDaytonaControlPlaneError(transient502())).toBe("transient");
-    expect(
-      classifyDaytonaControlPlaneError(new Error("read ECONNRESET")),
-    ).toBe("transient");
+    expect(classifyDaytonaControlPlaneError(new Error("read ECONNRESET"))).toBe(
+      "transient",
+    );
     expect(
       classifyDaytonaControlPlaneError(
         Object.assign(new Error("connect failed"), {
@@ -124,9 +124,7 @@ describe("createDaytonaControlPlaneEnvelope", () => {
     expect(attempts).toBe(3);
     // random 0.5 centers the jitter, so delays are the ladder verbatim.
     expect(waits).toEqual([1_000, 4_000]);
-    expect(
-      events.map((event) => [event.level, event.entry.event]),
-    ).toEqual([
+    expect(events.map((event) => [event.level, event.entry.event])).toEqual([
       ["info", "daytona.sandbox.create.attempt"],
       ["warn", "daytona.sandbox.create.retrying"],
       ["info", "daytona.sandbox.create.attempt"],
@@ -155,7 +153,8 @@ describe("createDaytonaControlPlaneEnvelope", () => {
     expect(attempts).toBe(4);
     expect(waits).toEqual([5_000, 5_000, 5_000]);
     const retrying = events.filter(
-      (event) => event.entry.event === "daytona.sandbox.network-update.retrying",
+      (event) =>
+        event.entry.event === "daytona.sandbox.network-update.retrying",
     );
     expect(retrying).toHaveLength(3);
     expect(retrying[0]?.entry).toMatchObject({

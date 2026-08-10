@@ -30,6 +30,11 @@ import {
 } from "../../logging/pipeline-event-logger";
 import { createPtyCommandPayload } from "../../shell/pty-command-payload";
 import { shellQuote } from "../../shell/shell-quote";
+import {
+  type DaytonaControlPlaneEnvelope,
+  createDaytonaControlPlaneEnvelope,
+  formatErrorDiagnostic,
+} from "./daytona-control-plane";
 
 type DaytonaSdkClient = {
   create(
@@ -130,6 +135,8 @@ export type DaytonaSdkPreparationWorkspaceProviderOptions = {
   /** Waits between artifact-transfer retries; its length bounds the retries. */
   artifactTransferBackoffMs?: number[];
   client?: DaytonaSdkClient;
+  /** Overrides the classify-and-retry envelope; tests inject an instant one. */
+  controlPlane?: DaytonaControlPlaneEnvelope;
   commandTimeoutMs?: number;
   diskGB?: number;
   logWriteTimeoutMs?: number;
@@ -158,7 +165,6 @@ const defaultPtyDisconnectTimeoutMs = 5_000;
 const defaultManagedProcessControlTimeoutMs = 30_000;
 const defaultArtifactTransferTimeoutSeconds = 60;
 const defaultSandboxCreateTimeoutSeconds = 300;
-const sandboxCreateConnectionRetryLimit = 2;
 /**
  * Server-side reaper for agent sandboxes: an hour past the 90-minute job
  * deadline, so it never cuts a live pipeline short while keeping a killed
@@ -167,6 +173,14 @@ const sandboxCreateConnectionRetryLimit = 2;
  */
 const agentSandboxAutoDeleteMinutes = 150;
 const ptyStartupRetryLimit = 2;
+/** Teardown conflict polls (~30s): brief, because the backstop reaps leftovers. */
+const teardownConflictPollLimit = 6;
+/**
+ * PTY creation is re-issuable until input is sent, so transient transport
+ * loss gets a short absorption window. Conflicts and everything else stay
+ * raw: the startup loop owns stale-id recovery and sandbox restart.
+ */
+const ptyCreateTransientBackoffMs = [1_000, 4_000];
 /**
  * One transient 502 during an artifact upload killed two matrix runs inside
  * the 11-way parallel launch window (homer, twenty, 2026-08-09). Transfers
@@ -224,6 +238,7 @@ export class DaytonaSdkPreparationWorkspaceProvider
   private readonly artifactTransferBackoffMs: number[];
   private readonly client: DaytonaSdkClient;
   private readonly commandTimeoutMs: number;
+  private readonly controlPlane: DaytonaControlPlaneEnvelope;
   private readonly diskGB: number;
   private readonly logWriteTimeoutMs: number;
   private readonly ptyConnectionTimeoutMs: number;
@@ -253,21 +268,26 @@ export class DaytonaSdkPreparationWorkspaceProvider
     this.sandboxCreateTimeoutSeconds =
       options.sandboxCreateTimeoutSeconds ?? defaultSandboxCreateTimeoutSeconds;
     this.sandboxLogSinks = options.sandboxLogSinks ?? [];
+    this.controlPlane =
+      options.controlPlane ??
+      createControlPlaneEnvelopeForSinks(this.sandboxLogSinks);
   }
 
   async create(): Promise<AgentHarnessWorkspaceHandle> {
     const createOptions = { timeout: this.sandboxCreateTimeoutSeconds };
-    const sandbox = await this.createSandboxWithConnectionRetry(
-      {
-        // Server-side backstop: if the controller dies before destroy(), the
-        // agent sandbox still gets reaped instead of running indefinitely.
-        autoDeleteInterval: agentSandboxAutoDeleteMinutes,
-        autoStopInterval: 0,
-        disk: this.diskGB,
-        ...(this.secrets === undefined ? {} : { secrets: this.secrets }),
-        ...(this.snapshot === undefined ? {} : { snapshot: this.snapshot }),
-      },
-      createOptions,
+    const sandbox = await this.controlPlane.run("agent-sandbox.create", () =>
+      this.client.create(
+        {
+          // Server-side backstop: if the controller dies before destroy(), the
+          // agent sandbox still gets reaped instead of running indefinitely.
+          autoDeleteInterval: agentSandboxAutoDeleteMinutes,
+          autoStopInterval: 0,
+          disk: this.diskGB,
+          ...(this.secrets === undefined ? {} : { secrets: this.secrets }),
+          ...(this.snapshot === undefined ? {} : { snapshot: this.snapshot }),
+        },
+        createOptions,
+      ),
     );
     const id = sandbox.id ?? sandbox.name;
     if (id === undefined || id.trim() === "") {
@@ -279,17 +299,22 @@ export class DaytonaSdkPreparationWorkspaceProvider
       submittedCodeSandbox =
         this.submittedCodeSnapshot === undefined
           ? undefined
-          : await this.createSandboxWithConnectionRetry(
-              {
-                autoStopInterval: 0,
-                autoDeleteInterval: 0,
-                disk: submittedCodeSandboxDiskGB,
-                ephemeral: true,
-                linkedSandbox: id,
-                networkBlockAll: true,
-                snapshot: this.submittedCodeSnapshot,
-              },
-              createOptions,
+          : await this.controlPlane.run(
+              "submitted-code-sandbox.create",
+              () =>
+                this.client.create(
+                  {
+                    autoStopInterval: 0,
+                    autoDeleteInterval: 0,
+                    disk: submittedCodeSandboxDiskGB,
+                    ephemeral: true,
+                    linkedSandbox: id,
+                    networkBlockAll: true,
+                    snapshot: this.submittedCodeSnapshot,
+                  },
+                  createOptions,
+                ),
+              { sandboxId: id },
             );
     } catch (error) {
       // The linked-create failure is the root cause; a failing compensating
@@ -302,6 +327,7 @@ export class DaytonaSdkPreparationWorkspaceProvider
       artifactTransferBackoffMs: this.artifactTransferBackoffMs,
       client: this.client,
       commandTimeoutMs: this.commandTimeoutMs,
+      controlPlane: this.controlPlane,
       id,
       logWriteTimeoutMs: this.logWriteTimeoutMs,
       ptyConnectionTimeoutMs: this.ptyConnectionTimeoutMs,
@@ -335,34 +361,22 @@ export class DaytonaSdkPreparationWorkspaceProvider
       }
     }
   }
+}
 
-  private async createSandboxWithConnectionRetry(
-    input: unknown,
-    options: { timeout: number },
-  ): Promise<DaytonaSdkSandbox> {
-    let lastError: unknown;
-    for (
-      let attempt = 0;
-      attempt <= sandboxCreateConnectionRetryLimit;
-      attempt += 1
-    ) {
-      try {
-        return await this.client.create(input, options);
-      } catch (error) {
-        lastError = error;
-        if (
-          attempt === sandboxCreateConnectionRetryLimit ||
-          !isDaytonaConnectionError(error)
-        ) {
-          throw error;
-        }
-
-        await wait(250 * (attempt + 1));
-      }
-    }
-
-    throw lastError;
-  }
+/**
+ * The provider- and handle-level default envelope. Its events go to the
+ * caller's local sinks only: control-plane observability must never itself
+ * depend on the control plane (or on a sandbox that may not exist yet).
+ */
+function createControlPlaneEnvelopeForSinks(
+  sinks: PipelineLogSink[],
+): DaytonaControlPlaneEnvelope {
+  return createDaytonaControlPlaneEnvelope({
+    logger: createPipelineEventLogger({
+      base: { component: "daytona-control-plane" },
+      sinks,
+    }),
+  });
 }
 
 // Every live handle this process created and has not yet destroyed. The
@@ -394,6 +408,7 @@ function createPreparationWorkspaceHandle(input: {
   artifactTransferBackoffMs: number[];
   client: DaytonaSdkClient;
   commandTimeoutMs: number;
+  controlPlane?: DaytonaControlPlaneEnvelope;
   id: string;
   logWriteTimeoutMs: number;
   ptyConnectionTimeoutMs: number;
@@ -410,6 +425,8 @@ function createPreparationWorkspaceHandle(input: {
     input.logWriteTimeoutMs,
     input.ptyConnectionTimeoutMs,
     input.artifactTransferBackoffMs,
+    input.controlPlane ??
+      createControlPlaneEnvelopeForSinks(input.sandboxLogSinks ?? []),
     input.sandboxLogSinks ?? [],
   );
 
@@ -444,6 +461,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     private readonly logWriteTimeoutMs: number,
     private readonly ptyConnectionTimeoutMs: number,
     private readonly artifactTransferBackoffMs: number[],
+    private readonly controlPlane: DaytonaControlPlaneEnvelope,
     sandboxLogSinks: PipelineLogSink[],
   ) {
     this.agentSandboxId = workspaceId;
@@ -518,19 +536,22 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
   }
 
   /**
-   * Deletes a sandbox, retrying once past a state-change conflict. Daytona
-   * reports 409 while a sandbox is still settling, which is transient rather
-   * than a reason to leave the sandbox running.
+   * Deletes a sandbox through the control-plane envelope. Daytona reports
+   * 409 while a sandbox is still settling; teardown polls that window
+   * briefly, then defers to the auto-delete backstop instead of holding a
+   * finished run open for the full conflict budget.
    */
   private async deleteSandboxThroughStateConflict(
     sandbox: DaytonaSdkSandbox,
   ): Promise<void> {
-    try {
-      await this.client.delete(sandbox);
-    } catch (error) {
-      if (!isDaytonaStateConflictError(error)) throw error;
-      await this.client.delete(sandbox);
-    }
+    await this.controlPlane.run(
+      "sandbox.delete",
+      () => this.client.delete(sandbox),
+      {
+        conflictPollLimit: teardownConflictPollLimit,
+        sandboxId: readSandboxId(sandbox),
+      },
+    );
   }
 
   async execute(
@@ -832,12 +853,11 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     // → upload → extract chain costs a bounded retry, never the run
     // (cyberchef's reset died on one dropped socket, 2026-08-09).
     let attempts = 0;
-    await runWithTransientTransferRetry({
+    await this.runTransferThroughEnvelope({
       attempt: () => {
         attempts += 1;
         return this.syncSubmittedCodeWorkspaceOnce();
       },
-      backoffMs: this.artifactTransferBackoffMs,
       onRetry: (error) =>
         this.writeArtifactTransferLogBestEffort({
           attempt: attempts,
@@ -848,6 +868,29 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
           sandboxId:
             this.submittedCodeSandboxId ?? "unknown-submitted-code-sandbox",
         }),
+      operation: "fs.sync",
+      sandboxId:
+        this.submittedCodeSandboxId ?? "unknown-submitted-code-sandbox",
+    });
+  }
+
+  /**
+   * Runs an idempotent Daytona transfer through the control-plane envelope
+   * with the transfer-sized ladder. Exhaustion and non-retryable failures
+   * rethrow the attempt's own error unchanged, because transfer seams carry
+   * their own infrastructure-family wrapping and error contracts.
+   */
+  private runTransferThroughEnvelope<T>(input: {
+    attempt: () => Promise<T>;
+    onRetry?: (error: unknown) => Promise<void> | void;
+    operation: string;
+    sandboxId: string;
+  }): Promise<T> {
+    return this.controlPlane.run(input.operation, input.attempt, {
+      ladderMs: this.artifactTransferBackoffMs,
+      ...(input.onRetry === undefined ? {} : { onRetry: input.onRetry }),
+      sandboxId: input.sandboxId,
+      wrapExhausted: false,
     });
   }
 
@@ -983,7 +1026,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
           `Failed to download reconciled lockfile ${failed.source}: ${failed.error}`,
         );
       }
-      await runWithTransientTransferRetry({
+      await this.runTransferThroughEnvelope({
         attempt: () =>
           this.sandbox.fs.uploadFiles(
             transfers.map(({ destination, localPath }) => ({
@@ -992,7 +1035,8 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
             })),
             defaultArtifactTransferTimeoutSeconds,
           ),
-        backoffMs: this.artifactTransferBackoffMs,
+        operation: "fs.upload",
+        sandboxId: this.agentSandboxId,
       });
     } finally {
       await rm(localDirectory, { force: true, recursive: true });
@@ -1004,7 +1048,14 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     enabled: boolean,
   ): Promise<void> {
     try {
-      await sandbox.updateNetworkSettings({ networkBlockAll: !enabled });
+      // The toggle is re-issuable: the envelope waits out in-progress-state
+      // conflicts (midday's first-409 death, 2026-08-09) and transport loss,
+      // while policy rejections stay raw for the fail-closed logic below.
+      await this.controlPlane.run(
+        "sandbox.network-update",
+        () => sandbox.updateNetworkSettings({ networkBlockAll: !enabled }),
+        { sandboxId: readSandboxId(sandbox) },
+      );
       this.networkOverrideRestricted = false;
     } catch (error) {
       if (isRestrictedNetworkPolicyError(error)) {
@@ -1031,14 +1082,17 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       source: file.sourcePath,
     }));
     const submittedCodeSandbox = this.submittedCodeSandbox;
-    await runWithTransientTransferRetry({
+    await this.runTransferThroughEnvelope({
       attempt: () => this.sandbox.fs.uploadFiles(uploadedFiles),
-      backoffMs: this.artifactTransferBackoffMs,
+      operation: "fs.upload",
+      sandboxId: this.agentSandboxId,
     });
     if (submittedCodeSandbox !== undefined) {
-      await runWithTransientTransferRetry({
+      await this.runTransferThroughEnvelope({
         attempt: () => submittedCodeSandbox.fs.uploadFiles(uploadedFiles),
-        backoffMs: this.artifactTransferBackoffMs,
+        operation: "fs.upload",
+        sandboxId:
+          this.submittedCodeSandboxId ?? "unknown-submitted-code-sandbox",
       });
     }
   }
@@ -1052,7 +1106,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     const attemptedRemoteTemporaryPaths: string[] = [];
     try {
       await writeFile(localPath, contents, "utf8");
-      await runWithTransientTransferRetry({
+      await this.runTransferThroughEnvelope({
         attempt: async () => {
           // A fresh temp path per attempt keeps a timed-out upload that lands
           // late from racing the retry's in-flight transfer.
@@ -1085,7 +1139,8 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
             );
           }
         },
-        backoffMs: this.artifactTransferBackoffMs,
+        operation: "fs.write-text",
+        sandboxId: this.agentSandboxId,
       });
     } catch (error) {
       throw new Error(
@@ -1157,7 +1212,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       this.submittedCodeSandboxId ?? "unknown-submitted-code-sandbox";
     let attempts = 0;
     try {
-      return await runWithTransientTransferRetry({
+      return await this.runTransferThroughEnvelope({
         attempt: async () => {
           attempts += 1;
           await this.writeArtifactTransferLogBestEffort({
@@ -1177,7 +1232,6 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
           });
           return result;
         },
-        backoffMs: this.artifactTransferBackoffMs,
         onRetry: (error) =>
           this.writeArtifactTransferLogBestEffort({
             attempt: attempts,
@@ -1187,6 +1241,8 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
             level: "warn",
             sandboxId,
           }),
+        operation: `fs.${input.operation}`,
+        sandboxId,
       });
     } catch (error) {
       await this.writeArtifactTransferLogBestEffort({
@@ -1306,10 +1362,23 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       let pty: ManagedPty | undefined;
 
       try {
-        const rawPty = await sandbox.process.createPty({
-          ...options,
-          id: attempt === 1 ? options.id : `makeademo-${randomUUID()}`,
-        });
+        const rawPty = await this.controlPlane.run(
+          "pty.create",
+          () =>
+            sandbox.process.createPty({
+              ...options,
+              id: attempt === 1 ? options.id : `makeademo-${randomUUID()}`,
+            }),
+          {
+            // Absorb transport loss only; conflicts and stale-id duplicates
+            // rethrow raw so this loop's fresh-id and restart logic still
+            // sees the original error.
+            conflictPollLimit: 0,
+            ladderMs: ptyCreateTransientBackoffMs,
+            sandboxId: readSandboxId(sandbox),
+            wrapExhausted: false,
+          },
+        );
         pty = new ManagedPty(rawPty);
         this.activePtys.add(pty);
         await withTimeout(
@@ -1365,7 +1434,13 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       return false;
     }
     await sandbox.refreshData?.();
-    await sandbox.start(defaultSandboxCreateTimeoutSeconds);
+    await this.controlPlane.run(
+      "sandbox.start",
+      async () => {
+        await sandbox.start?.(defaultSandboxCreateTimeoutSeconds);
+      },
+      { sandboxId: readSandboxId(sandbox) },
+    );
     return true;
   }
 
@@ -1499,23 +1574,6 @@ function toSdkTimeoutSeconds(timeoutMs: number): number {
   return Math.max(1, Math.ceil(timeoutMs / 1000));
 }
 
-function wait(delayMs: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, delayMs));
-}
-
-function isDaytonaConnectionError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-
-  return (
-    error.name === "DaytonaConnectionError" ||
-    error.message.includes("ECONNREFUSED") ||
-    error.message.includes("ECONNRESET") ||
-    error.message.includes("ETIMEDOUT")
-  );
-}
-
 function isDaytonaSandboxNotStartedError(error: unknown): boolean {
   return (
     error instanceof Error &&
@@ -1527,93 +1585,6 @@ function isDaytonaSandboxNotStartedError(error: unknown): boolean {
 
 function readSandboxId(sandbox: DaytonaSdkSandbox): string {
   return sandbox.id ?? sandbox.name ?? "unknown";
-}
-
-function isTransientDaytonaArtifactTransferError(error: unknown): boolean {
-  const statusCode = readHttpStatusCode(error);
-  if (statusCode !== undefined) {
-    return statusCode >= 500;
-  }
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  return (
-    /Connection|Timeout/i.test(error.name) ||
-    /ECONNREFUSED|ECONNRESET|ETIMEDOUT|Operation timed out|socket hang up|socket connection was closed|status code 5\d\d/i.test(
-      error.message,
-    )
-  );
-}
-
-function readHttpStatusCode(error: unknown): number | undefined {
-  if (typeof error !== "object" || error === null) {
-    return undefined;
-  }
-  const candidate = error as {
-    response?: { status?: unknown };
-    status?: unknown;
-    statusCode?: unknown;
-  };
-  for (const value of [
-    candidate.statusCode,
-    candidate.status,
-    candidate.response?.status,
-  ]) {
-    if (typeof value === "number") {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-/**
- * Runs an idempotent Daytona transfer, retrying transport-transient failures
- * (HTTP 5xx, connection resets, timeouts) once per backoff entry. Anything
- * else — and exhaustion — rethrows the attempt's own error unchanged.
- */
-async function runWithTransientTransferRetry<T>(input: {
-  attempt: () => Promise<T>;
-  backoffMs: readonly number[];
-  onRetry?: (error: unknown) => Promise<void> | void;
-}): Promise<T> {
-  for (let attemptNumber = 1; ; attemptNumber += 1) {
-    try {
-      return await input.attempt();
-    } catch (error) {
-      const delayMs = input.backoffMs[attemptNumber - 1];
-      if (
-        delayMs === undefined ||
-        !isTransientDaytonaArtifactTransferError(error)
-      ) {
-        throw error;
-      }
-      await input.onRetry?.(error);
-      await wait(delayMs);
-    }
-  }
-}
-
-function formatErrorDiagnostic(error: unknown): string {
-  return error instanceof Error
-    ? `${error.name}: ${error.message}`
-    : String(error);
-}
-
-/** Identifies a Daytona conflict raised while a sandbox state change settles. */
-function isDaytonaStateConflictError(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  const candidate = error as {
-    errorCode?: unknown;
-    message?: unknown;
-    statusCode?: unknown;
-  };
-  return (
-    candidate.statusCode === 409 ||
-    candidate.errorCode === "Conflict" ||
-    /state change in progress|state is changing/i.test(
-      String(candidate.message ?? ""),
-    )
-  );
 }
 
 function isDaytonaNotFoundError(error: unknown): boolean {

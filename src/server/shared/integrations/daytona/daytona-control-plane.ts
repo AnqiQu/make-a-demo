@@ -48,7 +48,7 @@ export function classifyDaytonaControlPlaneError(
   return "fatal";
 }
 
-export function readHttpStatusCode(error: unknown): number | undefined {
+function readHttpStatusCode(error: unknown): number | undefined {
   if (typeof error !== "object" || error === null) {
     return undefined;
   }
@@ -69,7 +69,7 @@ export function readHttpStatusCode(error: unknown): number | undefined {
   return undefined;
 }
 
-export type DaytonaControlPlaneRunOptions = {
+type DaytonaControlPlaneRunOptions = {
   /** Conflict polls before giving up; each waits `conflictPollDelayMs`. */
   conflictPollLimit?: number;
   /** Transient-retry delays; its length bounds the retries. */
