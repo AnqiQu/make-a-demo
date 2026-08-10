@@ -4680,6 +4680,134 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(harvest).toContain("/tmp}/xfs-*/build.log");
   });
 
+  it("surfaces the disk record and an ENOSPC hint when the install runs out of space", async () => {
+    // Twenty's [makeademo:disk] markers recorded the whole arc and reached
+    // no repair hint; the before-marker never survives the tail-biased
+    // excerpt, so the evidence must be filtered in explicitly (2026-08-08).
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("npm ci")) {
+          return {
+            exitCode: 1,
+            stderr:
+              "npm error code ENOSPC\nnpm error nospc ENOSPC: no space left on device, write",
+            stdout:
+              "[makeademo:disk] deps before /dev/overlay 10485760 10380000 105760 99% /workspace\nnpm warn tar zlib: unexpected end of file\n[makeademo:disk] deps after /dev/overlay 10485760 10485760 0 100% /workspace\n[makeademo:mem] deps peak-bytes 1200000000",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "install failure",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain("[makeademo:disk] deps before");
+    expect(report.logsSummary).toContain("[makeademo:mem] deps peak-bytes");
+    const hints = report.suggestedRepairHints.join("\n");
+    expect(hints).toContain("ENOSPC");
+    expect(hints).toContain("workspaces focus");
+    expect(hints).toContain("[makeademo:disk] deps before");
+  });
+
+  it("steers a build that exhausts the disk with the recorded markers", async () => {
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("vite build")) {
+          return {
+            exitCode: 1,
+            stderr:
+              "Error: ENOSPC: no space left on device, write '/workspace/repo/dist/assets/index.js'",
+            stdout:
+              "[makeademo:disk] build before /dev/overlay 10485760 10250000 235760 98% /workspace\nvite v5 building for production...",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        buildCommandUsed: "vite build",
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "build failure",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain("[makeademo:disk] build before");
+    const hints = report.suggestedRepairHints.join("\n");
+    expect(hints).toContain("ENOSPC");
+    expect(hints).toContain("[makeademo:disk] build before");
+  });
+
+  it("adds the disk steering when the offline lifecycle dies out of space", async () => {
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("npm rebuild")) {
+          return {
+            exitCode: 1,
+            stderr:
+              "gyp ERR! build error\ngyp ERR! stack Error: ENOSPC: no space left on device, mkdir '/workspace/repo/node_modules/better-sqlite3/build'",
+            stdout: "",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "install failure",
+      status: "failed",
+    });
+    expect(report.suggestedRepairHints.join("\n")).toContain("ENOSPC");
+  });
+
   it("rethrows a control-plane failure as infrastructure instead of a validation report", async () => {
     // Midday (2026-08-09): an unclassified 409 from the network toggle
     // became a Preparation Fallback Prompt asking the maker to repair the

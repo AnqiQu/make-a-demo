@@ -2364,26 +2364,40 @@ async function validateResolvedSubmittedCodeRuntime(
           ],
         });
       }
+      const installFileTail =
+        installEvidenceLogPath === undefined
+          ? ""
+          : await readCommandEvidenceTail(
+              input.workspace,
+              installEvidenceLogPath,
+            );
+      const installExcerpt = legibleFailureExcerpt({
+        ...result,
+        fileTail: installFileTail,
+      });
+      const diskPressure = readDiskPressureEvidence(
+        `${result.stderr}\n${result.stdout}\n${installFileTail}`,
+        installExcerpt,
+      );
       return failedPreparationValidation({
         attemptedCommand: result.executedCommand,
         classification: "install failure",
         exitCode: result.exitCode,
-        logsSummary: `Submitted-code dependency install failed: ${legibleFailureExcerpt(
-          {
-            ...result,
-            fileTail:
-              installEvidenceLogPath === undefined
-                ? ""
-                : await readCommandEvidenceTail(
-                    input.workspace,
-                    installEvidenceLogPath,
-                  ),
-          },
-        )}`,
+        logsSummary: [
+          `Submitted-code dependency install failed: ${installExcerpt}`,
+          ...diskPressure.markerLines,
+        ].join("\n"),
         manifest,
         stage,
         stderr: result.stderr,
         stdout: result.stdout,
+        ...(diskPressure.exhausted
+          ? {
+              suggestedRepairHints: [
+                diskExhaustionRepairHint(diskPressure.markerLines),
+              ],
+            }
+          : {}),
       });
     }
     if (result.resealError !== undefined) {
@@ -2482,12 +2496,10 @@ async function validateResolvedSubmittedCodeRuntime(
           stderr: lifecycle.stderr,
           stdout: lifecycle.stdout,
         });
-        const diskMarkerLines = `${lifecycle.stderr}\n${lifecycle.stdout}`
-          .split("\n")
-          .filter(
-            (line) =>
-              line.includes("[makeademo:disk]") && !excerpt.includes(line),
-          );
+        const lifecycleDiskPressure = readDiskPressureEvidence(
+          lifecycleOutput,
+          excerpt,
+        );
         // Exit 124 is the deadline-evidence conversion of a timeout kill:
         // the work in the tail completed and the hang began after its last
         // line. Naming it "install failure" sent five ghost repair rounds
@@ -2507,6 +2519,16 @@ async function validateResolvedSubmittedCodeRuntime(
         )
           ? `Network-closed lifecycle scripts were killed after 5 minutes of silence${heartbeatSpoke ? " with no CPU progress" : ""}`
           : "Network-closed lifecycle scripts were killed at their overall deadline";
+        const lifecycleHints = [
+          ...(downloadFailure
+            ? [
+                "This lifecycle step tries to download something, and the submitted-code network stays sealed after the install window closes — the download can never succeed, on any retry. Make the demo not need it: neutralize the downloading step for the demo, avoid the downloaded artifact at runtime, or vendor the artifact into the repo.",
+              ]
+            : []),
+          ...(lifecycleDiskPressure.exhausted
+            ? [diskExhaustionRepairHint(lifecycleDiskPressure.markerLines)]
+            : []),
+        ];
         return failedPreparationValidation({
           attemptedCommand: lifecycleCommand,
           classification: timedOut ? "lifecycle timeout" : "install failure",
@@ -2517,7 +2539,7 @@ async function validateResolvedSubmittedCodeRuntime(
               : `Network-closed lifecycle scripts failed after the dependency install: ${excerpt}`,
             ...buildLogEvidence,
             ...managerLogEvidence,
-            ...diskMarkerLines,
+            ...lifecycleDiskPressure.markerLines,
             // Proves the record saw the command end: output that merely
             // stops (killed child, dropped stream) has no such trailer.
             `[makeademo:command-end] exit=${lifecycle.exitCode}`,
@@ -2526,12 +2548,8 @@ async function validateResolvedSubmittedCodeRuntime(
           stage,
           stderr: lifecycle.stderr,
           stdout: lifecycle.stdout,
-          ...(downloadFailure
-            ? {
-                suggestedRepairHints: [
-                  "This lifecycle step tries to download something, and the submitted-code network stays sealed after the install window closes — the download can never succeed, on any retry. Make the demo not need it: neutralize the downloading step for the demo, avoid the downloaded artifact at runtime, or vendor the artifact into the repo.",
-                ],
-              }
+          ...(lifecycleHints.length > 0
+            ? { suggestedRepairHints: lifecycleHints }
             : {}),
         });
       }
@@ -2625,6 +2643,16 @@ async function validateResolvedSubmittedCodeRuntime(
         stderr: buildResult.stderr,
         stdout: buildResult.stdout,
       });
+      const buildDiskPressure = readDiskPressureEvidence(
+        `${buildResult.stderr}\n${buildResult.stdout}\n${buildFileTail}`,
+        buildExcerpt,
+      );
+      const buildHints = [
+        ...(buildDiskPressure.exhausted
+          ? [diskExhaustionRepairHint(buildDiskPressure.markerLines)]
+          : []),
+        ...unbuiltWorkspaceHints,
+      ];
       return failedPreparationValidation({
         attemptedCommand: manifest.buildCommandUsed,
         blockedNetworkAttempts: blockedBuildAttempts,
@@ -2633,17 +2661,17 @@ async function validateResolvedSubmittedCodeRuntime(
             ? "external network attempted"
             : "build failure",
         exitCode: buildResult.exitCode,
-        logsSummary:
+        logsSummary: [
           blockedBuildAttempts.length > 0
             ? `Submitted-code build requested ${blockedBuildAttempts.length} uncached external resource(s): ${buildExcerpt}`
             : `Submitted-code build failed: ${buildExcerpt}`,
+          ...buildDiskPressure.markerLines,
+        ].join("\n"),
         manifest,
         stage,
         stderr: buildResult.stderr,
         stdout: buildResult.stdout,
-        ...(unbuiltWorkspaceHints.length > 0
-          ? { suggestedRepairHints: unbuiltWorkspaceHints }
-          : {}),
+        ...(buildHints.length > 0 ? { suggestedRepairHints: buildHints } : {}),
       });
     }
   }
@@ -3218,6 +3246,50 @@ function legibleFailureExcerpt(input: {
     return cleaned;
   }
   return `[earlier output elided]\n${cleaned.slice(-failureEvidenceTailBytes)}`;
+}
+
+const diskExhaustionPattern =
+  /\bENOSPC\b|no space left on device|disk quota exceeded/i;
+
+/**
+ * Disk evidence for a failed heavy command: the `[makeademo:disk]` and
+ * `[makeademo:mem]` marker lines that did not survive the tail-biased
+ * excerpt, filtered in explicitly — the before-marker is the one proving
+ * the budget was already spent when the command started, and it never
+ * survives a tail (twenty's markers recorded the whole arc and reached no
+ * verdict, 2026-08-08) — plus the ENOSPC verdict that turns them into a
+ * repair hint.
+ */
+function readDiskPressureEvidence(
+  output: string,
+  excerpt: string,
+): { exhausted: boolean; markerLines: string[] } {
+  const markerLines = [
+    ...new Set(
+      output
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(
+          (line) =>
+            /^\[makeademo:(?:disk|mem)\]/.test(line) && !excerpt.includes(line),
+        ),
+    ),
+  ].slice(0, 8);
+  return { exhausted: diskExhaustionPattern.test(output), markerLines };
+}
+
+/**
+ * The repair steering for a disk-exhausted command. Retrying is the one
+ * move guaranteed not to work, so the hint names the budget, the levers
+ * that actually shrink the footprint, and the recorded df/memory arc the
+ * agent should reason from.
+ */
+function diskExhaustionRepairHint(markerLines: string[]): string {
+  return [
+    "The sandbox disk filled up (ENOSPC): about 10GB must hold the repository, the package-manager cache, and node_modules at once, and retrying without freeing space fails the same way.",
+    "Cut dependency weight instead: in a workspace monorepo install only the demo app's subtree (yarn workspaces focus <app>, pnpm --filter <app> install, npm install --workspace <app>), and remove heavyweight devDependencies or generated artifacts the demo never uses.",
+    ...(markerLines.length === 0 ? [] : ["Disk record:", ...markerLines]),
+  ].join("\n");
 }
 
 /**
