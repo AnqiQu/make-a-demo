@@ -2207,6 +2207,7 @@ async function validateResolvedSubmittedCodeRuntime(
       [
         ...(staleTreeDrop === undefined ? [] : [staleTreeDrop]),
         packageManagerCachePruneCommand,
+        `mkdir -p ${packageManagerStagingDirectory}`,
         `df -k /workspace 2>/dev/null | tail -1 | sed "s|^|[makeademo:disk] cache-prune before |"`,
         "true",
       ].join("; "),
@@ -2232,7 +2233,10 @@ async function validateResolvedSubmittedCodeRuntime(
                 gateCommand,
               ),
               "deps",
-              { timeoutMs: dependencyInstallTimeoutMs },
+              {
+                env: { TMPDIR: packageManagerStagingDirectory },
+                timeoutMs: dependencyInstallTimeoutMs,
+              },
             );
           installEvidenceLogPath = evidenceLogPath;
           return result;
@@ -2414,7 +2418,10 @@ async function validateResolvedSubmittedCodeRuntime(
             lifecycleCommand,
           ),
           "lifecycle",
-          { timeoutMs: dependencyInstallTimeoutMs },
+          {
+            env: { TMPDIR: packageManagerStagingDirectory },
+            timeoutMs: dependencyInstallTimeoutMs,
+          },
         );
       if (lifecycle.exitCode !== 0) {
         // The stream is lossy (calcom's YN0009 failure report never arrived,
@@ -3227,7 +3234,7 @@ async function harvestPackageManagerLogs(
   try {
     result = await executeSubmitted(
       workspace,
-      `for f in $(ls -t \${TMPDIR:-/tmp}/xfs-*/build.log 2>/dev/null | head -3) $(ls -t /root/.npm/_logs/*-debug-0.log 2>/dev/null | head -1); do printf '\\n[makeademo:manager-log] %s\\n' "$f"; tail -c 2000 "$f" 2>/dev/null; done`,
+      `for f in $(ls -t ${packageManagerStagingDirectory}/xfs-*/build.log \${TMPDIR:-/tmp}/xfs-*/build.log 2>/dev/null | head -3) $(ls -t /root/.npm/_logs/*-debug-0.log 2>/dev/null | head -1); do printf '\\n[makeademo:manager-log] %s\\n' "$f"; tail -c 2000 "$f" 2>/dev/null; done`,
     );
   } catch {
     return [];
@@ -3292,8 +3299,14 @@ const dependencyInstallTimeoutMs = 20 * 60_000;
 // between installs: any future install reopens the network window and
 // refetches. The corepack cache is untouched — sealed node-line swaps
 // re-provision managers from it.
-const packageManagerCachePruneCommand =
-  "rm -rf /root/.yarn/berry/cache /root/.npm/_cacache /root/.local/share/pnpm/store 2>/dev/null";
+// Package managers stage fetch/convert scratch in $TMPDIR, and /tmp shares
+// the 10GiB overlay with the repo — yarn's xfs-* zip staging raced twenty's
+// own tree for the same blocks, and killed installs leave their staging
+// debris behind where nothing reclaims it (2026-08-08). Staging under the
+// harness's own pruned path puts that churn on the same lever as the caches.
+const packageManagerStagingDirectory = "/root/.makeademo-staging";
+
+const packageManagerCachePruneCommand = `rm -rf /root/.yarn/berry/cache /root/.npm/_cacache /root/.local/share/pnpm/store ${packageManagerStagingDirectory} 2>/dev/null`;
 
 // The state file each manager writes inside node_modules when it owns the
 // tree; its absence proves another manager built what is there. Bun leaves

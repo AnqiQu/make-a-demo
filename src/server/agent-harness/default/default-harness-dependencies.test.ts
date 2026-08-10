@@ -4593,6 +4593,93 @@ describe("createDefaultAgentHarnessDependencies", () => {
     ).toBe(false);
   });
 
+  it("stages package-manager scratch space on the pruned cache path instead of /tmp", async () => {
+    // /tmp shares the 10GiB overlay, so yarn's xfs-* zip staging competes
+    // with the repo for the same blocks and killed installs leave their
+    // staging debris behind forever (twenty, 2026-08-08). Staging under the
+    // pruned path means every attempt reclaims the previous one's debris.
+    const executions: Array<{
+      command: string;
+      env: Record<string, string> | undefined;
+    }> = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command, options) {
+        executions.push({ command, env: options?.env });
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    const install = executions.find(({ command }) =>
+      command.includes("npm ci"),
+    );
+    const lifecycle = executions.find(({ command }) =>
+      command.includes("npm rebuild"),
+    );
+    expect(install?.env?.TMPDIR).toBe("/root/.makeademo-staging");
+    expect(lifecycle?.env?.TMPDIR).toBe("/root/.makeademo-staging");
+    const headroom = executions.find(({ command }) =>
+      command.includes("cache-prune before"),
+    );
+    expect(headroom?.command).toContain("mkdir -p /root/.makeademo-staging");
+    expect(headroom?.command).toContain(
+      "rm -rf /root/.yarn/berry/cache /root/.npm/_cacache /root/.local/share/pnpm/store /root/.makeademo-staging",
+    );
+  });
+
+  it("harvests package-manager build logs from the staging directory as well as /tmp", async () => {
+    const commands: string[] = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        if (command.includes("npm rebuild")) {
+          return { exitCode: 1, stderr: "gyp ERR! build error", stdout: "" };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    // The managers now stage under the harness's own directory, so the
+    // documented-location harvest must look there first while keeping the
+    // /tmp fallback for anything staged before the redirect.
+    const harvest = commands.find((command) =>
+      command.includes("[makeademo:manager-log]"),
+    );
+    expect(harvest).toContain("/root/.makeademo-staging/xfs-*/build.log");
+    expect(harvest).toContain("/tmp}/xfs-*/build.log");
+  });
+
   it("rethrows a control-plane failure as infrastructure instead of a validation report", async () => {
     // Midday (2026-08-09): an unclassified 409 from the network toggle
     // became a Preparation Fallback Prompt asking the maker to repair the
