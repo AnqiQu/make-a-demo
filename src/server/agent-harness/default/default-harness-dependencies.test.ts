@@ -3943,6 +3943,161 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(lifecycle).toContain("[makeademo:alive] cpu");
   });
 
+  it("tees the command-end exit beacon into the evidence file for heavy commands", async () => {
+    // The teed record must be able to prove on its own that the command
+    // finished and with what status: a lost PTY sentinel then becomes a
+    // recovered exit code instead of a false kill (ghostfolio's completed
+    // prisma generate died as exit 124 three times, 2026-08-09).
+    const commands: string[] = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    const install = commands.find((command) => command.includes("npm ci"));
+    expect(install).toContain("[makeademo:command-end] exit=");
+    // The beacon and the after-markers append to the same evidence file the
+    // command's output was teed into — the file alone carries completion.
+    expect(install).toContain("tee -a");
+  });
+
+  it("recovers a completed command's exit code from the teed record instead of reporting a false kill", async () => {
+    // Ghostfolio (2026-08-09): prisma generate finished, a spinner stole
+    // the PTY sentinel, and the idle shell was killed as exit 124 — three
+    // times, charging two repair rounds for work that had succeeded. When
+    // the teed record carries the command-end beacon, the kill was
+    // transport loss: the recorded exit code is the truth.
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("npm rebuild")) {
+          return {
+            exitCode: 124,
+            stderr: "",
+            stdout: [
+              "prisma generate: done in 213ms",
+              "[makeademo:timeout] Daytona command produced no output for 300000ms. The command was killed at its deadline; output above is partial.",
+            ].join("\n"),
+          };
+        }
+        if (
+          command.includes("tail -c") &&
+          command.includes("/tmp/makeademo/lifecycle-")
+        ) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: [
+              "prisma generate: done in 213ms",
+              "[makeademo:disk] lifecycle after /dev/vda1 10485760 3145728 7340032 30% /workspace",
+              "[makeademo:command-end] exit=0",
+            ].join("\n"),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: {
+        ...repoProfile(),
+        packageScripts: { dev: "next dev", postinstall: "prisma generate" },
+      },
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("keeps a genuinely failed command's recovered exit code instead of calling it a timeout", async () => {
+    // A lost sentinel must not upgrade a real failure into a phantom
+    // timeout either: exit=1 in the teed record is a true install-lane
+    // failure with the real error excerpt, not a "killed after silence"
+    // diagnosis pointing repairs at a hang that never happened.
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("npm rebuild")) {
+          return {
+            exitCode: 124,
+            stderr: "",
+            stdout: [
+              "gyp ERR! build error better_sqlite3",
+              "[makeademo:timeout] Daytona command produced no output for 300000ms. The command was killed at its deadline; output above is partial.",
+            ].join("\n"),
+          };
+        }
+        if (
+          command.includes("tail -c") &&
+          command.includes("/tmp/makeademo/lifecycle-")
+        ) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: [
+              "gyp ERR! build error better_sqlite3",
+              "[makeademo:command-end] exit=1",
+            ].join("\n"),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: {
+        ...repoProfile(),
+        packageScripts: { dev: "next dev", postinstall: "prisma generate" },
+      },
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "install failure",
+      status: "failed",
+    });
+    expect(report.logsSummary).not.toMatch(/killed after .*silence/i);
+    expect(report.logsSummary).toContain("better_sqlite3");
+  });
+
   it("classifies an inactivity-killed lifecycle as a lifecycle timeout, not an install failure", async () => {
     // Ghost (2026-08-09): pnpm rebuild was killed after 5 silent minutes,
     // classified "install failure", and five repair rounds chased a

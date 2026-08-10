@@ -2080,20 +2080,19 @@ async function validateResolvedSubmittedCodeRuntime(
           : { yarnVariant: input.repoProfile.yarnVariant }),
         // The gate may append a lifecycle-script suppression flag, so the
         // executed string must be the gate's command, not the closure's.
-        runCommand: (gateCommand) => {
-          const guarded = withDiskMarkers(
-            commandInAppDirectory(
-              runtimeTarget?.install.cwd ?? manifest.appDir,
-              gateCommand,
-            ),
-            "deps",
-          );
-          installEvidenceLogPath = guarded.evidenceLogPath;
-          return executeSubmittedWithDeadlineEvidence(
-            input.workspace,
-            guarded.command,
-            { timeoutMs: dependencyInstallTimeoutMs },
-          );
+        runCommand: async (gateCommand) => {
+          const { evidenceLogPath, result } =
+            await executeGuardedSubmittedCommand(
+              input.workspace,
+              commandInAppDirectory(
+                runtimeTarget?.install.cwd ?? manifest.appDir,
+                gateCommand,
+              ),
+              "deps",
+              { timeoutMs: dependencyInstallTimeoutMs },
+            );
+          installEvidenceLogPath = evidenceLogPath;
+          return result;
         },
       });
     type InstallResult = Awaited<ReturnType<typeof runInstall>>;
@@ -2264,24 +2263,22 @@ async function validateResolvedSubmittedCodeRuntime(
         : { yarnVariant: input.repoProfile.yarnVariant }),
     });
     if (lifecycleCommand !== undefined) {
-      const guardedLifecycle = withDiskMarkers(
-        commandInAppDirectory(
-          runtimeTarget?.install.cwd ?? manifest.appDir,
-          lifecycleCommand,
-        ),
-        "lifecycle",
-      );
-      const lifecycle = await executeSubmittedWithDeadlineEvidence(
-        input.workspace,
-        guardedLifecycle.command,
-        { timeoutMs: dependencyInstallTimeoutMs },
-      );
+      const { evidenceLogPath: lifecycleEvidenceLogPath, result: lifecycle } =
+        await executeGuardedSubmittedCommand(
+          input.workspace,
+          commandInAppDirectory(
+            runtimeTarget?.install.cwd ?? manifest.appDir,
+            lifecycleCommand,
+          ),
+          "lifecycle",
+          { timeoutMs: dependencyInstallTimeoutMs },
+        );
       if (lifecycle.exitCode !== 0) {
         // The stream is lossy (calcom's YN0009 failure report never arrived,
         // 2026-08-09); the teed evidence file is the source of truth.
         const lifecycleFileTail = await readCommandEvidenceTail(
           input.workspace,
-          guardedLifecycle.evidenceLogPath,
+          lifecycleEvidenceLogPath,
         );
         const lifecycleOutput = [
           lifecycle.stderr,
@@ -2439,25 +2436,23 @@ async function validateResolvedSubmittedCodeRuntime(
   };
 
   if (input.buildApp !== false && manifest.buildCommandUsed !== undefined) {
-    const guardedBuild = withDiskMarkers(
-      commandInAppDirectory(
-        runtimeTarget?.build?.cwd ?? manifest.appDir,
-        manifest.buildCommandUsed,
-      ),
-      "build",
-    );
-    const buildResult = await executeSubmittedWithDeadlineEvidence(
-      input.workspace,
-      guardedBuild.command,
-      { env: guardedRuntimeEnv, timeoutMs: submittedCodeBuildTimeoutMs },
-    );
+    const { evidenceLogPath: buildEvidenceLogPath, result: buildResult } =
+      await executeGuardedSubmittedCommand(
+        input.workspace,
+        commandInAppDirectory(
+          runtimeTarget?.build?.cwd ?? manifest.appDir,
+          manifest.buildCommandUsed,
+        ),
+        "build",
+        { env: guardedRuntimeEnv, timeoutMs: submittedCodeBuildTimeoutMs },
+      );
     const blockedBuildAttempts = readRuntimeNetworkAttempts(
       [buildResult.stderr, buildResult.stdout].filter(Boolean).join("\n"),
     );
     if (buildResult.exitCode !== 0 || blockedBuildAttempts.length > 0) {
       const buildFileTail = await readCommandEvidenceTail(
         input.workspace,
-        guardedBuild.evidenceLogPath,
+        buildEvidenceLogPath,
       );
       // The teed file is the source of truth for hints as well as excerpts:
       // twenty's EvalError naming the unbuilt package survived only there
@@ -2794,14 +2789,88 @@ async function executeSubmittedWithDeadlineEvidence(
 }
 
 /**
+ * Runs a heavy submitted-code command under the full evidence bracket
+ * (disk/memory markers, teed evidence file, CPU-liveness heartbeat,
+ * deadline-kill conversion) and refuses to report a false kill: when a
+ * timeout kill's teed record carries the command-end beacon, the command
+ * demonstrably finished and only the PTY sentinel was lost — the recorded
+ * exit code is the truth, so the caller sees the command's real outcome
+ * and no repair round or retry budget is ever charged for transport loss
+ * (ghostfolio's completed prisma generate was killed as exit 124 three
+ * times, charging two repair rounds, 2026-08-09).
+ */
+async function executeGuardedSubmittedCommand(
+  workspace: AgentHarnessWorkspace,
+  command: string,
+  label: string,
+  options: AgentHarnessWorkspaceExecuteOptions = {},
+): Promise<{
+  evidenceLogPath: string;
+  result: AgentHarnessWorkspaceCommandResult;
+}> {
+  const guarded = withDiskMarkers(command, label);
+  const result = await executeSubmittedWithDeadlineEvidence(
+    workspace,
+    guarded.command,
+    options,
+  );
+  if (
+    result.exitCode !== 124 ||
+    !result.stdout.includes("[makeademo:timeout]")
+  ) {
+    return { evidenceLogPath: guarded.evidenceLogPath, result };
+  }
+  const recordedExit = readRecordedCommandEndExit(
+    await readCommandEvidenceTail(workspace, guarded.evidenceLogPath),
+  );
+  // exit=124 stays ambiguous (the command may run `timeout` itself), so
+  // only a distinguishable recorded status overrides the kill.
+  if (recordedExit === undefined || recordedExit === 124) {
+    return { evidenceLogPath: guarded.evidenceLogPath, result };
+  }
+  try {
+    await workspace.writeSandboxLog({
+      event: "command.transport-fault.recovered",
+      label,
+      message: `The ${label} command finished with exit ${recordedExit} but its PTY sentinel was lost; the recorded exit code replaces the timeout kill.`,
+      recoveredExitCode: recordedExit,
+    });
+  } catch {
+    // Recovery must never be replaced by an observability failure.
+  }
+  return {
+    evidenceLogPath: guarded.evidenceLogPath,
+    result: {
+      exitCode: recordedExit,
+      stderr: result.stderr,
+      stdout: `${result.stdout}\n[makeademo:transport-fault] PTY sentinel lost after the command finished; exit=${recordedExit} recovered from the teed evidence record.`,
+    },
+  };
+}
+
+/** Reads the last command-end beacon a teed evidence record carries. */
+function readRecordedCommandEndExit(evidenceTail: string): number | undefined {
+  const recorded = [
+    ...evidenceTail.matchAll(/\[makeademo:command-end\] exit=(\d+)/g),
+  ].at(-1)?.[1];
+  return recorded === undefined ? undefined : Number(recorded);
+}
+
+/**
  * Brackets a heavy submitted-code command with `[makeademo:disk]` df lines
  * so ENOSPC diagnoses read the budget off the record instead of guessing
  * (twenty died on a hard 10GB cap three matrices running, 2026-08-08), and
  * tees the command's combined output to `evidenceLogPath` so failure
  * evidence survives a lossy PTY stream (calcom's yarn failure report never
- * reached the record, 2026-08-09). The command's own exit code is preserved
- * through the tee via PIPESTATUS and reaches the PTY sentinel via a
- * subshell exit, never a top-level `exit` (which would drop the sentinel).
+ * reached the record, 2026-08-09). The command runs with stdin sealed: its
+ * children must never drain the transport that carries the harness's own
+ * trailer lines (the stolen-sentinel false kills, ghostfolio 2026-08-09).
+ * The command's own exit code is preserved through the tee via PIPESTATUS
+ * and reaches the PTY sentinel via a subshell exit, never a top-level
+ * `exit` (which would drop the sentinel). The after-markers and a
+ * `[makeademo:command-end] exit=<status>` beacon append to the evidence
+ * file too, so the durable record alone proves the command finished and
+ * with what status even when the PTY stream or sentinel is lost.
  */
 function withDiskMarkers(
   command: string,
@@ -2815,12 +2884,13 @@ function withDiskMarkers(
   // inferring them (midday's dev-server OOM, 2026-08-09). Best-effort: a
   // host without a readable cgroup emits no line.
   const memoryMarker = `cat /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory/memory.max_usage_in_bytes 2>/dev/null | head -1 | sed "s|^|[makeademo:mem] ${label} peak-bytes |"`;
+  const commandEndBeacon = `printf '[makeademo:command-end] exit=%s\\n' "\${makeademo_disk_status}"`;
   // The liveness bracket wraps the whole marker sequence: heartbeats go to
   // the PTY stream (feeding the no-output watchdog) but never through the
   // tee, so the evidence file stays clean of transport lines.
   return {
     command: withCpuLivenessHeartbeat(
-      `${marker("before")}; mkdir -p /tmp/makeademo; { ${command}; } 2>&1 | tee ${shellQuote(evidenceLogPath)}; makeademo_disk_status=\${PIPESTATUS[0]}; ${marker("after")}; ${memoryMarker}; sh -c "exit \${makeademo_disk_status}"`,
+      `${marker("before")}; mkdir -p /tmp/makeademo; { ${command}; } </dev/null 2>&1 | tee ${shellQuote(evidenceLogPath)}; makeademo_disk_status=\${PIPESTATUS[0]}; { ${marker("after")}; ${memoryMarker}; ${commandEndBeacon}; } 2>&1 | tee -a ${shellQuote(evidenceLogPath)}; sh -c "exit \${makeademo_disk_status}"`,
     ),
     evidenceLogPath,
   };
