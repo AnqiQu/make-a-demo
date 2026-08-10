@@ -907,6 +907,15 @@ function createActions(
   errorStateRoutePaths: ReadonlySet<string> = new Set(),
 ) {
   const actions: Array<Record<string, unknown>> = [];
+  // Every assert leaves a record so the per-feature floor below can re-tag
+  // one without reparsing the built actions. floorFeatureIds is the set of
+  // features the floor may add on that assert's route: the route's own tags,
+  // except on auth walls, whose explicit-only tagging must hold.
+  const assertRecords: Array<{
+    evidenceText: string;
+    featureIds: string[];
+    floorFeatureIds: readonly string[];
+  }> = [];
   routes.forEach((fullRoute, routeIndex) => {
     // A crashed or not-found page's controls are not product surface: the
     // 2026-08-08 outline demo clicked its error boundary's "Reload" button
@@ -931,6 +940,11 @@ function createActions(
         featureInventory,
         explicitAuthenticationFeatureIds,
       );
+    const floorFeatureIds = isAuthWall(route) ? [] : (route.featureIds ?? []);
+    const recordAssert = (evidenceText: string, featureIds: string[]) => {
+      assertRecords.push({ evidenceText, featureIds, floorFeatureIds });
+      return featureIds;
+    };
     actions.push({
       confidence: 1,
       evidence: `Playwright loaded ${route.path}`,
@@ -956,7 +970,7 @@ function createActions(
         confidence: 0.95,
         evidence: `Playwright observed heading on ${route.path}`,
         expectedResult: `${heading} remains visible`,
-        featureIds: matchFeatureIds(heading),
+        featureIds: recordAssert(heading, matchFeatureIds(heading)),
         id,
         kind: "assert",
         ...createLocatorCandidateFields(id, locatorEvidence),
@@ -1032,7 +1046,7 @@ function createActions(
             confidence: 0.85,
             evidence: `Playwright observed visible text on ${route.path}`,
             expectedResult: `${visibleText} remains visible`,
-            featureIds: matchFeatureIds(visibleText),
+            featureIds: recordAssert(visibleText, matchFeatureIds(visibleText)),
             id,
             kind: "assert",
             ...createLocatorCandidateFields(
@@ -1061,7 +1075,10 @@ function createActions(
             confidence: 0.85,
             evidence: `Playwright observed a visible control on ${route.path}`,
             expectedResult: `${visibleButton} remains visible`,
-            featureIds: matchFeatureIds(visibleButton),
+            featureIds: recordAssert(
+              visibleButton,
+              matchFeatureIds(visibleButton),
+            ),
             id,
             kind: "assert",
             ...createLocatorCandidateFields(
@@ -1118,8 +1135,9 @@ function createActions(
             confidence: 0.95,
             evidence: `Playwright observed "${revealedText.value}" appear after exercising ${interaction.name} on ${route.path}`,
             expectedResult: `${revealedText.value} becomes visible after ${interaction.name}`,
-            featureIds: matchFeatureIds(
-              `${interaction.name} ${revealedText.value}`,
+            featureIds: recordAssert(
+              revealedText.value,
+              matchFeatureIds(`${interaction.name} ${revealedText.value}`),
             ),
             id: assertId,
             kind: "assert",
@@ -1181,6 +1199,37 @@ function createActions(
       });
     });
   });
+
+  // The assert floor: winner-take-all tagging can leave a route-tagged
+  // feature with zero asserts even though a shared string's tokens overlap
+  // its wording — the run then fails on a scoring artifact, not missing
+  // evidence. Any feature still assertless after tagging keeps at least
+  // one: its best wording-matched assert gains the feature's id alongside
+  // the winners. Features nowhere route-tagged stay untouched, so redirect
+  // and tagging misses keep their honest route-shared verdicts.
+  for (const feature of featureInventory) {
+    if (
+      assertRecords.some((record) => record.featureIds.includes(feature.id))
+    ) {
+      continue;
+    }
+    const featureTokens = featureSemanticTokens(feature);
+    let best:
+      | { record: (typeof assertRecords)[number]; score: number }
+      | undefined;
+    for (const record of assertRecords) {
+      if (!record.floorFeatureIds.includes(feature.id)) continue;
+      const score = semanticTokens(record.evidenceText).filter((token) =>
+        featureTokens.includes(token),
+      ).length;
+      if (score > 0 && (best === undefined || score > best.score)) {
+        best = { record, score };
+      }
+    }
+    if (best !== undefined) {
+      best.record.featureIds.push(feature.id);
+    }
+  }
 
   return actions;
 }

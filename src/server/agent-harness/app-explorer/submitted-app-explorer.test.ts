@@ -2364,10 +2364,11 @@ describe("exploreSubmittedApp", () => {
 
   it("fails a requested feature whose catalog tagging cannot satisfy flow planning", async () => {
     // Exploration grounds a feature on exercised evidence alone, but flow
-    // planning demands an interaction AND a visible assertion. A requested
-    // feature with zero tagged asserts makes flow planning structurally
-    // unsatisfiable, so the gap must fail here, where preparation repair can
-    // render assertable content or reselect the feature.
+    // planning demands an interaction AND a visible assertion. When no
+    // on-screen string shares a token with the feature wording, even the
+    // assert floor cannot help, flow planning is structurally
+    // unsatisfiable, and the gap must fail here, where preparation repair
+    // can render assertable content or reselect the feature.
     const posting = preparedFeature({
       description: "Publish a new article.",
       entryPaths: ["/#/article/demo"],
@@ -2387,7 +2388,7 @@ describe("exploreSubmittedApp", () => {
       routes: [
         observedRoute({
           featureIds: ["post-article", "article-comments"],
-          headings: ["Publish demo article"],
+          headings: ["Publish demo draft"],
           interactions: [
             {
               kind: "fill",
@@ -2420,17 +2421,17 @@ describe("exploreSubmittedApp", () => {
     expect(result.validationReport.logsSummary).toContain(
       "align the featureInventory wording",
     );
-    expect(result.validationReport.logsSummary).toContain(
-      "Publish demo article",
-    );
+    expect(result.validationReport.logsSummary).toContain("Publish demo draft");
   });
 
   it("fails forced agent-selected features whose tagging cannot satisfy flow planning", async () => {
     // conduit (2026-08-07): no maker-requested features, so the evidence-gap
     // check skipped every inventory entry — yet flow planning must select
     // min(3, |inventory|) features, and comment-on-article had zero tagged
-    // asserts. Structurally unsatisfiable from planning's first attempt; the
-    // wedge must fail here, where preparation repair can act.
+    // asserts. With no token-overlapping string for the assert floor to
+    // multi-tag, this stays structurally unsatisfiable from planning's
+    // first attempt; the wedge must fail here, where preparation repair can
+    // act.
     const asAgentSelected = ({
       requestedFeature: _requestedFeature,
       ...feature
@@ -2456,7 +2457,7 @@ describe("exploreSubmittedApp", () => {
       routes: [
         observedRoute({
           featureIds: ["post-article", "article-comments"],
-          headings: ["Publish demo article"],
+          headings: ["Publish demo draft"],
           interactions: [
             {
               kind: "fill",
@@ -3166,7 +3167,12 @@ describe("feature verdict ledger", () => {
     expect(script).toContain("resolveStoredLocator");
   });
 
-  it("names the winning feature and steers at an unclaimed entry route when scoring awards every assert elsewhere", async () => {
+  it("names the winning feature and steers at an unclaimed entry route when the crawl never tagged the feature", async () => {
+    // The untagged corner: allocation-chart's entry route rendered content
+    // whose tokens overlap the feature, but the crawl tagged the route to
+    // portfolio-overview alone (redirect or tagging miss). The assert floor
+    // cannot reach an untagged feature, so route-shared-with-winners is the
+    // honest verdict and the steering asks for an unclaimed entry route.
     const { result } = await exploreObservation({
       featureInventory: [
         preparedFeature({
@@ -3186,7 +3192,7 @@ describe("feature verdict ledger", () => {
       ],
       routes: [
         observedRoute({
-          featureIds: ["portfolio-overview", "allocation-chart"],
+          featureIds: ["portfolio-overview"],
           headings: ["Portfolio holdings overview"],
           path: "/en/portfolio",
         }),
@@ -3214,6 +3220,60 @@ describe("feature verdict ledger", () => {
     );
     expect(result.validationReport.logsSummary).toContain(
       '"Portfolio holdings overview"',
+    );
+  });
+
+  it("keeps at least one assert for a route-tagged feature the winners out-scored", async () => {
+    // Winner-take-all tagging awards every shared string to the strongest
+    // feature, leaving a co-tagged feature assertless and failing the whole
+    // run — even though one shared heading could serve both. The floor
+    // multi-tags the best wording-matched assert so the feature grounds.
+    const overview = preparedFeature({
+      description: "Review the portfolio holdings overview.",
+      entryPaths: ["/en/portfolio"],
+      id: "portfolio-overview",
+      label: "Portfolio overview",
+      requestedFeature: "portfolio overview",
+    });
+    const allocation = preparedFeature({
+      description: "Chart the holdings allocation.",
+      entryPaths: ["/en/portfolio"],
+      id: "allocation-chart",
+      label: "Allocation chart",
+      requestedFeature: "allocation chart",
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [overview, allocation],
+      routes: [
+        observedRoute({
+          featureIds: ["portfolio-overview", "allocation-chart"],
+          headings: [
+            "Portfolio holdings overview",
+            "Overview performance summary",
+          ],
+          path: "/en/portfolio",
+          requestedPath: "/en/portfolio",
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    expect(artifacts.validationReport.status).toBe("passed");
+    expect(artifacts.actionCatalog.actions).toContainEqual(
+      expect.objectContaining({
+        featureIds: ["portfolio-overview", "allocation-chart"],
+        kind: "assert",
+        preferredLocator: expect.objectContaining({
+          name: "Portfolio holdings overview",
+        }),
+      }),
+    );
+    expect(artifacts.validationReport.featureVerdicts).toContainEqual(
+      expect.objectContaining({
+        featureId: "allocation-chart",
+        groundedBy: "assert",
+        verdict: "grounded",
+      }),
     );
   });
 
