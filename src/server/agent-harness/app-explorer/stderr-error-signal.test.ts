@@ -62,4 +62,19 @@ describe("readStderrErrorSignal", () => {
     expect(readStderrErrorSignal("")).toBeUndefined();
     expect(readStderrErrorSignal("   \n  \n")).toBeUndefined();
   });
+
+  it("matches compound error-class names the way rendered error bodies spell them", () => {
+    // A crashed SPA route renders "TypeError: ..." — no standalone "error"
+    // word, no errno code. The signal must still recognize it, both in
+    // stderr traces and in harvested body samples.
+    expect(
+      readStderrErrorSignal(
+        "TypeError: Cannot read properties of undefined (reading 'map')",
+      ),
+    ).toContain("TypeError");
+    expect(
+      readStderrErrorSignal("ReferenceError: prisma is not defined"),
+    ).toContain("ReferenceError");
+    expect(readStderrErrorSignal("The terrors of production")).toBeUndefined();
+  });
 });

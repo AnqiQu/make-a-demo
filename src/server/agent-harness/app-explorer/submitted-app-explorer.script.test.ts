@@ -815,6 +815,54 @@ ${fillers}
     }
   }, 30_000);
 
+  it("records the document status and a body sample for an error response", async () => {
+    // A route answering 500 with a bare stack-trace body: the status and a
+    // bounded innerText sample must reach the observation so the backend
+    // can classify the route as a runtime fault instead of a wording gap.
+    const brokenPage = `<!doctype html><html><head><title>Broken</title></head><body><pre>TypeError: Cannot read properties of undefined (reading 'map')
+    at ReportList.render (/app/src/reports.tsx:12:5)</pre></body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(500, { "content-type": "text/html; charset=utf-8" });
+      response.end(brokenPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-status-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        routes: Array<{ documentStatus?: number; textSample?: string }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      expect(result.routes[0]?.documentStatus).toBe(500);
+      expect(result.routes[0]?.textSample).toContain("TypeError");
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
   it("reports a headers-only table as an empty data table and a populated one as none", async () => {
     // A data query that resolves empty or mis-shaped renders a table shell
     // with headers and no rows — silently, with no error and no request.

@@ -127,6 +127,14 @@ type ObservedRoute = {
    * ("Could not load shared documents" — outline, 2026-08-08).
    */
   alerts?: string[];
+  /**
+   * HTTP status of the route's main-document response when it was an error
+   * (>= 400). A 4xx/5xx document is a runtime fault no matter how plausible
+   * the rendered shell looks, so this outranks every wording-based
+   * diagnosis. Absent for healthy responses and for hash navigations, which
+   * ride the last full document load.
+   */
+  documentStatus?: number;
   path: string;
   primaryNavigation: string[];
   requestedPath?: string;
@@ -135,6 +143,13 @@ type ObservedRoute = {
   snapshot: string;
   text: string[];
   textLocatorEvidence?: Array<ObservedLocatorEvidence | null>;
+  /**
+   * Bounded body innerText captured only when the selector harvest found no
+   * headings and no text. A crashed SPA route paints its exception as bare
+   * unstructured body text — this sample lets an error-shaped body carry
+   * its own diagnosis instead of reading as missing content.
+   */
+  textSample?: string;
   title: string;
 };
 type ObservedInteraction = {
@@ -497,6 +512,9 @@ function createExplorationArtifacts(input: {
   );
   const distinctContentByRoute = readRouteDistinctContent(observedRoutes);
   const errorState = readErrorStateRoutes({
+    authWallRoutePaths: new Set(
+      observedRoutes.filter(isAuthWall).map((route) => route.path),
+    ),
     distinctContentByRoute,
     pageErrors: input.observation.pageErrors,
     ...(probeRoute === undefined ? {} : { probeRoute }),
@@ -778,6 +796,7 @@ const notFoundProbePathMarker = "__makeademo-404-probe__";
  * errors, the not-found verdict) for repair steering.
  */
 function readErrorStateRoutes(input: {
+  authWallRoutePaths: ReadonlySet<string>;
   distinctContentByRoute: ReadonlyMap<string, string[]>;
   pageErrors: string[];
   probeRoute?: {
@@ -788,10 +807,13 @@ function readErrorStateRoutes(input: {
   };
   routes: ReadonlyArray<{
     alerts?: string[];
+    documentStatus?: number;
     headings: string[];
     path: string;
     primaryNavigation?: string[];
     text: string[];
+    textLocatorEvidence?: Array<ObservedLocatorEvidence | null>;
+    textSample?: string;
   }>;
 }): {
   evidenceByRoute: Map<string, string[]>;
@@ -808,6 +830,42 @@ function readErrorStateRoutes(input: {
   };
   for (const route of input.routes) {
     addEvidence(route.path, unique(route.alerts ?? []));
+    // A 4xx/5xx main-document response is a runtime fault no matter how
+    // plausible the rendered shell looks — except a 401/403 that renders a
+    // login wall, which is product surface the auth-wall verdict owns.
+    if (
+      route.documentStatus !== undefined &&
+      route.documentStatus >= 400 &&
+      !(
+        (route.documentStatus === 401 || route.documentStatus === 403) &&
+        input.authWallRoutePaths.has(route.path)
+      )
+    ) {
+      suppressedRoutePaths.add(route.path);
+      addEvidence(route.path, [
+        `HTTP ${route.documentStatus} document response — a runtime fault, not a wording fault`,
+      ]);
+    }
+    // A bare error body carries its own diagnosis: the sample exists only
+    // when the selector harvest saw nothing, and it suppresses only when it
+    // is error-shaped and no verified content contradicts it.
+    const verifiedTextCount =
+      route.textLocatorEvidence === undefined
+        ? route.text.length
+        : route.text.filter((_, index) =>
+            Boolean(route.textLocatorEvidence?.[index]),
+          ).length;
+    if (
+      route.textSample !== undefined &&
+      route.headings.length === 0 &&
+      verifiedTextCount === 0 &&
+      readStderrErrorSignal(route.textSample) !== undefined
+    ) {
+      suppressedRoutePaths.add(route.path);
+      addEvidence(route.path, [
+        `bare error body: ${route.textSample.slice(0, 200)}`,
+      ]);
+    }
   }
 
   const shellCount = new Set(
@@ -2727,6 +2785,9 @@ try {
     recordFailedResource(request.url(), failure);
   });
   let staleModule504 = false;
+  // Status of the last main-document response. Hash navigations return no
+  // response and keep the prior value: every hash route rides that document.
+  let lastDocumentStatus;
   page.on("response", (response) => {
     if (response.status() >= 400) recordFailedResource(response.url(), "HTTP " + response.status());
     if (response.status() === 504 && response.request().resourceType() === "script") staleModule504 = true;
@@ -2739,12 +2800,14 @@ try {
     // Every long wait is clamped to the remaining deadline so in-flight
     // work always finalizes inside the exploration command budget.
     const gotoTimeoutMs = () => Math.min(60000, Math.max(1000, remainingMs()));
+    let response;
     try {
-      await page.goto(url, { timeout: gotoTimeoutMs(), waitUntil: "domcontentloaded" });
+      response = await page.goto(url, { timeout: gotoTimeoutMs(), waitUntil: "domcontentloaded" });
     } catch (error) {
       if (isAppUnavailableError(error) || remainingMs() < 1000) throw error;
-      await page.goto(url, { timeout: gotoTimeoutMs(), waitUntil: "domcontentloaded" });
+      response = await page.goto(url, { timeout: gotoTimeoutMs(), waitUntil: "domcontentloaded" });
     }
+    if (response) lastDocumentStatus = response.status();
     await page.waitForFunction(() => document.readyState === "complete", undefined, { timeout: 10000 }).catch(() => {});
     if (remainingMs() > 0) {
       // Dev servers compile and stream first-hit routes behind a DOM-quiet
@@ -2907,6 +2970,16 @@ try {
       seen.add(landedUrl);
       const observed = await page.evaluate(harvestPage);
       observed.buttons = prioritizeFeatureControls(observed.buttons);
+      if (lastDocumentStatus !== undefined && lastDocumentStatus >= 400) {
+        observed.documentStatus = lastDocumentStatus;
+      }
+      // A page whose selector harvest saw nothing may still be painting a
+      // bare error body; a bounded innerText sample lets the backend read
+      // the exception text that no heading or paragraph selector reaches.
+      if (observed.headings.length === 0 && observed.text.length === 0) {
+        const bodySample = await page.evaluate(() => ((document.body && document.body.innerText) || "").replace(/\\s+/g, " ").trim().slice(0, 400)).catch(() => "");
+        if (bodySample) observed.textSample = bodySample;
+      }
       observed.loadingOverlay = await page.evaluate(hasCoveringLoadingOverlay).catch(() => false);
       const current = new URL(page.url());
       const path = current.pathname + current.search + current.hash;

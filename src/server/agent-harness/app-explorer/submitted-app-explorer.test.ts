@@ -3365,6 +3365,116 @@ describe("feature verdict ledger", () => {
     );
   });
 
+  it("treats a 4xx or 5xx document response as an error state no matter what the page renders", async () => {
+    // ghostfolio-class failure: the server answers the entry route with a
+    // 500 whose body still renders headings. Any wording steering there is
+    // a lie — the fault is the runtime, and only the document status says
+    // so once the page paints a plausible-looking shell.
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          description: "Browse generated reports.",
+          entryPaths: ["/reports"],
+          id: "report-list",
+          label: "Report list",
+          requestedFeature: "report list",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          documentStatus: 500,
+          featureIds: ["report-list"],
+          headings: ["Report list"],
+          path: "/reports",
+          requestedPath: "/reports",
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        detail: expect.stringContaining("HTTP 500"),
+        failedBecause: "error-state-route",
+        featureId: "report-list",
+        verdict: "failed",
+      }),
+    ]);
+    expect(result.validationReport.featureVerdicts?.[0]?.detail).toContain(
+      "runtime fault, not a wording fault",
+    );
+  });
+
+  it("reads a bare error body as an error state and carries the sample as evidence", async () => {
+    // A crashed SPA route serves HTTP 200 and paints nothing but the
+    // exception text in an unstyled body: no headings, no verifiable text.
+    // The bounded innerText sample is the only witness, and its error shape
+    // must route the failure to runtime repair, not wording alignment.
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          description: "Browse generated reports.",
+          entryPaths: ["/reports"],
+          id: "report-list",
+          label: "Report list",
+          requestedFeature: "report list",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["report-list"],
+          path: "/reports",
+          requestedPath: "/reports",
+          textSample:
+            "TypeError: Cannot read properties of undefined (reading 'map') at ReportList.render",
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        detail: expect.stringContaining("TypeError"),
+        failedBecause: "error-state-route",
+        featureId: "report-list",
+        verdict: "failed",
+      }),
+    ]);
+  });
+
+  it("keeps a plain-worded empty body out of the error-state diagnosis", async () => {
+    // The sample only diagnoses when it is error-shaped: a thin route whose
+    // body text is ordinary copy stays a wording problem, not a runtime
+    // fault.
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          description: "Browse generated reports.",
+          entryPaths: ["/reports"],
+          id: "report-list",
+          label: "Report list",
+          requestedFeature: "report list",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["report-list"],
+          path: "/reports",
+          requestedPath: "/reports",
+          textSample: "Welcome to the reporting workspace",
+        }),
+      ],
+    });
+
+    expect(result.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        failedBecause: "no-assert-candidates",
+        featureId: "report-list",
+        verdict: "failed",
+      }),
+    ]);
+  });
+
   it("marks the empty-table veto as skeleton rows with the table shape in the detail", async () => {
     const { result } = await exploreObservation({
       featureInventory: [
