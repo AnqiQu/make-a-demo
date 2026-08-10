@@ -158,12 +158,31 @@ type PreparedDataSeam = {
   shapeProbe?: string;
 };
 
+/**
+ * The feature's declared proof obligation (N107): a typed expected outcome
+ * in Action Catalog vocabulary that the exploration gate executes as
+ * first-class grounding. `visible-text` asserts an exact on-screen string;
+ * `element-appears` asserts a visible element with the given accessible
+ * name; `state-transition` clicks the control named `locator` while its
+ * observed state reads `from` and requires state `to` afterward (states are
+ * accessible names, or the words "enabled"/"disabled"). Locators and texts
+ * live in the accessible-name space the harvest produces — never CSS or
+ * XPath. Where declared, the proof subsumes wording-based grounding: the
+ * feature passes only if its proof passes.
+ */
+type ExpectedProof =
+  | { kind: "element-appears"; name: string }
+  | { kind: "state-transition"; locator: string; from: string; to: string }
+  | { kind: "visible-text"; text: string };
+
 export type PreparedDemoFeature = {
   authStrategy: "bypass" | "demo-identity" | "none";
   /** Declared for data-backed features; empty or absent for static surfaces. */
   dataSeams?: PreparedDataSeam[];
   description: string;
   entryPaths: string[];
+  /** Required for maker-requested features; validated referentially at preparation. */
+  expectedProof?: ExpectedProof;
   fixtureNotes: string[];
   id: string;
   label: string;
@@ -259,6 +278,7 @@ export type FeatureVerdict = {
   failedBecause?:
     | "app-unreachable"
     | "auth-wall"
+    | "declared-proof-failed"
     | "error-state-route"
     | "no-assert-candidates"
     | "route-shared-with-winners"
@@ -783,6 +803,12 @@ function readPreparedDemoFeature(
       : captureValidationError(errors, () =>
           readPreparedDataSeams(feature.dataSeams, path),
         );
+  const expectedProof =
+    feature.expectedProof === undefined
+      ? undefined
+      : captureValidationError(errors, () =>
+          readExpectedProof(feature.expectedProof, path),
+        );
   if (
     errors.length > errorCount ||
     id === undefined ||
@@ -800,11 +826,35 @@ function readPreparedDemoFeature(
     ...(dataSeams === undefined ? {} : { dataSeams }),
     description,
     entryPaths,
+    ...(expectedProof === undefined ? {} : { expectedProof }),
     fixtureNotes,
     id,
     label,
     ...(requestedFeature === undefined ? {} : { requestedFeature }),
     sourcePaths,
+  };
+}
+
+function readExpectedProof(value: unknown, parentPath: string): ExpectedProof {
+  const path = `${parentPath}.expectedProof`;
+  const proof = assertRecord(value, path);
+  const kind = readEnum(
+    proof,
+    "kind",
+    ["element-appears", "state-transition", "visible-text"],
+    path,
+  );
+  if (kind === "visible-text") {
+    return { kind, text: readNonEmptyString(proof, "text", path) };
+  }
+  if (kind === "element-appears") {
+    return { kind, name: readNonEmptyString(proof, "name", path) };
+  }
+  return {
+    from: readNonEmptyString(proof, "from", path),
+    kind,
+    locator: readNonEmptyString(proof, "locator", path),
+    to: readNonEmptyString(proof, "to", path),
   };
 }
 
@@ -973,6 +1023,7 @@ function readFeatureVerdictArray(value: unknown): FeatureVerdict[] {
               [
                 "app-unreachable",
                 "auth-wall",
+                "declared-proof-failed",
                 "error-state-route",
                 "no-assert-candidates",
                 "route-shared-with-winners",

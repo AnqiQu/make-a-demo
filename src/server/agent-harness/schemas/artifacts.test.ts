@@ -373,6 +373,88 @@ describe("agent harness artifact schemas", () => {
     ]);
   });
 
+  it("parses each declared proof kind through to the prepared feature", () => {
+    // N107: the feature says how to prove it, in Action Catalog vocabulary.
+    const manifest = validPreparationManifest();
+    const feature = manifest.productContext.featureInventory[0];
+    if (feature === undefined) {
+      throw new Error("Expected a prepared feature fixture");
+    }
+    (feature as Record<string, unknown>).expectedProof = {
+      from: "Follow",
+      kind: "state-transition",
+      locator: "Follow",
+      to: "Unfollow",
+    };
+
+    const parsed = readPreparationManifest(manifest);
+
+    expect(parsed.productContext.featureInventory[0]?.expectedProof).toEqual({
+      from: "Follow",
+      kind: "state-transition",
+      locator: "Follow",
+      to: "Unfollow",
+    });
+
+    (feature as Record<string, unknown>).expectedProof = {
+      kind: "visible-text",
+      text: "Portfolio holdings overview",
+    };
+    expect(
+      readPreparationManifest(manifest).productContext.featureInventory[0]
+        ?.expectedProof,
+    ).toEqual({ kind: "visible-text", text: "Portfolio holdings overview" });
+
+    (feature as Record<string, unknown>).expectedProof = {
+      kind: "element-appears",
+      name: "Delete row",
+    };
+    expect(
+      readPreparationManifest(manifest).productContext.featureInventory[0]
+        ?.expectedProof,
+    ).toEqual({ kind: "element-appears", name: "Delete row" });
+  });
+
+  it("rejects declared proofs with unknown kinds or missing fields", () => {
+    const manifest = validPreparationManifest();
+    const feature = manifest.productContext.featureInventory[0];
+    if (feature === undefined) {
+      throw new Error("Expected a prepared feature fixture");
+    }
+    (feature as Record<string, unknown>).expectedProof = {
+      kind: "screenshot-diff",
+    };
+    expect(() => readPreparationManifest(manifest)).toThrow(
+      "expectedProof.kind must be one of: element-appears, state-transition, visible-text",
+    );
+
+    (feature as Record<string, unknown>).expectedProof = {
+      kind: "state-transition",
+      locator: "Follow",
+    };
+    expect(() => readPreparationManifest(manifest)).toThrow(
+      /expectedProof\.from must be a non-empty string/,
+    );
+  });
+
+  it("parses a declared-proof verdict on the feature ledger", () => {
+    const report = readValidationReport({
+      ...validValidationReport(),
+      featureVerdicts: [
+        {
+          detail: "declared proof failed: Follow stayed Follow after the click",
+          failedBecause: "declared-proof-failed",
+          featureId: "follow-author",
+          verdict: "failed",
+        },
+      ],
+    });
+
+    expect(report.featureVerdicts?.[0]?.failedBecause).toBe(
+      "declared-proof-failed",
+    );
+  });
+
   it("rejects data seams that escape the repo or omit the replaced function", () => {
     const manifest = validPreparationManifest();
     const feature = manifest.productContext.featureInventory[0];
