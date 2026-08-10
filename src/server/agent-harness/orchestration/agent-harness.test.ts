@@ -1910,6 +1910,63 @@ describe("runAgentHarnessPipeline", () => {
     });
   });
 
+  it("feeds observed auth-wall verdicts into the next round's fidelity check", async () => {
+    // The failure report that triggers a repair carries exploration's
+    // feature verdicts; post-repair fidelity must see them, so a manifest
+    // that still declares authStrategy "none" over an observed wall
+    // reaches the judge instead of passing on prose alone (N111).
+    const repairedStages: string[] = [];
+    let fidelityFailureSummary = "";
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({ runId: "run_auth_wall_contradiction" }),
+        stubPipelineDependencies({
+          capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
+          async prepareRepo() {
+            return { manifest: preparationManifest() };
+          },
+          async repairPreparation({ failureReport }) {
+            repairedStages.push(failureReport.stage);
+            if (failureReport.stage === "preparation-fidelity") {
+              fidelityFailureSummary = failureReport.logsSummary;
+            }
+            return { manifest: preparationManifest() };
+          },
+          async resetCaptureRuntime() {
+            throw new Error("Capture reset must not run.");
+          },
+          async validatePreparation() {
+            return {
+              ...report("preparation-preflight", "failed"),
+              attemptedCommand: "bun run dev",
+              failureClassification: "start failure",
+              featureVerdicts: [
+                {
+                  detail: "entry route / redirected to /login",
+                  failedBecause: "auth-wall" as const,
+                  featureId: "dashboard",
+                  verdict: "failed" as const,
+                },
+              ],
+              logsSummary:
+                "Feature dashboard's entry routes sit behind an authentication redirect.",
+            };
+          },
+        }),
+        { repoPreparationRepairLimit: 2 },
+      ),
+    ).rejects.toThrow("failed");
+
+    expect(repairedStages).toEqual([
+      "preparation-preflight",
+      "preparation-fidelity",
+    ]);
+    expect(fidelityFailureSummary).toContain("authentication wall");
+    expect(fidelityFailureSummary).toContain("dashboard");
+    expect(fidelityFailureSummary).toContain('authStrategy "none"');
+  });
+
   it("retries an invalid install repair from the last fidelity-approved preparation", async () => {
     const approvedManifest = {
       ...preparationManifest(),

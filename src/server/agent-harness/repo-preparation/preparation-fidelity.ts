@@ -1,6 +1,7 @@
 import { escapeRegExp } from "../../shared/text/escape-regexp";
 import { isEnvironmentSecretFileName } from "../repo-security/secret-predicates";
 import type {
+  FeatureVerdict,
   FidelityAdjudicationRecord,
   FidelityAdjudicationVerdict,
   PreparationManifest,
@@ -97,6 +98,8 @@ const repairHints = {
     "Complete the preparation so the claimed fixtures and replacements exist in the workspace, or correct the manifest to describe the actual prepared state.",
   statusHonesty:
     "Fix the condition that produces the error response instead of rewriting its status code; a success status over a broken state falsifies the harness's probe without repairing the feature.",
+  observedAuthWall:
+    "Prepare the narrowest demo-gated bypass or demo identity through an existing auth seam, record it in the feature's authStrategy, and keep the normal authentication path unchanged when the gate is off.",
 } as const;
 
 // An HTTP response-status write: res.status(...), sendStatus, writeHead,
@@ -115,6 +118,7 @@ function readStatusWrites(lines: string[]): Set<number> {
 export function validatePreparationFidelity(input: {
   dependencyRepair?: boolean;
   preparationManifest: PreparationManifest;
+  priorFeatureVerdicts?: FeatureVerdict[];
   repairBaseline?: PreparationWorkspaceDiff;
   repoSourceFiles: ReadonlyMap<string, string | undefined>;
   workspaceDiff: PreparationWorkspaceDiff;
@@ -134,6 +138,7 @@ export function validatePreparationFidelity(input: {
 export function readPreparationFidelityCandidates(input: {
   dependencyRepair?: boolean;
   preparationManifest: PreparationManifest;
+  priorFeatureVerdicts?: FeatureVerdict[];
   repairBaseline?: PreparationWorkspaceDiff;
   repoSourceFiles: ReadonlyMap<string, string | undefined>;
   workspaceDiff: PreparationWorkspaceDiff;
@@ -229,6 +234,34 @@ export function readPreparationFidelityCandidates(input: {
         });
       }
     }
+  }
+  // Exploration's own ledger beats the manifest's prose: a prior round's
+  // feature verdict recording an auth wall disproves a manifest that still
+  // declares the feature needs no auth handling (midday claimed
+  // authStrategy "none" across surfaces exploration then found behind
+  // login redirects, 2026-08-09). Features already declaring a strategy
+  // are the strategy failing, not a false claim, and stay with repair.
+  const inventoryById = new Map(
+    input.preparationManifest.productContext.featureInventory.map(
+      (feature) => [feature.id, feature] as const,
+    ),
+  );
+  for (const priorVerdict of input.priorFeatureVerdicts ?? []) {
+    if (priorVerdict.failedBecause !== "auth-wall") {
+      continue;
+    }
+    const feature = inventoryById.get(priorVerdict.featureId);
+    if (feature === undefined || feature.authStrategy !== "none") {
+      continue;
+    }
+    violations.push({
+      hint: repairHints.observedAuthWall,
+      message: `The harness observed an authentication wall on feature ${
+        feature.id
+      }'s entry routes${
+        priorVerdict.detail === undefined ? "" : ` (${priorVerdict.detail})`
+      }, but the manifest still declares authStrategy "none" for it — the prepared app itself disproves the claim. Prepare a demo-gated bypass or demo identity for that surface, or correct the feature's entry paths.`,
+    });
   }
   const repairPaths = readInvalidRepairPaths(input);
   const filePatches = parsePatchSections(input.workspaceDiff.patch);

@@ -392,6 +392,86 @@ describe("validatePreparationFidelity", () => {
     expect(report.logsSummary).toContain("workspace diff is empty");
   });
 
+  it("routes an observed auth wall against a declared no-auth feature to the judge", () => {
+    // Exploration's own ledger beats the manifest's prose: midday declared
+    // authStrategy "none" across surfaces that exploration then found
+    // walled behind login redirects (2026-08-09). When a prior round's
+    // feature verdict records an auth wall, a manifest that still claims
+    // the feature needs no auth handling is a disproven claim.
+    const report = validatePreparationFidelity({
+      preparationManifest: manifest({
+        localDemoModeChanges: [
+          "MAKEADEMO_DEMO=true activates the built-in demo dataset.",
+        ],
+        productContext: {
+          evidencePaths: [routePath],
+          featureInventory: [
+            {
+              authStrategy: "none",
+              description: "Track project time.",
+              entryPaths: ["/tracker"],
+              fixtureNotes: [],
+              id: "tracker",
+              label: "Tracker",
+              sourcePaths: [routePath],
+            },
+          ],
+          name: "Product",
+          summary: "The original product.",
+        },
+      }),
+      priorFeatureVerdicts: [
+        {
+          detail: "entry route /tracker redirected to /login",
+          failedBecause: "auth-wall",
+          featureId: "tracker",
+          verdict: "failed",
+        },
+      ],
+      repoSourceFiles: new Map(),
+      workspaceDiff: workspaceDiff([], ""),
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "product fidelity violation",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain("authentication wall");
+    expect(report.logsSummary).toContain("tracker");
+    expect(report.logsSummary).toContain('authStrategy "none"');
+  });
+
+  it("accepts prior feature verdicts that do not contradict the manifest's auth claims", () => {
+    // A wall observed on a feature that already declares an auth strategy is
+    // the strategy failing, not a false claim — and non-auth failure causes
+    // say nothing about authStrategy at all.
+    const report = validatePreparationFidelity({
+      preparationManifest: manifest({
+        localDemoModeChanges: [
+          "MAKEADEMO_DEMO=true activates the built-in demo dataset.",
+        ],
+      }),
+      priorFeatureVerdicts: [
+        {
+          detail: "entry route /tracker redirected to /login",
+          failedBecause: "auth-wall",
+          featureId: "tracker",
+          verdict: "failed",
+        },
+        {
+          detail: "rows rendered as loading skeletons",
+          failedBecause: "skeleton-rows",
+          featureId: "tracker",
+          verdict: "failed",
+        },
+      ],
+      repoSourceFiles: new Map(),
+      workspaceDiff: workspaceDiff([], ""),
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
   it("rejects a standalone replacement runtime for an existing product", () => {
     const report = validateDiff({
       createdFiles: ["demo/server.ts"],

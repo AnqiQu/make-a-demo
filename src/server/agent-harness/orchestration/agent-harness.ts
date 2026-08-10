@@ -1549,6 +1549,12 @@ async function ensureValidPreparation(input: {
           ...(repairBaseline === undefined
             ? {}
             : { dependencyRepair, repairBaseline }),
+          // The failure that dispatched the active repair carries the
+          // harness's own feature observations; fidelity checks the
+          // repaired manifest's claims against them.
+          ...(activeRepairFailure?.featureVerdicts === undefined
+            ? {}
+            : { priorFeatureVerdicts: activeRepairFailure.featureVerdicts }),
           preparationManifest,
           repoSourceFiles: new Map(
             input.input.files.map((file) => [file.path, file.text] as const),
