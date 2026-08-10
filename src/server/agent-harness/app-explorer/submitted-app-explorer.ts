@@ -969,7 +969,11 @@ function createActions(
         route: route.path,
       });
     });
-    if (route.headings.length === 0) {
+    // Text asserts are emitted on every route, headings or not: a page
+    // title grounds nothing about the data beneath it, and the harvested
+    // strings a feature actually needs — metrics, row text, pane labels —
+    // must be assertable wherever they rendered.
+    {
       const verifiedTexts = route.text
         .map((text, index) => ({ index, text }))
         .filter(
@@ -1041,7 +1045,9 @@ function createActions(
           });
         },
       );
-      if (textCandidates.length === 0) {
+      // The control fallback exists so a route is never assert-free; it
+      // only fires when neither headings nor text produced an assert.
+      if (route.headings.length === 0 && textCandidates.length === 0) {
         const visibleButton = route.buttons.find(
           (button, index) =>
             button.length > 0 &&

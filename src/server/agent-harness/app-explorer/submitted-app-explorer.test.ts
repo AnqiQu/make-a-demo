@@ -2326,6 +2326,42 @@ describe("exploreSubmittedApp", () => {
     );
   });
 
+  it("emits text asserts alongside heading asserts on the same route", async () => {
+    // Heading presence used to gate text asserts off entirely, so a
+    // dashboard whose data renders under a page title had no assertable
+    // data text — features grounded by content, not by the title, failed
+    // as wording mismatches. Both assert kinds must coexist.
+    const { result } = await exploreObservation({
+      routes: [
+        observedRoute({
+          headings: ["Fleet dashboard"],
+          text: [
+            "Total balance $12,400",
+            "Seven vehicles are currently active",
+          ],
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    expect(artifacts.actionCatalog.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "assert",
+        preferredLocator: {
+          name: "Fleet dashboard",
+          strategy: "role",
+          value: "heading",
+        },
+      }),
+    );
+    expect(artifacts.actionCatalog.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "assert",
+        preferredLocator: { strategy: "text", value: "Total balance $12,400" },
+      }),
+    );
+  });
+
   it("fails a requested feature whose catalog tagging cannot satisfy flow planning", async () => {
     // Exploration grounds a feature on exercised evidence alone, but flow
     // planning demands an interaction AND a visible assertion. A requested
@@ -2362,7 +2398,7 @@ describe("exploreSubmittedApp", () => {
           ],
           path: "/#/article/demo",
           requestedPath: "/#/article/demo",
-          text: ["A shared placeholder article body"],
+          text: ["A shared placeholder draft body"],
         }),
       ],
     });
@@ -2431,7 +2467,7 @@ describe("exploreSubmittedApp", () => {
           ],
           path: "/#/article/demo",
           requestedPath: "/#/article/demo",
-          text: ["A shared placeholder article body"],
+          text: ["A shared placeholder draft body"],
         }),
       ],
     });
