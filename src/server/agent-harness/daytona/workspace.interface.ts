@@ -61,6 +61,45 @@ export class AgentHarnessAgentLaunchError extends Error {
   }
 }
 
+/**
+ * Signals that a Daytona control-plane operation (sandbox create/delete/
+ * start, network update, filesystem transfer) stayed failed after the
+ * envelope's bounded classify-and-retry. The failure belongs to the
+ * infrastructure seam — it carries retry-the-job semantics and must never
+ * be converted into agent repair feedback or a Preparation Fallback Prompt
+ * (midday's maker-facing 409 prompt is the forbidden shape, 2026-08-09).
+ */
+export class AgentHarnessControlPlaneError extends Error {
+  readonly attempts: number;
+  readonly classification: "conflict" | "transient";
+  readonly operation: string;
+  readonly sandboxId?: string;
+
+  constructor(input: {
+    attempts: number;
+    cause: unknown;
+    classification: "conflict" | "transient";
+    operation: string;
+    sandboxId?: string;
+  }) {
+    const causeMessage =
+      input.cause instanceof Error
+        ? `${input.cause.name}: ${input.cause.message}`
+        : String(input.cause);
+    super(
+      `Daytona control-plane operation ${input.operation} failed after ${input.attempts} attempt(s) (${input.classification}): ${causeMessage}`,
+      { cause: input.cause },
+    );
+    this.name = "AgentHarnessControlPlaneError";
+    this.attempts = input.attempts;
+    this.classification = input.classification;
+    this.operation = input.operation;
+    if (input.sandboxId !== undefined) {
+      this.sandboxId = input.sandboxId;
+    }
+  }
+}
+
 /** Signals that a Daytona sandbox stayed unavailable after one bounded restart. */
 export class AgentHarnessSandboxUnavailableError extends Error {
   readonly sandboxId: string;
@@ -83,12 +122,14 @@ export function isAgentHarnessInfrastructureError(
   | AgentHarnessAgentLaunchError
   | AgentHarnessArtifactTransferError
   | AgentHarnessCommandTimeoutError
+  | AgentHarnessControlPlaneError
   | AgentHarnessJobDeadlineError
   | AgentHarnessSandboxUnavailableError {
   return (
     error instanceof AgentHarnessAgentLaunchError ||
     error instanceof AgentHarnessArtifactTransferError ||
     error instanceof AgentHarnessCommandTimeoutError ||
+    error instanceof AgentHarnessControlPlaneError ||
     error instanceof AgentHarnessJobDeadlineError ||
     error instanceof AgentHarnessSandboxUnavailableError
   );

@@ -9,6 +9,7 @@ import { createPipelineEventLogger } from "../../shared/logging/pipeline-event-l
 import {
   AgentHarnessArtifactTransferError,
   AgentHarnessCommandTimeoutError,
+  AgentHarnessControlPlaneError,
   AgentHarnessSandboxUnavailableError,
   type AgentHarnessWorkspace,
   isAgentHarnessInfrastructureError,
@@ -3941,6 +3942,46 @@ describe("createDefaultAgentHarnessDependencies", () => {
     // mid-compile after 5 quiet minutes, 2026-08-09).
     expect(install).toContain("[makeademo:alive] cpu");
     expect(lifecycle).toContain("[makeademo:alive] cpu");
+  });
+
+  it("rethrows a control-plane failure as infrastructure instead of a validation report", async () => {
+    // Midday (2026-08-09): an unclassified 409 from the network toggle
+    // became a Preparation Fallback Prompt asking the maker to repair the
+    // harness's own control plane — the forbidden shape. Exhausted
+    // control-plane retries fail the job as infrastructure.
+    const controlPlaneFailure = new AgentHarnessControlPlaneError({
+      attempts: 25,
+      cause: Object.assign(
+        new Error("An operation is already in progress for this resource"),
+        { statusCode: 409 },
+      ),
+      classification: "conflict",
+      operation: "sandbox.network-update",
+      sandboxId: "sandbox_123",
+    });
+    const workspace = createFakeAgentHarnessWorkspace({
+      async setSubmittedCodeNetworkAccess() {
+        throw controlPlaneFailure;
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.validatePreparation({
+        preparationManifest: {
+          ...preparationManifest(),
+          installCommandUsed: "npm ci --no-audit",
+        },
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).rejects.toBe(controlPlaneFailure);
   });
 
   it("tees the command-end exit beacon into the evidence file for heavy commands", async () => {
