@@ -36,6 +36,13 @@ export function createPreparationManifestTemplate(
         dataSeams: [],
         description: `Prepare a deterministic demo for ${feature}`,
         entryPaths: [],
+        // N107: replace with the typed outcome that proves this feature on
+        // its entry route — visible-text, element-appears, or
+        // state-transition {locator, from, to} in accessible-name space.
+        expectedProof: {
+          kind: "visible-text",
+          text: `replace-with-on-screen-text-proving ${feature}`,
+        },
         fixtureNotes: [],
         id: `requested-feature-${index + 1}`,
         label: feature,

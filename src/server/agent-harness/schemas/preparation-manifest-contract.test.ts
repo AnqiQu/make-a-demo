@@ -46,6 +46,23 @@ describe("createPreparationManifestContract", () => {
     expect(contract.invariants.join(" ")).toContain("dataSeams");
   });
 
+  it("describes the declared proof obligation with its three typed kinds", () => {
+    // N107: the feature says how to prove it. With additionalProperties:
+    // false the contract must name the field, and its shape must force one
+    // typed kind per declaration.
+    const contract = createPreparationManifestContract();
+    const feature =
+      contract.properties.productContext.properties.featureInventory.items;
+    const proof = feature.properties.expectedProof;
+
+    expect(proof.oneOf.map((variant) => variant.properties.kind.const)).toEqual(
+      ["element-appears", "state-transition", "visible-text"],
+    );
+    expect(feature.required).not.toContain("expectedProof");
+    expect(contract.invariants.join(" ")).toContain("expectedProof");
+    expect(contract.invariants.join(" ")).toContain("accessible name");
+  });
+
   it("carries no version field that nothing reads", () => {
     expect(createPreparationManifestContract()).not.toHaveProperty(
       "contractVersion",

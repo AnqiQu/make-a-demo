@@ -53,6 +53,10 @@ export function createPreparationManifestContract() {
       "when any feature uses bypass or demo-identity, authBypassOrDemoIdentity must describe the active secret-free authentication bootstrap",
       "feature ids must be stable safe identifiers and unique within featureInventory",
       "every data-backed feature must declare its dataSeams: the repo-relative path and functionName of the function the UI calls (now returning the in-code fixture under the demo gate) and the fixtureModule holding the fixture literal; declared files must exist in the prepared diff",
+      "every maker-requested feature must declare expectedProof: the typed browser-checkable outcome that proves the feature on its first entry route (visible-text: an exact on-screen string; element-appears: a visible element's accessible name; state-transition: click the control named locator while its state reads from and observe state to)",
+      "expectedProof locators, names, and texts are accessible names or on-screen strings — never CSS selectors or XPath",
+      "a state-transition proof's from must never be disabled: seed fixture state so the control starts enabled (history pre-populated so Undo is clickable, a followable author whose control will rename)",
+      "each feature's first entryPath must be a route no other feature claims",
     ],
     outputPath: "/workspace/.makeademo/preparation-manifest.json",
     properties: {
@@ -109,6 +113,39 @@ export function createPreparationManifestContract() {
                 },
                 description: { minLength: 1, type: "string" },
                 entryPaths: localAppPathArray,
+                expectedProof: {
+                  oneOf: [
+                    {
+                      additionalProperties: false,
+                      properties: {
+                        kind: { const: "element-appears", type: "string" },
+                        name: { minLength: 1, type: "string" },
+                      },
+                      required: ["kind", "name"],
+                      type: "object",
+                    },
+                    {
+                      additionalProperties: false,
+                      properties: {
+                        from: { minLength: 1, type: "string" },
+                        kind: { const: "state-transition", type: "string" },
+                        locator: { minLength: 1, type: "string" },
+                        to: { minLength: 1, type: "string" },
+                      },
+                      required: ["from", "kind", "locator", "to"],
+                      type: "object",
+                    },
+                    {
+                      additionalProperties: false,
+                      properties: {
+                        kind: { const: "visible-text", type: "string" },
+                        text: { minLength: 1, type: "string" },
+                      },
+                      required: ["kind", "text"],
+                      type: "object",
+                    },
+                  ],
+                },
                 fixtureNotes: stringArray,
                 id: {
                   minLength: 1,

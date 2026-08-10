@@ -45,5 +45,10 @@ describe("Preparation Manifest template", () => {
       },
       scriptGenerationContext: [],
     });
+    // N107: maker-requested features must declare a proof; the template
+    // shows the field so no agent has to infer its shape from prose.
+    expect(
+      template.productContext.featureInventory[0]?.expectedProof,
+    ).toMatchObject({ kind: "visible-text" });
   });
 });
