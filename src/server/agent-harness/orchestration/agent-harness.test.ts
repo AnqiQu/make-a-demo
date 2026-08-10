@@ -3411,6 +3411,10 @@ function preparationManifest() {
           authStrategy: "none" as const,
           description: "Show the dashboard.",
           entryPaths: ["/"],
+          expectedProof: {
+            kind: "visible-text" as const,
+            text: "Dashboard overview",
+          },
           fixtureNotes: [],
           id: "dashboard",
           label: "Dashboard",

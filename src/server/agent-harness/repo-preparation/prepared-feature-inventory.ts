@@ -113,6 +113,7 @@ export function assertPreparedFeatureInventory(input: {
       "PreparationManifest.authBypassOrDemoIdentity must describe the active off-camera authentication bootstrap",
     );
   }
+  assertDeclaredProofs(context.featureInventory);
 
   const requestedFeatures = input.demoBrief.keyProductFeatures ?? [];
   if (requestedFeatures.length === 0) {
@@ -137,19 +138,118 @@ export function assertPreparedFeatureInventory(input: {
   const prepared = countNormalizedFeatures(preparedRequestedFeatures);
   const missing = readFeatureCountDifference(requested, prepared);
   const unexpected = readFeatureCountDifference(prepared, requested);
-  if (missing.length === 0 && unexpected.length === 0) {
-    return;
+  if (missing.length > 0 || unexpected.length > 0) {
+    throw new Error(
+      [
+        "PreparationManifest must prepare every requested demo feature exactly once.",
+        ...(missing.length === 0 ? [] : [`Missing: ${missing.join(", ")}.`]),
+        ...(unexpected.length === 0
+          ? []
+          : [`Unexpected: ${unexpected.join(", ")}.`]),
+      ].join(" "),
+    );
   }
-
-  throw new Error(
-    [
-      "PreparationManifest must prepare every requested demo feature exactly once.",
-      ...(missing.length === 0 ? [] : [`Missing: ${missing.join(", ")}.`]),
-      ...(unexpected.length === 0
-        ? []
-        : [`Unexpected: ${unexpected.join(", ")}.`]),
-    ].join(" "),
+  // N107: the declaration is required for maker-requested features, checked
+  // only after the feature set itself is right — prepare the right
+  // features, then declare each one's proof.
+  const missingProofs = context.featureInventory.flatMap((feature, index) =>
+    feature.requestedFeature === undefined ||
+    feature.expectedProof !== undefined
+      ? []
+      : [`productContext.featureInventory[${index}] ${feature.id}`],
   );
+  if (missingProofs.length > 0) {
+    throw new Error(
+      `PreparationManifest maker-requested features must declare expectedProof: ${missingProofs.join(
+        "; ",
+      )}. Declare the typed browser-checkable outcome that proves each feature on its entry route — visible-text (an exact on-screen string), element-appears (a visible element's accessible name), or state-transition (click the control named locator while its state reads from and observe state to).`,
+    );
+  }
+}
+
+// Accessible names never start with selector sigils or route slashes and
+// never carry markup or attribute-selector syntax.
+const selectorShapedPattern = /^[.#/]|[<>]|\[[a-z-]+[=\]]/i;
+
+/**
+ * Verifies every declared proof is executable and distinguishing: template
+ * values replaced, locators in accessible-name space, transitions starting
+ * from an exercisable state, and no two features sharing one proof.
+ */
+function assertDeclaredProofs(
+  featureInventory: PreparationManifest["productContext"]["featureInventory"],
+): void {
+  const declared = featureInventory.flatMap((feature, index) =>
+    feature.expectedProof === undefined
+      ? []
+      : [
+          {
+            path: `productContext.featureInventory[${index}]`,
+            proof: feature.expectedProof,
+          },
+        ],
+  );
+  const templateProofs = declared.flatMap(({ path, proof }) =>
+    Object.values(proof).some((value) => templateValuePattern.test(value))
+      ? [`${path}.expectedProof`]
+      : [],
+  );
+  if (templateProofs.length > 0) {
+    throw new Error(
+      `PreparationManifest declared proofs must replace template values: ${templateProofs.join(
+        "; ",
+      )}. Write the real on-screen outcome the prepared app shows.`,
+    );
+  }
+  const disabledStarts = declared.flatMap(({ path, proof }) =>
+    proof.kind === "state-transition" && /^disabled$/i.test(proof.from)
+      ? [`${path}.expectedProof`]
+      : [],
+  );
+  if (disabledStarts.length > 0) {
+    throw new Error(
+      `PreparationManifest state-transition proofs must not start from disabled: ${disabledStarts.join(
+        "; ",
+      )}. A disabled control cannot be clicked — seed fixture state so the control starts enabled (history pre-populated so Undo is clickable, a followable author whose control will rename).`,
+    );
+  }
+  const selectorShaped = declared.flatMap(({ path, proof }) => {
+    const locatorValues =
+      proof.kind === "visible-text"
+        ? []
+        : proof.kind === "element-appears"
+          ? [proof.name]
+          : [proof.locator, proof.from, proof.to];
+    return locatorValues.some((value) => selectorShapedPattern.test(value))
+      ? [`${path}.expectedProof`]
+      : [];
+  });
+  if (selectorShaped.length > 0) {
+    throw new Error(
+      `PreparationManifest declared proofs must use accessible names, never CSS selectors or XPath: ${selectorShaped.join(
+        "; ",
+      )}. Name the control or element exactly as its on-screen accessible name reads.`,
+    );
+  }
+  const byProofKey = new Map<string, string[]>();
+  for (const { path, proof } of declared) {
+    const key = JSON.stringify(
+      Object.fromEntries(Object.entries(proof).sort()),
+    );
+    byProofKey.set(key, [...(byProofKey.get(key) ?? []), path]);
+  }
+  const duplicated = [...byProofKey.values()].filter(
+    (paths) => paths.length > 1,
+  );
+  if (duplicated.length > 0) {
+    throw new Error(
+      `PreparationManifest features declare identical proofs and cannot be distinguished: ${duplicated
+        .map((paths) => paths.join(" and "))
+        .join(
+          "; ",
+        )}. Each feature's proof must name evidence only that feature produces.`,
+    );
+  }
 }
 
 /** Rejects preparation output that switches away from a locked browser app. */

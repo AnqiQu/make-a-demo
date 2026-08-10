@@ -59,6 +59,101 @@ describe("assertPreparedFeatureInventory", () => {
     ).toThrow(/template/);
   });
 
+  it("requires a declared proof for every maker-requested feature once coverage holds", () => {
+    // N107: the feature says how to prove it. Coverage errors stay first —
+    // prepare the right feature set, then declare each proof.
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: ["creating an account"] },
+        preparationManifest: manifestWithFeatures([
+          {
+            id: "create-account",
+            label: "Creating an account",
+            requestedFeature: "creating an account",
+          },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).toThrow(/create-account.*expectedProof|expectedProof.*create-account/s);
+  });
+
+  it("rejects residual template values in declared proofs", () => {
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest: manifestWithFeatures([
+          {
+            expectedProof: {
+              kind: "visible-text",
+              text: "replace-with-on-screen-text-proving tracker",
+            },
+            id: "tracker",
+            label: "Tracker",
+          },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).toThrow(/declared proofs must replace template values/);
+  });
+
+  it("rejects a state-transition proof that starts disabled and steers to seeding", () => {
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest: manifestWithFeatures([
+          {
+            expectedProof: {
+              from: "disabled",
+              kind: "state-transition",
+              locator: "Undo",
+              to: "enabled",
+            },
+            id: "undo-redo",
+            label: "Undo and redo",
+          },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).toThrow(/seed.*starts enabled|starts enabled.*seed/is);
+  });
+
+  it("rejects selector-shaped proof locators and steers to accessible names", () => {
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest: manifestWithFeatures([
+          {
+            expectedProof: { kind: "element-appears", name: "#export-button" },
+            id: "export-report",
+            label: "Export report",
+          },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).toThrow(/accessible name/i);
+  });
+
+  it("rejects two features declaring the identical proof", () => {
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest: manifestWithFeatures([
+          {
+            expectedProof: { kind: "visible-text", text: "Portfolio overview" },
+            id: "portfolio-overview",
+            label: "Portfolio overview",
+          },
+          {
+            expectedProof: { kind: "visible-text", text: "Portfolio overview" },
+            id: "allocation-chart",
+            label: "Allocation chart",
+          },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).toThrow(/identical|indistinguishable/i);
+  });
+
   it("reports every unknown source path at once with the eligibility rule", () => {
     // Midday's 2026-08-08 regression: one-path-at-a-time rejection made the
     // repair whack-a-mole — the agent fixed evidencePaths, then the same
@@ -172,6 +267,7 @@ describe("assertPreparedFeatureInventory", () => {
   it("accepts an original browser entry module as UI source", () => {
     const preparationManifest = manifestWithFeatures([
       {
+        expectedProof: { kind: "visible-text", text: "Published demo article" },
         id: "post-article",
         label: "Posting an article",
         requestedFeature: "posting an article",
@@ -369,6 +465,7 @@ function manifestWithFeatures(
     authStrategy?: "bypass" | "demo-identity" | "none";
     description?: string;
     entryPaths?: string[];
+    expectedProof?: PreparationManifest["productContext"]["featureInventory"][number]["expectedProof"];
     id: string;
     label: string;
     requestedFeature?: string;
@@ -390,13 +487,14 @@ function manifestWithFeatures(
     ports: [3000],
     productContext: {
       evidencePaths: ["README.md"],
-      featureInventory: features.map((feature) => ({
+      featureInventory: features.map(({ expectedProof, ...feature }) => ({
         authStrategy: "none",
         description: `Demonstrate ${feature.label}`,
         entryPaths: ["/"],
         fixtureNotes: [],
         sourcePaths: ["src/routes.tsx"],
         ...feature,
+        ...(expectedProof === undefined ? {} : { expectedProof }),
       })),
       name: "Conduit",
       summary: "A publishing platform.",
