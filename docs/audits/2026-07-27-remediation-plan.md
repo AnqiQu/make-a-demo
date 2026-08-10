@@ -5196,3 +5196,77 @@ typecheck, and knip clean. Suggested gate before wave 3
 (N109–N111): rerun the ghostfolio + homer mini-matrix —
 ghostfolio's "evidence exists, verifier cannot ground it"
 frontier is exactly what N105–N108 exist to move.
+
+### Mini-matrix checkpoint (2026-08-10, ghostfolio + homer, wave-2 gate)
+
+Both passed with final videos. Homer 9.2 minutes;
+ghostfolio 20.7 minutes — the repo that failed the twelfth
+run after seven fruitless repair rounds now ships a video.
+Both pipeline logs are 100% info-level: zero warnings, zero
+errors, zero exit-124 verdicts, zero inactivity kills, zero
+Daytona retries, zero OOM lines, zero preparation
+fallbacks. Exploration, capture, and composite all passed
+on their first attempt in both runs.
+
+Wave-2 machinery readings, all firing as designed:
+ghostfolio's three features grounded via **declared-proof**
+with proofs drawn from seeded data ("Vanguard Total Stock
+Market ETF", "Add activity", "By ETF Provider") — the N107
+path is the grounding path, wording lottery not involved.
+The N108 probe reported "Feature probe grounded all 3
+prepared feature(s) on their entry routes" inside
+preparation-preflight on both repos, and no probe was ever
+inconclusive. Homer's single error-level event is the N107
+identical-proof rejection doing its job: the first manifest
+declared indistinguishable proofs for two features, the
+batched steering named both, one retry fixed it. The N106
+listen-failure hint steered ghostfolio's two runtime
+repairs to real causes: round 1 moved the client serve to
+port 3000 after the cold Angular build outlived the
+readiness budget; round 2 bound it to 0.0.0.0 after the
+server sat on localhost while the probe curled 127.0.0.1
+(refused for a full 3-minute window with the server
+claiming readiness — the binding, not the boot, was the
+wall).
+
+Two findings for the backlog, neither gating:
+
+1. **Listen-failure first attempts are the remaining tax**
+(ghostfolio two rounds ≈ 8 minutes, homer one). Both
+sub-causes are now legible: cold first builds outliving the
+~3.3-minute readiness budget, and localhost/IPv6-only
+binds refusing the 127.0.0.1 probe. Candidate (small):
+preparation-prompt steering to bind dev servers explicitly
+to 127.0.0.1/0.0.0.0, and/or probing localhost as a
+fallback before classifying listen failure.
+
+2. **The allocations scene ships empty charts (N112
+candidate).** Ghostfolio's portfolio-allocations scene
+shows gray placeholder donuts and a masked "Proportion of
+Net Worth ***** %" through its final frame, while the
+overview scene shows real seeded values ($14,240, +14.80%)
+and the add-activity scene shows a real dialog. Every gate
+passed: the declared proof was `visible-text "By ETF
+Provider"` — a static section label that renders with zero
+data — and chart canvases are invisible to the DOM
+emptiness checks (skeleton-rows sees table rows; a gray
+donut ring is just a canvas; the route even had aria text
+"100.00 % Developed Markets", so it was not content-empty).
+This is the predicted "passes every gate, video shows an
+empty surface" class, now narrowed to canvas/chart data
+surfaces grounded by static-label proofs. Sketch: a
+proof-quality floor (reject visible-text proofs that
+exactly match a section heading harvested on the same
+route with no data siblings), or chart-placeholder
+evidence (canvas-only cards with no numeric/legend text
+join skeleton-rows), or a capture-time flag for scenes
+whose route carried masked values so the run report sends
+a human to the clip. Evidence:
+`matrix-2026-08-10T21-05-49-340Z-ghostfolio/capture/scene-clips/portfolio-allocations.webm`.
+
+Cosmetic, watch only: ghostfolio serves 500 for
+/assets/ghost.svg and for /api/v1/logo/YAHOO/VTI (sealed
+upstream logo proxy) on demo routes — neither visibly mars
+the captured frames; /en/portfolio/x-ray and /en/fire
+throw on unfixtured surfaces, but neither is a demo
+feature route. Wave 3 (N109 → N110 → N111) is unblocked.
