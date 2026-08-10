@@ -3716,6 +3716,162 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
   });
 
+  it("fails preflight with the verdict ledger when the feature probe cannot ground a prepared feature", async () => {
+    // N108: after the runtime preflight passes, the harness re-runs the
+    // gate's own entry-route exploration. A feature the gate would fail
+    // must fail preparation now — minutes in — with the same ledger the
+    // gate would produce, so the repair round fixes the app, not the wall.
+    const commands: string[] = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        if (command.includes("explore-app.mjs")) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: `\n[makeademo:exploration] ${JSON.stringify({
+              blockedNetworkAttempts: [],
+              consoleErrors: [],
+              pageErrors: [],
+              routes: [
+                {
+                  buttons: [],
+                  featureIds: ["dashboard"],
+                  forms: [],
+                  headings: ["Weather station"],
+                  inputs: [],
+                  links: [],
+                  path: "/",
+                  primaryNavigation: [],
+                  screenshot: "/workspace/.makeademo/exploration/route.png",
+                  snapshot: "/workspace/.makeademo/exploration/route.aria.yml",
+                  text: ["Barometric pressure trend for the last week"],
+                  title: "Weather",
+                },
+              ],
+              unreachableRoutes: [],
+            })}\n`,
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: preparationManifest(),
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.stage).toBe("preparation-preflight");
+    expect(report.failureClassification).toBe(
+      "requested feature not observable",
+    );
+    expect(report.logsSummary).toContain("Feature verification probe failed");
+    expect(report.failingFeatureIds).toEqual(["dashboard"]);
+    expect(report.featureVerdicts).toContainEqual(
+      expect.objectContaining({ featureId: "dashboard", verdict: "failed" }),
+    );
+    const explorerCommand =
+      commands.find((command) => command.includes("explore-app.mjs")) ?? "";
+    const encodedScript = /printf %s '([^']+)'/.exec(explorerCommand)?.[1];
+    expect(
+      Buffer.from(encodedScript ?? "", "base64").toString("utf8"),
+    ).toContain('const crawlScope = "feature-entries"');
+  });
+
+  it("passes preflight and notes the probe when every prepared feature grounds on its entry route", async () => {
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("explore-app.mjs")) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: `\n[makeademo:exploration] ${JSON.stringify({
+              blockedNetworkAttempts: [],
+              consoleErrors: [],
+              pageErrors: [],
+              routes: [
+                {
+                  buttons: [],
+                  featureIds: ["dashboard"],
+                  forms: [],
+                  headings: ["Dashboard overview"],
+                  inputs: [],
+                  links: [],
+                  path: "/",
+                  primaryNavigation: [],
+                  screenshot: "/workspace/.makeademo/exploration/route.png",
+                  snapshot: "/workspace/.makeademo/exploration/route.aria.yml",
+                  text: ["Fresh deployments and uptime for every service"],
+                  title: "Dashboard",
+                },
+              ],
+              unreachableRoutes: [],
+            })}\n`,
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: preparationManifest(),
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report.status).toBe("passed");
+    expect(report.logsSummary).toContain(
+      "Feature probe grounded all 1 prepared feature(s)",
+    );
+  });
+
+  it("passes preflight through when the feature probe is inconclusive", async () => {
+    // A crashed explorer yields no verdicts — that is weather, not evidence
+    // about the prepared features. The probe must never fail a preparation
+    // the gate has not judged; exploration retains the final authority.
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("explore-app.mjs")) {
+          return { exitCode: 1, stderr: "browser exploded", stdout: "" };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: preparationManifest(),
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report.status).toBe("passed");
+    expect(report.logsSummary).toContain("Feature probe inconclusive");
+  });
+
   it("steers a listen failure at the captured app output", async () => {
     // Ghost's nodemon keeps the parent alive after the child crashes, so the
     // process looks running while the port stays refused; the crash is
@@ -5625,9 +5781,9 @@ describe("createDefaultAgentHarnessDependencies", () => {
       status: "passed",
       urlChecked: "http://127.0.0.1:3000/dashboard",
     });
-    expect(submittedCommands.at(-1)).toContain(
-      "http://127.0.0.1:3000/dashboard",
-    );
+    expect(
+      submittedCommands.find((command) => command.includes("makeademo:probe")),
+    ).toContain("http://127.0.0.1:3000/dashboard");
   });
 
   it("gives one connected feature request the full cold-render deadline", async () => {
@@ -6351,9 +6507,12 @@ describe("createDefaultAgentHarnessDependencies", () => {
       },
       async readSubmittedCodeAppStatus() {
         return {
+          // The first exploration run is the N108 preparation probe; the
+          // server-side resource is first requested during exploreApp's own
+          // run (the second), which must hydrate it and rerun.
           running: true,
           stderr:
-            explorationRuns === 1 && starts === 1
+            explorationRuns === 2 && starts === 1
               ? `${runtimeNetworkMarker}{"direction":"outbound","hasCredentials":false,"host":"assets.example.com","method":"GET","phase":"runtime","resourceType":"fetch","url":"https://assets.example.com/logo.svg"}`
               : "",
           stdout: "",
@@ -6400,7 +6559,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         workspace,
       });
 
-      expect(explorationRuns).toBe(2);
+      expect(explorationRuns).toBe(3);
       expect(starts).toBe(2);
       expect(uploadBatches).toBe(1);
       expect(result.validationReport).toMatchObject({

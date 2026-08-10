@@ -699,6 +699,82 @@ export async function createDefaultAgentHarnessDependencies(
       ? finalResult
       : unresolved(finalResult, remainingAttempts);
   };
+  // N108: once the runtime preflight passes, re-run the gate's own
+  // entry-route exploration against the live prepared app. A feature the
+  // gate would fail dies here — minutes in — with the gate's own verdict
+  // ledger, so the repair round targets the app instead of discovering the
+  // failure forty minutes later. The probe only ever surfaces verdicts:
+  // a crashed or hung explorer is weather, and the gate keeps the final
+  // authority over everything it has not judged.
+  const probePreparedFeatures = async (input: {
+    preparationManifest: PreparationManifest;
+    report: ValidationReport;
+    workspace: AgentHarnessWorkspace;
+  }): Promise<ValidationReport> => {
+    const featureInventory =
+      input.preparationManifest.productContext.featureInventory;
+    if (featureInventory.length === 0) return input.report;
+    const exploration = await runWithExternalResourceBroker({
+      readBlockedAttempts: (result: SubmittedAppExplorationResult) =>
+        result.validationReport.blockedNetworkAttempts,
+      run: () =>
+        exploreSubmittedApp({
+          baseUrl: input.preparationManifest.baseUrl,
+          ...(externalResourceManifest === undefined
+            ? {}
+            : { externalResourceManifest }),
+          featureInventory,
+          preparationManifestId: input.preparationManifest.id,
+          // The coverage gate guarantees requestedFeature values mirror the
+          // demo brief, so the probe classifies requested-feature failures
+          // exactly as the gate will.
+          requestedFeatures: featureInventory.flatMap((feature) =>
+            feature.requestedFeature === undefined
+              ? []
+              : [feature.requestedFeature],
+          ),
+          scope: "feature-entries",
+          workspace: input.workspace,
+        }),
+      stage: "preparation-preflight",
+      workspace: input.workspace,
+    });
+    const probeReport = exploration.validationReport;
+    const verdictFailed = (probeReport.featureVerdicts ?? []).some(
+      (verdict) => verdict.verdict === "failed",
+    );
+    if (probeReport.status !== "failed" || !verdictFailed) {
+      if (probeReport.status === "failed") {
+        await options.logger?.warn({
+          classification: probeReport.failureClassification,
+          event: "preparation.feature-probe.inconclusive",
+          message: probeReport.logsSummary.slice(0, 500),
+        });
+      }
+      return {
+        ...input.report,
+        logsSummary: `${input.report.logsSummary} ${
+          probeReport.status === "failed"
+            ? `Feature probe inconclusive (${probeReport.failureClassification ?? "unclassified"}); app exploration remains the authority.`
+            : `Feature probe grounded all ${featureInventory.length} prepared feature(s) on their entry routes.`
+        }`,
+      };
+    }
+    // The probe's screenshots and snapshots are the repair round's visual
+    // evidence; persist them under their own directory so the later gate
+    // run does not overwrite the record of what the repair agent saw.
+    await persistExplorationEvidence({
+      directoryName: "feature-probe-evidence",
+      logger: options.logger,
+      outputRoot: options.outputRoot,
+      workspace: input.workspace,
+    });
+    return {
+      ...probeReport,
+      logsSummary: `Feature verification probe failed after the runtime preflight passed: ${probeReport.logsSummary}`,
+      stage: "preparation-preflight",
+    };
+  };
 
   const dependencies: AgentHarnessPipelineDependencies = {
     async adjudicateFidelityCandidates({
@@ -1581,12 +1657,20 @@ export async function createDefaultAgentHarnessDependencies(
       runPlan,
       workspace,
     }) {
-      return await validateRuntimeWithExternalResources({
+      const report = await validateRuntimeWithExternalResources({
         ...(installDependencies === undefined ? {} : { installDependencies }),
         preparationManifest,
         ...(reconcileLockfile === undefined ? {} : { reconcileLockfile }),
         repoProfile,
         runPlan,
+        workspace,
+      });
+      if (report.status !== "passed") return report;
+      // The runtime preflight leaves the app running; the probe explores it
+      // in place before preparation is allowed to hand off.
+      return await probePreparedFeatures({
+        preparationManifest,
+        report,
         workspace,
       });
     },
@@ -3882,11 +3966,15 @@ async function tryReadPreparationManifest(
  * failure into an infrastructure error.
  */
 async function persistExplorationEvidence(input: {
+  directoryName?: string;
   logger: PipelineEventLogger | undefined;
   outputRoot: string;
   workspace: AgentHarnessWorkspace;
 }): Promise<void> {
-  const localDirectory = join(input.outputRoot, "exploration-evidence");
+  const localDirectory = join(
+    input.outputRoot,
+    input.directoryName ?? "exploration-evidence",
+  );
   try {
     await downloadSubmittedCodeArchive({
       archiveName: "exploration-evidence.tar",
