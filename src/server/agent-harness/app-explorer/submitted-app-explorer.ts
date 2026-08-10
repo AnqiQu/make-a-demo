@@ -10,6 +10,7 @@ import { redactSecretText } from "../default/json-artifact-diagnostic";
 import {
   type ActionCatalog,
   type AppMap,
+  type FeatureVerdict,
   type NetworkAttempt,
   type PreparedDemoFeature,
   type ValidationReport,
@@ -1237,6 +1238,277 @@ function createLocatorCandidateFields(
   };
 }
 
+type CatalogAction = ActionCatalog["actions"][number];
+
+function readActionsByFeatureId(
+  actionCatalog: ActionCatalog,
+): Map<string, CatalogAction[]> {
+  const actionsByFeatureId = new Map<string, CatalogAction[]>();
+  for (const action of actionCatalog.actions) {
+    for (const featureId of action.featureIds ?? []) {
+      const tagged = actionsByFeatureId.get(featureId);
+      if (tagged === undefined) {
+        actionsByFeatureId.set(featureId, [action]);
+      } else {
+        tagged.push(action);
+      }
+    }
+  }
+  return actionsByFeatureId;
+}
+
+/**
+ * Routes whose page renders route-distinct content. Interaction-revealed
+ * text is a route's content rendered on demand: for tool-shaped UIs it is
+ * the only content the route can ever show, so a route carrying a revealed
+ * assert is content-bearing for grounding and must never be classified
+ * hollow.
+ */
+function readContentRoutePaths(
+  distinctContentByRoute: ReadonlyMap<string, string[]>,
+  actionCatalog: ActionCatalog,
+): Set<string> {
+  const contentRoutePaths = new Set(
+    [...distinctContentByRoute]
+      .filter(([, content]) => content.length > 0)
+      .map(([path]) => path),
+  );
+  for (const action of actionCatalog.actions) {
+    if (action.revealedBy !== undefined) {
+      contentRoutePaths.add(action.route);
+    }
+  }
+  return contentRoutePaths;
+}
+
+/** Features blocked by an auth wall the maker never asked to film. */
+function readAuthWallFeatureIds(
+  appMap: AppMap,
+  featureInventory: PreparedDemoFeature[],
+  explicitAuthenticationFeatureIds: ReadonlySet<string>,
+): Set<string> {
+  const inventoryIds = new Set(featureInventory.map(({ id }) => id));
+  const authWallRoutes = new Set(appMap.loginOrAuthWalls);
+  return new Set(
+    appMap.discoveredRoutes
+      .filter((route) => authWallRoutes.has(route.path))
+      .flatMap((route) =>
+        (route.featureIds ?? []).filter(
+          (featureId) =>
+            inventoryIds.has(featureId) &&
+            !explicitAuthenticationFeatureIds.has(featureId),
+        ),
+      ),
+  );
+}
+
+/**
+ * Grounds every prepared feature into one structured verdict (N106). This is
+ * the single grounding computation: the failure classifier and its steering
+ * prose derive from these enums, the validation report persists them, and
+ * the verify-features probe returns them — so what repair reads, what
+ * fingerprints hash, and what the gate enforced can never drift apart.
+ * Diagnosis precedence mirrors physical causality: an auth wall or an entry
+ * route that never loaded outranks content diagnoses, a stuck loading
+ * overlay outranks table and wording diagnoses, and wording is blamed only
+ * once the route demonstrably rendered content.
+ */
+function readFeatureVerdicts(input: {
+  actionCatalog: ActionCatalog;
+  actionsByFeatureId: ReadonlyMap<string, CatalogAction[]>;
+  authWallFeatureIds: ReadonlySet<string>;
+  contentRoutePaths: ReadonlySet<string>;
+  distinctContentByRoute: ReadonlyMap<string, string[]>;
+  emptyDataTablesByRoute: ReadonlyMap<
+    string,
+    { columnHeaders: number; skeletonRows: number }
+  >;
+  errorEvidenceByRoute: ReadonlyMap<string, string[]>;
+  featureInventory: PreparedDemoFeature[];
+  populatedTableRoutes: ReadonlySet<string>;
+  stuckLoadingRoutes: ReadonlySet<string>;
+  unreachableRoutes: UnreachableRoute[];
+}): FeatureVerdict[] {
+  // A zero-row data table is the feature's data surface rendering empty:
+  // for a requested feature it vetoes the route's other distinct strings
+  // (summary cards, tab labels), which render from separate queries in
+  // hollow and healthy apps alike. A populated table on the same route
+  // lifts the veto — the data surface demonstrably renders rows — and
+  // non-requested features keep the plain content rule so the default demo
+  // can still select around such routes.
+  const demonstrableRoute = (feature: PreparedDemoFeature, route: string) =>
+    input.contentRoutePaths.has(route) &&
+    (feature.requestedFeature === undefined ||
+      !input.emptyDataTablesByRoute.has(route) ||
+      input.populatedTableRoutes.has(route));
+  const failed = (
+    feature: PreparedDemoFeature,
+    failedBecause: NonNullable<FeatureVerdict["failedBecause"]>,
+    detail: string,
+    evidence: string[],
+  ): FeatureVerdict => ({
+    detail,
+    ...(evidence.length === 0 ? {} : { evidence: evidence.slice(0, 6) }),
+    failedBecause,
+    featureId: feature.id,
+    verdict: "failed",
+  });
+  return input.featureInventory.map((feature) => {
+    if (input.authWallFeatureIds.has(feature.id)) {
+      return failed(
+        feature,
+        "auth-wall",
+        "entry routes redirected to authentication the maker did not request footage of",
+        feature.entryPaths,
+      );
+    }
+    const tagged = input.actionsByFeatureId.get(feature.id) ?? [];
+    const exercisedActions = tagged.filter(
+      (action) => action.exercised === true,
+    );
+    const matchingAsserts = tagged.filter(
+      (action) =>
+        action.kind === "assert" &&
+        assertEvidenceMatchesFeature(action, feature),
+    );
+    // A browser-exercised interaction proves the feature. Without one,
+    // verified assert evidence counts only when its visible text matches
+    // the feature, so read-only pages can ground while a wrong entry route
+    // that merely renders unrelated content cannot. Either way the feature
+    // needs a tagged route with route-distinct content: exercising a search
+    // box on a page that renders nothing demonstrates nothing.
+    if (
+      (exercisedActions.length > 0 || matchingAsserts.length > 0) &&
+      tagged.some((action) => demonstrableRoute(feature, action.route))
+    ) {
+      const [decisiveAssert] = matchingAsserts;
+      const decisive =
+        exercisedActions.length > 0 ? exercisedActions : matchingAsserts;
+      return {
+        detail:
+          exercisedActions.length > 0
+            ? (exercisedActions[0]?.expectedResult ??
+              "exercised in the browser")
+            : decisiveAssert === undefined
+              ? "matched verified assert evidence"
+              : `matched on-screen text ${JSON.stringify(
+                  readAssertEvidenceText(decisiveAssert),
+                )}`,
+        evidence: unique(decisive.map(({ id }) => id)).slice(0, 4),
+        featureId: feature.id,
+        groundedBy: exercisedActions.length > 0 ? "interaction" : "assert",
+        verdict: "grounded",
+      } satisfies FeatureVerdict;
+    }
+    const unreachable = input.unreachableRoutes.filter((route) =>
+      (route.featureIds ?? []).includes(feature.id),
+    );
+    if (unreachable.length > 0) {
+      return failed(
+        feature,
+        "app-unreachable",
+        unreachable
+          .slice(0, 2)
+          .map((route) => `${route.url}: ${route.error}`)
+          .join(" | "),
+        unreachable.map(({ url }) => url),
+      );
+    }
+    const taggedRoutes = unique(tagged.map((action) => action.route));
+    const routes = taggedRoutes.length > 0 ? taggedRoutes : feature.entryPaths;
+    const stuckRoutes = routes.filter((route) =>
+      input.stuckLoadingRoutes.has(route),
+    );
+    if (stuckRoutes.length > 0) {
+      return failed(
+        feature,
+        "no-assert-candidates",
+        "routes stayed behind a full-page loading overlay for the entire exploration",
+        stuckRoutes,
+      );
+    }
+    const contentRoutes = routes.filter((route) =>
+      input.contentRoutePaths.has(route),
+    );
+    const vetoTable = contentRoutes
+      .map((route) => input.emptyDataTablesByRoute.get(route))
+      .find((table) => table !== undefined);
+    if (
+      (exercisedActions.length > 0 || matchingAsserts.length > 0) &&
+      contentRoutes.length > 0 &&
+      vetoTable !== undefined
+    ) {
+      return failed(
+        feature,
+        "skeleton-rows",
+        vetoTable.skeletonRows > 0
+          ? `${vetoTable.skeletonRows} textless skeleton rows mounted under ${vetoTable.columnHeaders} column headers — the data query never resolved`
+          : `a zero-row data table rendered ${vetoTable.columnHeaders} column headers and no data rows`,
+        contentRoutes,
+      );
+    }
+    if (contentRoutes.length > 0) {
+      const featureTokens = featureSemanticTokens(feature);
+      let best:
+        | { action: CatalogAction; score: number; text: string }
+        | undefined;
+      for (const action of input.actionCatalog.actions) {
+        if (action.kind !== "assert" || !routes.includes(action.route)) {
+          continue;
+        }
+        const text = readAssertEvidenceText(action);
+        const score = semanticTokens(text).filter((token) =>
+          featureTokens.includes(token),
+        ).length;
+        if (score > 0 && (best === undefined || score > best.score)) {
+          best = { action, score, text };
+        }
+      }
+      if (best !== undefined) {
+        const winners = (best.action.featureIds ?? []).filter(
+          (featureId) => featureId !== feature.id,
+        );
+        return failed(
+          feature,
+          "route-shared-with-winners",
+          winners.length > 0
+            ? `best on-screen match ${JSON.stringify(best.text)} (score ${best.score}) was awarded to ${winners.join(", ")}`
+            : `best on-screen match ${JSON.stringify(best.text)} (score ${best.score}) was observed on a route not tagged to this feature`,
+          [best.action.id],
+        );
+      }
+      const shownContent = unique(
+        contentRoutes.flatMap(
+          (route) => input.distinctContentByRoute.get(route) ?? [],
+        ),
+      ).slice(0, 4);
+      return failed(
+        feature,
+        "token-mismatch",
+        `no harvested text shares a semantic token with the feature wording (best score 0); on-screen content: ${shownContent.join(", ")}`,
+        shownContent,
+      );
+    }
+    const errorEvidence = unique(
+      routes.flatMap((route) => input.errorEvidenceByRoute.get(route) ?? []),
+    ).slice(0, 6);
+    if (errorEvidence.length > 0) {
+      return failed(
+        feature,
+        "error-state-route",
+        errorEvidence.join(" | "),
+        routes,
+      );
+    }
+    return failed(
+      feature,
+      "no-assert-candidates",
+      "routes rendered only globally-repeated navigation chrome — no route-distinct headings, text, or data",
+      routes,
+    );
+  });
+}
+
 function createExplorationValidationReport(input: {
   actionCatalog: ActionCatalog;
   appMap: AppMap;
@@ -1253,18 +1525,40 @@ function createExplorationValidationReport(input: {
   stuckLoadingRoutes?: ReadonlySet<string>;
   unreachableRoutes: UnreachableRoute[];
 }): ValidationReport {
-  const groundingFailure = readExplorationFailure(
-    input.appMap,
-    input.featureInventory,
-    input.actionCatalog,
-    input.explicitAuthenticationFeatureIds,
-    input.unreachableRoutes,
-    input.emptyDataTablesByRoute ?? new Map(),
+  const actionsByFeatureId = readActionsByFeatureId(input.actionCatalog);
+  const contentRoutePaths = readContentRoutePaths(
     input.distinctContentByRoute,
-    input.populatedTableRoutes ?? new Set(),
-    input.stuckLoadingRoutes ?? new Set(),
-    input.errorEvidenceByRoute ?? new Map(),
+    input.actionCatalog,
   );
+  const featureVerdicts = readFeatureVerdicts({
+    actionCatalog: input.actionCatalog,
+    actionsByFeatureId,
+    authWallFeatureIds: readAuthWallFeatureIds(
+      input.appMap,
+      input.featureInventory,
+      input.explicitAuthenticationFeatureIds,
+    ),
+    contentRoutePaths,
+    distinctContentByRoute: input.distinctContentByRoute,
+    emptyDataTablesByRoute: input.emptyDataTablesByRoute ?? new Map(),
+    errorEvidenceByRoute: input.errorEvidenceByRoute ?? new Map(),
+    featureInventory: input.featureInventory,
+    populatedTableRoutes: input.populatedTableRoutes ?? new Set(),
+    stuckLoadingRoutes: input.stuckLoadingRoutes ?? new Set(),
+    unreachableRoutes: input.unreachableRoutes,
+  });
+  const groundingFailure = readExplorationFailure({
+    actionCatalog: input.actionCatalog,
+    actionsByFeatureId,
+    appMap: input.appMap,
+    contentRoutePaths,
+    distinctContentByRoute: input.distinctContentByRoute,
+    emptyDataTablesByRoute: input.emptyDataTablesByRoute ?? new Map(),
+    featureInventory: input.featureInventory,
+    featureVerdicts,
+    stuckLoadingRoutes: input.stuckLoadingRoutes ?? new Set(),
+    unreachableRoutes: input.unreachableRoutes,
+  });
   // Load-breaking runtime evidence outranks grounding counts: a route that
   // crashes before rendering cannot ground anything, and only the dependency
   // repair path can fix it.
@@ -1312,6 +1606,7 @@ function createExplorationValidationReport(input: {
     failure.failingFeatureIds.length === 0
       ? {}
       : { failingFeatureIds: unique(failure.failingFeatureIds).sort() }),
+    ...(featureVerdicts.length === 0 ? {} : { featureVerdicts }),
     logsSummary:
       failure?.message ??
       `Playwright explored ${input.appMap.discoveredRoutes.length} route(s) in the submitted-code sandbox.`,
@@ -1349,24 +1644,41 @@ function createExplorationValidationReport(input: {
  * in the report as evidence. Exploration fails only when a feature cannot be
  * demonstrated — its entry route is unreachable, it has no grounded evidence,
  * or authentication blocks it without the maker requesting auth footage.
+ * Per-feature diagnoses are read from the verdict ledger, so the prose
+ * steering and the persisted enums can never disagree.
  */
-function readExplorationFailure(
-  appMap: AppMap,
-  featureInventory: PreparedDemoFeature[],
-  actionCatalog: ActionCatalog,
-  explicitAuthenticationFeatureIds: ReadonlySet<string>,
-  unreachableRoutes: UnreachableRoute[],
+function readExplorationFailure(input: {
+  actionCatalog: ActionCatalog;
+  actionsByFeatureId: ReadonlyMap<string, CatalogAction[]>;
+  appMap: AppMap;
+  contentRoutePaths: ReadonlySet<string>;
+  distinctContentByRoute: ReadonlyMap<string, string[]>;
   emptyDataTablesByRoute: ReadonlyMap<
     string,
     { columnHeaders: number; skeletonRows: number }
-  >,
-  distinctContentByRoute: ReadonlyMap<string, string[]>,
-  populatedTableRoutes: ReadonlySet<string>,
-  stuckLoadingRoutes: ReadonlySet<string>,
-  errorEvidenceByRoute: ReadonlyMap<string, string[]> = new Map(),
-):
+  >;
+  featureInventory: PreparedDemoFeature[];
+  featureVerdicts: FeatureVerdict[];
+  stuckLoadingRoutes: ReadonlySet<string>;
+  unreachableRoutes: UnreachableRoute[];
+}):
   | { classification: string; failingFeatureIds?: string[]; message: string }
   | undefined {
+  const {
+    actionCatalog,
+    actionsByFeatureId,
+    appMap,
+    contentRoutePaths,
+    distinctContentByRoute,
+    emptyDataTablesByRoute,
+    featureInventory,
+    featureVerdicts,
+    stuckLoadingRoutes,
+    unreachableRoutes,
+  } = input;
+  const verdictByFeatureId = new Map(
+    featureVerdicts.map((verdict) => [verdict.featureId, verdict]),
+  );
   const unreachableFailure = (features: PreparedDemoFeature[]) => {
     const featureIds = new Set(features.map(({ id }) => id));
     const unreachable = unreachableRoutes.filter((route) =>
@@ -1435,44 +1747,17 @@ function readExplorationFailure(
     // 2026-08-07 matrix), so it names both causes instead of asserting one.
     return ` An empty data table (${emptyTable.columnHeaders} column headers, zero data rows) rendered on these routes. Two causes produce this: the data query resolved empty (fixture shape or default filters exclude the fixture rows), or a virtualized table body measured zero height and rendered no rows despite data being present — identify which before repairing, and prefer fixture and data-path fixes over changing product components.`;
   };
-  const actionsByFeatureId = new Map<
-    string,
-    Array<ActionCatalog["actions"][number]>
-  >();
-  for (const action of actionCatalog.actions) {
-    for (const featureId of action.featureIds ?? []) {
-      const tagged = actionsByFeatureId.get(featureId);
-      if (tagged === undefined) {
-        actionsByFeatureId.set(featureId, [action]);
-      } else {
-        tagged.push(action);
-      }
-    }
-  }
-  const featuresById = new Map(
-    featureInventory.map((feature) => [feature.id, feature]),
+  const authBarrierFeatures = featureInventory.filter(
+    (feature) =>
+      verdictByFeatureId.get(feature.id)?.failedBecause === "auth-wall",
   );
-  const authWallRoutes = new Set(appMap.loginOrAuthWalls);
-  const authBarrierFeatureIds = new Set(
-    appMap.discoveredRoutes
-      .filter((route) => authWallRoutes.has(route.path))
-      .flatMap((route) =>
-        (route.featureIds ?? []).filter((featureId) => {
-          const feature = featuresById.get(featureId);
-          return (
-            feature !== undefined &&
-            !explicitAuthenticationFeatureIds.has(feature.id)
-          );
-        }),
-      ),
-  );
-  if (authBarrierFeatureIds.size > 0) {
-    const blockedFeatures = featureInventory
-      .filter((feature) => authBarrierFeatureIds.has(feature.id))
-      .map((feature) => feature.requestedFeature ?? feature.label);
+  if (authBarrierFeatures.length > 0) {
+    const blockedFeatures = authBarrierFeatures.map(
+      (feature) => feature.requestedFeature ?? feature.label,
+    );
     return {
       classification: "feature auth barrier",
-      failingFeatureIds: [...authBarrierFeatureIds],
+      failingFeatureIds: authBarrierFeatures.map(({ id }) => id),
       message: `Prepared feature routes redirected to authentication for: ${blockedFeatures.join(", ")}. Seed an authenticated demo session through the repo's demo gate so these routes render signed in, or reselect featureInventory entries onto routes outside authentication.`,
     };
   }
@@ -1491,20 +1776,6 @@ function readExplorationFailure(
       classification: "empty/unmeaningful app state",
       message: `Explored ${appMap.discoveredRoutes.length} route(s) that served their document shell but rendered no visible content — no headings, text, links, or controls appeared within the content wait. The prepared runtime's data fixtures or demo gating are blocking rendering; repair the prepared app so its routes render their content.`,
     };
-  }
-  const contentRoutePaths = new Set(
-    [...distinctContentByRoute]
-      .filter(([, content]) => content.length > 0)
-      .map(([path]) => path),
-  );
-  // Interaction-revealed text is a route's content rendered on demand: for
-  // tool-shaped UIs it is the only content the route can ever show, so a
-  // route carrying a revealed assert is content-bearing for grounding and
-  // must never be classified hollow.
-  for (const action of actionCatalog.actions) {
-    if (action.revealedBy !== undefined) {
-      contentRoutePaths.add(action.route);
-    }
   }
   // When no route anywhere renders route-distinct content, grounding failures
   // are a data-rendering defect, not a feature-selection problem: exercised
@@ -1530,39 +1801,10 @@ function readExplorationFailure(
       )}`,
     };
   };
-  // A zero-row data table is the feature's data surface rendering empty:
-  // for a requested feature it vetoes the route's other distinct strings
-  // (summary cards, tab labels), which render from separate queries in
-  // hollow and healthy apps alike. A populated table on the same route
-  // lifts the veto — the data surface demonstrably renders rows — and
-  // non-requested features keep the plain content rule so the default demo
-  // can still select around such routes.
-  const demonstrableRoute = (feature: PreparedDemoFeature, route: string) =>
-    contentRoutePaths.has(route) &&
-    (feature.requestedFeature === undefined ||
-      !emptyDataTablesByRoute.has(route) ||
-      populatedTableRoutes.has(route));
   const groundedFeatureIds = new Set(
-    featureInventory
-      .filter((feature) => {
-        const actions = actionsByFeatureId.get(feature.id) ?? [];
-        // A browser-exercised interaction proves the feature. Without one,
-        // verified assert evidence counts only when its visible text matches
-        // the feature, so read-only pages can ground while a wrong entry
-        // route that merely renders unrelated content cannot. Either way the
-        // feature needs a tagged route with route-distinct content: exercising
-        // a search box on a page that renders nothing demonstrates nothing.
-        return (
-          (actions.some((action) => action.exercised === true) ||
-            actions.some(
-              (action) =>
-                action.kind === "assert" &&
-                assertEvidenceMatchesFeature(action, feature),
-            )) &&
-          actions.some((action) => demonstrableRoute(feature, action.route))
-        );
-      })
-      .map((feature) => feature.id),
+    featureVerdicts
+      .filter(({ verdict }) => verdict === "grounded")
+      .map(({ featureId }) => featureId),
   );
   // Features forced onto identical tagged evidence — exactly one assert and
   // one interaction each, all shared — can never both satisfy the FlowSpec
@@ -1616,22 +1858,30 @@ function readExplorationFailure(
       message: indistinguishableMessage(requestedCollision),
     };
   }
-  if (missingRequestedFeatures.length > 0) {
-    const unreachable = unreachableFailure(missingRequestedFeatures);
-    if (unreachable !== undefined) {
-      return unreachable;
+  // One sentence per ungrounded feature, keyed off its ledger enum: naming
+  // what the feature's routes actually showed turns "no evidence" into
+  // actionable steering, and deriving the branch from the persisted enum
+  // guarantees the prose can never contradict the ledger.
+  const describeUngroundedFeature = (
+    feature: PreparedDemoFeature,
+  ): { sentence: string; verdict: FeatureVerdict | undefined } => {
+    const verdict = verdictByFeatureId.get(feature.id);
+    const tagged = actionsByFeatureId.get(feature.id) ?? [];
+    const taggedRoutes = unique(tagged.map((action) => action.route));
+    const routes = taggedRoutes.length > 0 ? taggedRoutes : feature.entryPaths;
+    const featureName =
+      feature.requestedFeature === undefined
+        ? `Prepared feature "${feature.label}"`
+        : `Requested feature "${feature.requestedFeature}"`;
+    if (
+      routes.length === 0 ||
+      verdict === undefined ||
+      verdict.verdict === "grounded"
+    ) {
+      return { sentence: "", verdict };
     }
-    // Naming what the feature's routes actually showed turns "no evidence"
-    // into actionable steering: a chrome-only route means the data path is
-    // broken, which the repair agent cannot see from the feature name alone.
-    const featureEvidence = missingRequestedFeatures.map((feature) => {
-      const tagged = actionsByFeatureId.get(feature.id) ?? [];
-      const taggedRoutes = unique(tagged.map((action) => action.route));
-      const routes =
-        taggedRoutes.length > 0 ? taggedRoutes : feature.entryPaths;
-      if (routes.length === 0) {
-        return { sentence: "", vetoedByEmptyTable: false };
-      }
+    const routeList = routes.slice(0, 4).join(", ");
+    if (verdict.failedBecause === "no-assert-candidates") {
       const stuckRoutes = routes.filter((route) =>
         stuckLoadingRoutes.has(route),
       );
@@ -1641,86 +1891,77 @@ function readExplorationFailure(
       // (cyberchef burned five on wording alignment, 2026-08-08).
       if (stuckRoutes.length > 0) {
         return {
-          sentence: ` Requested feature "${feature.requestedFeature}" is tagged to routes ${stuckRoutes
+          sentence: ` ${featureName} is tagged to routes ${stuckRoutes
             .slice(0, 4)
             .join(
               ", ",
             )}, which stayed behind a full-page loading overlay for the entire exploration — the app never finished initializing in the demo runtime, so no interaction or assert could be exercised. Repair the prepared app's startup path (look for silently pending requests, workers that never come up, or gated initialization that never completes); featureInventory wording cannot help.`,
-          vetoedByEmptyTable: false,
+          verdict,
         };
       }
-      const contentRoutes = routes.filter((route) =>
-        contentRoutePaths.has(route),
-      );
-      // Matching evidence on a content-bearing route means the only blocker
-      // was the zero-row veto: steer the repair at the fixture shape, not at
-      // wording or the whole data path.
-      const hasMatchingEvidence =
-        tagged.some((action) => action.exercised === true) ||
-        tagged.some(
-          (action) =>
-            action.kind === "assert" &&
-            assertEvidenceMatchesFeature(action, feature),
-        );
-      if (hasMatchingEvidence && contentRoutes.length > 0) {
-        const shownContent = unique(
-          contentRoutes.flatMap(
-            (route) => distinctContentByRoute.get(route) ?? [],
-          ),
-        ).slice(0, 4);
-        return {
-          sentence: ` Requested feature "${feature.requestedFeature}" is tagged to routes ${routes
-            .slice(0, 4)
-            .join(
-              ", ",
-            )}, which rendered distinct content (${shownContent.join(", ")}) but a zero-row data table as the feature's data surface — an empty table cannot demonstrate the feature.${emptyTableEvidence(
-            contentRoutes,
-            feature,
-          )}`,
-          vetoedByEmptyTable: true,
-        };
-      }
-      // A content-bearing route means rendering is fine and the lexical
-      // evidence match failed: without naming what the route showed, the
-      // repair agent is steered at the data path it cannot improve.
-      if (contentRoutes.length > 0) {
-        const shownContent = unique(
-          contentRoutes.flatMap(
-            (route) => distinctContentByRoute.get(route) ?? [],
-          ),
-        ).slice(0, 4);
-        return {
-          sentence: ` Requested feature "${feature.requestedFeature}" is tagged to routes ${routes
-            .slice(0, 4)
-            .join(", ")}, which rendered distinct content (${shownContent.join(
-            ", ",
-          )}) — but no exercised interaction or visible-text assert matched the feature's wording; align the featureInventory wording with the on-screen labels or point entryPaths at the feature's own UI.`,
-          vetoedByEmptyTable: false,
-        };
-      }
-      // Error-state evidence names the actual breakage (toast text, the
-      // uncaught exception, the not-found verdict); with it, the repair
-      // agent fixes the contract instead of guessing at wording.
-      const errorEvidence = unique(
-        routes.flatMap((route) => errorEvidenceByRoute.get(route) ?? []),
-      ).slice(0, 6);
+    }
+    const contentRoutes = routes.filter((route) =>
+      contentRoutePaths.has(route),
+    );
+    const shownContent = unique(
+      contentRoutes.flatMap((route) => distinctContentByRoute.get(route) ?? []),
+    ).slice(0, 4);
+    // Matching evidence on a content-bearing route means the only blocker
+    // was the zero-row veto: steer the repair at the fixture shape, not at
+    // wording or the whole data path.
+    if (verdict.failedBecause === "skeleton-rows") {
       return {
-        errorState: errorEvidence.length > 0,
-        sentence: ` Requested feature "${feature.requestedFeature}" routes ${routes
-          .slice(0, 4)
-          .join(", ")} ${chromeOnlyExplanation(
-          `; repair the prepared app's data path for these routes.${emptyTableEvidence(
-            routes,
-            feature,
-          )}`,
-        )}${
-          errorEvidence.length === 0
-            ? ""
-            : ` Error-state evidence on these routes: ${errorEvidence.join(" | ")}.`
-        }`,
-        vetoedByEmptyTable: false,
+        sentence: ` ${featureName} is tagged to routes ${routeList}, which rendered distinct content (${shownContent.join(", ")}) but a zero-row data table as the feature's data surface — an empty table cannot demonstrate the feature.${emptyTableEvidence(
+          contentRoutes,
+          feature,
+        )}`,
+        verdict,
       };
-    });
+    }
+    // The route rendered matching text, but evidence scoring awarded every
+    // matching assert elsewhere: wording alignment cannot fix a zero-sum
+    // split — only an unclaimed entry route or a feature merge can.
+    if (verdict.failedBecause === "route-shared-with-winners") {
+      return {
+        sentence: ` ${featureName} is tagged to routes ${routeList}, whose ${verdict.detail ?? "best-matching on-screen text was awarded to another feature sharing the route"} — give this feature an entry route no other feature claims, or merge it with the winning feature in the featureInventory.`,
+        verdict,
+      };
+    }
+    // A content-bearing route means rendering is fine and the lexical
+    // evidence match failed: without naming what the route showed, the
+    // repair agent is steered at the data path it cannot improve.
+    if (verdict.failedBecause === "token-mismatch") {
+      return {
+        sentence: ` ${featureName} is tagged to routes ${routeList}, which rendered distinct content (${shownContent.join(", ")}) — but no exercised interaction or visible-text assert matched the feature's wording; align the featureInventory wording with the on-screen labels or point entryPaths at the feature's own UI.`,
+        verdict,
+      };
+    }
+    // Error-state evidence names the actual breakage (toast text, the
+    // uncaught exception, the not-found verdict); with it, the repair
+    // agent fixes the contract instead of guessing at wording.
+    return {
+      sentence: ` ${featureName} routes ${routeList} ${chromeOnlyExplanation(
+        `; repair the prepared app's data path for these routes.${emptyTableEvidence(
+          routes,
+          feature,
+        )}`,
+      )}${
+        verdict.failedBecause === "error-state-route" &&
+        verdict.detail !== undefined
+          ? ` Error-state evidence on these routes: ${verdict.detail}. The runtime is broken on these routes; featureInventory wording cannot help.`
+          : ""
+      }`,
+      verdict,
+    };
+  };
+  if (missingRequestedFeatures.length > 0) {
+    const unreachable = unreachableFailure(missingRequestedFeatures);
+    if (unreachable !== undefined) {
+      return unreachable;
+    }
+    const featureEvidence = missingRequestedFeatures.map(
+      describeUngroundedFeature,
+    );
     const routeEvidence = featureEvidence
       .map(({ sentence }) => sentence)
       .join("");
@@ -1730,14 +1971,16 @@ function readExplorationFailure(
     const missingRequestedIds = missingRequestedFeatures.map(({ id }) => id);
     return (
       hollowFailure(missingRequestedFeatures) ??
-      (featureEvidence.every(({ vetoedByEmptyTable }) => vetoedByEmptyTable)
+      (featureEvidence.every(
+        ({ verdict }) => verdict?.failedBecause === "skeleton-rows",
+      )
         ? {
             classification: "empty/unmeaningful app state",
             failingFeatureIds: missingRequestedIds,
             message: `Every requested feature's data surface rendered as a zero-row table: ${requestedFeatureNames}.${routeEvidence}`,
           }
         : featureEvidence.every(
-              (entry) => "errorState" in entry && entry.errorState === true,
+              ({ verdict }) => verdict?.failedBecause === "error-state-route",
             )
           ? {
               // Every missing feature failed on an error-state route: the
@@ -1871,11 +2114,29 @@ function readExplorationFailure(
       if (unreachable !== undefined) {
         return unreachable;
       }
+      // Wording-alignment and route-claim steering extend to default-demo
+      // features (N106): a generic "reselect" hint alone leaves the repair
+      // agent guessing which feature's wording missed. Other enums keep the
+      // reselect steering — their sentences would point at data-path repairs
+      // that reselection is meant to avoid.
+      const steerableSentences = ungroundedFeatures
+        .filter((feature) => {
+          const failedBecause = verdictByFeatureId.get(
+            feature.id,
+          )?.failedBecause;
+          return (
+            failedBecause === "token-mismatch" ||
+            failedBecause === "route-shared-with-winners"
+          );
+        })
+        .slice(0, 4)
+        .map((feature) => describeUngroundedFeature(feature).sentence)
+        .join("");
       return (
         hollowFailure(ungroundedFeatures) ?? {
           classification: "prepared feature not observable",
           failingFeatureIds: ungroundedFeatures.map(({ id }) => id),
-          message: `App Exploration observed ${observedPreparedFeatureCount} prepared features but needs ${requiredPreparedFeatureCount} to plan the default demo.${formatGroundedRoutes(actionCatalog, contentRoutePaths)}`,
+          message: `App Exploration observed ${observedPreparedFeatureCount} prepared features but needs ${requiredPreparedFeatureCount} to plan the default demo.${formatGroundedRoutes(actionCatalog, contentRoutePaths)}${steerableSentences}`,
         }
       );
     }
@@ -1893,15 +2154,18 @@ function readExplorationFailure(
   return undefined;
 }
 
+/** The visible text an assert proves: locator value for text asserts, accessible name otherwise. */
+function readAssertEvidenceText(action: CatalogAction): string {
+  const locator = action.preferredLocator;
+  return (locator.strategy === "text" ? locator.value : locator.name) ?? "";
+}
+
 function assertEvidenceMatchesFeature(
-  action: ActionCatalog["actions"][number],
+  action: CatalogAction,
   feature: PreparedDemoFeature,
 ): boolean {
-  const locator = action.preferredLocator;
-  const evidenceText =
-    (locator.strategy === "text" ? locator.value : locator.name) ?? "";
   const featureTokens = featureSemanticTokens(feature);
-  return semanticTokens(evidenceText).some((token) =>
+  return semanticTokens(readAssertEvidenceText(action)).some((token) =>
     featureTokens.includes(token),
   );
 }

@@ -2958,6 +2958,403 @@ describe("exploreSubmittedApp", () => {
   });
 });
 
+describe("feature verdict ledger", () => {
+  it("records grounded verdicts with their evidence class on a passed report", async () => {
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          entryPaths: ["/holdings"],
+          id: "holding-management",
+          label: "Holding management",
+          requestedFeature: "managing holdings",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["holding-management"],
+          headings: ["Holding management"],
+          interactions: [
+            {
+              kind: "click",
+              locator: {
+                name: "Add holding",
+                strategy: "role",
+                value: "button",
+              },
+              locatorEvidence: {
+                locator: {
+                  exact: true,
+                  name: "Add holding",
+                  role: "button",
+                  strategy: "role",
+                },
+                verification: {
+                  matchCount: 1,
+                  route: "/holdings",
+                  visible: true,
+                },
+              },
+              name: "Add holding",
+              outcome: "Add holding dialog became visible",
+            },
+          ],
+          path: "/holdings",
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    expect(artifacts.validationReport.status).toBe("passed");
+    expect(artifacts.validationReport.featureVerdicts).toEqual([
+      {
+        detail: "Add holding dialog became visible",
+        evidence: ["click-interaction-1-1"],
+        featureId: "holding-management",
+        groundedBy: "interaction",
+        verdict: "grounded",
+      },
+    ]);
+  });
+
+  it("names the winning feature and steers at an unclaimed entry route when scoring awards every assert elsewhere", async () => {
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          description: "Show the portfolio overview.",
+          entryPaths: ["/en/portfolio"],
+          id: "portfolio-overview",
+          label: "Portfolio overview",
+          requestedFeature: "portfolio overview",
+        }),
+        preparedFeature({
+          description: "Chart the portfolio allocation split.",
+          entryPaths: ["/en/portfolio"],
+          id: "allocation-chart",
+          label: "Allocation chart",
+          requestedFeature: "allocation chart",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["portfolio-overview", "allocation-chart"],
+          headings: ["Portfolio holdings overview"],
+          path: "/en/portfolio",
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        featureId: "portfolio-overview",
+        groundedBy: "assert",
+        verdict: "grounded",
+      }),
+      expect.objectContaining({
+        detail: expect.stringContaining('"Portfolio holdings overview"'),
+        failedBecause: "route-shared-with-winners",
+        featureId: "allocation-chart",
+        verdict: "failed",
+      }),
+    ]);
+    const failed = result.validationReport.featureVerdicts?.[1];
+    expect(failed?.detail).toContain("portfolio-overview");
+    expect(result.validationReport.logsSummary).toContain(
+      "an entry route no other feature claims",
+    );
+    expect(result.validationReport.logsSummary).toContain(
+      '"Portfolio holdings overview"',
+    );
+  });
+
+  it("distinguishes a token mismatch from shared-route loss and names the on-screen content", async () => {
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          description: "Show the portfolio overview.",
+          entryPaths: ["/en/portfolio"],
+          id: "portfolio-overview",
+          label: "Portfolio overview",
+          requestedFeature: "portfolio overview",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["portfolio-overview"],
+          headings: ["Wombat maintenance schedule"],
+          path: "/en/portfolio",
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        detail: expect.stringContaining("Wombat maintenance schedule"),
+        failedBecause: "token-mismatch",
+        featureId: "portfolio-overview",
+        verdict: "failed",
+      }),
+    ]);
+    expect(result.validationReport.logsSummary).toContain(
+      "align the featureInventory wording",
+    );
+  });
+
+  it("marks error-state routes as runtime faults that wording cannot repair", async () => {
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          entryPaths: ["/broken"],
+          id: "invoice-review",
+          label: "Invoice review",
+          requestedFeature: "reviewing invoices",
+        }),
+      ],
+      pageErrors: [
+        "http://127.0.0.1:3000/broken: TypeError: Cannot read properties of undefined",
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["invoice-review"],
+          headings: ["Application error"],
+          path: "/broken",
+        }),
+        observedRoute({
+          headings: ["Completely unrelated welcome copy"],
+          path: "/",
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        detail: expect.stringContaining("TypeError"),
+        failedBecause: "error-state-route",
+        featureId: "invoice-review",
+        verdict: "failed",
+      }),
+    ]);
+    expect(result.validationReport.logsSummary).toContain(
+      "featureInventory wording cannot help",
+    );
+  });
+
+  it("marks the empty-table veto as skeleton rows with the table shape in the detail", async () => {
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          description: "Review recent transactions.",
+          entryPaths: ["/transactions"],
+          id: "transaction-review",
+          label: "Transaction review",
+          requestedFeature: "transaction review",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          emptyDataTables: [
+            {
+              columnHeaders: 5,
+              headerTexts: ["Date", "Payee", "Amount"],
+              skeletonRows: 6,
+            },
+          ],
+          featureIds: ["transaction-review"],
+          headings: ["Transactions"],
+          path: "/transactions",
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        detail: expect.stringContaining("6 textless skeleton rows"),
+        failedBecause: "skeleton-rows",
+        featureId: "transaction-review",
+        verdict: "failed",
+      }),
+    ]);
+  });
+
+  it("marks auth-walled features and unreachable entry routes with their own enums", async () => {
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          entryPaths: ["/invoices"],
+          id: "invoice-list",
+          label: "Invoice list",
+          requestedFeature: "listing invoices",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["invoice-list"],
+          headings: ["Sign in"],
+          inputs: ["Email", "Password"],
+          path: "/invoices",
+        }),
+      ],
+    });
+    expect(result.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        failedBecause: "auth-wall",
+        featureId: "invoice-list",
+        verdict: "failed",
+      }),
+    ]);
+
+    const unreachable = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          entryPaths: ["/reports"],
+          id: "report-review",
+          label: "Report review",
+          requestedFeature: "reviewing reports",
+        }),
+      ],
+      routes: [observedRoute({ headings: ["Welcome home"] })],
+      unreachableRoutes: [
+        {
+          error: "net::ERR_CONNECTION_REFUSED",
+          featureIds: ["report-review"],
+          url: "http://127.0.0.1:3000/reports",
+        },
+      ],
+    });
+    expect(unreachable.result.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        detail: expect.stringContaining("ERR_CONNECTION_REFUSED"),
+        failedBecause: "app-unreachable",
+        featureId: "report-review",
+        verdict: "failed",
+      }),
+    ]);
+  });
+
+  it("marks routes with nothing to assert as no-assert-candidates", async () => {
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          description: "Browse the media library.",
+          entryPaths: ["/library"],
+          id: "media-library",
+          label: "Media library",
+          requestedFeature: "browsing the media library",
+        }),
+        preparedFeature({
+          description: "Read the welcome dashboard.",
+          entryPaths: ["/"],
+          id: "welcome-dashboard",
+          label: "Welcome dashboard",
+          requestedFeature: "welcome dashboard",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["media-library"],
+          path: "/library",
+        }),
+        observedRoute({
+          featureIds: ["welcome-dashboard"],
+          headings: ["Welcome dashboard"],
+          path: "/",
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        failedBecause: "no-assert-candidates",
+        featureId: "media-library",
+        verdict: "failed",
+      }),
+      expect.objectContaining({
+        featureId: "welcome-dashboard",
+        groundedBy: "assert",
+        verdict: "grounded",
+      }),
+    ]);
+  });
+
+  it("extends per-feature wording steering to default-demo features", async () => {
+    const defaultFeature = (
+      id: string,
+      label: string,
+      entryPath: string,
+      description: string,
+    ): PreparedDemoFeature => ({
+      authStrategy: "none",
+      description,
+      entryPaths: [entryPath],
+      fixtureNotes: [],
+      id,
+      label,
+      sourcePaths: ["src/app.tsx"],
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [
+        defaultFeature(
+          "board-view",
+          "Board view",
+          "/board",
+          "Show the kanban board view.",
+        ),
+        defaultFeature(
+          "list-view",
+          "List view",
+          "/list",
+          "Show the task list view.",
+        ),
+        defaultFeature(
+          "settings-panel",
+          "Settings panel",
+          "/settings",
+          "Adjust workspace settings.",
+        ),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["board-view"],
+          headings: ["Board view"],
+          path: "/board",
+        }),
+        observedRoute({
+          featureIds: ["list-view"],
+          headings: ["List view"],
+          path: "/list",
+        }),
+        observedRoute({
+          featureIds: ["settings-panel"],
+          headings: ["Notification preferences"],
+          path: "/settings",
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.featureVerdicts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          failedBecause: "token-mismatch",
+          featureId: "settings-panel",
+          verdict: "failed",
+        }),
+      ]),
+    );
+    expect(result.validationReport.logsSummary).toContain("Settings panel");
+    expect(result.validationReport.logsSummary).toContain(
+      "align the featureInventory wording",
+    );
+    expect(result.validationReport.logsSummary).toContain(
+      "Notification preferences",
+    );
+  });
+});
+
 type ExplorationResult = Awaited<ReturnType<typeof exploreSubmittedApp>>;
 
 async function exploreObservation(input: {
