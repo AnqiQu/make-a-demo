@@ -4098,6 +4098,100 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(report.logsSummary).toContain("better_sqlite3");
   });
 
+  it("claims 'no CPU progress' only when the heartbeat record can support it", async () => {
+    // With zero [makeademo:alive] lines on the record, "no CPU progress"
+    // is unearned: the heartbeat may simply never have spoken (it was
+    // silent batch-wide, 2026-08-09). Silence is the only measured fact.
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("npm rebuild")) {
+          return {
+            exitCode: 124,
+            stderr: "",
+            stdout: [
+              "> better-sqlite3 install: gyp info ok",
+              "[makeademo:timeout] Daytona command produced no output for 300000ms. The command was killed at its deadline; output above is partial.",
+            ].join("\n"),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: {
+        ...repoProfile(),
+        packageScripts: { dev: "next dev", postinstall: "prisma generate" },
+      },
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "lifecycle timeout",
+      status: "failed",
+    });
+    expect(report.logsSummary).toMatch(/killed after .*silence/i);
+    expect(report.logsSummary).not.toContain("no CPU progress");
+  });
+
+  it("keeps the 'no CPU progress' diagnosis when the heartbeat demonstrably worked", async () => {
+    // Alive lines earlier in this command's own output prove the sampler
+    // functions here: silence after them means the tree really went idle,
+    // and the diagnosis may say so.
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("npm rebuild")) {
+          return {
+            exitCode: 124,
+            stderr: "",
+            stdout: [
+              "[makeademo:alive] cpu 4210",
+              "> better-sqlite3 install: gyp info ok",
+              "[makeademo:timeout] Daytona command produced no output for 300000ms. The command was killed at its deadline; output above is partial.",
+            ].join("\n"),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: {
+        ...repoProfile(),
+        packageScripts: { dev: "next dev", postinstall: "prisma generate" },
+      },
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "lifecycle timeout",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain("no CPU progress");
+  });
+
   it("classifies an inactivity-killed lifecycle as a lifecycle timeout, not an install failure", async () => {
     // Ghost (2026-08-09): pnpm rebuild was killed after 5 silent minutes,
     // classified "install failure", and five repair rounds chased a

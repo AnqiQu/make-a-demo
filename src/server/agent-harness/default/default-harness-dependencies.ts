@@ -2344,10 +2344,18 @@ async function validateResolvedSubmittedCodeRuntime(
         // chasing a phantom install with dependency-only edit rights
         // (2026-08-09); "lifecycle timeout" keeps full repo latitude.
         const timedOut = lifecycle.exitCode === 124;
+        // "no CPU progress" is a measurement claim: it is earned only when
+        // alive lines on this command's own record prove the heartbeat
+        // functions here, so silence afterward means a genuinely idle tree.
+        // Without them, silence is the only recorded fact (the heartbeat
+        // was silent batch-wide while commands worked, 2026-08-09).
+        const heartbeatSpoke = /\[makeademo:alive\] cpu \d+/.test(
+          `${lifecycle.stdout}`,
+        );
         const timeoutSummary = `${lifecycle.stdout}`.includes(
           "produced no output",
         )
-          ? "Network-closed lifecycle scripts were killed after 5 minutes of silence with no CPU progress"
+          ? `Network-closed lifecycle scripts were killed after 5 minutes of silence${heartbeatSpoke ? " with no CPU progress" : ""}`
           : "Network-closed lifecycle scripts were killed at their overall deadline";
         return failedPreparationValidation({
           attemptedCommand: lifecycleCommand,
