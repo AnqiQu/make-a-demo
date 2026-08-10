@@ -2680,6 +2680,200 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(repairPrompt).toContain("Do not rewrite the PreparationManifest");
   });
 
+  it("routes a repaired file that no longer parses back to the same repair session", async () => {
+    const manifest = preparationManifest();
+    const parseBatches: string[] = [];
+    let parseFailuresLeft = 1;
+    const workspace = createFakeAgentHarnessWorkspace({
+      async execute(command) {
+        if (
+          command === "cat '/workspace/.makeademo/preparation-manifest.json'"
+        ) {
+          return { exitCode: 0, stderr: "", stdout: JSON.stringify(manifest) };
+        }
+        if (command.includes("status --porcelain")) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: " M src/demo-data.js\n?? src/page.tsx\n",
+          };
+        }
+        if (command.includes("node --check")) {
+          parseBatches.push(command);
+          if (parseFailuresLeft > 0) {
+            parseFailuresLeft -= 1;
+            return {
+              exitCode: 65,
+              stderr:
+                "src/demo-data.js:3\nconst rows = [;\nSyntaxError: Unexpected token ';'",
+              stdout: "[makeademo:parse] src/demo-data.js\n",
+            };
+          }
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const runs: Array<{ prompt: string; sessionId: string | undefined }> = [];
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(input) {
+          runs.push({ prompt: input.prompt, sessionId: input.sessionId });
+          return {
+            exitCode: 0,
+            sessionId: "session_parse_fix",
+            stderr: "",
+            stdout: "repaired",
+          };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const repaired = await harness.dependencies.repairPreparation?.({
+      demoBrief: { keyProductFeatures: ["dashboard"] },
+      failureReport: {
+        ...validationReport("preparation-preflight", "failed"),
+        failureClassification: "start failure",
+      },
+      normalizedSupportingDocuments: undefined,
+      preparationManifest: manifest,
+      repoProfile: repoProfile(),
+      repoSourcePaths: ["package.json", "src/App.tsx"],
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(repaired?.manifest).toEqual(manifest);
+    expect(runs).toHaveLength(2);
+    // The correction rides the same OpenCode session as the broken edit.
+    expect(runs[1]?.sessionId).toBe("session_parse_fix");
+    expect(runs[1]?.prompt).toContain("src/demo-data.js");
+    expect(runs[1]?.prompt).toContain("SyntaxError");
+    // No cheap parser applies to the .tsx file, so it is never checked.
+    expect(parseBatches.join("\n")).not.toContain("page.tsx");
+  });
+
+  it("steers a dependency repair whose package manifest no longer parses", async () => {
+    const manifest = preparationManifest();
+    let parseFailuresLeft = 1;
+    const workspace = createFakeAgentHarnessWorkspace({
+      async execute(command) {
+        if (command.includes("status --porcelain")) {
+          return { exitCode: 0, stderr: "", stdout: " M package.json\n" };
+        }
+        if (command.includes("JSON.parse")) {
+          if (parseFailuresLeft > 0) {
+            parseFailuresLeft -= 1;
+            return {
+              exitCode: 65,
+              stderr:
+                "SyntaxError: Expected ',' or '}' after property value in JSON at position 214",
+              stdout: "[makeademo:parse] package.json\n",
+            };
+          }
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const prompts: string[] = [];
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(input) {
+          prompts.push(input.prompt);
+          return { exitCode: 0, stderr: "", stdout: "repaired" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const repaired = await harness.dependencies.repairPreparation?.({
+      demoBrief: { keyProductFeatures: ["dashboard"] },
+      failureReport: {
+        ...validationReport("preparation-preflight", "failed"),
+        failureClassification: "install failure",
+      },
+      normalizedSupportingDocuments: undefined,
+      preparationManifest: manifest,
+      repoProfile: repoProfile(),
+      repoSourcePaths: ["package.json", "src/App.tsx"],
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(repaired?.manifest).toEqual(manifest);
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("package.json");
+    expect(prompts[1]).toContain("SyntaxError");
+  });
+
+  it("returns the repair despite a persistent parse failure once attempts are exhausted", async () => {
+    // The parse probe steers repairs; it never gates them (N100). On the
+    // final artifact attempt the manifest ships as-is and the runtime
+    // preflight judges the workspace.
+    const manifest = preparationManifest();
+    let parseBatchRuns = 0;
+    const workspace = createFakeAgentHarnessWorkspace({
+      async execute(command) {
+        if (
+          command === "cat '/workspace/.makeademo/preparation-manifest.json'"
+        ) {
+          return { exitCode: 0, stderr: "", stdout: JSON.stringify(manifest) };
+        }
+        if (command.includes("status --porcelain")) {
+          return { exitCode: 0, stderr: "", stdout: " M src/demo-data.js\n" };
+        }
+        if (command.includes("node --check")) {
+          parseBatchRuns += 1;
+          return {
+            exitCode: 65,
+            stderr: "SyntaxError: Unexpected token ';'",
+            stdout: "[makeademo:parse] src/demo-data.js\n",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    let runs = 0;
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run() {
+          runs += 1;
+          return { exitCode: 0, stderr: "", stdout: "repaired" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+      retryPolicy: { agentArtifactAttempts: 2 },
+    });
+
+    const repaired = await harness.dependencies.repairPreparation?.({
+      demoBrief: { keyProductFeatures: ["dashboard"] },
+      failureReport: {
+        ...validationReport("preparation-preflight", "failed"),
+        failureClassification: "start failure",
+      },
+      normalizedSupportingDocuments: undefined,
+      preparationManifest: manifest,
+      repoProfile: repoProfile(),
+      repoSourcePaths: ["package.json", "src/App.tsx"],
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(repaired?.manifest).toEqual(manifest);
+    expect(runs).toBe(2);
+    // The final attempt skips the probe: with no retry left, the signal
+    // could only gate, and the probe never gates.
+    expect(parseBatchRuns).toBe(1);
+  });
+
   it("retries an initial-preparation stall without consuming an artifact attempt", async () => {
     // Midday's 2026-08-08 regression: a 300s inactivity stall consumed one
     // of three artifact attempts because the initial-preparation loop had

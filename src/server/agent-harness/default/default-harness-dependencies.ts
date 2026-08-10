@@ -1386,10 +1386,26 @@ export async function createDefaultAgentHarnessDependencies(
           continue;
         }
         if (manifestResult.ok) {
-          return {
-            manifest: manifestResult.manifest,
-            ...(opencodeSessionId === undefined ? {} : { opencodeSessionId }),
-          };
+          // On the final attempt the probe is skipped: with no retry left
+          // its signal could only gate, and the probe never gates (N100) —
+          // the runtime preflight judges the workspace instead.
+          const parseFailure =
+            attempt === retryPolicy.agentArtifactAttempts
+              ? undefined
+              : await readRepairedSourceParseFailure(workspace);
+          if (parseFailure === undefined) {
+            return {
+              manifest: manifestResult.manifest,
+              ...(opencodeSessionId === undefined ? {} : { opencodeSessionId }),
+            };
+          }
+          await options.logger?.warn({
+            event: "preparation.repair.parse-check-failed",
+            message: parseFailure.slice(0, 500),
+          });
+          artifactError = parseFailure;
+          attempt += 1;
+          continue;
         }
         artifactError = manifestResult.error;
         if (manifestResult.failureClassification === "missing") {
@@ -3783,6 +3799,85 @@ function createPreparationDiffOperationError(error: unknown): Error {
 
 function readUnknownErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+// `git status` cannot rank changed files by relevance, so the parse probe
+// bounds its work by count; real preparations change far fewer files.
+const parseProbeFileLimit = 24;
+// Distinguishes "a checked file failed to parse" from environmental
+// nonzero exits (git absent, cd failed), which carry no parse evidence.
+const parseProbeFailureExitCode = 65;
+const parseProbeMarker = "[makeademo:parse] ";
+
+function readParseProbeCandidatePaths(porcelainStatus: string): string[] {
+  return porcelainStatus
+    .split("\n")
+    .flatMap((line) => {
+      // Porcelain v1: two status columns, a space, then the path (renames
+      // list `old -> new`). Deletions leave nothing to parse.
+      if (line.length < 4 || line.slice(0, 2).includes("D")) {
+        return [];
+      }
+      const rawPath = line.slice(3);
+      const path = rawPath.includes(" -> ")
+        ? (rawPath.split(" -> ").at(-1) ?? rawPath)
+        : rawPath;
+      return /\.(?:cjs|js|json|mjs)$/.test(path) &&
+        !path.startsWith('"') &&
+        !/(?:^|\/)(?:node_modules|\.git|\.makeademo|\.opencode)\//.test(path)
+        ? [path]
+        : [];
+    })
+    .slice(0, parseProbeFileLimit);
+}
+
+/**
+ * Probes whether the files preparation changed still parse, using cheap
+ * parsers the sandbox already carries: `node --check` for CommonJS/ESM
+ * sources and a JSON.parse round-trip for JSON. Returns steering prose for
+ * the first file that provably fails, and undefined when everything parses
+ * or no parser applies (missing node, unparseable status, exotic paths) —
+ * the probe steers repairs, it never gates them (N100).
+ */
+async function readRepairedSourceParseFailure(
+  workspace: AgentHarnessWorkspace,
+): Promise<string | undefined> {
+  const status = await workspace.execute(
+    `git -C ${shellQuote(workspaceRepoDirectory)} status --porcelain -uall`,
+  );
+  if (status.exitCode !== 0) {
+    return undefined;
+  }
+  const paths = readParseProbeCandidatePaths(status.stdout);
+  if (paths.length === 0) {
+    return undefined;
+  }
+  const checks = paths.map((path) => {
+    const check = path.endsWith(".json")
+      ? `node -e 'JSON.parse(require("fs").readFileSync(process.argv.pop(),"utf8"))' ${shellQuote(path)}`
+      : `node --check ${shellQuote(path)}`;
+    return `${check} || { echo ${shellQuote(`${parseProbeMarker}${path}`)}; exit ${parseProbeFailureExitCode}; }`;
+  });
+  const probe = await workspace.execute(
+    [
+      `cd ${shellQuote(workspaceRepoDirectory)} || exit 0`,
+      "command -v node >/dev/null 2>&1 || exit 0",
+      ...checks,
+      "exit 0",
+    ].join("\n"),
+  );
+  if (probe.exitCode !== parseProbeFailureExitCode) {
+    return undefined;
+  }
+  const failedPath = probe.stdout
+    .split("\n")
+    .reverse()
+    .find((line) => line.startsWith(parseProbeMarker))
+    ?.slice(parseProbeMarker.length);
+  const diagnostic = probe.stderr.trim().split("\n").slice(-12).join("\n");
+  return `The repaired workspace no longer parses: ${
+    failedPath ?? "a changed file"
+  } fails its syntax check.\n${diagnostic}\nFix the syntax in that file in place. The rest of the repair and the preparation manifest are preserved and will be re-read as-is.`;
 }
 
 async function writeWorkspaceJson(
