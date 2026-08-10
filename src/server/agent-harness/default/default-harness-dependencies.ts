@@ -122,6 +122,8 @@ import {
 import {
   createOfflineLifecycleCommand,
   hasNetworkInstallFailureSignature,
+  parseInstallCommand,
+  readYarnInstallVariant,
   runDependencyInstallThroughGate,
 } from "../tools/dependency-install-gate";
 import {
@@ -2188,11 +2190,26 @@ async function validateResolvedSubmittedCodeRuntime(
     // install leaves its partial cache behind and never reaches the
     // success-path prune, so the next attempt refetches into a full overlay
     // (twenty's attempt-4 ENOSPC in fetch/zip-convert, 2026-08-08). Every
-    // install starts from a pruned cache; the open window refetches what it
-    // needs. Best-effort by construction.
+    // install starts by dropping trees it provably cannot reuse and pruning
+    // the caches; the open window refetches what it needs. Best-effort by
+    // construction.
+    const staleTreeDrop = createStaleDependencyTreeDropCommand({
+      installCommand,
+      installDirectory: absoluteAppDirectory(
+        runtimeTarget?.install.cwd ?? manifest.appDir,
+      ),
+      ...(input.repoProfile.yarnVariant === undefined
+        ? {}
+        : { yarnVariant: input.repoProfile.yarnVariant }),
+    });
     await executeSubmitted(
       input.workspace,
-      `${packageManagerCachePruneCommand}; df -k /workspace 2>/dev/null | tail -1 | sed "s|^|[makeademo:disk] cache-prune before |"; true`,
+      [
+        ...(staleTreeDrop === undefined ? [] : [staleTreeDrop]),
+        packageManagerCachePruneCommand,
+        `df -k /workspace 2>/dev/null | tail -1 | sed "s|^|[makeademo:disk] cache-prune before |"`,
+        "true",
+      ].join("; "),
     );
     let installEvidenceLogPath: string | undefined;
     const runInstall = (command: string) =>
@@ -3277,6 +3294,46 @@ const dependencyInstallTimeoutMs = 20 * 60_000;
 // re-provision managers from it.
 const packageManagerCachePruneCommand =
   "rm -rf /root/.yarn/berry/cache /root/.npm/_cacache /root/.local/share/pnpm/store 2>/dev/null";
+
+// The state file each manager writes inside node_modules when it owns the
+// tree; its absence proves another manager built what is there. Bun leaves
+// no in-tree marker, so bun trees are never judged foreign.
+const dependencyTreeReuseMarkers: Record<string, string> = {
+  npm: ".package-lock.json",
+  pnpm: ".modules.yaml",
+};
+
+/**
+ * The workspace reset deliberately preserves node_modules so a same-manager
+ * install can reuse the prior attempt's tree. A tree built by a different
+ * package manager is never reused — the current manager rebuilds around it
+ * while the old tree holds the space (one of twenty's three coexisting
+ * dependency-tree copies, 2026-08-08) — so when the install directory's
+ * tree lacks the current manager's own state marker, every preserved tree
+ * is dead weight and is dropped before the install. Returns undefined when
+ * the manager leaves no in-tree marker to check or is unrecognized.
+ */
+function createStaleDependencyTreeDropCommand(input: {
+  installCommand: string;
+  installDirectory: string;
+  yarnVariant?: "berry" | "classic";
+}): string | undefined {
+  const manager = parseInstallCommand(input.installCommand).packageManager;
+  const marker =
+    manager === "yarn"
+      ? readYarnInstallVariant(input.installCommand, input.yarnVariant) ===
+        "berry"
+        ? ".yarn-state.yml"
+        : ".yarn-integrity"
+      : manager === undefined
+        ? undefined
+        : dependencyTreeReuseMarkers[manager];
+  if (marker === undefined) {
+    return undefined;
+  }
+  const tree = `${input.installDirectory}/node_modules`;
+  return `if [ -d ${shellQuote(tree)} ] && [ ! -e ${shellQuote(`${tree}/${marker}`)} ]; then find /workspace -mindepth 1 -name node_modules -prune -exec rm -rf {} + 2>/dev/null; echo "[makeademo:disk] stale-tree dropped node_modules not built by ${manager}"; fi`;
+}
 const submittedCodeBuildTimeoutMs = 15 * 60_000;
 
 async function probeSubmittedCodeRuntime(

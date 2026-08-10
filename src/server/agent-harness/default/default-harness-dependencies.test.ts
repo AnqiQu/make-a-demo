@@ -4513,6 +4513,86 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
   });
 
+  it("drops preserved node_modules that another package manager built before installing", async () => {
+    // The workspace reset preserves node_modules for same-manager reuse; a
+    // tree the current manager cannot reuse just holds the space while the
+    // manager rebuilds around it — one of twenty's three coexisting
+    // dependency-tree copies (2026-08-08). A tree missing the manager's own
+    // state marker is provably foreign and is dropped first.
+    const commands: string[] = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "pnpm install --frozen-lockfile",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    const dropIndex = commands.findIndex((command) =>
+      command.includes("stale-tree"),
+    );
+    const installIndex = commands.findIndex((command) =>
+      command.includes("pnpm install"),
+    );
+    expect(dropIndex).toBeGreaterThanOrEqual(0);
+    expect(installIndex).toBeGreaterThan(dropIndex);
+    // Only a tree missing pnpm's own state marker is foreign; a reusable
+    // same-manager tree stays for the incremental install.
+    expect(commands[dropIndex]).toContain(
+      "/workspace/repo/node_modules/.modules.yaml",
+    );
+    expect(commands[dropIndex]).toContain(
+      "-name node_modules -prune -exec rm -rf",
+    );
+  });
+
+  it("keeps preserved trees for a manager that leaves no reuse signature", async () => {
+    const commands: string[] = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    // The default fixture installs with bun, which writes no in-tree state
+    // marker — without evidence of a foreign tree, nothing is dropped.
+    await harness.dependencies.validatePreparation({
+      preparationManifest: preparationManifest(),
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(commands.some((command) => command.includes("stale-tree"))).toBe(
+      false,
+    );
+    expect(
+      commands.some((command) => command.includes("-name node_modules -prune")),
+    ).toBe(false);
+  });
+
   it("rethrows a control-plane failure as infrastructure instead of a validation report", async () => {
     // Midday (2026-08-09): an unclassified 409 from the network toggle
     // became a Preparation Fallback Prompt asking the maker to repair the
