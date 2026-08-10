@@ -24,6 +24,16 @@ describe("withCpuLivenessHeartbeat", () => {
     );
   });
 
+  it("lets callers shorten the sample interval so tests can observe a heartbeat quickly", () => {
+    const wrapped = withCpuLivenessHeartbeat("sleep 5", {
+      sampleIntervalSeconds: 1,
+    });
+
+    expect(wrapped).toContain("while sleep 1;");
+    // The default stays one line per minute for production transcripts.
+    expect(withCpuLivenessHeartbeat("sleep 5")).toContain("while sleep 60;");
+  });
+
   it("seals the wrapped command's stdin so its children cannot drain the transport", () => {
     const wrapped = withCpuLivenessHeartbeat("npx prisma generate");
 

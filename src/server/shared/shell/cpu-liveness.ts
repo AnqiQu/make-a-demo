@@ -48,10 +48,15 @@ const readProcessGroupCpu = (processGroupVariable: string) =>
  * and the sampler would watch the idle shell's group instead of the
  * command's (the batch-wide silent heartbeat, 2026-08-09).
  */
-export function withCpuLivenessHeartbeat(command: string): string {
+export function withCpuLivenessHeartbeat(
+  command: string,
+  options: { sampleIntervalSeconds?: number } = {},
+): string {
+  const sampleIntervalSeconds =
+    options.sampleIntervalSeconds ?? cpuSampleIntervalSeconds;
   const sampler = [
     `makeademo_alive_pg=$(cat /proc/self/stat 2>/dev/null | awk '{ s = $0; sub(/^[^)]*\\) /, "", s); split(s, f, " "); print f[3] }')`,
-    `{ makeademo_alive_last=""; while sleep ${cpuSampleIntervalSeconds}; do makeademo_alive_now=$(${readProcessGroupCpu("makeademo_alive_pg")}); if [ -n "$makeademo_alive_now" ] && [ "$makeademo_alive_now" != "$makeademo_alive_last" ]; then echo "[makeademo:alive] cpu $makeademo_alive_now"; fi; makeademo_alive_last="$makeademo_alive_now"; done; } & makeademo_alive_pid=$!`,
+    `{ makeademo_alive_last=""; while sleep ${sampleIntervalSeconds}; do makeademo_alive_now=$(${readProcessGroupCpu("makeademo_alive_pg")}); if [ -n "$makeademo_alive_now" ] && [ "$makeademo_alive_now" != "$makeademo_alive_last" ]; then echo "[makeademo:alive] cpu $makeademo_alive_now"; fi; makeademo_alive_last="$makeademo_alive_now"; done; } & makeademo_alive_pid=$!`,
   ].join("; ");
   return `${sampler}; { ${command}; } </dev/null; makeademo_alive_status=$?; kill "$makeademo_alive_pid" 2>/dev/null; wait "$makeademo_alive_pid" 2>/dev/null; sh -c "exit $makeademo_alive_status"`;
 }
