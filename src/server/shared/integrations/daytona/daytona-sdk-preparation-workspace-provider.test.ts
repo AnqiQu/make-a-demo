@@ -325,6 +325,37 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     expect(thrown).toMatchObject({ operation: "sandbox.network-update" });
   });
 
+  it("routes control-plane attribution through a caller-provided pipeline logger", async () => {
+    // The pipeline hands the provider its own structured logger (the
+    // mini-matrix ran with every daytona.* event dark because only sinks
+    // were wireable, 2026-08-10); events must land there attributed.
+    const entries: Array<Record<string, unknown>> = [];
+    const calls: unknown[] = [];
+    const sandbox = fakeLinkedSandbox(calls, "sandbox_123", "ok");
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: {
+        async create(input: unknown) {
+          calls.push({ create: input });
+          return sandbox;
+        },
+        async delete() {},
+      } as never,
+      controlPlaneLogger: {
+        error: async (entry) => void entries.push(entry),
+        info: async (entry) => void entries.push(entry),
+        warn: async (entry) => void entries.push(entry),
+      },
+    });
+
+    await provider.create();
+
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        event: "daytona.agent-sandbox.create.attempt",
+      }),
+    );
+  });
+
   it("attributes every control-plane attempt to its seam in the pipeline log", async () => {
     // A 27-minute silent gap must never again be unattributable: each
     // attempt names its operation and sandbox before the SDK call starts.

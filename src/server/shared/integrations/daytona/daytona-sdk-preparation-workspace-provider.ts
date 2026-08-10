@@ -137,6 +137,13 @@ export type DaytonaSdkPreparationWorkspaceProviderOptions = {
   client?: DaytonaSdkClient;
   /** Overrides the classify-and-retry envelope; tests inject an instant one. */
   controlPlane?: DaytonaControlPlaneEnvelope;
+  /**
+   * Structured logger for the default envelope's `daytona.<operation>.*`
+   * attribution events — the pipeline passes its own so control-plane
+   * waits land in the run's pipeline log. Ignored when `controlPlane` is
+   * given; without either, events fall back to `sandboxLogSinks`.
+   */
+  controlPlaneLogger?: Pick<PipelineEventLogger, "error" | "info" | "warn">;
   commandTimeoutMs?: number;
   diskGB?: number;
   logWriteTimeoutMs?: number;
@@ -270,7 +277,11 @@ export class DaytonaSdkPreparationWorkspaceProvider
     this.sandboxLogSinks = options.sandboxLogSinks ?? [];
     this.controlPlane =
       options.controlPlane ??
-      createControlPlaneEnvelopeForSinks(this.sandboxLogSinks);
+      (options.controlPlaneLogger === undefined
+        ? createControlPlaneEnvelopeForSinks(this.sandboxLogSinks)
+        : createDaytonaControlPlaneEnvelope({
+            logger: options.controlPlaneLogger,
+          }));
   }
 
   async create(): Promise<AgentHarnessWorkspaceHandle> {

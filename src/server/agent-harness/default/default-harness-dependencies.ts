@@ -1917,6 +1917,16 @@ async function createDaytonaWorkspaceProvider(input: {
     ...(input.logger === undefined ? {} : { logger: input.logger }),
   });
   return new DaytonaSdkPreparationWorkspaceProvider({
+    // Control-plane waits and failures must be attributable from the run's
+    // own pipeline log (the mini-matrix ran every daytona.* event dark
+    // because nothing carried the logger down, 2026-08-10).
+    ...(input.logger === undefined
+      ? {}
+      : {
+          controlPlaneLogger: input.logger.child({
+            component: "daytona-control-plane",
+          }),
+        }),
     secrets: createOpenCodeProviderSandboxSecrets({
       providerID: input.providerID,
       providerSecretName,
