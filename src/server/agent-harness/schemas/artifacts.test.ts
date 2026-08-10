@@ -125,6 +125,77 @@ describe("agent harness artifact schemas", () => {
     ).toThrow(/exercised is only valid for feature interactions/);
   });
 
+  it("parses the feature verdict ledger on a validation report", () => {
+    // N106: grounding emits one structured verdict per prepared feature so
+    // repair steering and the verify-features probe share one vocabulary.
+    const report = readValidationReport({
+      ...validValidationReport(),
+      featureVerdicts: [
+        {
+          evidence: ["click-interaction-1-1"],
+          featureId: "post-article",
+          groundedBy: "interaction",
+          verdict: "grounded",
+        },
+        {
+          detail:
+            'best on-screen match "Holdings" was awarded to portfolio-overview',
+          evidence: ["/en/portfolio"],
+          failedBecause: "route-shared-with-winners",
+          featureId: "allocations-view",
+          verdict: "failed",
+        },
+      ],
+    });
+
+    expect(report.featureVerdicts).toEqual([
+      {
+        evidence: ["click-interaction-1-1"],
+        featureId: "post-article",
+        groundedBy: "interaction",
+        verdict: "grounded",
+      },
+      {
+        detail:
+          'best on-screen match "Holdings" was awarded to portfolio-overview',
+        evidence: ["/en/portfolio"],
+        failedBecause: "route-shared-with-winners",
+        featureId: "allocations-view",
+        verdict: "failed",
+      },
+    ]);
+  });
+
+  it("rejects feature verdicts whose reason contradicts the verdict", () => {
+    expect(() =>
+      readValidationReport({
+        ...validValidationReport(),
+        featureVerdicts: [
+          {
+            failedBecause: "token-mismatch",
+            featureId: "post-article",
+            verdict: "grounded",
+          },
+        ],
+      }),
+    ).toThrow(
+      "featureVerdicts[0] with verdict grounded must set groundedBy and omit failedBecause",
+    );
+
+    expect(() =>
+      readValidationReport({
+        ...validValidationReport(),
+        featureVerdicts: [
+          {
+            failedBecause: "vibes",
+            featureId: "post-article",
+            verdict: "failed",
+          },
+        ],
+      }),
+    ).toThrow("featureVerdicts[0].failedBecause must be one of");
+  });
+
   it("rejects artifacts that would break downstream validation boundaries", () => {
     expect(() =>
       readRunPlan({ ...validRunPlan(), expectedLocalUrl: "https://app.test" }),

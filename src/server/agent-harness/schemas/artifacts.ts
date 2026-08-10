@@ -240,11 +240,41 @@ export type FidelityAdjudicationVerdict = {
   verdict: "confirm" | "overturn";
 };
 
+/**
+ * One prepared feature's structured grounding verdict (N106). Producers must
+ * emit exactly one entry per prepared feature per grounding attempt, on
+ * passed and failed reports alike: the enums — not prose — are the shared
+ * vocabulary of the exploration gate, the verify-features probe, and repair
+ * steering, so fingerprints and hints can key off them. A `grounded` verdict
+ * carries `groundedBy` naming the strongest evidence class; a `failed`
+ * verdict carries `failedBecause` naming the first blocker repair must
+ * clear. `evidence` lists the deciding action ids, routes, or observed
+ * strings; `detail` carries the decisive specifics (the best-scoring
+ * on-screen string for token-mismatch, the error text for error-state
+ * routes) rather than restating the enum.
+ */
+export type FeatureVerdict = {
+  detail?: string;
+  evidence?: string[];
+  failedBecause?:
+    | "app-unreachable"
+    | "auth-wall"
+    | "error-state-route"
+    | "no-assert-candidates"
+    | "route-shared-with-winners"
+    | "skeleton-rows"
+    | "token-mismatch";
+  featureId: string;
+  groundedBy?: "assert" | "declared-proof" | "interaction" | "state-transition";
+  verdict: "failed" | "grounded";
+};
+
 export type ValidationReport = {
   status: "failed" | "passed";
   stage: string;
   attemptedCommand?: string;
   exitCode?: number;
+  featureVerdicts?: FeatureVerdict[];
   fidelityAdjudication?: FidelityAdjudicationRecord;
   logsSummary: string;
   stdoutExcerpts: string[];
@@ -898,6 +928,63 @@ export function readFidelityAdjudicationVerdicts(
   });
 }
 
+function readFeatureVerdictArray(value: unknown): FeatureVerdict[] {
+  return readArray(value, "featureVerdicts", (item, index) => {
+    const path = `featureVerdicts[${index}]`;
+    const record = assertRecord(item, path);
+    const verdict = readEnum(record, "verdict", ["failed", "grounded"], path);
+    if (
+      verdict === "grounded"
+        ? record.groundedBy === undefined || record.failedBecause !== undefined
+        : record.failedBecause === undefined || record.groundedBy !== undefined
+    ) {
+      throw new Error(
+        verdict === "grounded"
+          ? `${path} with verdict grounded must set groundedBy and omit failedBecause`
+          : `${path} with verdict failed must set failedBecause and omit groundedBy`,
+      );
+    }
+    return {
+      ...(record.detail === undefined
+        ? {}
+        : { detail: readNonEmptyString(record, "detail", path) }),
+      ...(record.evidence === undefined
+        ? {}
+        : { evidence: readStringArray(record, "evidence", path) }),
+      ...(record.failedBecause === undefined
+        ? {}
+        : {
+            failedBecause: readEnum(
+              record,
+              "failedBecause",
+              [
+                "app-unreachable",
+                "auth-wall",
+                "error-state-route",
+                "no-assert-candidates",
+                "route-shared-with-winners",
+                "skeleton-rows",
+                "token-mismatch",
+              ],
+              path,
+            ),
+          }),
+      featureId: readNonEmptyString(record, "featureId", path),
+      ...(record.groundedBy === undefined
+        ? {}
+        : {
+            groundedBy: readEnum(
+              record,
+              "groundedBy",
+              ["assert", "declared-proof", "interaction", "state-transition"],
+              path,
+            ),
+          }),
+      verdict,
+    };
+  });
+}
+
 export function readValidationReport(value: unknown): ValidationReport {
   const record = assertRecord(value, "ValidationReport");
   return {
@@ -912,6 +999,9 @@ export function readValidationReport(value: unknown): ValidationReport {
     ...optionalKey(record, "exitCode", readNonNegativeNumber),
     ...optionalKey(record, "failingFeatureIds", readStringArray),
     ...optionalKey(record, "failureClassification", readNonEmptyString),
+    ...(record.featureVerdicts === undefined
+      ? {}
+      : { featureVerdicts: readFeatureVerdictArray(record.featureVerdicts) }),
     ...(record.fidelityAdjudication === undefined
       ? {}
       : {
