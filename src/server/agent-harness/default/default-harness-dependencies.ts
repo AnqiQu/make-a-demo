@@ -2184,6 +2184,16 @@ async function validateResolvedSubmittedCodeRuntime(
   if (input.installDependencies !== false) {
     const installCommand =
       manifest.installCommandUsed || input.runPlan.installCommand;
+    // The attempts that most need headroom are the failing ones: a failed
+    // install leaves its partial cache behind and never reaches the
+    // success-path prune, so the next attempt refetches into a full overlay
+    // (twenty's attempt-4 ENOSPC in fetch/zip-convert, 2026-08-08). Every
+    // install starts from a pruned cache; the open window refetches what it
+    // needs. Best-effort by construction.
+    await executeSubmitted(
+      input.workspace,
+      `${packageManagerCachePruneCommand}; df -k /workspace 2>/dev/null | tail -1 | sed "s|^|[makeademo:disk] cache-prune before |"; true`,
+    );
     let installEvidenceLogPath: string | undefined;
     const runInstall = (command: string) =>
       runDependencyInstallThroughGate({
@@ -2502,15 +2512,12 @@ async function validateResolvedSubmittedCodeRuntime(
         });
       }
     }
-    // The package archives double-store next to node_modules (~1GB for a
-    // berry monorepo — twenty's ENOSPC, 2026-08-08) and nothing sealed
-    // reads them after the offline lifecycle: any future install reopens
-    // the network window and refetches. The corepack cache is untouched —
-    // sealed node-line swaps re-provision managers from it. Best-effort by
-    // construction.
+    // Nothing sealed reads the archives after the offline lifecycle (the
+    // --immutable re-run needed them; this slots after it), so the space
+    // returns to build outputs and capture. Best-effort by construction.
     await executeSubmitted(
       input.workspace,
-      `rm -rf /root/.yarn/berry/cache /root/.npm/_cacache /root/.local/share/pnpm/store 2>/dev/null; df -k /workspace 2>/dev/null | tail -1 | sed "s|^|[makeademo:disk] cache-prune after |"; true`,
+      `${packageManagerCachePruneCommand}; df -k /workspace 2>/dev/null | tail -1 | sed "s|^|[makeademo:disk] cache-prune after |"; true`,
     );
   }
 
@@ -3262,6 +3269,14 @@ const runtimeReadinessMaxDelayMs = 15_000;
  * classified timeout instead of an opaque provider error.
  */
 const dependencyInstallTimeoutMs = 20 * 60_000;
+
+// The package archives double-store next to node_modules (~1GB for a berry
+// monorepo — twenty's ENOSPC, 2026-08-08) and nothing sealed reads them
+// between installs: any future install reopens the network window and
+// refetches. The corepack cache is untouched — sealed node-line swaps
+// re-provision managers from it.
+const packageManagerCachePruneCommand =
+  "rm -rf /root/.yarn/berry/cache /root/.npm/_cacache /root/.local/share/pnpm/store 2>/dev/null";
 const submittedCodeBuildTimeoutMs = 15 * 60_000;
 
 async function probeSubmittedCodeRuntime(

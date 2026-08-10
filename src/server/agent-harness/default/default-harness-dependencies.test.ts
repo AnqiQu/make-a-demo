@@ -4463,6 +4463,56 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(lifecycle).toContain("[makeademo:alive] cpu");
   });
 
+  it("prunes the package-manager caches before the dependency install so failing attempts get headroom", async () => {
+    // The only prune used to run on the success path, so the attempts that
+    // most needed the headroom — the failing ones — refetched into a full
+    // overlay (twenty's attempt-4 ENOSPC in fetch/zip-convert, 2026-08-08).
+    const commands: string[] = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        if (command.includes("npm ci")) {
+          return {
+            exitCode: 1,
+            stderr:
+              "npm error code ENOSPC\nnpm error nospc ENOSPC: no space left on device, write",
+            stdout: "",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report.status).toBe("failed");
+    const pruneIndex = commands.findIndex((command) =>
+      command.includes("cache-prune before"),
+    );
+    const installIndex = commands.findIndex((command) =>
+      command.includes("npm ci"),
+    );
+    expect(pruneIndex).toBeGreaterThanOrEqual(0);
+    expect(installIndex).toBeGreaterThan(pruneIndex);
+    expect(commands[pruneIndex]).toContain(
+      "rm -rf /root/.yarn/berry/cache /root/.npm/_cacache /root/.local/share/pnpm/store",
+    );
+  });
+
   it("rethrows a control-plane failure as infrastructure instead of a validation report", async () => {
     // Midday (2026-08-09): an unclassified 409 from the network toggle
     // became a Preparation Fallback Prompt asking the maker to repair the
@@ -4928,7 +4978,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
     });
 
     const pruneIndex = commands.findIndex((command) =>
-      command.includes("berry/cache"),
+      command.includes("cache-prune after"),
     );
     const lifecycleIndex = commands.findIndex((command) =>
       command.includes("npm rebuild"),
@@ -6035,10 +6085,14 @@ describe("createDefaultAgentHarnessDependencies", () => {
       }),
     ).resolves.toMatchObject({ status: "passed" });
 
-    expect(commands[0]).toContain(
-      "bun install --lockfile-only --ignore-scripts",
+    const reconcileIndex = commands.findIndex((command) =>
+      command.includes("bun install --lockfile-only --ignore-scripts"),
     );
-    expect(commands[1]).toContain("bun install --frozen-lockfile");
+    const frozenIndex = commands.findIndex((command) =>
+      command.includes("bun install --frozen-lockfile"),
+    );
+    expect(reconcileIndex).toBeGreaterThanOrEqual(0);
+    expect(frozenIndex).toBeGreaterThan(reconcileIndex);
     expect(promotedFiles).toEqual([["bun.lock"]]);
   });
 
