@@ -143,6 +143,32 @@ export function readPreparationFidelityCandidates(input: {
         )}. The workspace diff is empty.`,
       });
     }
+    // The inverse sham passes the check above by claiming nothing at all:
+    // midday's accepted manifest carried an empty diff, empty demo-mode and
+    // fixture declarations, empty seams — and two demoable features
+    // (2026-08-09). "Preserves the screened application" is trivially true
+    // of a preparation that changed nothing, so the vacuous claim must
+    // reach the judge instead of passing silently; a repo that genuinely
+    // demos unchanged survives adjudication by saying so.
+    const featureInventory =
+      input.preparationManifest.productContext.featureInventory;
+    if (
+      unsupportedClaims.length === 0 &&
+      featureInventory.length > 0 &&
+      input.preparationManifest.localDemoModeChanges.length === 0 &&
+      featureInventory.every(
+        (feature) => (feature.dataSeams ?? []).length === 0,
+      )
+    ) {
+      violations.push({
+        hint: repairHints.truthfulManifest,
+        message: `The workspace diff is empty and the manifest declares no local demo modes, added fixtures, or data seams, yet it claims ${featureInventory.length} demoable feature(s): ${featureInventory
+          .map(({ id }) => id)
+          .join(
+            ", ",
+          )}. A preparation that changed nothing must record how those features run offline — localDemoModeChanges enacted through envUsed — or actually prepare them.`,
+      });
+    }
   }
   // Declared data seams are referential claims (N100): the fixture module
   // must be a file the preparation actually created or changed, and the

@@ -220,6 +220,27 @@ describe("validatePreparationFidelity", () => {
     expect(report.status).toBe("passed");
   });
 
+  it("routes an empty-diff manifest that still claims demoable features to the judge", () => {
+    // Midday's sham (2026-08-09): empty workspace diff, empty
+    // localDemoModeChanges, mocksAndFixturesAdded, and dataSeams — and two
+    // claimed features. "Preserves the screened application" was trivially
+    // true of a preparation that changed nothing, and fidelity passed it.
+    // A manifest claiming demoable features must either carry demo
+    // machinery or say how the features run unchanged.
+    const report = validatePreparationFidelity({
+      preparationManifest: manifest(),
+      repoSourceFiles: new Map(),
+      workspaceDiff: workspaceDiff([], ""),
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "product fidelity violation",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain("tracker");
+    expect(report.logsSummary).toContain("workspace diff is empty");
+  });
+
   it("rejects a standalone replacement runtime for an existing product", () => {
     const report = validateDiff({
       createdFiles: ["demo/server.ts"],

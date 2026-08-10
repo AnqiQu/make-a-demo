@@ -3800,7 +3800,12 @@ function preparationManifest() {
     id: "prep_001",
     installCommandUsed: "bun install --frozen-lockfile",
     knownLimitations: [],
-    localDemoModeChanges: [],
+    // An honest manifest over the stubs' often-empty diffs: the vacuity
+    // candidate (N111) targets manifests that claim features while
+    // declaring no demo machinery at all.
+    localDemoModeChanges: [
+      "MAKEADEMO_DEMO=true activates the repository's existing demo mode.",
+    ],
     mocksAndFixturesAdded: [],
     ports: [3000],
     productContext: {
