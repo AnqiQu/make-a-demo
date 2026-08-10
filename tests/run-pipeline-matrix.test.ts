@@ -125,6 +125,46 @@ describe("runPipelineMatrix", () => {
     ]);
   });
 
+  it("staggers runnable launches with bounded jitter when enabled", async () => {
+    // Eleven sandboxes created in the same second are their own
+    // control-plane herd (2026-08-09): create calls queue behind each
+    // other's state changes and the batch synchronizes onto every
+    // conflict window. Spreading launches 30-60s apart de-correlates them.
+    const sleeps: number[] = [];
+    const results = await runPipelineMatrix(
+      resolveMatrixEntries(
+        [
+          { name: "alpha", repoUrl: "https://github.com/example/alpha" },
+          { name: "unpublished" },
+          { name: "bravo", repoUrl: "https://github.com/example/bravo" },
+          { name: "charlie", repoUrl: "https://github.com/example/charlie" },
+        ],
+        {},
+      ),
+      {
+        launchStagger: {
+          random: () => 0.5,
+          sleep: async (delayMs) => {
+            sleeps.push(delayMs);
+          },
+        },
+        log: () => {},
+        runPipeline: async () => passingPipelineResult(),
+      },
+    );
+
+    // The first runnable entry launches immediately; each later one waits
+    // its cumulative offset (random 0.5 centers the 30-60s gap at 45s).
+    // Skipped entries consume no stagger slot.
+    expect(sleeps).toEqual([45_000, 90_000]);
+    expect(results.map((result) => result.status)).toEqual([
+      "passed",
+      "skipped",
+      "passed",
+      "passed",
+    ]);
+  });
+
   it("keeps report rows in entry order and keeps going when one entry fails", async () => {
     const results = await runPipelineMatrix(
       resolveMatrixEntries(

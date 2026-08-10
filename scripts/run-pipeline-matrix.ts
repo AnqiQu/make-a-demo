@@ -104,6 +104,33 @@ function matrixRunId(entryName: string, batchStamp: string): string {
   return `matrix-${batchStamp}-${slug}`;
 }
 
+const launchStaggerMinimumMs = 30_000;
+const launchStaggerJitterMs = 30_000;
+
+/**
+ * Cumulative launch offset per entry: the first runnable entry starts
+ * immediately, each later one 30-60s after the previous. Skipped entries
+ * consume no slot.
+ */
+function computeLaunchOffsets(
+  entries: ResolvedMatrixEntry[],
+  random: () => number,
+): number[] {
+  let offsetMs = 0;
+  let firstRunnable = true;
+  return entries.map((entry) => {
+    if (entry.status !== "runnable") {
+      return 0;
+    }
+    if (firstRunnable) {
+      firstRunnable = false;
+      return 0;
+    }
+    offsetMs += launchStaggerMinimumMs + random() * launchStaggerJitterMs;
+    return offsetMs;
+  });
+}
+
 /**
  * Runs every runnable entry concurrently, each in its own sandbox via
  * `runPipeline`, and keeps report rows in entry order regardless of which run
@@ -114,6 +141,17 @@ function matrixRunId(entryName: string, batchStamp: string): string {
 export async function runPipelineMatrix(
   entries: ResolvedMatrixEntry[],
   options: {
+    /**
+     * Spreads runnable launches 30-60s apart. A whole matrix created in the
+     * same second is its own control-plane herd (2026-08-09): the batch
+     * queues behind its own state changes and synchronizes onto every
+     * conflict window. Off by default so single-entry callers and tests
+     * keep instant launches; `main` enables it.
+     */
+    launchStagger?: {
+      random?: () => number;
+      sleep?: (delayMs: number) => Promise<void>;
+    };
     log: (message: string) => void;
     runPipeline?: (
       input: DefaultDemoPipelineInput,
@@ -125,8 +163,17 @@ export async function runPipelineMatrix(
     options.runPipeline ??
     ((input, runId) => runDefaultDemoPipeline(input, { runId }));
   const batchStamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const stagger = options.launchStagger;
+  const launchOffsetsMs =
+    stagger === undefined
+      ? undefined
+      : computeLaunchOffsets(entries, stagger.random ?? Math.random);
+  const sleep =
+    stagger?.sleep ??
+    ((delayMs: number) =>
+      new Promise<void>((resolve) => setTimeout(resolve, delayMs)));
   return Promise.all(
-    entries.map(async (entry): Promise<MatrixEntryResult> => {
+    entries.map(async (entry, entryIndex): Promise<MatrixEntryResult> => {
       if (entry.status === "skipped") {
         options.log(`skipping ${entry.name}: ${entry.reason}`);
         return {
@@ -134,6 +181,13 @@ export async function runPipelineMatrix(
           name: entry.name,
           status: "skipped",
         };
+      }
+      const launchOffsetMs = launchOffsetsMs?.[entryIndex] ?? 0;
+      if (launchOffsetMs > 0) {
+        options.log(
+          `holding ${entry.name} launch for ${Math.round(launchOffsetMs / 1000)}s to spread control-plane load`,
+        );
+        await sleep(launchOffsetMs);
       }
       options.log(`running ${entry.name} (${entry.input.repoUrl})`);
       const startedAt = Date.now();
@@ -287,7 +341,7 @@ async function main(): Promise<void> {
     process.stdout.write(`[matrix] ${message}\n`);
   await guardAgainstHostSleep(log);
   const entries = resolveMatrixEntries(configured, process.env);
-  const results = await runPipelineMatrix(entries, { log });
+  const results = await runPipelineMatrix(entries, { launchStagger: {}, log });
 
   const report = renderMatrixReport(results);
   const reportPath = join(
