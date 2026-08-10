@@ -159,6 +159,17 @@ type PreparedDataSeam = {
 };
 
 /**
+ * The declared-proof vocabulary, shared by the schema reader, the manifest
+ * contract, and the agent-facing feature-verification guide so the three can
+ * never drift apart.
+ */
+export const expectedProofKinds = [
+  "element-appears",
+  "state-transition",
+  "visible-text",
+] as const;
+
+/**
  * The feature's declared proof obligation (N107): a typed expected outcome
  * in Action Catalog vocabulary that the exploration gate executes as
  * first-class grounding. `visible-text` asserts an exact on-screen string;
@@ -272,18 +283,27 @@ export type FidelityAdjudicationVerdict = {
  * on-screen string for token-mismatch, the error text for error-state
  * routes) rather than restating the enum.
  */
+/**
+ * Every failure cause the feature-verdict ledger can assign. The schema
+ * reader, the guide the preparation agent reads, and any renderer that maps
+ * causes to steering all consume this one list, so a new cause cannot land
+ * without its agent-facing explanation.
+ */
+export const featureVerdictFailureCauses = [
+  "app-unreachable",
+  "auth-wall",
+  "declared-proof-failed",
+  "error-state-route",
+  "no-assert-candidates",
+  "route-shared-with-winners",
+  "skeleton-rows",
+  "token-mismatch",
+] as const;
+
 export type FeatureVerdict = {
   detail?: string;
   evidence?: string[];
-  failedBecause?:
-    | "app-unreachable"
-    | "auth-wall"
-    | "declared-proof-failed"
-    | "error-state-route"
-    | "no-assert-candidates"
-    | "route-shared-with-winners"
-    | "skeleton-rows"
-    | "token-mismatch";
+  failedBecause?: (typeof featureVerdictFailureCauses)[number];
   featureId: string;
   groundedBy?: "assert" | "declared-proof" | "interaction" | "state-transition";
   verdict: "failed" | "grounded";
@@ -838,12 +858,7 @@ function readPreparedDemoFeature(
 function readExpectedProof(value: unknown, parentPath: string): ExpectedProof {
   const path = `${parentPath}.expectedProof`;
   const proof = assertRecord(value, path);
-  const kind = readEnum(
-    proof,
-    "kind",
-    ["element-appears", "state-transition", "visible-text"],
-    path,
-  );
+  const kind = readEnum(proof, "kind", expectedProofKinds, path);
   if (kind === "visible-text") {
     return { kind, text: readNonEmptyString(proof, "text", path) };
   }
@@ -1020,16 +1035,7 @@ function readFeatureVerdictArray(value: unknown): FeatureVerdict[] {
             failedBecause: readEnum(
               record,
               "failedBecause",
-              [
-                "app-unreachable",
-                "auth-wall",
-                "declared-proof-failed",
-                "error-state-route",
-                "no-assert-candidates",
-                "route-shared-with-winners",
-                "skeleton-rows",
-                "token-mismatch",
-              ],
+              featureVerdictFailureCauses,
               path,
             ),
           }),

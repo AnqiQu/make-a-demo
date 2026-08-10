@@ -64,6 +64,7 @@ import type {
   AgentHarnessPipelineInput,
 } from "../orchestration/agent-harness";
 import { isDependencyRepairFailure } from "../repair/repair-router";
+import { createFeatureVerificationGuide } from "../repo-preparation/feature-verification-guide";
 import {
   type FidelityCandidate,
   readPatchSectionText,
@@ -1054,6 +1055,11 @@ export async function createDefaultAgentHarnessDependencies(
         workspace,
         artifactPaths.preparationManifestTemplate,
         preparationManifestTemplate,
+      );
+      await writeWorkspaceText(
+        workspace,
+        artifactPaths.featureVerificationGuide,
+        createFeatureVerificationGuide(),
       );
       await writeWorkspaceJson(
         workspace,
@@ -4529,10 +4535,12 @@ function createRepoPreparationPrompt(input: {
       artifactPaths.supportingDocuments,
       artifactPaths.preparationManifestContract,
       artifactPaths.preparationManifestTemplate,
+      artifactPaths.featureVerificationGuide,
       artifactPaths.preparationManifest,
     ],
     instructions: [
       "Prepare the cloned app in /workspace/repo for a local MakeADemo run.",
+      `Read ${artifactPaths.featureVerificationGuide} before selecting or declaring features: it explains how the backend verifies each prepared feature in a real browser and how to declare proofs that pass.`,
       "Before editing, inspect the README and package metadata, then use route definitions to follow only the page components, state/API layers, authentication guards, and fixtures needed for browser-demonstrable flows.",
       `The RunPlan has locked the demo to ${input.runPlan.appDir}. Prepare only that browser application and its internal dependencies; never substitute a marketing, docs, showcase, or other runnable sibling. appDir must remain ${input.runPlan.appDir}.`,
       "You may modify app files in /workspace/repo only when needed to make a deterministic local demo mode.",
@@ -4587,10 +4595,12 @@ function createRepoPreparationRepairPrompt(input: {
       artifactPaths.demoBrief,
       artifactPaths.preparationManifestContract,
       artifactPaths.preparationManifestTemplate,
+      artifactPaths.featureVerificationGuide,
       artifactPaths.preparationManifest,
     ],
     instructions: [
       "Repo Preparation completed without producing the required artifact /workspace/.makeademo/preparation-manifest.json.",
+      `Read ${artifactPaths.featureVerificationGuide} for how the backend verifies each prepared feature and how to declare proofs that pass.`,
       "The artifact may be missing, unreadable, invalid JSON, or schema-invalid.",
       `The RunPlan target is immutable: prepare only ${input.runPlan.appDir}, keep appDir equal to ${input.runPlan.appDir}, and do not use evidence from a runnable sibling application.`,
       `Backend artifact validation failed with: ${input.readError}`,
@@ -4643,6 +4653,7 @@ function createRuntimePreparationRepairPrompt(input: {
       artifactPaths.demoBrief,
       artifactPaths.preparationManifestContract,
       artifactPaths.preparationManifestTemplate,
+      artifactPaths.featureVerificationGuide,
       artifactPaths.preparationManifest,
       validationArtifactPath(input.failureReport.stage),
     ],
@@ -4657,6 +4668,11 @@ function createRuntimePreparationRepairPrompt(input: {
       `stderr evidence: ${elideMiddle(JSON.stringify(input.failureReport.stderrExcerpts), 8_000)}`,
       `stdout evidence: ${elideMiddle(JSON.stringify(input.failureReport.stdoutExcerpts), 8_000)}`,
       `Suggested repair hints: ${JSON.stringify(input.failureReport.suggestedRepairHints)}`,
+      ...(input.failureReport.featureVerdicts === undefined
+        ? []
+        : [
+            `The failure summary lists one verdict per prepared feature; read ${artifactPaths.featureVerificationGuide} for what each verdict means and the repair it calls for.`,
+          ]),
       ...(input.artifactError === undefined
         ? []
         : [

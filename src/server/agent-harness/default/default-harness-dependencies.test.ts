@@ -108,6 +108,61 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(retryPrompt).toContain("Bearer [Redacted]");
   });
 
+  it("seeds the feature verification guide and points the preparation prompt at it", async () => {
+    // N108: the guide is a workspace artifact, not prompt prose — the
+    // sandbox agent has no shell to install skills, so the playbook must
+    // already be on disk and the prompt must name its path (N65 pattern).
+    const writes = new Map<string, string>();
+    const prompts: string[] = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async execute(command) {
+        if (
+          command === "cat '/workspace/.makeademo/preparation-manifest.json'"
+        ) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: JSON.stringify(preparationManifest()),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async writeTextFile(path, contents) {
+        writes.set(path, contents);
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(input) {
+          prompts.push(input.prompt);
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await harness.dependencies.prepareRepo({
+      demoBrief: { keyProductFeatures: ["dashboard"] },
+      normalizedSupportingDocuments: undefined,
+      repoProfile: repoProfile(),
+      repoSourcePaths: ["package.json", "src/App.tsx"],
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    const guide = writes.get(
+      "/workspace/.makeademo/feature-verification-guide.md",
+    );
+    expect(guide).toBeDefined();
+    expect(guide).toContain("token-mismatch");
+    expect(guide).toContain("expectedProof");
+    expect(prompts[0]).toContain(
+      "/workspace/.makeademo/feature-verification-guide.md",
+    );
+  });
+
   it("captures gitignored workspace paths while skipping dependency caches", async () => {
     const commands: string[] = [];
     const digest = "a".repeat(64);

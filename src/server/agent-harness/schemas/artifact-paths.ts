@@ -25,6 +25,7 @@ export const makeADemoArtifactPaths = {
   demoScriptContract: `${makeADemoDirectory}/demo-script-contract.json`,
   externalResourceHydrationReport: `${makeADemoDirectory}/external-resource-hydration-report.json`,
   externalResourceManifest: `${makeADemoDirectory}/external-resource-manifest.json`,
+  featureVerificationGuide: `${makeADemoDirectory}/feature-verification-guide.md`,
   fidelityAdjudication: `${makeADemoDirectory}/fidelity-adjudication.json`,
   flowSpec: `${makeADemoDirectory}/flow-spec.json`,
   flowSpecContract: `${makeADemoDirectory}/flow-spec-contract.json`,
