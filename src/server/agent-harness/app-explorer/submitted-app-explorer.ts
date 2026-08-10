@@ -149,6 +149,14 @@ type ObservedInteraction = {
   name: string;
   outcome: string;
   /**
+   * The control state change this interaction caused (N105): a
+   * self-renaming toggle or a control leaving its disabled state. Recorded
+   * whenever the before/after control harvest shows one, independent of
+   * which visible delta named the outcome — transition evidence is
+   * wording-free proof of behavior.
+   */
+  stateTransition?: { control: string; from: string; to: string };
+  /**
    * Text that became visible only after this interaction, verified as a
    * unique visible locator in the revealed state. Tool-shaped UIs render
    * their proof-text on demand, so these are the only assertable evidence
@@ -1092,6 +1100,9 @@ function createActions(
         preferredLocator,
         risks: [],
         route: route.path,
+        ...(interaction.stateTransition === undefined
+          ? {}
+          : { stateTransition: interaction.stateTransition }),
       });
       (interaction.revealedTexts ?? []).forEach(
         (revealedText, revealedIndex) => {
@@ -1391,22 +1402,42 @@ function readFeatureVerdicts(input: {
       (exercisedActions.length > 0 || matchingAsserts.length > 0) &&
       tagged.some((action) => demonstrableRoute(feature, action.route))
     ) {
+      // A recorded control transition is the strongest exercised evidence:
+      // wording-free, so steering must never send it to wording alignment.
+      const transitionAction = exercisedActions.find(
+        (action) => action.stateTransition !== undefined,
+      );
       const [decisiveAssert] = matchingAsserts;
       const decisive =
         exercisedActions.length > 0 ? exercisedActions : matchingAsserts;
+      const transition = transitionAction?.stateTransition;
       return {
         detail:
-          exercisedActions.length > 0
-            ? (exercisedActions[0]?.expectedResult ??
-              "exercised in the browser")
-            : decisiveAssert === undefined
-              ? "matched verified assert evidence"
-              : `matched on-screen text ${JSON.stringify(
-                  readAssertEvidenceText(decisiveAssert),
-                )}`,
-        evidence: unique(decisive.map(({ id }) => id)).slice(0, 4),
+          transition !== undefined
+            ? transition.control === transition.from
+              ? `${transition.from} → ${transition.to}`
+              : `${transition.control}: ${transition.from} → ${transition.to}`
+            : exercisedActions.length > 0
+              ? (exercisedActions[0]?.expectedResult ??
+                "exercised in the browser")
+              : decisiveAssert === undefined
+                ? "matched verified assert evidence"
+                : `matched on-screen text ${JSON.stringify(
+                    readAssertEvidenceText(decisiveAssert),
+                  )}`,
+        evidence: unique(
+          (transitionAction === undefined
+            ? decisive
+            : [transitionAction, ...decisive]
+          ).map(({ id }) => id),
+        ).slice(0, 4),
         featureId: feature.id,
-        groundedBy: exercisedActions.length > 0 ? "interaction" : "assert",
+        groundedBy:
+          transitionAction !== undefined
+            ? "state-transition"
+            : exercisedActions.length > 0
+              ? "interaction"
+              : "assert",
         verdict: "grounded",
       } satisfies FeatureVerdict;
     }
@@ -2518,13 +2549,36 @@ try {
       .slice(0, 80);
     return {
       alerts: read("[role=alert], [role=status], [role=alertdialog], [aria-live]:not([aria-live=off])"),
+      // Control names and disabled states are behavioral evidence (N105): a
+      // toggle that renames itself or a Save that enables Undo produces no
+      // heading, text, or URL delta, yet is the interaction's whole proof.
+      controls: Array.from(document.querySelectorAll("button, [role=button]")).filter(visible).slice(0, 40).map((element) => ({
+        disabled: element.disabled === true || element.getAttribute("aria-disabled") === "true",
+        name: clean(element.innerText || element.getAttribute("aria-label")),
+      })).filter((control) => control.name),
       dialogs: read("[role=dialog], dialog[open]"),
       headings: read("h1, h2, h3, [role=heading]"),
+      rowCount: Array.from(document.querySelectorAll("table tbody tr, [role=row]")).filter(visible).length,
       text: read("main p, main li, article p, [role=main] p, [role=status], [role=alert]"),
       title: document.title,
       url: location.href,
     };
   });
+  // The strongest wording-free delta between two visible states: a control
+  // leaving its disabled state, or one control name replacing another (a
+  // self-renaming toggle). Independent of describeVisibleOutcome so the
+  // transition is recorded even when a text delta names the outcome.
+  const readStateTransition = (before, after) => {
+    const enabledControl = after.controls.find((control) => !control.disabled &&
+      before.controls.some((entry) => entry.name === control.name && entry.disabled));
+    if (enabledControl) return { control: enabledControl.name, from: "disabled", to: "enabled" };
+    const beforeNames = new Set(before.controls.map((control) => control.name));
+    const afterNames = new Set(after.controls.map((control) => control.name));
+    const appeared = after.controls.find((control) => !beforeNames.has(control.name));
+    const vanished = before.controls.find((control) => !afterNames.has(control.name));
+    if (appeared && vanished) return { control: vanished.name, from: vanished.name, to: appeared.name };
+    return undefined;
+  };
   const describeVisibleOutcome = (before, after) => {
     if (after.url !== before.url) {
       const target = new URL(after.url);
@@ -2537,6 +2591,15 @@ try {
     const newText = after.text.find((value) => !before.text.includes(value));
     if (newText) return newText + " became visible";
     if (after.title !== before.title) return after.title + " became visible";
+    const transition = readStateTransition(before, after);
+    if (transition) {
+      return transition.from === "disabled"
+        ? transition.control + " [disabled] → [enabled]"
+        : transition.from + " became " + transition.to;
+    }
+    if (after.rowCount !== before.rowCount) {
+      return "visible data rows changed from " + before.rowCount + " to " + after.rowCount;
+    }
     return undefined;
   };
   // Text that appears only after an interaction is that interaction's proof:
@@ -2883,13 +2946,17 @@ try {
           await gotoRoute(routeUrl);
           const exactLocator = page.getByRole("button", { name, exact: true });
           const interactionLocator = await exactLocator.count() === 1 ? exactLocator : page.getByRole("button", { name, exact: false });
-          if (await interactionLocator.count() !== 1 || !(await interactionLocator.isVisible())) continue;
+          // A disabled control cannot be exercised: clicking it burns the
+          // full click timeout to observe nothing. Its name stays harvested
+          // as evidence; another control's click may enable it (N105).
+          if (await interactionLocator.count() !== 1 || !(await interactionLocator.isVisible()) || !(await interactionLocator.isEnabled().catch(() => false))) continue;
           const before = await readVisibleState();
           await interactionLocator.click({ timeout: 4000 });
           await waitForQuietDom(250, 1500);
           const after = await readVisibleState();
           const outcome = describeVisibleOutcome(before, after);
           if (!outcome) continue;
+          const stateTransition = readStateTransition(before, after);
           if (after.url !== before.url) {
             const landed = new URL(after.url);
             if (landed.origin === baseOrigin && !seen.has(normalizeCrawlUrl(landed.href))) {
@@ -2907,6 +2974,7 @@ try {
             locatorEvidence,
             name,
             outcome,
+            ...(stateTransition ? { stateTransition } : {}),
             ...(revealedTexts.length > 0 ? { revealedTexts } : {}),
           });
         } catch (error) {
@@ -2946,6 +3014,7 @@ try {
           }
           await waitForQuietDom(250, 1500);
           const after = await readVisibleState();
+          const stateTransition = readStateTransition(before, after);
           const revealedTexts = await harvestRevealedTexts(before, after, path);
           observed.interactions.push({
             kind: input.controlKind,
@@ -2953,6 +3022,7 @@ try {
             locatorEvidence: input.locatorEvidence,
             name: input.name,
             outcome,
+            ...(stateTransition ? { stateTransition } : {}),
             ...(revealedTexts.length > 0 ? { revealedTexts } : {}),
           });
         } catch (error) {
@@ -2963,6 +3033,15 @@ try {
       // Downstream validation replays every action from a fresh navigation,
       // so evidence gathered in interaction-mutated page state must be
       // re-proven here or dropped; emitting it would fail deterministically.
+      const resolveStoredLocator = (locator) => locator.strategy === "role"
+        ? page.getByRole(locator.role, { exact: locator.exact === true, name: locator.name })
+        : locator.strategy === "label"
+          ? page.getByLabel(locator.value, { exact: locator.exact === true })
+          : locator.strategy === "placeholder"
+            ? page.getByPlaceholder(locator.value, { exact: locator.exact === true })
+            : locator.strategy === "text"
+              ? page.getByText(locator.value, { exact: locator.exact === true })
+              : page.locator(locator.value);
       const freshInteractions = [];
       for (const interaction of observed.interactions) {
         try {
@@ -2972,6 +3051,18 @@ try {
             : createInteractionLocator(interaction.locator);
           if (await freshLocator.count() === 1 && await freshLocator.isVisible()) {
             freshInteractions.push(interaction);
+            continue;
+          }
+          // Zero matches on the fresh-state name lookup is not proof the
+          // control is gone: the stored evidence locator was verified once
+          // on this route, so re-prove through it before dropping the
+          // interaction (N105).
+          const storedLocator = interaction.locatorEvidence?.locator;
+          if (storedLocator) {
+            const fallbackLocator = resolveStoredLocator(storedLocator);
+            if (await fallbackLocator.count() === 1 && await fallbackLocator.isVisible()) {
+              freshInteractions.push(interaction);
+            }
           }
         } catch (error) {
           if (isAppUnavailableError(error)) throw error;

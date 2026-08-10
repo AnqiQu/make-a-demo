@@ -374,6 +374,19 @@ type ActionCatalogAction = {
   /** True only when browser exploration executed the action and observed its result. */
   exercised?: true;
   /**
+   * The control state change browser exploration observed when it exercised
+   * this action (N105): a self-renaming toggle (`Follow` → `Unfollow`) or a
+   * control leaving its disabled state (`disabled` → `enabled`). Transition
+   * evidence is wording-free proof of behavior, so grounding and script
+   * generation may rely on it where visible-text matching would fail. Only
+   * valid alongside `exercised`.
+   */
+  stateTransition?: {
+    control: string;
+    from: string;
+    to: string;
+  };
+  /**
    * For asserts on text that becomes visible only after an interaction: the
    * catalog id of the revealing interaction. Such an assert is valid demo
    * evidence only when its revealing interaction runs earlier in the same
@@ -1361,6 +1374,15 @@ function readAction(value: unknown, index: number): ActionCatalogAction {
   if (revealedBy !== undefined && kind !== "assert") {
     throw new Error(`${path}.revealedBy is only valid on assert actions`);
   }
+  const stateTransition =
+    record.stateTransition === undefined
+      ? undefined
+      : readStateTransition(record.stateTransition, path);
+  if (stateTransition !== undefined && exercised !== true) {
+    throw new Error(
+      `${path}.stateTransition is only valid on browser-exercised actions`,
+    );
+  }
   if (
     locatorCandidates !== undefined &&
     preferredLocatorCandidateId === undefined
@@ -1402,6 +1424,7 @@ function readAction(value: unknown, index: number): ActionCatalogAction {
     ...(revealedBy === undefined ? {} : { revealedBy }),
     risks: readStringArray(record, "risks", path),
     route: readLocalRoute(record, "route", path),
+    ...(stateTransition === undefined ? {} : { stateTransition }),
     ...(record.scrollPosition === undefined
       ? {}
       : {
@@ -1412,6 +1435,19 @@ function readAction(value: unknown, index: number): ActionCatalogAction {
             path,
           ),
         }),
+  };
+}
+
+function readStateTransition(
+  value: unknown,
+  parentPath: string,
+): NonNullable<ActionCatalogAction["stateTransition"]> {
+  const path = `${parentPath}.stateTransition`;
+  const record = assertRecord(value, path);
+  return {
+    control: readNonEmptyString(record, "control", path),
+    from: readNonEmptyString(record, "from", path),
+    to: readNonEmptyString(record, "to", path),
   };
 }
 

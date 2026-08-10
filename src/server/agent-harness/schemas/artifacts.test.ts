@@ -111,6 +111,55 @@ describe("agent harness artifact schemas", () => {
     );
   });
 
+  it("parses a state transition on a browser-exercised interaction", () => {
+    // N105: a toggle that renames itself or enables a control is proof of
+    // behavior; the observed transition rides the exercised action.
+    const catalog = validActionCatalog();
+    const parsed = readActionCatalog({
+      ...catalog,
+      actions: catalog.actions.map((action, index) =>
+        index === 0
+          ? {
+              ...action,
+              exercised: true,
+              stateTransition: {
+                control: "Undo",
+                from: "disabled",
+                to: "enabled",
+              },
+            }
+          : action,
+      ),
+    });
+
+    expect(parsed.actions[0]?.stateTransition).toEqual({
+      control: "Undo",
+      from: "disabled",
+      to: "enabled",
+    });
+  });
+
+  it("rejects a state transition on an action the browser never exercised", () => {
+    const catalog = validActionCatalog();
+    expect(() =>
+      readActionCatalog({
+        ...catalog,
+        actions: catalog.actions.map((action, index) =>
+          index === 0
+            ? {
+                ...action,
+                stateTransition: {
+                  control: "Undo",
+                  from: "disabled",
+                  to: "enabled",
+                },
+              }
+            : action,
+        ),
+      }),
+    ).toThrow("stateTransition is only valid on browser-exercised actions");
+  });
+
   it("does not label navigation as a browser-exercised feature interaction", () => {
     const catalog = validActionCatalog();
     expect(() =>

@@ -113,6 +113,91 @@ describe("generated exploration script", () => {
     }
   }, 30_000);
 
+  it("records control renames and disabled-to-enabled transitions as interaction outcomes", async () => {
+    // N105: a toggle that renames itself (Follow → Unfollow) and a click
+    // that enables a disabled control (Save draft → Undo enabled) are
+    // wording-free proof of behavior; both previously produced no visible
+    // delta the outcome describer could see, so the interactions were
+    // silently discarded.
+    const togglePage = `<!doctype html><html><head><title>Toggle App</title></head><body>
+<h1>Project workspace</h1>
+<main><p>Quarterly planning workspace for the demo team</p></main>
+<button onclick="this.textContent='Unfollow'">Follow</button>
+<button onclick="document.getElementById('undo').disabled = false">Save draft</button>
+<button id="undo" disabled>Undo</button>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(togglePage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 60_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        routes: Array<{
+          buttons: string[];
+          interactions: Array<{
+            name: string;
+            outcome: string;
+            stateTransition?: { control: string; from: string; to: string };
+          }>;
+        }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      const route = result.routes[0];
+      expect(route?.buttons).toContain("Undo");
+      expect(route?.interactions).toContainEqual(
+        expect.objectContaining({
+          name: "Follow",
+          outcome: "Follow became Unfollow",
+          stateTransition: {
+            control: "Follow",
+            from: "Follow",
+            to: "Unfollow",
+          },
+        }),
+      );
+      expect(route?.interactions).toContainEqual(
+        expect.objectContaining({
+          name: "Save draft",
+          outcome: "Undo [disabled] → [enabled]",
+          stateTransition: { control: "Undo", from: "disabled", to: "enabled" },
+        }),
+      );
+      // The disabled control itself is never clicked.
+      expect(route?.interactions).not.toContainEqual(
+        expect.objectContaining({ name: "Undo" }),
+      );
+    } finally {
+      server.close();
+    }
+  }, 60_000);
+
   it("quarantines alert text from the content harvest into a separate alerts field", async () => {
     // Error toasts are what an app shows when it fails; harvested as text
     // they ground features on failure copy (outline, 2026-08-08).

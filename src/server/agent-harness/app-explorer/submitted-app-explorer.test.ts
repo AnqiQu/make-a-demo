@@ -3048,6 +3048,89 @@ describe("feature verdict ledger", () => {
     ]);
   });
 
+  it("grounds a feature through a recorded control state transition", async () => {
+    // N105: a toggle that renames itself (Follow → Unfollow) or enables a
+    // control is wording-free proof of behavior; the ledger names it as its
+    // own evidence class so steering never asks for wording alignment.
+    const { result } = await exploreObservation({
+      featureInventory: [
+        preparedFeature({
+          description: "Follow another author.",
+          entryPaths: ["/#/profile"],
+          id: "follow-author",
+          label: "Follow an author",
+          requestedFeature: "following an author",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["follow-author"],
+          headings: ["Author profile"],
+          interactions: [
+            {
+              kind: "click",
+              locator: { name: "Follow", strategy: "role", value: "button" },
+              locatorEvidence: {
+                locator: {
+                  exact: true,
+                  name: "Follow",
+                  role: "button",
+                  strategy: "role",
+                },
+                verification: {
+                  matchCount: 1,
+                  route: "/#/profile",
+                  visible: true,
+                },
+              },
+              name: "Follow",
+              outcome: "Follow became Unfollow",
+              stateTransition: {
+                control: "Follow",
+                from: "Follow",
+                to: "Unfollow",
+              },
+            },
+          ],
+          path: "/#/profile",
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    expect(artifacts.validationReport.status).toBe("passed");
+    expect(artifacts.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        detail: expect.stringContaining("Unfollow"),
+        featureId: "follow-author",
+        groundedBy: "state-transition",
+        verdict: "grounded",
+      }),
+    ]);
+    const clickAction = artifacts.actionCatalog.actions.find(
+      (action) => action.kind === "click" && action.exercised === true,
+    );
+    expect(clickAction?.stateTransition).toEqual({
+      control: "Follow",
+      from: "Follow",
+      to: "Unfollow",
+    });
+  });
+
+  it("observes transitions, skips disabled controls, and re-proves through stored locator evidence in the generated script", async () => {
+    const { commands } = await exploreObservation({
+      routes: [observedRoute({ headings: ["Dashboard"] })],
+    });
+    const script = readExplorerScript(commands);
+
+    expect(script).toContain("readStateTransition");
+    expect(script).toContain("[disabled] → [enabled]");
+    expect(script).toContain("isEnabled");
+    // Zero matches on the fresh-state name lookup must fall back to the
+    // stored verified locator before the interaction is dropped (N105).
+    expect(script).toContain("resolveStoredLocator");
+  });
+
   it("names the winning feature and steers at an unclaimed entry route when scoring awards every assert elsewhere", async () => {
     const { result } = await exploreObservation({
       featureInventory: [
