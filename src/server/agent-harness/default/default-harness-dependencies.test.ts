@@ -2833,6 +2833,48 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(runs).toBe(2);
   });
 
+  it("still detects a launch failure when only agent-liveness beats accompanied the bootstrap noise", async () => {
+    // The agent-liveness plugin beats on OpenCode's event bus before the
+    // model produces any real output. An OpenCode that beat once and then
+    // crashed with nothing on the record is still an infrastructure launch
+    // failure — the beats are watchdog transport, not "the agent spoke",
+    // and must not burn artifact-repair attempts.
+    const workspace = repairableRepoPreparationWorkspace();
+    let runs = 0;
+    const harness = await createDefaultAgentHarnessDependencies({
+      agentLaunchRetryDelayMs: 1,
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run() {
+          runs += 1;
+          return {
+            exitCode: 1,
+            stderr: "",
+            stdout: `${heredocPtyBootstrapNoise()}\r\n[makeademo:agent-alive] model stream active`,
+          };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const error: unknown = await harness.dependencies
+      .prepareRepo({
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        normalizedSupportingDocuments: undefined,
+        repoProfile: repoProfile(),
+        repoSourcePaths: ["package.json", "src/App.tsx"],
+        runPlan: runPlan(),
+        workspace,
+      })
+      .then(() => undefined)
+      .catch((thrown: unknown) => thrown);
+
+    expect(isAgentHarnessInfrastructureError(error)).toBe(true);
+    expect(String(error)).toMatch(/no OpenCode output/);
+    expect(runs).toBe(2);
+  });
+
   it("classifies a shell exec-diagnostic exit as infrastructure, not agent quality", async () => {
     // calcom/ghostfolio 2026-08-07: bash printed "bash: /root/.opencode/bin/
     // opencode: Argument list too long" and exited 126 in ~1s, three times —
@@ -4346,6 +4388,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
             stdout: [
               "[makeademo:alive] cpu 120",
               "npm ERR! gyp ERR! build error better_sqlite3",
+              "[makeademo:agent-alive] model stream active",
               "[makeademo:alive] cpu 480",
             ].join("\n"),
           };
@@ -4376,6 +4419,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
       status: "failed",
     });
     expect(report.logsSummary).not.toContain("[makeademo:alive]");
+    expect(report.logsSummary).not.toContain("[makeademo:agent-alive]");
   });
 
   it("prunes package-manager caches after a successful offline lifecycle", async () => {

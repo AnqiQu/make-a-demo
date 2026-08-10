@@ -1794,11 +1794,11 @@ function appendTail(current: string, chunk: string, maxLength: number): string {
 // command as a heredoc, so racing echo puts script body on PS2 lines), the
 // command exit marker, the shell's own exec diagnostic ("bash: <path>:
 // Argument list too long" — the 2026-08-07 E2BIG launches), the session
-// teardown echo, or a CPU-liveness heartbeat (transport from the harness's
-// own sampler, never the agent). Each proves the shell spoke and OpenCode
-// never did.
+// teardown echo, or a liveness beat (the CPU sampler's or the agent-liveness
+// plugin's — watchdog transport from the harness, never the model's own
+// output). Each proves the shell spoke and OpenCode never did.
 const ptyBootstrapLinePattern =
-  /^(?:[^@\s]+@[^\n#]*#.*|>.*|__MAKEADEMO_EXIT(?:_[A-Za-z0-9]+)?__:\d+|bash: [^:\n]+: .+|logout|\[makeademo:alive\] cpu \d+)$/;
+  /^(?:[^@\s]+@[^\n#]*#.*|>.*|__MAKEADEMO_EXIT(?:_[A-Za-z0-9]+)?__:\d+|bash: [^:\n]+: .+|logout|\[makeademo:alive\] cpu \d+|\[makeademo:agent-alive\].*)$/;
 
 function hasOnlyPtyBootstrapOutput(result: {
   stderr: string;
@@ -2946,11 +2946,11 @@ function legibleFailureExcerpt(input: {
       : (input.fileTail?.trim().length ?? 0) > 0
         ? (input.fileTail ?? "")
         : input.stdout;
-  // Liveness heartbeats are watchdog transport, never evidence — a
-  // line-per-minute of sampler output would dilute the bounded tail.
+  // Liveness beats (CPU sampler and agent-liveness plugin) are watchdog
+  // transport, never evidence — sampler output would dilute the bounded tail.
   const cleaned = stripAnsi(source)
     .split("\n")
-    .filter((line) => !line.trim().startsWith("[makeademo:alive]"))
+    .filter((line) => !/^\[makeademo:(?:agent-)?alive\]/.test(line.trim()))
     .join("\n")
     .trim();
   if (cleaned.length <= failureEvidenceTailBytes) {
