@@ -33,14 +33,25 @@ const readProcessGroupCpu = (processGroupVariable: string) =>
  * to any caller-appended trailer), must preserve the command's exit
  * status as its own, must never let the sampler outlive the command, and
  * must emit nothing when the command finishes inside the first sample
- * interval. Heartbeat lines are transport, not evidence: consumers of
+ * interval. The command runs with stdin sealed to /dev/null: wrapped
+ * commands are sealed-runtime work that must never read the transport
+ * (a stdin-draining child spinner stole the PTY exit sentinel and turned
+ * a completed command into a false kill, ghostfolio 2026-08-09).
+ * Heartbeat lines are transport, not evidence: consumers of
  * command output must filter `[makeademo:alive]` lines before excerpting
  * or interpreting it.
+ *
+ * The sampler scopes by process group read from /proc/self, which is only
+ * correct when the wrapped string runs without job control (non-interactive
+ * shells — the PTY transport's script execution qualifies): under an
+ * interactive monitor-mode shell every pipeline gets its own process group
+ * and the sampler would watch the idle shell's group instead of the
+ * command's (the batch-wide silent heartbeat, 2026-08-09).
  */
 export function withCpuLivenessHeartbeat(command: string): string {
   const sampler = [
     `makeademo_alive_pg=$(cat /proc/self/stat 2>/dev/null | awk '{ s = $0; sub(/^[^)]*\\) /, "", s); split(s, f, " "); print f[3] }')`,
     `{ makeademo_alive_last=""; while sleep ${cpuSampleIntervalSeconds}; do makeademo_alive_now=$(${readProcessGroupCpu("makeademo_alive_pg")}); if [ -n "$makeademo_alive_now" ] && [ "$makeademo_alive_now" != "$makeademo_alive_last" ]; then echo "[makeademo:alive] cpu $makeademo_alive_now"; fi; makeademo_alive_last="$makeademo_alive_now"; done; } & makeademo_alive_pid=$!`,
   ].join("; ");
-  return `${sampler}; { ${command}; }; makeademo_alive_status=$?; kill "$makeademo_alive_pid" 2>/dev/null; wait "$makeademo_alive_pid" 2>/dev/null; sh -c "exit $makeademo_alive_status"`;
+  return `${sampler}; { ${command}; } </dev/null; makeademo_alive_status=$?; kill "$makeademo_alive_pid" 2>/dev/null; wait "$makeademo_alive_pid" 2>/dev/null; sh -c "exit $makeademo_alive_status"`;
 }

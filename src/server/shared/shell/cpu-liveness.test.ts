@@ -20,8 +20,18 @@ describe("withCpuLivenessHeartbeat", () => {
     // teardown must not clobber it, and the trailing exit re-raises it
     // without a top-level `exit` (which would drop a PTY sentinel).
     expect(wrapped).toMatch(
-      /\{ exit 7; \}; makeademo_alive_status=\$\?; kill .*sh -c "exit \$makeademo_alive_status"$/,
+      /\{ exit 7; \} <\/dev\/null; makeademo_alive_status=\$\?; kill .*sh -c "exit \$makeademo_alive_status"$/,
     );
+  });
+
+  it("seals the wrapped command's stdin so its children cannot drain the transport", () => {
+    const wrapped = withCpuLivenessHeartbeat("npx prisma generate");
+
+    // A child that reads inherited stdin (ora/inquirer spinners) must get
+    // /dev/null, never the PTY buffer or script stream that carries the
+    // harness's own trailer lines (ghostfolio's stolen exit sentinel,
+    // 2026-08-09).
+    expect(wrapped).toContain("{ npx prisma generate; } </dev/null;");
   });
 
   it("samples only the command's own process group and speaks only on change", () => {
