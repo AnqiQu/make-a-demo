@@ -162,7 +162,7 @@ export function expandPreparationInstallScopeForMissingWorkspace(input: {
   ].join("\n");
   const missingWorkspaceNames = [
     ...runtimeEvidence.matchAll(
-      /(?:can't resolve|cannot find (?:module|package)|could not resolve|failed to resolve import)[^"'`\r\n]*["'`]([^"'`\r\n]+)["'`]/gi,
+      /(?:can't resolve|cannot find (?:module|package)|could not resolve|failed to resolve (?:import|entry for package))[^"'`\r\n]*["'`]([^"'`\r\n]+)["'`]/gi,
     ),
   ]
     .map((match) => readPackageName(match[1] ?? ""))

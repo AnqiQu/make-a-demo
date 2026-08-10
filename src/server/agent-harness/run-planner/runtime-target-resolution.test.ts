@@ -476,6 +476,40 @@ describe("resolveRuntimeTarget", () => {
     );
   });
 
+  it("expands scoped installation when a workspace package's entry cannot be resolved", () => {
+    // vite and rollup name the package rather than a file when its
+    // package.json entry points at build output that was never produced.
+    const expanded = expandPreparationInstallScopeForMissingWorkspace({
+      failureReport: {
+        ...validationReport(),
+        failureClassification: "build failure",
+        logsSummary:
+          'Failed to resolve entry for package "@acme/design-system". The package may have incorrect main/module/exports specified in its package.json.',
+      },
+      preparationManifest: manifest("apps/web/src/page.tsx"),
+      repoProfile: profile({
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "@acme/web",
+            ports: [],
+            scripts: { start: "next start" },
+          },
+          {
+            dir: "packages/design-system",
+            name: "@acme/design-system",
+            ports: [],
+            scripts: {},
+          },
+        ],
+      }),
+    });
+
+    expect(expanded?.installCommandUsed).toContain(
+      "--filter=@acme/design-system",
+    );
+  });
+
   it("expands scoped installation when the failure is classified as a missing dependency", () => {
     const expanded = expandPreparationInstallScopeForMissingWorkspace({
       failureReport: {

@@ -2584,6 +2584,10 @@ async function validateResolvedSubmittedCodeRuntime(
       // (2026-08-09).
       const unbuiltWorkspaceHints = readUnbuiltWorkspacePackageHints(
         `${buildResult.stderr}\n${buildResult.stdout}\n${buildFileTail}`,
+        {
+          appDir: manifest.appDir,
+          workspacePackages: input.repoProfile.workspacePackages,
+        },
       );
       const buildExcerpt = legibleFailureExcerpt({
         fileTail: buildFileTail,
@@ -2705,7 +2709,12 @@ async function validateResolvedSubmittedCodeRuntime(
               "The process is alive but nothing listens on the probed port and the captured app output stopped changing — the bind failure or crash is already in that output (a supervisor such as nodemon may be keeping the parent alive after its child crashed). Fix the cause shown there instead of adjusting ports or probes.",
             ]
           : []),
-        ...(probeSucceeded ? [] : readUnbuiltWorkspacePackageHints(appOutput)),
+        ...(probeSucceeded
+          ? []
+          : readUnbuiltWorkspacePackageHints(appOutput, {
+              appDir: manifest.appDir,
+              workspacePackages: input.repoProfile.workspacePackages,
+            })),
       ];
       return hints.length > 0 ? { suggestedRepairHints: hints } : {};
     })(),
@@ -2713,25 +2722,103 @@ async function validateResolvedSubmittedCodeRuntime(
   });
 }
 
-// Dependency install never builds internal workspace packages. A module
-// missing at an absolute path under the repo's own node_modules after a
-// successful install is workspace-linked with unproduced build output — a
-// registry package ships its files in the tarball (twenty's
+// Dependency install never builds internal workspace packages, and three
+// evidence shapes prove one is missing its build output (N67, N109). A
+// module missing at an absolute path under the repo's own node_modules
+// after a successful install is workspace-linked with unproduced output —
+// a registry package ships its files in the tarball (twenty's
 // twenty-shared/dist, directus's @directus/extensions, 2026-08-07 matrix).
-function readUnbuiltWorkspacePackageHints(output: string): string[] {
-  const packages = new Set<string>();
+// An entry-resolution failure naming a known workspace package is the same
+// class without a file path: its package.json entry points at unbuilt
+// dist/. A runtime file missing under a sibling workspace's directory is
+// the asset variant: the file is that sibling's build product.
+function readUnbuiltWorkspacePackageHints(
+  output: string,
+  context: {
+    appDir: string;
+    workspacePackages: RepoProfile["workspacePackages"];
+  },
+): string[] {
+  const hints: string[] = [];
+  const missingFilePackages = new Set<string>();
   for (const match of output.matchAll(
     /(?:can'?t resolve|cannot find module|could not resolve)\s+["'][^"']*node_modules\/((?:@[A-Za-z0-9_.-]+\/)?[A-Za-z0-9_.-]+)\/[^"']+["']/gi,
   )) {
     const name = match[1];
     if (name !== undefined) {
-      packages.add(name);
+      missingFilePackages.add(name);
     }
   }
-  return [...packages].map(
-    (name) =>
-      `${name} resolves into the repo's own node_modules but the imported file does not exist — it is likely an internal workspace package whose build output was never produced, and dependency install builds no workspace member. Set buildCommandUsed to the repository's own target that builds ${name} before the app (check the repo's build, nx, or turbo scripts) instead of changing the import.`,
+  hints.push(
+    ...[...missingFilePackages].map(
+      (name) =>
+        `${name} resolves into the repo's own node_modules but the imported file does not exist — it is likely an internal workspace package whose build output was never produced, and dependency install builds no workspace member. Set buildCommandUsed to the repository's own target that builds ${name} before the app (check the repo's build, nx, or turbo scripts) instead of changing the import.`,
+    ),
   );
+
+  const workspacePackages = context.workspacePackages ?? [];
+  const workspaceNames = new Set(
+    workspacePackages.flatMap(({ name }) => (name === undefined ? [] : [name])),
+  );
+  const entryPackages = new Set<string>();
+  for (const match of output.matchAll(
+    /failed to resolve entry for package\s+["']([^"'\n]+)["']/gi,
+  )) {
+    const name = match[1];
+    if (
+      name !== undefined &&
+      workspaceNames.has(name) &&
+      !missingFilePackages.has(name)
+    ) {
+      entryPackages.add(name);
+    }
+  }
+  hints.push(
+    ...[...entryPackages].map(
+      (name) =>
+        `${name} is an internal workspace package whose entry point does not resolve — its package.json main/module/exports names build output that dependency install never produces. Set buildCommandUsed to the repository's own target that builds ${name} before the app (check the repo's build, nx, or turbo scripts) instead of changing the import.`,
+    ),
+  );
+
+  // The root workspace directory would claim every repo path, so only
+  // named subdirectory siblings participate in asset matching.
+  const appDir = normalizeRepoRelativeDir(context.appDir);
+  const siblingWorkspaces = workspacePackages.flatMap((pkg) => {
+    const dir = normalizeRepoRelativeDir(pkg.dir);
+    return dir === "" || dir === appDir ? [] : [{ dir, name: pkg.name }];
+  });
+  const missingAssetHints = new Map<string, string>();
+  for (const match of output.matchAll(
+    /(?:ENOENT|no such file or directory)[^'"\n]*['"]([^'"\n]+)['"]/gi,
+  )) {
+    const rawPath = match[1];
+    if (rawPath === undefined) {
+      continue;
+    }
+    const path = rawPath.replace(/^\/workspace\/repo\//, "");
+    if (path.startsWith("/") || path.includes("node_modules/")) {
+      continue;
+    }
+    for (const sibling of siblingWorkspaces) {
+      if (
+        !missingAssetHints.has(sibling.dir) &&
+        (path === sibling.dir || path.startsWith(`${sibling.dir}/`))
+      ) {
+        const label = sibling.name ?? sibling.dir;
+        missingAssetHints.set(
+          sibling.dir,
+          `${path} is missing at runtime and lives under the internal workspace ${label} — that file is its build output, and dependency install builds no workspace member. Extend buildCommandUsed with the repository's own target that builds ${label} before the app instead of creating the file by hand.`,
+        );
+      }
+    }
+  }
+  hints.push(...missingAssetHints.values());
+  return hints;
+}
+
+function normalizeRepoRelativeDir(dir: string): string {
+  const trimmed = dir.replace(/^\.\//, "").replace(/\/+$/, "");
+  return trimmed === "." ? "" : trimmed;
 }
 
 function classifyPreparationRuntimeFailure(
@@ -2741,7 +2828,7 @@ function classifyPreparationRuntimeFailure(
 ): string {
   const missingSpecifiers = [
     ...appOutput.matchAll(
-      /(?:can'?t resolve|cannot find module|could not resolve)\s+["']([^"']+)["']/gi,
+      /(?:can'?t resolve|cannot find module|could not resolve|failed to resolve entry for package)\s+["']([^"']+)["']/gi,
     ),
   ].map((match) => match[1] ?? "");
   if (missingSpecifiers.some(isBarePackageSpecifier)) {

@@ -5595,6 +5595,198 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(hints).toContain("instead of changing the import");
   });
 
+  it("steers an unresolved workspace entry at the repo's own build target", async () => {
+    // vite names only the package when its entry points at unbuilt dist/
+    // output: no node_modules file path ever appears, so the missing-file
+    // rule stays silent and the run burned rounds without steering.
+    vi.useFakeTimers();
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (!command.includes("curl -")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        return {
+          exitCode: 7,
+          stderr:
+            "curl: (7) Failed to connect to 127.0.0.1 port 3000 after 0 ms: Couldn't connect to server",
+          stdout: "",
+        };
+      },
+      async readSubmittedCodeAppStatus() {
+        return {
+          exitCode: 1,
+          running: false,
+          startedAt: "2026-08-06T00:00:00.000Z",
+          stderr:
+            'Error: Failed to resolve entry for package "@acme/ui". The package may have incorrect main/module/exports specified in its package.json.',
+          stdout: "",
+        };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    try {
+      const validation = harness.dependencies.validatePreparation({
+        preparationManifest: preparationManifest(),
+        repoProfile: {
+          ...repoProfile(),
+          workspacePackages: [
+            {
+              dir: ".",
+              name: "@acme/web",
+              ports: [3000],
+              scripts: { dev: "bun run dev" },
+            },
+            { dir: "packages/ui", name: "@acme/ui", ports: [], scripts: {} },
+          ],
+          workspaces: { isMonorepo: true, packageDirectories: ["packages/*"] },
+        },
+        runPlan: runPlan(),
+        workspace,
+      });
+      await vi.advanceTimersByTimeAsync(200_000);
+      const report = await validation;
+
+      expect(report).toMatchObject({
+        failureClassification: "missing dependency",
+        status: "failed",
+      });
+      const hints = report.suggestedRepairHints.join("\n");
+      expect(hints).toContain("@acme/ui");
+      expect(hints).toContain("buildCommandUsed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps entry-resolution steering away from registry packages", async () => {
+    // A registry package with a broken export map is agent work, not an
+    // unbuilt-workspace prerequisite: no workspace bears the name.
+    vi.useFakeTimers();
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (!command.includes("curl -")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        return {
+          exitCode: 7,
+          stderr: "curl: (7) Failed to connect to 127.0.0.1 port 3000",
+          stdout: "",
+        };
+      },
+      async readSubmittedCodeAppStatus() {
+        return {
+          exitCode: 1,
+          running: false,
+          startedAt: "2026-08-06T00:00:00.000Z",
+          stderr:
+            'Error: Failed to resolve entry for package "left-pad-ultra". The package may have incorrect main/module/exports specified in its package.json.',
+          stdout: "",
+        };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    try {
+      const validation = harness.dependencies.validatePreparation({
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      });
+      await vi.advanceTimersByTimeAsync(200_000);
+      const report = await validation;
+
+      expect(report.status).toBe("failed");
+      expect(report.suggestedRepairHints.join("\n")).not.toContain(
+        "left-pad-ultra",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("steers a missing sibling-workspace asset into the build closure", async () => {
+    // twenty-emails class: the server crashes opening a file a sibling
+    // workspace's build produces. The missing path is the sanctioned
+    // evidence; the fix is the sibling's build target, not a hand-made file.
+    vi.useFakeTimers();
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (!command.includes("curl -")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        return {
+          exitCode: 7,
+          stderr: "curl: (7) Failed to connect to 127.0.0.1 port 3000",
+          stdout: "",
+        };
+      },
+      async readSubmittedCodeAppStatus() {
+        return {
+          exitCode: 1,
+          running: false,
+          startedAt: "2026-08-06T00:00:00.000Z",
+          stderr:
+            "Error: ENOENT: no such file or directory, open '/workspace/repo/packages/emails/dist/welcome.html'",
+          stdout: "",
+        };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    try {
+      const validation = harness.dependencies.validatePreparation({
+        preparationManifest: preparationManifest(),
+        repoProfile: {
+          ...repoProfile(),
+          workspacePackages: [
+            {
+              dir: ".",
+              name: "@acme/web",
+              ports: [3000],
+              scripts: { dev: "bun run dev" },
+            },
+            {
+              dir: "packages/emails",
+              name: "@acme/emails",
+              ports: [],
+              scripts: {},
+            },
+          ],
+          workspaces: { isMonorepo: true, packageDirectories: ["packages/*"] },
+        },
+        runPlan: runPlan(),
+        workspace,
+      });
+      await vi.advanceTimersByTimeAsync(200_000);
+      const report = await validation;
+
+      expect(report.status).toBe("failed");
+      const hints = report.suggestedRepairHints.join("\n");
+      expect(hints).toContain("packages/emails/dist/welcome.html");
+      expect(hints).toContain("@acme/emails");
+      expect(hints).toContain("buildCommandUsed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fails closed when the dependency network window cannot be resealed", async () => {
     let windowOpened = false;
     const workspace = createFakeAgentHarnessWorkspace({
