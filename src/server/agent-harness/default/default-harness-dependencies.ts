@@ -2193,11 +2193,12 @@ async function validateResolvedSubmittedCodeRuntime(
     // install starts by dropping trees it provably cannot reuse and pruning
     // the caches; the open window refetches what it needs. Best-effort by
     // construction.
+    const installDirectory = absoluteAppDirectory(
+      runtimeTarget?.install.cwd ?? manifest.appDir,
+    );
     const staleTreeDrop = createStaleDependencyTreeDropCommand({
       installCommand,
-      installDirectory: absoluteAppDirectory(
-        runtimeTarget?.install.cwd ?? manifest.appDir,
-      ),
+      installDirectory,
       ...(input.repoProfile.yarnVariant === undefined
         ? {}
         : { yarnVariant: input.repoProfile.yarnVariant }),
@@ -2212,6 +2213,28 @@ async function validateResolvedSubmittedCodeRuntime(
         "true",
       ].join("; "),
     );
+    // The pnp fallback outlives one round only through its /root sentinel:
+    // every reset restores the repo's own .yarnrc.yml, and without the
+    // reapply each later round would pay a full out-of-disk install before
+    // rediscovering the switch.
+    const berryYarnInstall =
+      parseInstallCommand(installCommand).packageManager === "yarn" &&
+      readYarnInstallVariant(installCommand, input.repoProfile.yarnVariant) ===
+        "berry";
+    let berryPnpFallbackActive = false;
+    if (berryYarnInstall) {
+      const sentinel = await executeSubmitted(
+        input.workspace,
+        `test -f ${shellQuote(berryPnpFallbackSentinelPath)}`,
+      );
+      if (sentinel.exitCode === 0) {
+        berryPnpFallbackActive = true;
+        await executeSubmitted(
+          input.workspace,
+          createBerryPnpLinkerCommand(installDirectory),
+        );
+      }
+    }
     let installEvidenceLogPath: string | undefined;
     const runInstall = (command: string) =>
       runDependencyInstallThroughGate({
@@ -2330,6 +2353,39 @@ async function validateResolvedSubmittedCodeRuntime(
         result = await runInstall(engineRetryCommand);
       }
     }
+    if (
+      result.status === "failed" &&
+      berryYarnInstall &&
+      !berryPnpFallbackActive &&
+      diskExhaustionPattern.test(`${result.stderr}\n${result.stdout}`)
+    ) {
+      // Harness-owned storage halving under the demo gate: the agent may
+      // not mutate manager identity, but the stages downstream adjudicate
+      // whether the app actually works in the PnP world.
+      berryPnpFallbackActive = true;
+      try {
+        await input.workspace.writeSandboxLog({
+          event: "install.disk-pressure.berry-pnp-fallback",
+          message:
+            "Yarn Berry install exhausted the disk; the harness is switching the workspace to nodeLinker: pnp (pnpMode: loose, enableGlobalCache: false) and retrying the install once.",
+        });
+      } catch {
+        // The fallback must never be displaced by an observability failure.
+      }
+      await executeSubmitted(
+        input.workspace,
+        [
+          createBerryPnpLinkerCommand(installDirectory),
+          // Unpacked trees are dead weight under pnp: the zip cache is the
+          // module store.
+          "find /workspace -mindepth 1 -name node_modules -prune -exec rm -rf {} + 2>/dev/null",
+          `mkdir -p ${berryPnpFallbackStateDirectory}`,
+          `touch ${shellQuote(berryPnpFallbackSentinelPath)}`,
+          "true",
+        ].join("; "),
+      );
+      result = await runInstall(installCommand);
+    }
     if (result.status === "denied") {
       return failedPreparationValidation({
         attemptedCommand: installCommand,
@@ -2379,6 +2435,12 @@ async function validateResolvedSubmittedCodeRuntime(
         `${result.stderr}\n${result.stdout}\n${installFileTail}`,
         installExcerpt,
       );
+      const installHints = [
+        ...(berryPnpFallbackActive ? [berryPnpFallbackRepairHint] : []),
+        ...(diskPressure.exhausted
+          ? [diskExhaustionRepairHint(diskPressure.markerLines)]
+          : []),
+      ];
       return failedPreparationValidation({
         attemptedCommand: result.executedCommand,
         classification: "install failure",
@@ -2391,12 +2453,8 @@ async function validateResolvedSubmittedCodeRuntime(
         stage,
         stderr: result.stderr,
         stdout: result.stdout,
-        ...(diskPressure.exhausted
-          ? {
-              suggestedRepairHints: [
-                diskExhaustionRepairHint(diskPressure.markerLines),
-              ],
-            }
+        ...(installHints.length > 0
+          ? { suggestedRepairHints: installHints }
           : {}),
       });
     }
@@ -3379,6 +3437,25 @@ const dependencyInstallTimeoutMs = 20 * 60_000;
 const packageManagerStagingDirectory = "/root/.makeademo-staging";
 
 const packageManagerCachePruneCommand = `rm -rf /root/.yarn/berry/cache /root/.npm/_cacache /root/.local/share/pnpm/store ${packageManagerStagingDirectory} 2>/dev/null`;
+
+// The berry pnp fallback's decision record. /root survives workspace resets
+// (a reset re-extracts /workspace only), unlike the repo's own .yarnrc.yml,
+// which every reset restores to the linker that already ran out of disk.
+const berryPnpFallbackStateDirectory = "/root/.makeademo-install-state";
+const berryPnpFallbackSentinelPath = `${berryPnpFallbackStateDirectory}/berry-pnp-fallback`;
+
+// nodeLinker: pnp keeps only the zip cache — no unpacked tree, the storage
+// halving twenty's agent correctly identified and fidelity rightly vetoed
+// the agent applying (2026-08-08). pnpMode: loose approximates hoisting so
+// undeclared access degrades to warnings, and enableGlobalCache: false
+// parks the cache on the preserved project path (*/.yarn/cache) where
+// neither cache prune deletes the running app's module store.
+function createBerryPnpLinkerCommand(installDirectory: string): string {
+  return `cd ${shellQuote(installDirectory)} && yarn config set nodeLinker pnp && yarn config set pnpMode loose && yarn config set enableGlobalCache false`;
+}
+
+const berryPnpFallbackRepairHint =
+  "After an out-of-disk install the harness switched this Yarn Berry workspace to nodeLinker: pnp with pnpMode: loose and enableGlobalCache: false — the zip cache is now the module store and no node_modules tree is written. Repair within the PnP world; do not change nodeLinker or the yarn config back. A module-not-found error at runtime usually means the package must be declared in the importing package.json's dependencies.";
 
 // The state file each manager writes inside node_modules when it owns the
 // tree; its absence proves another manager built what is there. Bun leaves

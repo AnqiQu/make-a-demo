@@ -4808,6 +4808,227 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(report.suggestedRepairHints.join("\n")).toContain("ENOSPC");
   });
 
+  it("switches a yarn berry install to the pnp linker when it dies out of space and retries once", async () => {
+    // Twenty's repair agent found the correct halving fix — nodeLinker: pnp
+    // — and the mutatesManagerIdentity rule rightly vetoed the agent doing
+    // it (2026-08-08). The harness owns the fallback instead: pnp keeps only
+    // the zip cache, and enableGlobalCache: false parks that cache on the
+    // preserved project path so neither prune deletes the runtime's store.
+    const commands: string[] = [];
+    const sandboxEvents: Array<Record<string, unknown>> = [];
+    let installAttempts = 0;
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        if (command.startsWith("test -f")) {
+          return { exitCode: 1, stderr: "", stdout: "" };
+        }
+        if (command.includes("yarn install")) {
+          installAttempts += 1;
+          if (installAttempts === 1) {
+            return {
+              exitCode: 1,
+              stderr:
+                "YN0001: │ Error: ENOSPC: no space left on device, copyfile '/root/.yarn/berry/cache/react-npm-19.0.0.zip'",
+              stdout: "",
+            };
+          }
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async writeSandboxLog(event) {
+        sandboxEvents.push(event);
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "yarn install --immutable",
+      },
+      repoProfile: { ...repoProfile(), yarnVariant: "berry" },
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(installAttempts).toBe(2);
+    const fallbackIndex = commands.findIndex((command) =>
+      command.includes("yarn config set nodeLinker pnp"),
+    );
+    expect(fallbackIndex).toBeGreaterThanOrEqual(0);
+    expect(commands[fallbackIndex]).toContain("yarn config set pnpMode loose");
+    expect(commands[fallbackIndex]).toContain(
+      "yarn config set enableGlobalCache false",
+    );
+    // The unpacked trees are dead weight under pnp, and the sentinel makes
+    // the switch survive the next workspace reset.
+    expect(commands[fallbackIndex]).toContain(
+      "-name node_modules -prune -exec rm -rf",
+    );
+    expect(commands[fallbackIndex]).toContain(
+      "touch '/root/.makeademo-install-state/berry-pnp-fallback'",
+    );
+    expect(
+      commands
+        .slice(fallbackIndex + 1)
+        .some((command) => command.includes("yarn install")),
+    ).toBe(true);
+    expect(report.status).toBe("passed");
+    expect(
+      sandboxEvents.some(
+        (event) => event.event === "install.disk-pressure.berry-pnp-fallback",
+      ),
+    ).toBe(true);
+  });
+
+  it("reapplies the persisted pnp fallback before the next round's install", async () => {
+    // The workspace reset restores the repo's own .yarnrc.yml, so the
+    // switch would silently revert and every later round would pay a full
+    // out-of-disk install before rediscovering it. The sentinel under /root
+    // survives resets; when it is present the config is reapplied first.
+    const commands: string[] = [];
+    let installAttempts = 0;
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        if (command.startsWith("test -f")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        if (command.includes("yarn install")) {
+          installAttempts += 1;
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "yarn install --immutable",
+      },
+      repoProfile: { ...repoProfile(), yarnVariant: "berry" },
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(installAttempts).toBe(1);
+    const configIndex = commands.findIndex((command) =>
+      command.includes("yarn config set nodeLinker pnp"),
+    );
+    const installIndex = commands.findIndex((command) =>
+      command.includes("yarn install"),
+    );
+    expect(configIndex).toBeGreaterThanOrEqual(0);
+    expect(installIndex).toBeGreaterThan(configIndex);
+    // Reapplying is config-only: nothing is dropped and the sentinel is
+    // not rewritten.
+    expect(
+      commands.some((command) => command.includes("touch '/root/.makeademo")),
+    ).toBe(false);
+  });
+
+  it("keeps the pnp fallback away from classic yarn installs", async () => {
+    const commands: string[] = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        if (command.includes("yarn install")) {
+          return {
+            exitCode: 1,
+            stderr:
+              'error An unexpected error occurred: "ENOSPC: no space left on device, write"',
+            stdout: "",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "yarn install --frozen-lockfile",
+      },
+      repoProfile: { ...repoProfile(), yarnVariant: "classic" },
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    // Classic yarn has no linker to fall back to; the failure goes to the
+    // repair loop with the disk steering instead.
+    expect(
+      commands.some((command) => command.includes("yarn config set")),
+    ).toBe(false);
+    expect(report.suggestedRepairHints.join("\n")).toContain("ENOSPC");
+  });
+
+  it("names the harness pnp switch in the hints when the retried install still fails", async () => {
+    let installAttempts = 0;
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.startsWith("test -f")) {
+          return { exitCode: 1, stderr: "", stdout: "" };
+        }
+        if (command.includes("yarn install")) {
+          installAttempts += 1;
+          return {
+            exitCode: 1,
+            stderr:
+              "YN0001: │ Error: ENOSPC: no space left on device, copyfile",
+            stdout: "",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "yarn install --immutable",
+      },
+      repoProfile: { ...repoProfile(), yarnVariant: "berry" },
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(installAttempts).toBe(2);
+    expect(report).toMatchObject({
+      failureClassification: "install failure",
+      status: "failed",
+    });
+    const hints = report.suggestedRepairHints.join("\n");
+    // The repair agent must know the linker world changed under it — and
+    // that changing it back is off the table.
+    expect(hints).toContain("nodeLinker: pnp");
+    expect(hints).toContain("ENOSPC");
+  });
+
   it("rethrows a control-plane failure as infrastructure instead of a validation report", async () => {
     // Midday (2026-08-09): an unclassified 409 from the network toggle
     // became a Preparation Fallback Prompt asking the maker to repair the
