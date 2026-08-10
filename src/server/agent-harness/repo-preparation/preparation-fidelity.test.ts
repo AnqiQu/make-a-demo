@@ -236,6 +236,47 @@ describe("validatePreparationFidelity", () => {
     expect(report.status).toBe("passed");
   });
 
+  it("routes an error-status rewrite on a probed response to the judge", () => {
+    // Ghost's maintenance page (2026-08-08): the agent rewrote the 503 the
+    // harness was probing into a 200 — the probe went green while the page
+    // still said maintenance; nothing was fixed, the record was. Even a
+    // demo-gated flip lies to the probe (the probe runs with the gate on),
+    // so the status rewrite itself must reach the judge.
+    const serverPath = "core/server/web/site/app.js";
+    const report = validateDiff({
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [serverPath],
+      patch: [
+        `diff --git a/${serverPath} b/${serverPath}`,
+        "-  res.writeHead(503, { 'Content-Type': 'text/html' });",
+        "+  if (process.env.MAKEADEMO_DEMO === 'true') { res.writeHead(200, { 'Content-Type': 'text/html' }); } else { res.writeHead(503, { 'Content-Type': 'text/html' }); }",
+      ].join("\n"),
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "product fidelity violation",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain(serverPath);
+    expect(report.logsSummary).toContain("503");
+    expect(report.logsSummary).toContain("200");
+  });
+
+  it("accepts a gated data adaptation that never touches response statuses", () => {
+    const serverPath = "src/server/data.ts";
+    const report = validateDiff({
+      manifestOverrides: { envUsed: { MAKEADEMO_DEMO: "true" } },
+      modifiedFiles: [serverPath],
+      patch: [
+        `diff --git a/${serverPath} b/${serverPath}`,
+        "-  const entries = await fetchTrackerEntries();",
+        "+  const entries = process.env.MAKEADEMO_DEMO === 'true' ? trackerFixtures : await fetchTrackerEntries();",
+      ].join("\n"),
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
   it("rejects removing the packageManager pin", () => {
     // outline (2026-08-08): the prep agent deleted `"packageManager":
     // "yarn@4.11.0"`, silently downgrading the repo to yarn classic;

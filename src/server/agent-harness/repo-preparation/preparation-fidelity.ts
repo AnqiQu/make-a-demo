@@ -95,7 +95,22 @@ const repairHints = {
     "Keep the repository's packageManager pin and manager configuration; adapt the demo within the detected package manager instead of switching or unpinning it.",
   truthfulManifest:
     "Complete the preparation so the claimed fixtures and replacements exist in the workspace, or correct the manifest to describe the actual prepared state.",
+  statusHonesty:
+    "Fix the condition that produces the error response instead of rewriting its status code; a success status over a broken state falsifies the harness's probe without repairing the feature.",
 } as const;
+
+// An HTTP response-status write: res.status(...), sendStatus, writeHead,
+// statusCode assignment, or a status: field in a response init.
+const statusWritePattern =
+  /(?:\.status\s*\(|\.sendStatus\s*\(|writeHead\s*\(|statusCode\s*=|\bstatus\s*:)\s*([1-9]\d{2})\b/g;
+
+function readStatusWrites(lines: string[]): Set<number> {
+  return new Set(
+    lines.flatMap((line) =>
+      [...line.matchAll(statusWritePattern)].map((match) => Number(match[1])),
+    ),
+  );
+}
 
 export function validatePreparationFidelity(input: {
   dependencyRepair?: boolean;
@@ -254,6 +269,29 @@ export function readPreparationFidelityCandidates(input: {
       violations.push({
         hint: repairHints.packageManagerIdentity,
         message: `${path} changes the package-manager identity (the packageManager pin or a manager configuration file); the backend pins the detected manager and regenerates lockfiles with it.`,
+        path,
+      });
+    }
+    // Rewriting an error status into a success converts the harness's probe
+    // into a lie while fixing nothing: ghost's maintenance page went
+    // 503→200 and preflight turned green over the same broken state
+    // (2026-08-08). Gated or not — the probe runs with the gate on — the
+    // rewrite itself must reach the judge; a legitimate demo-mode toggle
+    // survives by quoting the condition it actually changed.
+    const removedErrorWrites = [...readStatusWrites(patch.removed)].filter(
+      (code) => code >= 400,
+    );
+    const addedSuccessWrites = [...readStatusWrites(patch.added)].filter(
+      (code) => code >= 200 && code < 300,
+    );
+    if (removedErrorWrites.length > 0 && addedSuccessWrites.length > 0) {
+      violations.push({
+        hint: repairHints.statusHonesty,
+        message: `${path} rewrites an HTTP error status into a success: a ${removedErrorWrites.join(
+          "/",
+        )} response write was removed and a ${addedSuccessWrites.join(
+          "/",
+        )} one added. If the harness probed that route, the rewrite falsifies the probe instead of repairing what failed.`,
         path,
       });
     }
