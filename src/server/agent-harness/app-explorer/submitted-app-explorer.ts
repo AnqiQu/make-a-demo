@@ -2823,6 +2823,10 @@ try {
         return ((document.body && document.body.innerText) || "").trim().length >= 40;
       }, undefined, { timeout: Math.min(15000, Math.max(1, remainingMs())) }).catch(() => {});
     }
+    // Data that lands just after first paint (slow query, lazy chunk) would
+    // otherwise be harvested mid-fetch. Polling apps never go idle, so the
+    // window is capped and a timeout is not an error.
+    await page.waitForLoadState("networkidle", { timeout: Math.min(3000, Math.max(1, remainingMs())) }).catch(() => {});
     await waitForQuietDom(300, 2500);
     // A full-viewport loading indicator means the page is not ready no
     // matter how quiet the DOM is (cyberchef, 2026-08-08): wait it out
@@ -3241,6 +3245,54 @@ try {
         featureIds: target.featureIds ?? [],
         url: target.url,
       });
+      if (isAppUnavailableError(error)) break;
+    }
+  }
+  // N105 stability rider: a feature entry route about to be reported
+  // content-free earns one fresh navigation and re-harvest before that
+  // verdict stands. First paints lose races the rest of the crawl has since
+  // settled (cold compiles, slow first queries, one-off hydration stalls),
+  // and a flaky miss should cost seconds, not a repair round. Only richer
+  // fresh harvests replace the observation, so a confirmed miss stays a
+  // miss; interactions are not re-exercised.
+  const reharvestThinFeatureRoute = async (route) => {
+    await gotoRoute(new URL(route.requestedPath || route.path, baseUrl).toString());
+    const fresh = await page.evaluate(harvestPage);
+    if (fresh.headings.length + fresh.text.length <= route.headings.length + route.text.length) return;
+    fresh.buttons = prioritizeFeatureControls(fresh.buttons);
+    const overlayStuck = await page.evaluate(hasCoveringLoadingOverlay).catch(() => false);
+    route.headings = fresh.headings;
+    route.text = fresh.text;
+    route.buttons = fresh.buttons;
+    route.alerts = fresh.alerts;
+    route.emptyDataTables = fresh.emptyDataTables;
+    route.populatedDataTables = fresh.populatedDataTables;
+    route.headingLocatorEvidence = await Promise.all(route.headings.map((heading) =>
+      createVerifiedRoleLocatorEvidence({ candidateNames: [heading], role: "heading", route: route.path })));
+    route.buttonLocatorEvidence = await Promise.all(route.buttons.map((button) =>
+      createVerifiedRoleLocatorEvidence({ candidateNames: [button], role: "button", route: route.path })));
+    route.textLocatorEvidence = await Promise.all(route.text.map((text) =>
+      createVerifiedDirectLocatorEvidence({ locator: { exact: true, strategy: "text", value: text }, route: route.path })));
+    if (overlayStuck) { route.loadingOverlay = true; } else { delete route.loadingOverlay; }
+    if (lastDocumentStatus !== undefined && lastDocumentStatus >= 400) { route.documentStatus = lastDocumentStatus; } else { delete route.documentStatus; }
+    delete route.textSample;
+    for (const value of [...route.headings, ...route.text]) {
+      if (value) harvestedOnEarlierRoutes.add(value);
+    }
+    if (route.screenshot) await page.screenshot({ fullPage: true, path: route.screenshot }).catch(() => {});
+    if (route.snapshot) {
+      const freshAria = typeof page.locator("body").ariaSnapshot === "function" ? await page.locator("body").ariaSnapshot() : await page.locator("body").innerText();
+      await writeFile(route.snapshot, freshAria).catch(() => {});
+    }
+  };
+  for (const route of result.routes) {
+    if (Date.now() >= deadlineAtMs) break;
+    if (!(route.featureIds || []).length) continue;
+    const verifiedTextCount = route.text.filter((value, index) => value && (!route.textLocatorEvidence || Boolean(route.textLocatorEvidence[index]))).length;
+    if ((route.headings.length > 0 || verifiedTextCount > 0) && route.loadingOverlay !== true) continue;
+    try {
+      await reharvestThinFeatureRoute(route);
+    } catch (error) {
       if (isAppUnavailableError(error)) break;
     }
   }

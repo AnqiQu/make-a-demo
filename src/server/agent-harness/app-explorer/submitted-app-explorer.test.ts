@@ -183,6 +183,21 @@ describe("exploreSubmittedApp", () => {
     expect(script).toContain("element.innerText");
   });
 
+  it("waits for a bounded network-quiet window and re-harvests thin feature entry routes", async () => {
+    const { commands } = await exploreObservation({
+      featureInventory: [preparedFeature({})],
+      routes: [observedRoute({ headings: ["Dashboard"] })],
+    });
+    const script = readExplorerScript(commands);
+
+    // N105 stability rider: data that lands just after first paint gets a
+    // short capped network-idle window, and a feature entry route about to
+    // be reported content-free earns one fresh navigation and re-harvest
+    // before that verdict stands.
+    expect(script).toContain("networkidle");
+    expect(script).toContain("reharvestThinFeatureRoute");
+  });
+
   it("spends the control budget on feature-matching names before positional picks", async () => {
     const { commands } = await exploreObservation({
       featureInventory: [preparedFeature({})],

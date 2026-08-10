@@ -863,6 +863,82 @@ ${fillers}
     }
   }, 30_000);
 
+  it("re-harvests a feature entry route whose first paint rendered nothing", async () => {
+    // The first hit races a cold compile and serves only a skeleton; every
+    // later hit renders the real page. A feature entry route about to be
+    // reported content-free must get one fresh navigation before that
+    // verdict stands, so a flaky first paint costs seconds, not a repair
+    // round.
+    const skeletonPage = `<!doctype html><html><head><title>Fleet App</title></head><body>
+<input placeholder="Loading" />
+</body></html>`;
+    const contentPage = `<!doctype html><html><head><title>Fleet App</title></head><body>
+<h1>Fleet dashboard</h1>
+<main><p>Seven vehicles are currently active</p></main>
+</body></html>`;
+    let rootHits = 0;
+    const server = createServer((request, response) => {
+      if ((request.url ?? "/").split("?")[0] === "/") {
+        rootHits += 1;
+        response.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+        });
+        response.end(rootHits === 1 ? skeletonPage : contentPage);
+        return;
+      }
+      response.writeHead(404, { "content-type": "text/plain" });
+      response.end("not found");
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-reharvest-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`, [
+          {
+            authStrategy: "none",
+            description: "Watch the vehicle fleet dashboard.",
+            entryPaths: ["/"],
+            fixtureNotes: [],
+            id: "fleet-dashboard",
+            label: "Fleet dashboard",
+            sourcePaths: ["src/dashboard.tsx"],
+          },
+        ])
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        routes: Array<{ headings: string[]; text: string[] }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      expect(result.routes[0]?.headings).toContain("Fleet dashboard");
+      expect(result.routes[0]?.text).toContain(
+        "Seven vehicles are currently active",
+      );
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
   it("reports a headers-only table as an empty data table and a populated one as none", async () => {
     // A data query that resolves empty or mis-shaped renders a table shell
     // with headers and no rows — silently, with no error and no request.
