@@ -6842,6 +6842,83 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(startEnv?.NODE_OPTIONS).toContain("--max-old-space-size=4096");
   });
 
+  it("fails the capture reset when a scene route stops serving after the restart", async () => {
+    // The reset restarts the app for a clean take; the readiness probe only
+    // confirms the app binds. The routes the Demo Script actually films must
+    // also still serve on the fresh app — a scene route that 5xx's after the
+    // reset must fail the gate, never be greenlit for capture.
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (!command.includes("curl -")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        if (command.includes("/broken")) {
+          return {
+            exitCode: 22,
+            stderr: "curl: (22) The requested URL returned error: 500",
+            stdout:
+              '\n[makeademo:probe] {"httpStatus":500,"url":"http://127.0.0.1:3000/broken"}\n',
+          };
+        }
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout:
+            '\n[makeademo:probe] {"httpStatus":200,"url":"http://127.0.0.1:3000/"}\n',
+        };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.resetCaptureRuntime({
+      preparationManifest: preparationManifest(),
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      scriptCandidate: sceneRouteScriptCandidate("/broken"),
+      workspace,
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain("/broken");
+  });
+
+  it("passes the capture reset when every scene route still serves", async () => {
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (!command.includes("curl -")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout:
+            '\n[makeademo:probe] {"httpStatus":200,"url":"http://127.0.0.1:3000/dashboard"}\n',
+        };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.resetCaptureRuntime({
+      preparationManifest: preparationManifest(),
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      scriptCandidate: sceneRouteScriptCandidate("/dashboard"),
+      workspace,
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
   it("starts and stops the submitted app through the workspace managed-process seam", async () => {
     const shellCommands: string[] = [];
     const lifecycleCalls: unknown[] = [];
@@ -8794,6 +8871,34 @@ function blockedImageExplorationWorkspace(
       };
     },
   });
+}
+
+function sceneRouteScriptCandidate(path: string): ScriptCandidate {
+  return {
+    ...capturePathScriptCandidate(),
+    scriptJsonContent: {
+      format: "16:9",
+      presentation: {},
+      scenes: [
+        {
+          actions: [
+            { id: "go", path, type: "goto" },
+            {
+              id: "see",
+              locator: { strategy: "css", value: "main" },
+              type: "assert-visible",
+            },
+          ],
+          expectedVisibleOutcome: "The scene is visible.",
+          id: "scene_one",
+          type: "playwright-recording",
+        },
+      ],
+      scriptId: "script_reset",
+      title: "Demo",
+      version: 1,
+    },
+  };
 }
 
 function capturePathScriptCandidate(): ScriptCandidate {

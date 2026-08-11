@@ -1508,14 +1508,24 @@ export async function createDefaultAgentHarnessDependencies(
       preparationManifest,
       repoProfile,
       runPlan,
+      scriptCandidate,
       workspace,
     }) {
-      return await validateRuntimeWithExternalResources({
+      const report = await validateRuntimeWithExternalResources({
         installDependencies: false,
         preparationManifest,
         repoProfile,
         runPlan,
         stage: "capture-runtime-reset",
+        workspace,
+      });
+      if (report.status !== "passed") {
+        return report;
+      }
+      return await confirmCaptureSceneRoutesServe({
+        baseUrl: preparationManifest.baseUrl,
+        passedReport: report,
+        sceneRoutes: readCaptureSceneRoutes(scriptCandidate),
         workspace,
       });
     },
@@ -3041,6 +3051,81 @@ function preparationProbeUrl(manifest: PreparationManifest): string {
     : new URL(entryPath, manifest.baseUrl).toString();
 }
 
+/**
+ * The distinct navigation routes a Demo Script films: every `goto` path across
+ * its setup actions and playwright-recording scenes. The capture reset probes
+ * these on the freshly restarted app so a route that reverted to failing is
+ * caught before it is filmed — not the single readiness route alone. Returns
+ * an empty list for a script with no browser navigation, or one that no longer
+ * parses (the contract stage already owns that failure).
+ */
+function readCaptureSceneRoutes(scriptCandidate: ScriptCandidate): string[] {
+  try {
+    const demoScript = parseDemoScript(scriptCandidate.scriptJsonContent);
+    const actions = [
+      ...(demoScript.setupActions ?? []),
+      ...demoScript.scenes.flatMap((scene) =>
+        scene.type === "playwright-recording" ? (scene.actions ?? []) : [],
+      ),
+    ];
+    return [
+      ...new Set(
+        actions.flatMap((action) =>
+          action.type === "goto" ? [action.path] : [],
+        ),
+      ),
+    ];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Confirms every capture scene route still serves on the reset app. The
+ * readiness probe already proved the app binds, so each route takes a single
+ * shot with no cold-render budget; a route that does not respond fails the
+ * reset with the route named, so Footage Capture never films a broken surface.
+ * Returns the passed report untouched when every route serves.
+ */
+async function confirmCaptureSceneRoutesServe(input: {
+  baseUrl: string;
+  passedReport: ValidationReport;
+  sceneRoutes: string[];
+  workspace: AgentHarnessWorkspace;
+}): Promise<ValidationReport> {
+  const failures: { classification: string; detail: string }[] = [];
+  for (const route of input.sceneRoutes) {
+    const probe = await probeSubmittedCodeRuntime(
+      input.workspace,
+      new URL(route, input.baseUrl).toString(),
+      0,
+    );
+    if (probe.runtimeProbe.attempts.at(-1)?.outcome === "responded") {
+      continue;
+    }
+    failures.push({
+      classification: classifyPreparationRuntimeFailure(probe.runtimeProbe, ""),
+      detail:
+        probe.runtimeProbe.httpStatus === undefined
+          ? route
+          : `${route} (HTTP ${probe.runtimeProbe.httpStatus})`,
+    });
+  }
+  if (failures.length === 0) {
+    return input.passedReport;
+  }
+  return {
+    ...input.passedReport,
+    failureClassification: failures[0]?.classification ?? "start failure",
+    logsSummary: `The reset app no longer serves ${failures.length} capture scene route(s): ${failures.map((failure) => failure.detail).join(", ")}. Footage Capture would film a broken route.`,
+    status: "failed",
+    suggestedRepairHints: [
+      ...input.passedReport.suggestedRepairHints,
+      "A route the Demo Script navigates stopped serving on the freshly reset app. Make every scene route render on a cold start; do not depend on state a prior validation pass warmed.",
+    ],
+  };
+}
+
 function unresolvedExternalResourceValidation(
   report: ValidationReport,
   attempts: NetworkAttempt[],
@@ -3528,6 +3613,10 @@ const submittedCodeBuildTimeoutMs = 15 * 60_000;
 async function probeSubmittedCodeRuntime(
   workspace: AgentHarnessWorkspace,
   url: string,
+  // The readiness probe absorbs a cold dev server's compile window; a route
+  // check against an already-bound app wants no backoff, so callers pass 0 to
+  // take a single shot.
+  budgetMs = runtimeReadinessBudgetMs,
 ): Promise<
   AgentHarnessWorkspaceCommandResult & {
     runtimeProbe: RuntimeProbeDiagnostics;
@@ -3573,7 +3662,7 @@ async function probeSubmittedCodeRuntime(
       isReadinessProbeExecutionFailure(result) ||
       !isConnectionRefused(result) ||
       process?.running === false ||
-      waitedMs >= runtimeReadinessBudgetMs
+      waitedMs >= budgetMs
     ) {
       break;
     }

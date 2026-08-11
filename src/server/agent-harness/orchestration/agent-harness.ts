@@ -129,6 +129,12 @@ export type AgentHarnessPipelineDependencies = {
     preparationManifest: PreparationManifest;
     repoProfile: RepoProfile;
     runPlan: RunPlan;
+    /**
+     * The Demo Script about to be filmed. The reset re-probes every scene's
+     * navigation route on the freshly restarted app, so a route that reverted
+     * to failing after the reset fails the gate instead of being filmed.
+     */
+    scriptCandidate: ScriptCandidate;
     workspace: AgentHarnessWorkspace;
   }): Promise<ValidationReport>;
   exploreApp(input: {
@@ -751,6 +757,7 @@ export async function runAgentHarnessPipeline(
               preparationManifest,
               repoProfile,
               runPlan,
+              scriptCandidate,
               workspace: requireWorkspace(workspace),
             })),
             stage: "capture-path-preflight",
@@ -928,6 +935,7 @@ export async function runAgentHarnessPipeline(
             preparationManifest,
             repoProfile,
             runPlan,
+            scriptCandidate,
             workspace: requireWorkspace(workspace),
           }),
         validationAttemptCounts,
