@@ -858,6 +858,48 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(prompts[1]).toContain("assert-data");
   });
 
+  it("carries every prior attempt's distinct rejection into the next flow-planning prompt", async () => {
+    // directus oscillated across three fresh-session attempts (2026-08-11):
+    // attempt 1 broke the pairing rule, attempt 2 fixed it but broke the
+    // route-distinct rule, attempt 3 fixed that and regressed the pairing —
+    // each retry saw only the latest error and undid an earlier fix. The
+    // prompt must accumulate every distinct rejection so one fix cannot
+    // silently reintroduce another.
+    const interactionMissing = {
+      ...flowSpec(),
+      features: flowSpec().features.map((feature) => ({
+        ...feature,
+        referencedActionIds: ["assert-chrome"],
+      })),
+    };
+    const chromeOnly = {
+      ...flowSpec(),
+      features: flowSpec().features.map((feature) => ({
+        ...feature,
+        referencedActionIds: ["open-dashboard", "assert-chrome"],
+      })),
+    };
+    const distinct = {
+      ...flowSpec(),
+      features: flowSpec().features.map((feature) => ({
+        ...feature,
+        referencedActionIds: ["open-dashboard", "assert-data"],
+      })),
+    };
+    const { attempts, prompts, result } = await runFlowPlanningScenario({
+      actionCatalog: chromeAndDataCatalog(),
+      appMap: sidebarAppMap(),
+      candidates: [interactionMissing, chromeOnly, distinct],
+    });
+
+    expect(result).toEqual(distinct);
+    expect(attempts).toBe(3);
+    // The third prompt must carry the route-distinct rejection from attempt 2
+    // AND the pairing rejection from attempt 1 — not the latest alone.
+    expect(prompts[2]).toContain("route-distinct");
+    expect(prompts[2]).toContain("must select both an interaction");
+  });
+
   it("accepts chrome-only assertions when the catalog offers nothing route-distinct", async () => {
     const catalog = chromeAndDataCatalog();
     const chromeOnlyCatalog = {

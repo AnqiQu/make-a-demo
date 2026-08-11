@@ -308,19 +308,30 @@ export async function createDefaultAgentHarnessDependencies(
         ? baseline.candidateFingerprint
         : undefined;
     let artifactError = stageInput.initialArtifactError;
+    // Every distinct rejection reason the stage has seen. Feeding only the
+    // latest lets a fresh-session retry satisfy the newest constraint while
+    // regressing one an earlier attempt already fixed (directus's
+    // flow-planning oscillated across three attempts, 2026-08-11); the agent
+    // must see every constraint at once.
+    const priorArtifactErrors: string[] = [];
     let stallRetriesRemaining = retryPolicy.agentStallRetries;
     // Stall retries repeat an attempt number, so "is this the first run"
     // must be tracked separately or a post-stall retry would lose the
     // accumulated error evidence (including the kill disclosure).
     let priorRunHappened = false;
     for (let attempt = 1; attempt <= attempts; ) {
+      if (priorRunHappened && !priorArtifactErrors.includes(artifactError)) {
+        priorArtifactErrors.push(artifactError);
+      }
       const result = await runOpenCode({
         availableTools: ["read", "write"],
         configDir: openCodeConfigDirectory,
         model: `${providerID}/${modelID}`,
         prompt: stageInput.prompt(
           attempt,
-          priorRunHappened ? artifactError : undefined,
+          priorRunHappened
+            ? accumulatedArtifactError(priorArtifactErrors)
+            : undefined,
         ),
         ...optionalSessionId(opencodeSessionId),
         stage: stageInput.stageForAttempt(attempt),
@@ -4724,6 +4735,26 @@ function readUnreachableDependencyHost(result: {
 
 function readErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Folds the distinct rejection reasons a stage has accumulated into the
+ * feedback the next attempt receives. A single reason passes through
+ * unchanged; several are framed so the agent satisfies every constraint at
+ * once instead of correcting the newest and regressing an earlier fix.
+ */
+function accumulatedArtifactError(priorErrors: string[]): string {
+  const latest = priorErrors[priorErrors.length - 1] ?? "";
+  if (priorErrors.length <= 1) {
+    return latest;
+  }
+  return [
+    "Each earlier attempt was rejected for a different reason. A valid artifact must satisfy ALL of these constraints at once — correcting one must not reintroduce another:",
+    ...priorErrors.map(
+      (error, index) => `- Attempt ${index + 1} was rejected: ${error}`,
+    ),
+    `Resolve the most recent rejection while keeping every earlier one satisfied: ${latest}`,
+  ].join("\n");
 }
 
 function readErrorDiagnostic(error: unknown): {
