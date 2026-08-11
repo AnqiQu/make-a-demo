@@ -2213,7 +2213,7 @@ async function validateResolvedSubmittedCodeRuntime(
         "true",
       ].join("; "),
     );
-    // The pnp fallback outlives one round only through its /root sentinel:
+    // The disk fallback outlives one round only through its /root sentinel:
     // every reset restores the repo's own .yarnrc.yml, and without the
     // reapply each later round would pay a full out-of-disk install before
     // rediscovering the switch.
@@ -2221,17 +2221,17 @@ async function validateResolvedSubmittedCodeRuntime(
       parseInstallCommand(installCommand).packageManager === "yarn" &&
       readYarnInstallVariant(installCommand, input.repoProfile.yarnVariant) ===
         "berry";
-    let berryPnpFallbackActive = false;
+    let berryDiskFallbackActive = false;
     if (berryYarnInstall) {
       const sentinel = await executeSubmitted(
         input.workspace,
-        `test -f ${shellQuote(berryPnpFallbackSentinelPath)}`,
+        `test -f ${shellQuote(berryDiskFallbackSentinelPath)}`,
       );
       if (sentinel.exitCode === 0) {
-        berryPnpFallbackActive = true;
+        berryDiskFallbackActive = true;
         await executeSubmitted(
           input.workspace,
-          createBerryPnpLinkerCommand(installDirectory),
+          createBerryDiskFallbackLinkerCommand(installDirectory),
         );
       }
     }
@@ -2356,18 +2356,19 @@ async function validateResolvedSubmittedCodeRuntime(
     if (
       result.status === "failed" &&
       berryYarnInstall &&
-      !berryPnpFallbackActive &&
+      !berryDiskFallbackActive &&
       diskExhaustionPattern.test(`${result.stderr}\n${result.stdout}`)
     ) {
-      // Harness-owned storage halving under the demo gate: the agent may
-      // not mutate manager identity, but the stages downstream adjudicate
-      // whether the app actually works in the PnP world.
-      berryPnpFallbackActive = true;
+      // Harness-owned storage dedup under the demo gate: the agent may not
+      // mutate manager identity, but the manager itself is unchanged — only
+      // its on-disk layout is deduped, and every downstream stage still runs
+      // against a real node_modules tree.
+      berryDiskFallbackActive = true;
       try {
         await input.workspace.writeSandboxLog({
-          event: "install.disk-pressure.berry-pnp-fallback",
+          event: "install.disk-pressure.berry-hardlink-fallback",
           message:
-            "Yarn Berry install exhausted the disk; the harness is switching the workspace to nodeLinker: pnp (pnpMode: loose, enableGlobalCache: false) and retrying the install once.",
+            "Yarn Berry install exhausted the disk; the harness is switching the workspace to nodeLinker: node-modules with nmMode: hardlinks-global (deduping the tree onto disk while keeping a real node_modules) and retrying the install once.",
         });
       } catch {
         // The fallback must never be displaced by an observability failure.
@@ -2375,12 +2376,13 @@ async function validateResolvedSubmittedCodeRuntime(
       await executeSubmitted(
         input.workspace,
         [
-          createBerryPnpLinkerCommand(installDirectory),
-          // Unpacked trees are dead weight under pnp: the zip cache is the
-          // module store.
+          createBerryDiskFallbackLinkerCommand(installDirectory),
+          // The copy-mode tree is rebuilt hardlinked: dropping it lets the
+          // retry re-materialize node_modules deduped rather than layered on
+          // the footprint that just overflowed.
           "find /workspace -mindepth 1 -name node_modules -prune -exec rm -rf {} + 2>/dev/null",
-          `mkdir -p ${berryPnpFallbackStateDirectory}`,
-          `touch ${shellQuote(berryPnpFallbackSentinelPath)}`,
+          `mkdir -p ${berryDiskFallbackStateDirectory}`,
+          `touch ${shellQuote(berryDiskFallbackSentinelPath)}`,
           "true",
         ].join("; "),
       );
@@ -2436,7 +2438,7 @@ async function validateResolvedSubmittedCodeRuntime(
         installExcerpt,
       );
       const installHints = [
-        ...(berryPnpFallbackActive ? [berryPnpFallbackRepairHint] : []),
+        ...(berryDiskFallbackActive ? [berryDiskFallbackRepairHint] : []),
         ...(diskPressure.exhausted
           ? [diskExhaustionRepairHint(diskPressure.markerLines)]
           : []),
@@ -3441,21 +3443,24 @@ const packageManagerCachePruneCommand = `rm -rf /root/.yarn/berry/cache /root/.n
 // The berry pnp fallback's decision record. /root survives workspace resets
 // (a reset re-extracts /workspace only), unlike the repo's own .yarnrc.yml,
 // which every reset restores to the linker that already ran out of disk.
-const berryPnpFallbackStateDirectory = "/root/.makeademo-install-state";
-const berryPnpFallbackSentinelPath = `${berryPnpFallbackStateDirectory}/berry-pnp-fallback`;
+const berryDiskFallbackStateDirectory = "/root/.makeademo-install-state";
+const berryDiskFallbackSentinelPath = `${berryDiskFallbackStateDirectory}/berry-hardlink-fallback`;
 
-// nodeLinker: pnp keeps only the zip cache — no unpacked tree, the storage
-// halving twenty's agent correctly identified and fidelity rightly vetoed
-// the agent applying (2026-08-08). pnpMode: loose approximates hoisting so
-// undeclared access degrades to warnings, and enableGlobalCache: false
-// parks the cache on the preserved project path (*/.yarn/cache) where
-// neither cache prune deletes the running app's module store.
-function createBerryPnpLinkerCommand(installDirectory: string): string {
-  return `cd ${shellQuote(installDirectory)} && yarn config set nodeLinker pnp && yarn config set pnpMode loose && yarn config set enableGlobalCache false`;
+// nodeLinker: node-modules keeps a real tree so npm- and npx-based build and
+// start scripts resolve, while nmMode: hardlinks-global dedupes that tree's
+// files against a shared store to shrink the footprint an ordinary copy-mode
+// install exhausted. The earlier pnp fallback fit twenty's install but left
+// no node_modules, so its npx build (npx nx, npx concurrently) fetched from
+// the sealed registry and died (2026-08-11); a resolution-preserving linker
+// never trades an install failure for that opaquer build one.
+function createBerryDiskFallbackLinkerCommand(
+  installDirectory: string,
+): string {
+  return `cd ${shellQuote(installDirectory)} && yarn config set nodeLinker node-modules && yarn config set nmMode hardlinks-global`;
 }
 
-const berryPnpFallbackRepairHint =
-  "After an out-of-disk install the harness switched this Yarn Berry workspace to nodeLinker: pnp with pnpMode: loose and enableGlobalCache: false — the zip cache is now the module store and no node_modules tree is written. Repair within the PnP world; do not change nodeLinker or the yarn config back. A module-not-found error at runtime usually means the package must be declared in the importing package.json's dependencies.";
+const berryDiskFallbackRepairHint =
+  "After an out-of-disk install the harness switched this Yarn Berry workspace to nodeLinker: node-modules with nmMode: hardlinks-global — a real node_modules tree is kept and its files are hardlinked to a shared store to save disk, so npm- and npx-based build and start scripts still resolve. Keep this linker; do not switch to PnP. If the install still runs out of disk, cut the installed footprint: install only the demo app's workspace subtree and drop dev-only dependencies the demo never runs.";
 
 // The state file each manager writes inside node_modules when it owns the
 // tree; its absence proves another manager built what is there. Bun leaves

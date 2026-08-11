@@ -4808,12 +4808,13 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(report.suggestedRepairHints.join("\n")).toContain("ENOSPC");
   });
 
-  it("switches a yarn berry install to the pnp linker when it dies out of space and retries once", async () => {
-    // Twenty's repair agent found the correct halving fix — nodeLinker: pnp
-    // — and the mutatesManagerIdentity rule rightly vetoed the agent doing
-    // it (2026-08-08). The harness owns the fallback instead: pnp keeps only
-    // the zip cache, and enableGlobalCache: false parks that cache on the
-    // preserved project path so neither prune deletes the runtime's store.
+  it("switches a yarn berry install to a hardlinked node-modules linker when it dies out of space and retries once", async () => {
+    // Twenty exhausted the disk in the default node-modules mode, and the
+    // earlier pnp fallback fit the install but left no node_modules — so its
+    // npx-based build (npx nx, npx concurrently) could not resolve and tried
+    // to fetch from the sealed registry (2026-08-11). The harness keeps a
+    // real tree instead: nmMode hardlinks-global dedupes files onto disk
+    // while every npm/npx tool still resolves through node_modules.
     const commands: string[] = [];
     const sandboxEvents: Array<Record<string, unknown>> = [];
     let installAttempts = 0;
@@ -4860,20 +4861,22 @@ describe("createDefaultAgentHarnessDependencies", () => {
 
     expect(installAttempts).toBe(2);
     const fallbackIndex = commands.findIndex((command) =>
-      command.includes("yarn config set nodeLinker pnp"),
+      command.includes("yarn config set nodeLinker node-modules"),
     );
     expect(fallbackIndex).toBeGreaterThanOrEqual(0);
-    expect(commands[fallbackIndex]).toContain("yarn config set pnpMode loose");
     expect(commands[fallbackIndex]).toContain(
-      "yarn config set enableGlobalCache false",
+      "yarn config set nmMode hardlinks-global",
     );
-    // The unpacked trees are dead weight under pnp, and the sentinel makes
-    // the switch survive the next workspace reset.
+    // The disk fallback must never resort to pnp: it is what broke twenty's
+    // npx-based build.
+    expect(commands[fallbackIndex]).not.toContain("nodeLinker pnp");
+    // The copied tree is rebuilt hardlinked, and the sentinel makes the
+    // switch survive the next workspace reset.
     expect(commands[fallbackIndex]).toContain(
       "-name node_modules -prune -exec rm -rf",
     );
     expect(commands[fallbackIndex]).toContain(
-      "touch '/root/.makeademo-install-state/berry-pnp-fallback'",
+      "touch '/root/.makeademo-install-state/berry-hardlink-fallback'",
     );
     expect(
       commands
@@ -4883,12 +4886,13 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(report.status).toBe("passed");
     expect(
       sandboxEvents.some(
-        (event) => event.event === "install.disk-pressure.berry-pnp-fallback",
+        (event) =>
+          event.event === "install.disk-pressure.berry-hardlink-fallback",
       ),
     ).toBe(true);
   });
 
-  it("reapplies the persisted pnp fallback before the next round's install", async () => {
+  it("reapplies the persisted hardlink fallback before the next round's install", async () => {
     // The workspace reset restores the repo's own .yarnrc.yml, so the
     // switch would silently revert and every later round would pay a full
     // out-of-disk install before rediscovering it. The sentinel under /root
@@ -4926,7 +4930,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
 
     expect(installAttempts).toBe(1);
     const configIndex = commands.findIndex((command) =>
-      command.includes("yarn config set nodeLinker pnp"),
+      command.includes("yarn config set nodeLinker node-modules"),
     );
     const installIndex = commands.findIndex((command) =>
       command.includes("yarn install"),
@@ -4940,7 +4944,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
     ).toBe(false);
   });
 
-  it("keeps the pnp fallback away from classic yarn installs", async () => {
+  it("keeps the disk fallback away from classic yarn installs", async () => {
     const commands: string[] = [];
     const workspace = createFakeAgentHarnessWorkspace({
       async executeSubmittedCode(command) {
@@ -4981,7 +4985,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(report.suggestedRepairHints.join("\n")).toContain("ENOSPC");
   });
 
-  it("names the harness pnp switch in the hints when the retried install still fails", async () => {
+  it("names the harness linker switch in the hints when the retried install still fails", async () => {
     let installAttempts = 0;
     const workspace = createFakeAgentHarnessWorkspace({
       async executeSubmittedCode(command) {
@@ -5025,7 +5029,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
     const hints = report.suggestedRepairHints.join("\n");
     // The repair agent must know the linker world changed under it — and
     // that changing it back is off the table.
-    expect(hints).toContain("nodeLinker: pnp");
+    expect(hints).toContain("nodeLinker: node-modules");
     expect(hints).toContain("ENOSPC");
   });
 
