@@ -5515,3 +5515,128 @@ tree and builds (or fails honestly with ENOSPC and the
 disk hint), calcom runs `yarn run dev` in apps/web and
 binds :3000, and directus's flow planner converges instead
 of oscillating.
+
+## Addendum (2026-08-11, wave-4 rerun — the loopback family and the pre-capture gate: N116, N117)
+
+The gate rerun (2026-08-11T20-47-14Z) validated N113 and
+N114: twenty's hardlink fallback fired, both installs fit
+at 43-45% disk, the build succeeded with no ECONNREFUSED,
+and Vite bound — advancing from a build failure to a
+readiness-probe miss; calcom booted on `yarn run dev` in
+apps/web and reached footage capture (12 stages). Neither
+of the two new failure classes below is caused by wave-4
+code — both are older seams the rerun simply reached for
+the first time. directus (a cosmetic `packageManager`
+edit instead of the `predev` build it produced the prior
+run) and ghostfolio (a prep-agent inactivity kill, then an
+unreachable sandbox) were stochastic, passed other runs,
+and are not code regressions.
+
+### Diagnoses
+
+twenty — preparation-preflight (readiness), a loopback
+address-family mismatch. The build now succeeds and Vite
+binds, printing `➜ Local: http://localhost:PORT/`, but the
+readiness probe curled the IPv4 literal `127.0.0.1` and
+was refused "after 0 ms" for the full budget while the
+process stayed `running: true`. Under Node 24 the DNS
+result order no longer prefers IPv4, so a dev server that
+binds `localhost` (Vite's default) takes IPv6 `::1` first
+and never listens on `127.0.0.1`. The probe is not the
+only IPv4-literal consumer: the in-sandbox browser
+explorer and capture both navigate `manifest.baseUrl`,
+also `http://127.0.0.1:PORT`, so a probe-only localhost
+retry would pass preflight and then fail exploration
+against the same unreachable literal — the fault would
+move downstream, not clear.
+
+calcom — footage-capture, two pre-capture-gate gaps the
+booted app exposed. (1) `capture-runtime-reset` restarts
+the app for a clean take, then confirms health by probing
+a single route — `preparationProbeUrl`, the first feature
+`entryPath` — not the scene `goto` routes it is about to
+film. A scene route that reverted to failing after the
+reset is greenlit because it is never re-probed. (2) The
+external-resource broker retries a capture-path pass to
+hydrate blocked external resources and returns the latest
+pass keyed only on remaining external attempts; a pass
+that fails on an app-origin route 5xx while also carrying
+an uncached CDN resource is retried after hydration, and a
+byte-identical later pass with a lucky 2xx overwrites the
+failure. Playwright's `page.goto` resolves on a 500, so
+the 5xx surfaces only as a downstream assertion failure —
+by classification alone indistinguishable from a
+blocked-image assertion failure, so the broker cannot tell
+a flaky app route from the external resource it is there
+to hydrate. (calcom's underlying block is a genuine
+Postgres gap the prep never provisioned — a separate
+open decision — but the gates above must not greenlight a
+route the capture will re-hit.)
+
+### N116 (High, bugfix) — the dev server binds the loopback the pipeline dials
+
+The root cause is Node's DNS order, not the probe, so fix
+the bind rather than every consumer. Node 17+ defaults
+`dns.lookup` to verbatim order (IPv6 first), which is why
+a `localhost`-binding dev server takes `::1`. Pin the
+app's own Node to `--dns-result-order=ipv4first` by
+merging it into the `NODE_OPTIONS` the harness already
+assembles for the submitted-code build and start
+environment (`guardedRuntimeEnv`, alongside the runtime
+network-guard `--require`, preserving any NODE_OPTIONS the
+repo set). `localhost` then resolves to `127.0.0.1` first,
+so the dev server binds the family the whole pipeline
+dials — probe, in-sandbox browser explorer, and capture,
+all through the unchanged `127.0.0.1` `baseUrl`. This is
+the complete fix a probe-only localhost retry is not (that
+would clear preflight and then fail exploration against
+the same literal), and it is minimal: one flag on the env
+already threaded through build, start, and every restart
+(so capture, which films the app the reset left running,
+inherits it too), with no `baseUrl` change and no
+127.0.0.1 test churn. It targets the exact class that has
+the bug — Node dev servers resolving `localhost` — while a
+server that already binds `0.0.0.0` or an IP literal is
+unaffected because the flag only reorders name
+resolution. A genuine listen failure — nothing on any
+loopback family — still refuses and classifies unchanged.
+The `--host 127.0.0.1` fallback start command stays as a
+second belt for the case where the harness supplies the
+command outright.
+
+### N117 (High, mixed) — the pre-capture gate re-probes what it films, and an app-origin server error sticks
+
+Gap 1 (re-probe the scene routes). Thread the demo
+script's distinct playwright-recording scene `goto` paths
+into `resetCaptureRuntime`. After the readiness probe
+confirms the app binds, probe each scene route once — the
+app is already up, so no cold-render budget is spent — and
+fail the reset naming any route that does not serve (a
+refuse, a >=400, or a render timeout). The routes are
+derived from the script the stage is about to film, never
+a hardcoded path, so the gate generalizes to any repo. A
+run with no scene routes falls back to the current single
+readiness probe unchanged.
+
+Gap 2 (an app-origin 5xx is a hard, sticky failure).
+Instrument the capture-path script to record each scene's
+main-document navigation status for same-origin (app)
+responses, and classify an app-origin status >=500 as a
+hard capture failure. Hydrating an external resource can
+never fix the app's own route returning a server error, so
+this verdict is sticky: the external-resource broker never
+overwrites it with a later pass's success, and the
+orchestrator never retries it as transient infrastructure.
+The discriminator is origin, not classification, so
+legitimate external-resource retries — always a different
+origin — are untouched and keep their fail-then-hydrate-
+then-succeed path. A route that 5xx's on any validation
+pass is thus never greenlit for filming, even if a
+byte-identical retry gets lucky.
+
+Recommended order: N116 first (unblocks twenty and every
+localhost-binding Node dev server, a single DNS-order flag
+on the app env), then N117 gap 1 (re-probe scene routes),
+then N117 gap 2 (the app-origin nav-status instrumentation
+and its sticky verdict). N112 (empty chart-surface class)
+remains recorded, deliberately not implemented.
