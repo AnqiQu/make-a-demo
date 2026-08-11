@@ -62,23 +62,41 @@ export function findRuntimeConfigurationIssue(input: {
   ) {
     return "Runtime commands must use the manifest working directory instead of a command-level working directory flag.";
   }
+  const knownWorkspaceNames = new Set(
+    (input.repoProfile.workspacePackages ?? []).flatMap(({ name }) =>
+      name === undefined ? [] : [name],
+    ),
+  );
   for (const command of [
     input.preparationManifest.buildCommandUsed,
     input.preparationManifest.startCommandUsed,
   ]) {
-    const scriptName =
-      command === undefined ? undefined : readScriptName(command);
-    if (scriptName === undefined) {
+    if (command === undefined) {
       continue;
     }
+    const scriptName = readScriptName(command);
     const scripts =
       input.preparationManifest.appDir === "."
         ? input.repoProfile.packageScripts
         : input.repoProfile.workspacePackages?.find(
             ({ dir }) => dir === input.preparationManifest.appDir,
           )?.scripts;
-    if (scripts?.[scriptName] === undefined) {
+    if (scriptName !== undefined && scripts?.[scriptName] === undefined) {
       return `Runtime script "${scriptName}" is not defined for ${input.preparationManifest.appDir}.`;
+    }
+    // The command may name a workspace directly, or run a script whose body
+    // fans out through the task runner; scan both surfaces for a selector
+    // that targets a package the repository does not contain.
+    const scriptBody =
+      scriptName === undefined ? undefined : scripts?.[scriptName];
+    const absentPackage = readAbsentWorkspacePackage(
+      [command, scriptBody]
+        .filter((value): value is string => value !== undefined)
+        .join(" "),
+      knownWorkspaceNames,
+    );
+    if (absentPackage !== undefined) {
+      return `Runtime command "${command}" selects workspace package ${absentPackage}, which does not exist in this repository. Run only workspace targets the checkout contains.`;
     }
   }
   return undefined;
@@ -547,18 +565,20 @@ function findScopedRootScript(
   operation: string,
 ): string | undefined {
   const scripts = repoProfile.packageScripts;
-  const otherWorkspaceNames = (repoProfile.workspacePackages ?? [])
-    .map(({ name }) => name)
-    .filter(
-      (name): name is string =>
-        name !== undefined && name !== workspacePackage.name,
-    );
-  const targetsAnotherWorkspace = (command: string) =>
-    otherWorkspaceNames.some((name) => referencesPackageName(command, name));
+  const workspaceNames = (repoProfile.workspacePackages ?? []).flatMap(
+    ({ name }) => (name === undefined ? [] : [name]),
+  );
+  const otherWorkspaceNames = workspaceNames.filter(
+    (name) => name !== workspacePackage.name,
+  );
+  const knownWorkspaceNames = new Set(workspaceNames);
+  const unusableRootScript = (command: string) =>
+    otherWorkspaceNames.some((name) => referencesPackageName(command, name)) ||
+    readAbsentWorkspacePackage(command, knownWorkspaceNames) !== undefined;
   const shortName = posix.basename(workspacePackage.dir);
   const named = `${operation}:${shortName}`;
   const namedCommand = scripts[named];
-  if (namedCommand !== undefined && !targetsAnotherWorkspace(namedCommand)) {
+  if (namedCommand !== undefined && !unusableRootScript(namedCommand)) {
     return named;
   }
   if (workspacePackage.name === undefined) {
@@ -568,8 +588,49 @@ function findScopedRootScript(
     ([name, command]) =>
       (name === operation || name.startsWith(`${operation}:`)) &&
       referencesPackageName(command, workspacePackage.name as string) &&
-      !targetsAnotherWorkspace(command),
+      !unusableRootScript(command),
   )?.[0];
+}
+
+/**
+ * Whether a command selects a scoped package the repository does not contain.
+ * Task-runner fan-out scripts (turbo/pnpm `--filter`, lerna `--scope`, nx
+ * `--project`) validate every selector before launching, so a script naming a
+ * scoped package absent from the workspace set — a proprietary sibling
+ * stripped from an OSS checkout, as with cal.com's `dev:all` reaching for
+ * `@calcom/website` — aborts before the real app can bind. Only scoped names
+ * sharing a scope with a known workspace are judged, so an unrelated registry
+ * dependency, a path filter, or a glob never trips this. Returns the first
+ * offending package name so callers can name it in a repair message.
+ */
+function readAbsentWorkspacePackage(
+  command: string,
+  knownWorkspaceNames: ReadonlySet<string>,
+): string | undefined {
+  const readScope = (name: string) => /^(@[A-Za-z0-9._-]+)\//.exec(name)?.[1];
+  const knownScopes = new Set(
+    [...knownWorkspaceNames].flatMap((name) => {
+      const scope = readScope(name);
+      return scope === undefined ? [] : [scope];
+    }),
+  );
+  for (const match of command.matchAll(
+    /--(?:filter|workspace|scope|projects?)[=\s]+["']?(@[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+)["']?/g,
+  )) {
+    const name = match[1];
+    if (name === undefined) {
+      continue;
+    }
+    const scope = readScope(name);
+    if (
+      scope !== undefined &&
+      knownScopes.has(scope) &&
+      !knownWorkspaceNames.has(name)
+    ) {
+      return name;
+    }
+  }
+  return undefined;
 }
 
 /**

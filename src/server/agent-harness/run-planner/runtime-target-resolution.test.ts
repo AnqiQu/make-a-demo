@@ -625,6 +625,36 @@ describe("resolveRuntimeTarget", () => {
     expect(target?.start).toEqual({ command: "yarn run dev", cwd: "apps/web" });
   });
 
+  it("rejects a root orchestration script that fans out to a package absent from the workspace", () => {
+    // A root "run everything" script whose selectors name packages the
+    // checkout does not contain — a proprietary sibling stripped from an OSS
+    // monorepo — makes the task runner abort at filter resolution before the
+    // real app binds. Such a script must never be chosen over the
+    // workspace-local command whose targets all exist.
+    const target = resolveRuntimeTarget({
+      preparationManifest: manifest("apps/web/src/page.tsx"),
+      repoProfile: profile({
+        candidateInstallCommands: ["yarn install --immutable"],
+        lockfiles: ["yarn.lock"],
+        packageManager: "yarn",
+        packageScripts: {
+          "dev:all":
+            'turbo run dev --filter="@a/web" --filter="@a/marketing" --filter="@a/console"',
+        },
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "@a/web",
+            ports: [],
+            scripts: { dev: "next dev" },
+          },
+        ],
+      }),
+    });
+
+    expect(target?.start).toEqual({ command: "yarn run dev", cwd: "apps/web" });
+  });
+
   it("reads equals-form and env-form ports from the selected script", () => {
     const target = resolveRuntimeTarget({
       preparationManifest: manifest("apps/web/src/page.tsx"),
@@ -863,6 +893,55 @@ describe("resolveRuntimeTarget", () => {
         repoProfile: profile({ packageScripts: { dev: "vite" } }),
       }),
     ).toContain('script "missing"');
+  });
+
+  it("rejects a runtime command that selects a package absent from the workspace", () => {
+    const preparationManifest = manifest("src/page.tsx");
+    preparationManifest.startCommandUsed =
+      'turbo run dev --filter="@acme/web" --filter="@acme/marketing"';
+
+    expect(
+      findRuntimeConfigurationIssue({
+        preparationManifest,
+        repoProfile: profile({
+          packageManager: "yarn",
+          workspacePackages: [
+            {
+              dir: "apps/web",
+              name: "@acme/web",
+              ports: [],
+              scripts: { dev: "next dev" },
+            },
+          ],
+        }),
+      }),
+    ).toContain("@acme/marketing");
+  });
+
+  it("rejects a run-script command whose script body selects an absent package", () => {
+    const preparationManifest = manifest("src/page.tsx");
+    preparationManifest.startCommandUsed = "yarn run dev:all";
+
+    expect(
+      findRuntimeConfigurationIssue({
+        preparationManifest,
+        repoProfile: profile({
+          packageManager: "yarn",
+          packageScripts: {
+            "dev:all":
+              'turbo run dev --filter="@acme/web" --filter="@acme/website"',
+          },
+          workspacePackages: [
+            {
+              dir: "apps/web",
+              name: "@acme/web",
+              ports: [],
+              scripts: { dev: "next dev" },
+            },
+          ],
+        }),
+      }),
+    ).toContain("@acme/website");
   });
 });
 
