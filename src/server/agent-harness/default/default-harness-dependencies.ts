@@ -2666,7 +2666,18 @@ async function validateResolvedSubmittedCodeRuntime(
   const guardedRuntimeEnv = {
     ...manifest.envUsed,
     ...sealedRuntimeTelemetryOptOuts,
-    NODE_OPTIONS: [existingNodeOptions, `--require=${runtimeNetworkGuardPath}`]
+    // Node 24 resolves localhost to IPv6 ::1 first, so a dev server that binds
+    // localhost (Vite's default) never listens on 127.0.0.1 — the address the
+    // readiness probe, the browser explorer, and capture all dial through
+    // baseUrl. Pinning the app's own DNS order to ipv4first makes localhost
+    // resolve to 127.0.0.1 first, so the server binds the family the pipeline
+    // reaches; a server that already binds 0.0.0.0 or an IP literal is
+    // unaffected. The runtime network guard require is preserved alongside it.
+    NODE_OPTIONS: [
+      existingNodeOptions,
+      "--dns-result-order=ipv4first",
+      `--require=${runtimeNetworkGuardPath}`,
+    ]
       .filter(
         (value): value is string => value !== undefined && value.length > 0,
       )

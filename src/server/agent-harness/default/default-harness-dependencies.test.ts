@@ -6802,6 +6802,46 @@ describe("createDefaultAgentHarnessDependencies", () => {
     }
   });
 
+  it("pins the app's Node DNS order to IPv4 so a localhost bind stays reachable", async () => {
+    // Node 24 orders localhost as ::1 first, so a dev server that binds
+    // localhost (Vite's default) never listens on 127.0.0.1 and every
+    // 127.0.0.1 consumer — the readiness probe, the browser explorer, and
+    // capture — is refused. Pinning --dns-result-order=ipv4first in the app's
+    // own NODE_OPTIONS makes localhost resolve to 127.0.0.1 first, so the
+    // server binds the family the whole pipeline dials.
+    let startEnv: Record<string, string | undefined> | undefined;
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode() {
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async startSubmittedCodeApp(input) {
+        startEnv = input.env;
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.validatePreparation({
+        preparationManifest: {
+          ...preparationManifest(),
+          envUsed: { NODE_OPTIONS: "--max-old-space-size=4096" },
+        },
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).resolves.toMatchObject({ status: "passed" });
+
+    expect(startEnv?.NODE_OPTIONS).toContain("--dns-result-order=ipv4first");
+    // A repo's own NODE_OPTIONS is preserved, not clobbered.
+    expect(startEnv?.NODE_OPTIONS).toContain("--max-old-space-size=4096");
+  });
+
   it("starts and stops the submitted app through the workspace managed-process seam", async () => {
     const shellCommands: string[] = [];
     const lifecycleCalls: unknown[] = [];
@@ -6849,7 +6889,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
             MAKEADEMO_OFFLINE: "1",
             NEXT_TELEMETRY_DISABLED: "1",
             NODE_OPTIONS:
-              "--require=/workspace/.makeademo/runtime-network-guard.cjs",
+              "--dns-result-order=ipv4first --require=/workspace/.makeademo/runtime-network-guard.cjs",
             npm_config_engine_strict: "false",
           },
         },
