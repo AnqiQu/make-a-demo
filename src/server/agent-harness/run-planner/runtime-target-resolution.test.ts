@@ -655,6 +655,35 @@ describe("resolveRuntimeTarget", () => {
     expect(target?.start).toEqual({ command: "yarn run dev", cwd: "apps/web" });
   });
 
+  it("rejects a root orchestration script fanning out to an absent unscoped package", () => {
+    // The same abort happens in monorepos whose packages have no @scope: a
+    // plain-named workspace set (turbo/lerna/nx with bare package names) where
+    // the root "run everything" script filters a sibling the checkout lacks.
+    // Detection must not depend on the @scope namespace, or unscoped repos get
+    // no protection and the doomed fan-out script wins over the local command.
+    const target = resolveRuntimeTarget({
+      preparationManifest: manifest("apps/web/src/page.tsx"),
+      repoProfile: profile({
+        candidateInstallCommands: ["yarn install --immutable"],
+        lockfiles: ["yarn.lock"],
+        packageManager: "yarn",
+        packageScripts: {
+          "dev:all": "turbo run dev --filter=web --filter=marketing",
+        },
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "web",
+            ports: [],
+            scripts: { dev: "next dev" },
+          },
+        ],
+      }),
+    });
+
+    expect(target?.start).toEqual({ command: "yarn run dev", cwd: "apps/web" });
+  });
+
   it("reads equals-form and env-form ports from the selected script", () => {
     const target = resolveRuntimeTarget({
       preparationManifest: manifest("apps/web/src/page.tsx"),
@@ -942,6 +971,59 @@ describe("resolveRuntimeTarget", () => {
         }),
       }),
     ).toContain("@acme/website");
+  });
+
+  it("rejects a runtime command selecting an absent unscoped package", () => {
+    const preparationManifest = manifest("src/page.tsx");
+    preparationManifest.startCommandUsed =
+      "turbo run dev --filter=web --filter=marketing";
+
+    expect(
+      findRuntimeConfigurationIssue({
+        preparationManifest,
+        repoProfile: profile({
+          packageManager: "yarn",
+          workspacePackages: [
+            {
+              dir: "apps/web",
+              name: "web",
+              ports: [],
+              scripts: { dev: "next dev" },
+            },
+          ],
+        }),
+      }),
+    ).toContain("marketing");
+  });
+
+  it("accepts selectors that resolve: short names, path filters, and graph patterns", () => {
+    // The unscoped generalization must not fire on selectors that DO resolve.
+    // `--filter=web` short-selects `@a/web`; `./apps/marketing` is a path, not
+    // a name; `web...` is a pnpm relationship pattern. None names a missing
+    // package, so preflight must raise no absent-package issue.
+    const preparationManifest = manifest("apps/web/src/page.tsx");
+    preparationManifest.appDir = "apps/web";
+    preparationManifest.startCommandUsed =
+      "turbo run dev --filter=web --filter=./apps/marketing --filter=web...";
+
+    const issue = findRuntimeConfigurationIssue({
+      preparationManifest,
+      repoProfile: profile({
+        candidateAppDirs: [".", "apps/web"],
+        packageManager: "yarn",
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "@a/web",
+            ports: [],
+            scripts: { dev: "next dev" },
+          },
+          { dir: "tools/cli", name: "tools", ports: [], scripts: {} },
+        ],
+      }),
+    });
+
+    expect(issue).toBeUndefined();
   });
 });
 

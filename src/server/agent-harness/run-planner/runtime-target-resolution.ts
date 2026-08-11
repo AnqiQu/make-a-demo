@@ -593,41 +593,72 @@ function findScopedRootScript(
 }
 
 /**
- * Whether a command selects a scoped package the repository does not contain.
- * Task-runner fan-out scripts (turbo/pnpm `--filter`, lerna `--scope`, nx
- * `--project`) validate every selector before launching, so a script naming a
- * scoped package absent from the workspace set — a proprietary sibling
- * stripped from an OSS checkout, as with cal.com's `dev:all` reaching for
- * `@calcom/website` — aborts before the real app can bind. Only scoped names
- * sharing a scope with a known workspace are judged, so an unrelated registry
- * dependency, a path filter, or a glob never trips this. Returns the first
- * offending package name so callers can name it in a repair message.
+ * Whether a command selects a workspace package the repository does not
+ * contain. Task-runner fan-out scripts (turbo/pnpm `--filter`, lerna
+ * `--scope`, nx `--project`) validate every selector before launching, so a
+ * script naming a package absent from the workspace set — a proprietary
+ * sibling stripped from an OSS checkout, as with cal.com's `dev:all` reaching
+ * for `@calcom/website` — aborts before the real app can bind. Returns the
+ * first offending package name so callers can name it in a repair message.
+ *
+ * A selector is judged absent only when it names the repository's own
+ * namespace yet matches no workspace: a scoped name is judged when it shares a
+ * scope with a known workspace, an unscoped name only when the repo actually
+ * uses unscoped workspace names and the name matches neither a full workspace
+ * name nor a workspace's short name (so `--filter=web` still resolves to
+ * `@a/web`). Registry dependencies of a foreign scope, path filters
+ * (`./pkg`), globs (`@a/*`), and pnpm relationship patterns (`web...`) are
+ * never judged, so only a genuinely missing target trips this.
  */
 function readAbsentWorkspacePackage(
   command: string,
   knownWorkspaceNames: ReadonlySet<string>,
 ): string | undefined {
   const readScope = (name: string) => /^(@[A-Za-z0-9._-]+)\//.exec(name)?.[1];
+  const shortNameOf = (name: string) =>
+    name.includes("/") ? name.slice(name.lastIndexOf("/") + 1) : name;
   const knownScopes = new Set(
     [...knownWorkspaceNames].flatMap((name) => {
       const scope = readScope(name);
       return scope === undefined ? [] : [scope];
     }),
   );
+  const knownShortNames = new Set([...knownWorkspaceNames].map(shortNameOf));
+  const repoUsesUnscopedNames = [...knownWorkspaceNames].some(
+    (name) => !name.startsWith("@"),
+  );
   for (const match of command.matchAll(
-    /--(?:filter|workspace|scope|projects?)[=\s]+["']?(@[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+)["']?/g,
+    /--(?:filter|workspace|scope|projects?)[=\s]+["']?([^"'\s]+)["']?/g,
   )) {
-    const name = match[1];
-    if (name === undefined) {
+    const selector = match[1];
+    // pnpm relationship patterns (`web...`, `...web`) select by graph, not a
+    // literal name, so a `...` never names a missing package.
+    if (selector === undefined || selector.includes("...")) {
       continue;
     }
-    const scope = readScope(name);
+    const scope = readScope(selector);
+    if (scope !== undefined) {
+      // A clean scoped name only; a scoped glob (`@a/*`) or extra segment is
+      // not a literal package selector.
+      if (!/^@[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(selector)) {
+        continue;
+      }
+      if (knownScopes.has(scope) && !knownWorkspaceNames.has(selector)) {
+        return selector;
+      }
+      continue;
+    }
+    // A bare identifier only; anything with a slash is a path filter and
+    // anything with glob/pattern punctuation is not a literal name.
+    if (!/^[A-Za-z0-9._-]+$/.test(selector)) {
+      continue;
+    }
     if (
-      scope !== undefined &&
-      knownScopes.has(scope) &&
-      !knownWorkspaceNames.has(name)
+      repoUsesUnscopedNames &&
+      !knownWorkspaceNames.has(selector) &&
+      !knownShortNames.has(selector)
     ) {
-      return name;
+      return selector;
     }
   }
   return undefined;
