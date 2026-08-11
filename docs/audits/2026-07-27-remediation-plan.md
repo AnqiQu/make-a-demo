@@ -5374,3 +5374,144 @@ criteria read "twenty completes two sequential installs
 inside 10GiB or fails citing ENOSPC with disk hints
 present" and "no fidelity pass on an empty-diff manifest
 claiming demoable features."
+
+## Addendum (2026-08-11, wave-3 acceptance matrix — the disk-pressure five: twenty, directus, calcom, ghostfolio, homer)
+
+The wave-3 gate ran the disk-pressure class (twenty,
+directus, calcom) against two controls (ghostfolio,
+homer). Both controls passed; all three heavy repos
+failed — but none on raw ENOSPC. N110's disk work held:
+twenty's install fit inside 10GiB (final disk 47%), and
+no other entry showed a disk signature. Each failure sits
+at a different stage, and two of the three share one
+weakness — a retry that re-does work instead of building
+on the last.
+
+### Diagnoses
+
+twenty — preparation-preflight (build), a cost N110's own
+PnP fallback introduced. The install exhausted the 10GiB
+disk in node-modules mode; the N110 berry PnP fallback
+fired (sandbox event `install.disk-pressure.berry-pnp-fallback`)
+and the install then fit under PnP. But twenty's build
+and start are npx-driven (`npx nx run-many`, `npx
+concurrently`, `npx wait-on`), and npm/npx cannot resolve
+through PnP — there is no node_modules — so `yarn run
+build` reached for `vite` from registry.npmjs.org and
+died ECONNREFUSED on the sealed network, identically
+across all five attempts. The fallback traded an honest
+install ENOSPC for an opaque build-time network failure.
+
+calcom — preparation-preflight (start), the resolver
+overriding a good repair. The resolved start command was
+`yarn run dev:all` → `turbo run dev --filter=@calcom/web
+--filter=@calcom/website --filter=@calcom/console`;
+`@calcom/website` and `@calcom/console` are proprietary,
+absent from the OSS checkout. Turbo validates every filter
+target up front and aborts exit 1 before `@calcom/web`
+binds, so the readiness probe to :3000 got httpStatus 000.
+The repair produced the correct fix — `startCommandUsed:
+yarn run dev`, `appDir: apps/web`, passed on both
+attempts — but `resolvePreparationRuntime` overrode it
+back to `dev:all`/root every round: `findScopedRootScript`'s
+`!targetsAnotherWorkspace` guard only rejects a root
+script referencing other existing workspaces, so a script
+fanning out to absent packages passed the guard and
+clobbered the repair. Same fingerprint every round →
+budget exhausted after 2.
+
+directus — flow-planning, stateless-retry oscillation.
+Not a crash, timeout, liveness kill, or resource failure —
+exploration was rich (8 routes, 109 actions, all three
+requested features grounded, no auth wall). The
+flow-planning agent ran three times (the cap), each
+writing valid JSON, each rejected by the FlowSpec contract
+on one feature (`data-model-fields`) that carries two
+rules: the interaction must come from the allowed set, and
+the visible assert must target route-distinct content, not
+globally-repeated navigation text. It oscillated — attempt
+2 fixed the assert, attempt 3 fixed the interaction but
+regressed the assert — never holding both, though the
+validator named a working pair each time. Each retry ran
+in a fresh opencode session and saw only the latest error,
+with no memory of the prior fix.
+
+Unifying theme: calcom and directus are the same weakness
+one level apart — a retry that does not carry forward what
+the last attempt got right. The resolver re-derives a
+command that discards the repair; the flow planner
+re-derives a spec that discards its own earlier
+correction. N109's fingerprint/no-op machinery detects the
+stuck loop but only ends the run; it does not make the
+next attempt smarter. ghostfolio and homer passed as
+controls, confirming the fixes below do not disturb the
+working path.
+
+### N113 (High, bugfix) — the disk fallback preserves module resolution
+
+The yarn-berry disk fallback no longer switches to PnP,
+which removes node_modules and breaks any npm/npx-based
+build or start tooling (twenty). After an ENOSPC-signed
+berry install failure it now switches to the node-modules
+linker with `nmMode: hardlinks-global` — a real
+node_modules tree with files deduped onto a global
+content-addressable store — drops the copy-mode tree,
+retries once, and records the decision as a `/root`
+sentinel (`berry-hardlink-fallback`) that survives
+workspace resets. A real node_modules keeps every
+toolchain resolving; if the hardlinked tree still will not
+fit, the install fails honestly with the existing ENOSPC
+disk hint. The strategy never changes the module-resolution
+contract, so it keys off nothing repo-specific.
+
+### N114 (High, bugfix) — a runtime command may not select a package absent from the workspace
+
+A shared `readAbsentWorkspacePackage` reads scoped package
+selectors from a command and returns any that share a
+known workspace's scope but are not themselves a workspace
+package — quote- and tool-agnostic, keyed to the repo's
+own workspace set. It guards two seams: `findScopedRootScript`
+no longer selects a root orchestration script that fans
+out to an absent package (so calcom's `dev:all` is skipped
+for the workspace-local `yarn run dev`, matching the
+repair), and `findRuntimeConfigurationIssue` rejects any
+build or start command that references one (defense-in-depth
+for an agent-authored command that bypasses resolution).
+The diagnosis corrected the proposal: calcom's root cause
+was the resolver overriding the repair, not a missing
+persistence write, so the fix stops the override rather
+than re-plumbing the manifest.
+
+### N115 (Medium, feature) — artifact-stage retries accumulate their rejections
+
+The shared artifact-stage retry loop now folds the distinct
+rejection reasons a stage has accumulated into the next
+attempt's prompt ("Each earlier attempt was rejected for a
+different reason. A valid artifact must satisfy ALL of
+these constraints at once — correcting one must not
+reintroduce another:"), so a stage that fixes rule A can no
+longer silently regress rule B (directus). It lives in the
+retry loop, not in flow-planning, so it applies to every
+artifact stage and any multi-rule contract.
+
+### Landed (2026-08-11, wave 4: retries carry their evidence, disk keeps its node_modules)
+
+`2bd90f5` N114 — the absent-workspace-package guard at both
+the selection and validation seams. `a03e813` N113 — the
+hardlinked node-modules disk fallback replacing PnP.
+`c10435a` N115 — cumulative rejections folded into the next
+artifact-stage prompt. All three TDD red-first with
+synthetic fixtures (`@a/*` and `@acme/*` monorepos, a
+three-attempt oscillation), never a twenty/calcom/directus-shaped
+one, so no fix overfits the repos that motivated it. Full
+suite 1135 tests green; lint, typecheck, and knip clean.
+Dependency graphs unchanged (no module-structure change),
+so no `generated:` commit. N112 (empty chart-surface class)
+remains recorded, deliberately not implemented.
+
+Suggested gate: rerun the same disk-pressure set — twenty
+completes both installs inside 10GiB via the hardlinked
+tree and builds (or fails honestly with ENOSPC and the
+disk hint), calcom runs `yarn run dev` in apps/web and
+binds :3000, and directus's flow planner converges instead
+of oscillating.
