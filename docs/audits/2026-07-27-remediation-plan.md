@@ -5270,3 +5270,107 @@ upstream logo proxy) on demo routes — neither visibly mars
 the captured frames; /en/portfolio/x-ray and /en/fire
 throw on unfixtured surfaces, but neither is a demo
 feature route. Wave 3 (N109 → N110 → N111) is unblocked.
+
+### Landed (2026-08-10, wave 3: repair converges, disk survives, fidelity reads evidence)
+
+N109 in five commits. `69dff98` failure fingerprints hash
+the decisive cause line instead of the whole symptom, so a
+drifting curl exit code or a timestamped npm debug-log path
+cannot make the same wall look new to the repeated-failure
+limit. `683e6a6` a repair round that changes nothing in the
+workspace is a rejected non-attempt — steered back with the
+unchanged evidence, never a budget charge. `016a8f4`
+repaired files get a soft parse probe (node --check class)
+with one in-session correction pass, so a syntax-broken
+repair dies at write time instead of one failed preflight
+later. `c090b36` prerequisite evidence widens to
+entry-resolution failures and sibling-asset shapes, so
+"module not found" repairs see the neighboring files that
+disprove a bad path guess. `9571538` a failed preflight
+states the requiredEnvHints gap against the manifest's
+actual envUsed, naming the variables the preparation never
+set.
+
+N110 in six commits. `24a92cf` the package-manager caches
+(yarn berry, npm, pnpm, and the staging directory) prune
+before every install, not only after lifecycle — headroom
+is created where the footprint peaks, with df markers
+bracketing the pruning. `9886bd4` preserved node_modules
+trees carried across a workspace reset drop before install
+when their in-tree manager state marker
+(.package-lock.json, .modules.yaml, .yarn-integrity,
+.yarn-state.yml) does not match the current manager — a
+foreign tree is dead weight the resolver will rebuild
+anyway; bun (no marker) conservatively never drops.
+`d3410f1` package-manager staging moves off /tmp: TMPDIR
+points at /root/.makeademo-staging for install and
+lifecycle commands, the pre-install prune clears it, and
+the build-log harvest follows the staging path. `217607c`
+ENOSPC evidence reaches verdicts: a disk-exhaustion
+classifier plus the [makeademo:disk]/[makeademo:mem]
+markers feed install, build, and lifecycle failure reports,
+and the repair hint names the 10GB budget with per-manager
+workspace-scoped install commands. `eddfdd3` world rule 9
+tells the agent the same thing up front: the disk is a hard
+ceiling shared with /tmp, and a footprint that grows to it
+dies with ENOSPC on every retry. `2a48f27` the yarn berry
+PnP fallback is harness-owned: after an ENOSPC-signed berry
+install failure, the harness switches the workspace to
+nodeLinker pnp (loose) with enableGlobalCache false — zips
+park in the project .yarn/cache both prunes preserve —
+drops the dead node_modules trees, retries once, and
+records the decision as a /root sentinel that survives
+workspace resets so every later round reapplies the config
+before installing; the repair hint tells the agent to leave
+the linker alone.
+
+N111 in four commits, all candidates through the
+judge-on-veto lane, none hard vetoes. `603dc88` the vacuity
+candidate: an empty workspace diff under a manifest that
+claims demoable features while declaring no demo machinery
+at all (no localDemoModeChanges, fixtures, or data seams)
+is midday's sham restated as evidence; a repo that
+genuinely demos unchanged survives adjudication by saying
+so. `6fc034b` an unverified fixture shape cannot back a
+declared observable state: a data seam whose shapeProbe
+records not-run or failed under a feature with an
+expectedProof reaches the judge (excalidraw's "Undo
+enabled" over a not-run probe). `e6f40b9` error-status
+rewrites on probed responses reach the judge: a diff that
+removes an HTTP error-status write and adds a success-status
+write on the same file is treated as falsifying the probe
+rather than repairing the feature — demo-gated flips
+included, because the probe runs with the gate on.
+`bd3b5b1` observed auth walls contradict declared no-auth
+features: the failure report that dispatched the active
+repair now threads its feature verdicts into the next
+fidelity check, so a prior round's auth-wall verdict
+against a feature whose manifest still declares
+authStrategy "none" is a disproven claim, not prose the
+judge never sees.
+
+Deviation from plan (N111): the orchestration test stubs
+needed one fixture correction, not a rule exception — the
+stub manifest's empty-diff rounds were an accidental
+replica of midday's sham, so the fixture now declares an
+honest localDemoModeChanges entry instead of the rule
+learning to excuse it.
+
+Deviation from practice (wave discipline): the final three
+commits were verified with targeted suites plus
+fmt/lint/typecheck per commit under a token budget, with
+knip and the full suite deferred to a single wave-end
+gauntlet — recorded here: full suite 1131 tests green,
+lint, typecheck, and knip clean. `5157dff` regenerates the
+dependency graphs (one new edge: the orchestrator's N109
+import of the stderr error signal). N112 (empty
+chart-surface class) remains recorded, deliberately not
+implemented.
+
+Suggested gate before closing the plan: rerun the
+mini-matrix with a disk-pressure repo (twenty, calcom, or
+directus class) alongside a control — the acceptance
+criteria read "twenty completes two sequential installs
+inside 10GiB or fails citing ENOSPC with disk hints
+present" and "no fidelity pass on an empty-diff manifest
+claiming demoable features."
