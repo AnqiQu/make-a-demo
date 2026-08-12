@@ -7522,6 +7522,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
   });
 
   it("preserves HTTP error metadata and classifies a crashing route as a build failure", async () => {
+    vi.useFakeTimers();
     const workspace = createFakeAgentHarnessWorkspace({
       async executeSubmittedCode(command) {
         return command.includes("curl -")
@@ -7548,21 +7549,206 @@ describe("createDefaultAgentHarnessDependencies", () => {
       repoSourceArchive: await repoSourceArchive(),
     });
 
-    const report = await harness.dependencies.validatePreparation({
-      preparationManifest: preparationManifest(),
-      repoProfile: repoProfile(),
-      runPlan: runPlan(),
-      workspace,
-    });
+    try {
+      const validation = harness.dependencies.validatePreparation({
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      });
+      await vi.advanceTimersByTimeAsync(200_000);
+      const report = await validation;
 
-    expect(report).toMatchObject({
-      failureClassification: "build failure",
-      runtimeProbe: {
-        finalUrl: "http://127.0.0.1:3000/dashboard",
-        httpStatus: 500,
-      },
-      status: "failed",
-    });
+      expect(report).toMatchObject({
+        failureClassification: "build failure",
+        runtimeProbe: {
+          finalUrl: "http://127.0.0.1:3000/dashboard",
+          httpStatus: 500,
+        },
+        status: "failed",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("recovers when an HTTP error clears within the readiness budget", async () => {
+    // ghostfolio's Angular dev server binds early and 404s every route while
+    // it compiles (2026-08-12); a bound server's first HTTP response is a
+    // warming signal, not a verdict, until the readiness budget ends.
+    vi.useFakeTimers();
+    try {
+      const startMs = Date.now();
+      const workspace = createFakeAgentHarnessWorkspace({
+        async executeSubmittedCode(command) {
+          if (!command.includes("curl -")) {
+            return { exitCode: 0, stderr: "", stdout: "" };
+          }
+          return Date.now() - startMs < 60_000
+            ? {
+                exitCode: 22,
+                stderr: "curl: (22) The requested URL returned error: 404",
+                stdout:
+                  '[makeademo:probe] {"httpStatus":404,"url":"http://127.0.0.1:3000/home"}',
+              }
+            : {
+                exitCode: 0,
+                stderr: "",
+                stdout:
+                  '[makeademo:probe] {"httpStatus":200,"url":"http://127.0.0.1:3000/home"}',
+              };
+        },
+      });
+      const harness = await createDefaultAgentHarnessDependencies({
+        artifactStore: { async writeJson() {} },
+        openCodeRunner: repoPreparationRunner(),
+        outputRoot: "/tmp/makeademo-test",
+        repoSourceArchive: await repoSourceArchive(),
+      });
+
+      const validation = harness.dependencies.validatePreparation({
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      });
+      await vi.advanceTimersByTimeAsync(200_000);
+      const report = await validation;
+
+      expect(report.status).toBe("passed");
+      const outcomes = report.runtimeProbe?.attempts.map(
+        ({ outcome }) => outcome,
+      );
+      expect(outcomes?.at(0)).toBe("http-error");
+      expect(outcomes?.at(-1)).toBe("responded");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("extends the readiness budget while the compiling app keeps writing output", async () => {
+    // An Angular/Nx cold compile can outlast the base readiness budget while
+    // visibly streaming progress. Output growth between polls is proof of
+    // life, so it buys more budget instead of letting the round die mid-build.
+    vi.useFakeTimers();
+    try {
+      const startMs = Date.now();
+      let statusReads = 0;
+      const workspace = createFakeAgentHarnessWorkspace({
+        async executeSubmittedCode(command) {
+          if (!command.includes("curl -")) {
+            return { exitCode: 0, stderr: "", stdout: "" };
+          }
+          return Date.now() - startMs < 300_000
+            ? {
+                exitCode: 22,
+                stderr: "curl: (22) The requested URL returned error: 404",
+                stdout:
+                  '[makeademo:probe] {"httpStatus":404,"url":"http://127.0.0.1:3000/home"}',
+              }
+            : {
+                exitCode: 0,
+                stderr: "",
+                stdout:
+                  '[makeademo:probe] {"httpStatus":200,"url":"http://127.0.0.1:3000/home"}',
+              };
+        },
+        async readSubmittedCodeAppStatus() {
+          statusReads += 1;
+          return {
+            running: true,
+            stderr: "",
+            stdout: Array.from(
+              { length: statusReads },
+              (_, index) => `compiled chunk ${index}`,
+            ).join("\n"),
+          };
+        },
+      });
+      const harness = await createDefaultAgentHarnessDependencies({
+        artifactStore: { async writeJson() {} },
+        openCodeRunner: repoPreparationRunner(),
+        outputRoot: "/tmp/makeademo-test",
+        repoSourceArchive: await repoSourceArchive(),
+      });
+
+      const validation = harness.dependencies.validatePreparation({
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      });
+      await vi.advanceTimersByTimeAsync(400_000);
+      const report = await validation;
+
+      expect(report.status).toBe("passed");
+      expect(report.runtimeProbe?.attempts.at(-1)?.outcome).toBe("responded");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops extending the readiness budget at its absolute cap", async () => {
+    // Output growth extends the budget but never indefinitely: an app that
+    // streams logs forever without ever serving must still end the round so
+    // the repair loop gets the final HTTP status to act on.
+    vi.useFakeTimers();
+    try {
+      let probes = 0;
+      let statusReads = 0;
+      const workspace = createFakeAgentHarnessWorkspace({
+        async executeSubmittedCode(command) {
+          if (!command.includes("curl -")) {
+            return { exitCode: 0, stderr: "", stdout: "" };
+          }
+          probes += 1;
+          return {
+            exitCode: 22,
+            stderr: "curl: (22) The requested URL returned error: 404",
+            stdout:
+              '[makeademo:probe] {"httpStatus":404,"url":"http://127.0.0.1:3000/home"}',
+          };
+        },
+        async readSubmittedCodeAppStatus() {
+          statusReads += 1;
+          return {
+            running: true,
+            stderr: "",
+            stdout: Array.from(
+              { length: statusReads },
+              (_, index) => `compiled chunk ${index}`,
+            ).join("\n"),
+          };
+        },
+      });
+      const harness = await createDefaultAgentHarnessDependencies({
+        artifactStore: { async writeJson() {} },
+        openCodeRunner: repoPreparationRunner(),
+        outputRoot: "/tmp/makeademo-test",
+        repoSourceArchive: await repoSourceArchive(),
+      });
+
+      const validation = harness.dependencies.validatePreparation({
+        preparationManifest: preparationManifest(),
+        repoProfile: repoProfile(),
+        runPlan: runPlan(),
+        workspace,
+      });
+      await vi.advanceTimersByTimeAsync(2_000_000);
+      const report = await validation;
+
+      expect(report).toMatchObject({
+        failureClassification: "app route not discoverable",
+        runtimeProbe: { httpStatus: 404 },
+        status: "failed",
+      });
+      // More probes than the static 180s budget allows proves the budget
+      // slid; staying bounded proves the 10-minute cap held.
+      expect(probes).toBeGreaterThan(16);
+      expect(probes).toBeLessThan(50);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("classifies a running process that never listens as a listen failure", async () => {
@@ -7718,6 +7904,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
   });
 
   it("classifies an unresolved bare import as a missing dependency", async () => {
+    vi.useFakeTimers();
     const workspace = createFakeAgentHarnessWorkspace({
       async executeSubmittedCode(command) {
         return command.includes("curl -")
@@ -7744,17 +7931,21 @@ describe("createDefaultAgentHarnessDependencies", () => {
       repoSourceArchive: await repoSourceArchive(),
     });
 
-    await expect(
-      harness.dependencies.validatePreparation({
+    try {
+      const validation = harness.dependencies.validatePreparation({
         preparationManifest: preparationManifest(),
         repoProfile: repoProfile(),
         runPlan: runPlan(),
         workspace,
-      }),
-    ).resolves.toMatchObject({
-      failureClassification: "missing dependency",
-      status: "failed",
-    });
+      });
+      await vi.advanceTimersByTimeAsync(200_000);
+      await expect(validation).resolves.toMatchObject({
+        failureClassification: "missing dependency",
+        status: "failed",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("reports suppressed server egress without failing a responsive runtime", async () => {

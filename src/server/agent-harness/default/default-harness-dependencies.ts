@@ -3603,17 +3603,25 @@ function absoluteAppDirectory(appDir: string): string {
 
 /**
  * Cold monorepo dev servers routinely compile for 60–120s before binding, so
- * connection-refused probes back off exponentially until this budget elapses.
- * Every other failure mode (HTTP error, crashed process, probe execution
- * failure) still terminates the probe immediately. A running process whose
- * port stays refused deliberately keeps the whole budget: from the outside a
- * supervisor idling after its child crashed is indistinguishable from a
- * compiler working silently, so the listen-failure repair hint — not an
- * early exit — is what stops repeated identical rounds.
+ * the readiness probe backs off exponentially while the failure is one a
+ * still-warming server produces: connection refused (nothing bound yet) or
+ * an HTTP error (bound, but the app behind the port is still compiling —
+ * ghostfolio's Angular dev server 404s every route for minutes before the
+ * first one exists, 2026-08-12). Crashed processes, probe execution
+ * failures, and connected render timeouts (which already held a 90s window
+ * open) terminate immediately; at budget end the last observed status
+ * classifies the failure. The budget slides while the managed app keeps
+ * writing output between polls — visible progress is proof of life and buys
+ * more time, up to the absolute cap. A running process whose port stays
+ * refused with static output deliberately keeps the base budget: from the
+ * outside a supervisor idling after its child crashed is indistinguishable
+ * from a compiler working silently, so the listen-failure repair hint — not
+ * an early exit — is what stops repeated identical rounds.
  */
 const runtimeReadinessBudgetMs = 180_000;
 const runtimeReadinessInitialDelayMs = 2_000;
 const runtimeReadinessMaxDelayMs = 15_000;
+const runtimeReadinessProgressCapMs = 600_000;
 
 /**
  * Explicit ceilings for the two heaviest submitted-code commands, replacing
@@ -3720,6 +3728,8 @@ async function probeSubmittedCodeRuntime(
   let responseMetadata: { httpStatus: number; url: string } | undefined;
   let waitedMs = 0;
   let delayMs = runtimeReadinessInitialDelayMs;
+  let budgetEndMs = budgetMs;
+  let lastAppOutputLength: number | undefined;
   for (let attempt = 1; ; attempt += 1) {
     const startedAt = new Date().toISOString();
     const startedAtMs = Date.now();
@@ -3731,6 +3741,7 @@ async function probeSubmittedCodeRuntime(
     const status = await readSubmittedCodeAppStatusSafely(workspace);
     const process =
       status === undefined ? undefined : runtimeProcessObservation(status);
+    const outcome = readRuntimeProbeOutcome(result, process);
     attempts.push({
       attempt,
       ...(result.stderr || result.stdout
@@ -3742,16 +3753,29 @@ async function probeSubmittedCodeRuntime(
         : {}),
       durationMs: Date.now() - startedAtMs,
       exitCode: result.exitCode,
-      outcome: readRuntimeProbeOutcome(result, process),
+      outcome,
       startedAt,
       ...(process === undefined ? {} : { process }),
     });
+    const appOutputLength =
+      status === undefined
+        ? undefined
+        : (status.stdout?.length ?? 0) + (status.stderr?.length ?? 0);
     if (
-      result.exitCode === 0 ||
+      appOutputLength !== undefined &&
+      lastAppOutputLength !== undefined &&
+      appOutputLength > lastAppOutputLength
+    ) {
+      budgetEndMs = Math.min(
+        runtimeReadinessProgressCapMs,
+        waitedMs + budgetMs,
+      );
+    }
+    lastAppOutputLength = appOutputLength ?? lastAppOutputLength;
+    if (
       isReadinessProbeExecutionFailure(result) ||
-      !isConnectionRefused(result) ||
-      process?.running === false ||
-      waitedMs >= budgetMs
+      (outcome !== "connection-refused" && outcome !== "http-error") ||
+      waitedMs >= budgetEndMs
     ) {
       break;
     }
