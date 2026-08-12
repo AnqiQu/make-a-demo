@@ -293,4 +293,90 @@ describe("createDaytonaControlPlaneEnvelope", () => {
     expect(observed[0]?.delayMs).toBe(2_000);
     expect(observed[0]?.error).toBeInstanceOf(Error);
   });
+
+  it("converts a hung attempt into a transient retry instead of awaiting it forever", async () => {
+    const { envelope, events } = createRecordingEnvelope();
+    let attempts = 0;
+
+    const result = await envelope.run(
+      "sandbox.delete",
+      () => {
+        attempts += 1;
+        if (attempts === 1) {
+          // Neither resolves nor rejects: the hung-HTTP-call shape that
+          // wedged the 2026-08-11 batch for 40 minutes.
+          return new Promise<string>(() => {});
+        }
+        return Promise.resolve("deleted");
+      },
+      { attemptTimeoutMs: 20, ladderMs: [1_000] },
+    );
+
+    expect(result).toBe("deleted");
+    expect(attempts).toBe(2);
+    const retrying = events.find(
+      (event) => event.entry.event === "daytona.sandbox.delete.retrying",
+    );
+    expect(retrying?.entry.classification).toBe("transient");
+    expect(String(retrying?.entry.error)).toContain("20ms");
+  });
+
+  it("fails a persistently hung operation through the ladder instead of wedging the run", async () => {
+    const { envelope, events } = createRecordingEnvelope();
+    let attempts = 0;
+
+    await expect(
+      envelope.run(
+        "sandbox.delete",
+        () => {
+          attempts += 1;
+          return new Promise<void>(() => {});
+        },
+        { attemptTimeoutMs: 10, ladderMs: [1_000] },
+      ),
+    ).rejects.toBeInstanceOf(AgentHarnessControlPlaneError);
+
+    expect(attempts).toBe(2);
+    expect(events.at(-1)?.entry.event).toBe("daytona.sandbox.delete.failed");
+    expect(events.at(-1)?.entry.classification).toBe("transient");
+  });
+
+  it("ignores a timed-out attempt's late settlement without an unhandled rejection", async () => {
+    const { envelope } = createRecordingEnvelope();
+    let attempts = 0;
+
+    const result = await envelope.run(
+      "sandbox.network-update",
+      () => {
+        attempts += 1;
+        if (attempts === 1) {
+          return new Promise<string>((_resolve, reject) => {
+            setTimeout(() => reject(new Error("late transport failure")), 40);
+          });
+        }
+        return Promise.resolve("updated");
+      },
+      { attemptTimeoutMs: 10, ladderMs: [1_000] },
+    );
+
+    expect(result).toBe("updated");
+    // Let the abandoned attempt reject; vitest fails the test run if that
+    // rejection surfaces as unhandled.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+  });
+
+  it("runs an attempt unbounded when the caller disables the attempt timeout", async () => {
+    const { envelope } = createRecordingEnvelope();
+
+    const result = await envelope.run(
+      "fs.upload",
+      () =>
+        new Promise<string>((resolve) => {
+          setTimeout(() => resolve("uploaded"), 30);
+        }),
+      { attemptTimeoutMs: Number.POSITIVE_INFINITY },
+    );
+
+    expect(result).toBe("uploaded");
+  });
 });

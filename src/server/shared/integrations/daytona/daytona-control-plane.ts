@@ -70,6 +70,17 @@ function readHttpStatusCode(error: unknown): number | undefined {
 }
 
 type DaytonaControlPlaneRunOptions = {
+  /**
+   * Per-attempt bound on how long a single control-plane call may stay
+   * unsettled before the envelope abandons it as transport loss and lets
+   * the transient ladder re-issue it. A backstop against calls that hang
+   * without rejecting, not a latency budget: the default stays above the
+   * slowest legitimate envelope operation (a sandbox create pulling a
+   * snapshot, a large artifact upload). `Number.POSITIVE_INFINITY`
+   * disables the bound for a call the caller knows may legitimately
+   * outlast it.
+   */
+  attemptTimeoutMs?: number;
   /** Conflict polls before giving up; each waits `conflictPollDelayMs`. */
   conflictPollLimit?: number;
   /** Transient-retry delays; its length bounds the retries. */
@@ -105,13 +116,68 @@ const controlLadderMs = [
 const conflictPollDelayMs = 5_000;
 const defaultConflictPollLimit = 24;
 
+// A hung control-plane call neither resolves nor rejects, so the retry
+// ladder — which only reacts to thrown errors — never engages and the
+// whole batch wedges behind one awaited promise (ghostfolio's
+// sandbox.delete hung ~40 minutes until the kernel reaped the socket,
+// 2026-08-11). Ten minutes polices hangs without ever racing a
+// legitimate operation.
+const defaultAttemptTimeoutMs = 10 * 60_000;
+
+/**
+ * Awaits one attempt under the per-attempt bound. A timeout rejects with
+ * an error the classifier reads as transient (name and message both carry
+ * its timeout signature), so the ordinary ladder re-issues the call. The
+ * abandoned attempt's eventual settlement is consumed by the handlers
+ * already attached here, so a late resolution is ignored and a late
+ * rejection never surfaces as unhandled.
+ */
+function runAttemptWithTimeout<T>(
+  attempt: () => Promise<T>,
+  operation: string,
+  timeoutMs: number,
+): Promise<T> {
+  if (!Number.isFinite(timeoutMs)) {
+    return attempt();
+  }
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(
+        Object.assign(
+          new Error(
+            `Operation timed out: Daytona ${operation} returned no response within ${timeoutMs}ms; treating the hung call as transport loss.`,
+          ),
+          { name: "DaytonaControlPlaneAttemptTimeoutError" },
+        ),
+      );
+    }, timeoutMs);
+    // Promise.resolve().then() routes a synchronous throw from attempt()
+    // into the same settled path, so the timer is always cleared.
+    Promise.resolve()
+      .then(attempt)
+      .then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+  });
+}
+
 /**
  * The one envelope every re-issuable Daytona control-plane touch runs
  * through: sandbox create/delete/start, network updates, PTY session
  * creation, and filesystem transfers. Each attempt emits a seam-attributed
  * `daytona.<operation>.attempt/retrying/failed` pipeline-log event with
  * the sandbox id, so a silent multi-minute gap is always attributable and
- * a terminal failure names its seam.
+ * a terminal failure names its seam. Every attempt is also bounded by
+ * `attemptTimeoutMs`: a call that hangs without rejecting is abandoned as
+ * transport loss and re-issued through the transient ladder, so one stuck
+ * HTTP call can never wedge the run.
  *
  * Deliberately excluded: command execution and managed-app session
  * commands. A transport error there can mask a command that already ran,
@@ -152,6 +218,8 @@ export function createDaytonaControlPlaneEnvelope(envelopeOptions: {
       options: DaytonaControlPlaneRunOptions = {},
     ): Promise<T> {
       const ladderMs = options.ladderMs ?? controlLadderMs;
+      const attemptTimeoutMs =
+        options.attemptTimeoutMs ?? defaultAttemptTimeoutMs;
       const conflictPollLimit =
         options.conflictPollLimit ?? defaultConflictPollLimit;
       const attribution =
@@ -169,7 +237,11 @@ export function createDaytonaControlPlaneEnvelope(envelopeOptions: {
           `Daytona ${operation} attempt ${attemptNumber}.`,
         );
         try {
-          return await attempt();
+          return await runAttemptWithTimeout(
+            attempt,
+            operation,
+            attemptTimeoutMs,
+          );
         } catch (error) {
           const classification = classifyDaytonaControlPlaneError(error);
           const delayMs =
