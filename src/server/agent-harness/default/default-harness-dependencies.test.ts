@@ -895,9 +895,9 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(result).toEqual(distinct);
     expect(attempts).toBe(3);
     // The third prompt must carry the route-distinct rejection from attempt 2
-    // AND the pairing rejection from attempt 1 — not the latest alone.
+    // AND the navigate-anchor rejection from attempt 1 — not the latest alone.
     expect(prompts[2]).toContain("route-distinct");
-    expect(prompts[2]).toContain("must select both an interaction");
+    expect(prompts[2]).toContain("must select its navigate action");
   });
 
   it("accepts chrome-only assertions when the catalog offers nothing route-distinct", async () => {
@@ -1074,11 +1074,8 @@ describe("createDefaultAgentHarnessDependencies", () => {
     });
     expect(result).toEqual(completeFlowSpec);
     expect(attempts).toBe(2);
-    expect(prompts[1]).toContain(
-      "must select both an interaction and visible assertion",
-    );
-    expect(prompts[1]).toContain("tagged asserts: dashboard");
-    expect(prompts[1]).toContain("tagged interactions: open-dashboard");
+    expect(prompts[1]).toContain("must select its navigate action");
+    expect(prompts[1]).toContain("tagged navigate candidates: open-dashboard");
   });
 
   it("echoes what a rejected FlowSpec actually referenced", async () => {
@@ -1099,6 +1096,164 @@ describe("createDefaultAgentHarnessDependencies", () => {
     });
 
     expect(prompts[1]).toContain("The FlowSpec referenced: dashboard (assert");
+  });
+
+  it("steers a feature without an exercised interaction toward its tagged navigate action", async () => {
+    // directus wedged flow planning (2026-08-12): the candidate selected a
+    // tagged click and assert, but the rejection said "must select both an
+    // interaction and visible assertion" — a rule the candidate already
+    // satisfied — so every fresh attempt reproduced the same rejection. The
+    // message must name the actual requirement: anchor on a navigate action.
+    const catalog = actionCatalog();
+    catalog.actions.push({
+      confidence: 0.9,
+      evidence: "Static DOM analysis found a widget toggle",
+      expectedResult: "Widget expands",
+      featureIds: ["dashboard"],
+      id: "toggle-widget",
+      kind: "click",
+      preferredLocator: {
+        name: "Toggle widget",
+        strategy: "role",
+        value: "button",
+      },
+      risks: [],
+      route: "/",
+    });
+    const completeFlowSpec = flowSpec();
+    const navigateMissing = {
+      ...completeFlowSpec,
+      features: completeFlowSpec.features.map((feature) => ({
+        ...feature,
+        referencedActionIds: ["toggle-widget", "dashboard"],
+      })),
+    };
+    const { attempts, prompts, result } = await runFlowPlanningScenario({
+      actionCatalog: catalog,
+      candidates: [navigateMissing, completeFlowSpec],
+    });
+
+    expect(result).toEqual(completeFlowSpec);
+    expect(attempts).toBe(2);
+    expect(prompts[1]).toContain("must select its navigate action");
+    expect(prompts[1]).toContain("tagged navigate candidates: open-dashboard");
+    expect(prompts[1]).toContain(
+      "The FlowSpec referenced: toggle-widget (click)",
+    );
+    expect(prompts[1]).not.toContain(
+      "must select both an interaction and visible assertion",
+    );
+  });
+
+  it("accepts an unexercised interaction when the catalog tags no navigate for the feature", async () => {
+    const catalog = actionCatalog();
+    catalog.actions = catalog.actions.filter(
+      (action) => action.id !== "open-dashboard",
+    );
+    catalog.actions.push({
+      confidence: 0.9,
+      evidence: "Static DOM analysis found a widget toggle",
+      expectedResult: "Widget expands",
+      featureIds: ["dashboard"],
+      id: "toggle-widget",
+      kind: "click",
+      preferredLocator: {
+        name: "Toggle widget",
+        strategy: "role",
+        value: "button",
+      },
+      risks: [],
+      route: "/",
+    });
+    const interactionOnly = {
+      ...flowSpec(),
+      features: flowSpec().features.map((feature) => ({
+        ...feature,
+        referencedActionIds: ["toggle-widget", "dashboard"],
+      })),
+    };
+    const { attempts, result } = await runFlowPlanningScenario({
+      actionCatalog: catalog,
+      candidates: [interactionOnly],
+    });
+
+    expect(result).toEqual(interactionOnly);
+    expect(attempts).toBe(1);
+  });
+
+  it("does not demand a navigate the feature may only reach through an auth wall", async () => {
+    // A navigate behind an auth wall is unusable to a non-authentication
+    // feature: selecting it forces the auth-wall route into the FlowSpec,
+    // which the route rule rejects — an unsatisfiable ping-pong.
+    const catalog = actionCatalog();
+    catalog.actions = catalog.actions.filter(
+      (action) => action.id !== "open-dashboard",
+    );
+    catalog.actions.push(
+      {
+        confidence: 0.9,
+        evidence: "Playwright loaded the admin console",
+        expectedResult: "Admin console becomes visible",
+        featureIds: ["dashboard"],
+        id: "open-admin",
+        kind: "navigate",
+        preferredLocator: {
+          reason: "Navigation targets an observed route, not an element.",
+          strategy: "css",
+          value: "body",
+        },
+        risks: [],
+        route: "/admin",
+      },
+      {
+        confidence: 0.9,
+        evidence: "Static DOM analysis found a widget toggle",
+        expectedResult: "Widget expands",
+        featureIds: ["dashboard"],
+        id: "toggle-widget",
+        kind: "click",
+        preferredLocator: {
+          name: "Toggle widget",
+          strategy: "role",
+          value: "button",
+        },
+        risks: [],
+        route: "/",
+      },
+    );
+    const base = appMap();
+    const walledAppMap = {
+      ...base,
+      discoveredRoutes: [
+        ...base.discoveredRoutes,
+        {
+          buttons: [],
+          forms: [],
+          headings: ["Admin"],
+          inputs: [],
+          links: [],
+          path: "/admin",
+          screenshots: [],
+          text: ["Admin"],
+        },
+      ],
+      loginOrAuthWalls: ["/admin"],
+    };
+    const interactionOnly = {
+      ...flowSpec(),
+      features: flowSpec().features.map((feature) => ({
+        ...feature,
+        referencedActionIds: ["toggle-widget", "dashboard"],
+      })),
+    };
+    const { attempts, result } = await runFlowPlanningScenario({
+      actionCatalog: catalog,
+      appMap: walledAppMap,
+      candidates: [interactionOnly],
+    });
+
+    expect(result).toEqual(interactionOnly);
+    expect(attempts).toBe(1);
   });
 
   it("persists rejected FlowSpec candidates as attempt files", async () => {

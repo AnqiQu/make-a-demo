@@ -4024,10 +4024,34 @@ function assertFlowSpecGrounded(input: {
             .join(", ")}`,
         );
       }
-    } else if (!selectedActionKinds.has("navigate")) {
-      violations.push(
-        `FlowSpec feature ${feature.featureId} must select both an interaction and visible assertion from ActionCatalog. ${taggedActionSummary(feature.featureId)}${referencedActionsSummary(feature)}`,
+    } else {
+      // Without a browser-exercised interaction every tagged interaction is
+      // speculative, so the feature must at least anchor on a navigate — the
+      // one action that provably reaches the route. The rejection must name
+      // that requirement: directus wedged on fresh identical attempts
+      // (2026-08-12) because this branch reused the pairing-rule wording the
+      // candidate already satisfied. Enforced only when the catalog tags a
+      // navigate the feature may legally reference (auth-wall navigates
+      // would ping-pong against the route rule), so the planning retry loop
+      // can never wedge on a navigate-free catalog.
+      const usableNavigates = input.actionCatalog.actions.filter(
+        (action) =>
+          action.kind === "navigate" &&
+          action.featureIds?.includes(feature.featureId) &&
+          (!authWallRoutes.has(action.route) ||
+            isExplicitAuthenticationFeature(
+              preparedFeature,
+              input.demoBrief.keyProductFeatures ?? [],
+            )),
       );
+      if (usableNavigates.length > 0 && !selectedActionKinds.has("navigate")) {
+        violations.push(
+          `FlowSpec feature ${feature.featureId} must select its navigate action when the catalog offers no browser-exercised interaction; tagged navigate candidates: ${usableNavigates
+            .slice(0, 3)
+            .map(({ id }) => id)
+            .join(", ")}.${referencedActionsSummary(feature)}`,
+        );
+      }
     }
   }
   const actionReferenceCounts = new Map<string, number>();
