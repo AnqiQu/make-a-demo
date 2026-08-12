@@ -1,20 +1,42 @@
-import type { PreparationManifest, RunPlan } from "./artifacts";
+import type {
+  PreparationManifest,
+  RequiredService,
+  RunPlan,
+} from "./artifacts";
 
 /**
  * Produces the complete canonical shape Repo Preparation agents should copy
  * and enrich. The returned value must always satisfy PreparationManifest so a
- * model never has to infer field types from prose.
+ * model never has to infer field types from prose. When the repo profile
+ * detected required data services (N122), the template pre-fills one
+ * dataStrategy entry per service — rung embedded-config exactly when
+ * detection proved an embedded driver exists, else client-stub — with a
+ * template detail the enforcement validator refuses until replaced.
  */
 export function createPreparationManifestTemplate(
   runPlan: RunPlan,
   demoBrief: { keyProductFeatures?: string[] } = {},
+  repoProfile: { servicesRequired?: RequiredService[] } = {},
 ): PreparationManifest {
   const requestedFeatures = demoBrief.keyProductFeatures ?? [];
+  const servicesRequired = repoProfile.servicesRequired ?? [];
   return {
     appDir: runPlan.appDir,
     appExplorationHints: [],
     baseUrl: runPlan.expectedLocalUrl,
     blockedExternalServicesReplaced: [],
+    ...(servicesRequired.length === 0
+      ? {}
+      : {
+          dataStrategy: servicesRequired.map((service) => ({
+            detail: `replace-with-how-${service.service}-is-served-for-the-demo`,
+            rung:
+              (service.embeddedAlternativeEvidencePaths?.length ?? 0) > 0
+                ? ("embedded-config" as const)
+                : ("client-stub" as const),
+            service: service.service,
+          })),
+        }),
     ...(runPlan.buildCommand === undefined
       ? {}
       : { buildCommandUsed: runPlan.buildCommand }),

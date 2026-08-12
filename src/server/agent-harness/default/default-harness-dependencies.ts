@@ -1077,6 +1077,7 @@ export async function createDefaultAgentHarnessDependencies(
       const preparationManifestTemplate = createPreparationManifestTemplate(
         runPlan,
         demoBrief,
+        repoProfile,
       );
       await writeWorkspaceJson(
         workspace,
@@ -1333,7 +1334,7 @@ export async function createDefaultAgentHarnessDependencies(
       await writeWorkspaceJson(
         workspace,
         artifactPaths.preparationManifestTemplate,
-        createPreparationManifestTemplate(runPlan, demoBrief),
+        createPreparationManifestTemplate(runPlan, demoBrief, repoProfile),
       );
       let artifactError: string | undefined;
       let stallRetriesRemaining = retryPolicy.agentStallRetries;
@@ -1347,6 +1348,7 @@ export async function createDefaultAgentHarnessDependencies(
             demoBrief,
             failureReport,
             preparationManifest,
+            repoProfile,
             runPlan,
           }),
           ...optionalSessionId(opencodeSessionId),
@@ -5185,6 +5187,33 @@ const dataFixturePlaybookInstruction =
   "(5) In a TypeScript repo, prove each fixture's shape with the repo's own compiler before finishing: write a temporary probe file inside the app (for example .makeademo-fixture-probe.ts) containing `const check: Awaited<ReturnType<typeof theFunction>> = theFixture;` per seam, typecheck it with the app's tsconfig (a temporary config that extends it with a files entry for the probe, run through the repo's own tsc --noEmit), record the outcome in that seam's shapeProbe field ('passed', 'failed: <first diagnostic>', or 'not-run: <reason>'), fix failures, and delete the probe and temporary config afterwards. " +
   "(6) Then check what no compiler can: fixture dates inside the surface's default visible range, status/enum values that survive its default filters, and consistent relations between fixture entities — a shape-correct fixture that the default view filters out still renders an empty table.";
 
+/**
+ * Interpolated only when detection found required data services (prompt
+ * diet, N65): names each detected service with its evidence so the agent
+ * answers the exact inventory the manifest validator will enforce (N122),
+ * and states the rung ladder in preference order with the product decision
+ * that data-backed features are never dropped or steered away from.
+ */
+function createDataStrategyInstruction(repoProfile: RepoProfile): string[] {
+  const services = repoProfile.servicesRequired ?? [];
+  if (services.length === 0) return [];
+  const inventory = services
+    .map(
+      (service) =>
+        `${service.service} (evidence: ${service.evidencePaths.join(", ")}${
+          (service.embeddedAlternativeEvidencePaths?.length ?? 0) > 0
+            ? `; embedded driver available: ${(
+                service.embeddedAlternativeEvidencePaths ?? []
+              ).join(", ")}`
+            : ""
+        })`,
+    )
+    .join("; ");
+  return [
+    `This repository requires data services: ${inventory}. Answer every one in the manifest's dataStrategy (the template pre-filled one entry per service) with the highest workable rung, in this preference order: (1) embedded-config — when an embedded driver exists (sqlite dependency, multi-driver config) or can be added as a dependency, configure the app onto it and seed deterministic demo data through the repo's own migration/seed path; (2) client-stub — serve deterministic in-code fixtures from the app's own fetch/API-client layer per the fixture playbook, never a service worker; (3) declared-stub — demo the feature on generated deterministic data and describe the substitution in the entry's detail. Never drop a data-backed feature, steer the demo away from it, or leave its queries pending; the demo must show the feature working on deterministic data.`,
+  ];
+}
+
 const appDirShapeInstruction =
   'appDir must be relative to /workspace/repo: use "." for the repo root or a path such as "frontend"; never use an absolute path.';
 
@@ -5277,6 +5306,7 @@ function createRepoPreparationPrompt(input: {
       offCameraAuthenticationInstruction,
       offlineFeatureStateInstruction,
       dataFixturePlaybookInstruction,
+      ...createDataStrategyInstruction(input.repoProfile),
       sealedNetworkWorldRulesInstruction,
       "Do not invent core product behavior that is absent from the source. If a requested capability is truly absent, leave concrete evidence in knownLimitations rather than fabricating it.",
       "Every feature sourcePaths list must cite at least one original browser route, page, component, or UI module used by the prepared route. If the original app cannot be prepared through the allowed seams, do not synthesize a substitute product.",
@@ -5329,6 +5359,7 @@ function createRepoPreparationRepairPrompt(input: {
       offCameraAuthenticationInstruction,
       offlineFeatureStateInstruction,
       dataFixturePlaybookInstruction,
+      ...createDataStrategyInstruction(input.repoProfile),
       "Preserve original routes, UI components, styles, brand assets, and interaction logic. Repair only authentication, data, external-service, fixture, seed, asset-vendoring, environment, or configuration seams; never create a replacement app or standalone demo server.",
       "Do not finish until the manifest exists at that exact path.",
       "Do not write secrets into files. Replace external services with local fixtures or mocks.",
@@ -5357,6 +5388,7 @@ function createRuntimePreparationRepairPrompt(input: {
   demoBrief: AgentHarnessPipelineInput["demoBrief"];
   failureReport: ValidationReport;
   preparationManifest: PreparationManifest;
+  repoProfile: RepoProfile;
   runPlan: RunPlan;
 }): string {
   const dependencyRepair = isDependencyRepairFailure(
@@ -5430,6 +5462,7 @@ function createRuntimePreparationRepairPrompt(input: {
       "empty/unmeaningful app state"
         ? [dataFixturePlaybookInstruction]
         : []),
+      ...createDataStrategyInstruction(input.repoProfile),
       sealedNetworkWorldRulesInstruction,
       "Read /workspace/.makeademo/preparation-manifest-contract.json and use /workspace/.makeademo/preparation-manifest-template.json as the canonical shape.",
       "Do not patch only the reported failure. Revalidate the complete manifest and every productContext.featureInventory entry before finishing.",
