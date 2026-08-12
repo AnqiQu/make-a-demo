@@ -178,6 +178,40 @@ type PreparedDataSeam = {
 };
 
 /**
+ * The data-backend ladder vocabulary (N122), in preparation preference
+ * order, shared by the schema reader, the manifest contract, and the
+ * enforcement validator so the rung names can never drift apart. The rungs:
+ * embedded-config runs the repo's own embedded backend (sqlite driver or
+ * dialect); provisioned-service runs a real service inside the sandbox;
+ * client-stub serves deterministic data from the app's own fetch/API-client
+ * layer; provider-recipe swaps a cloud driver for a local equivalent;
+ * declared-stub demos the feature against generated data and declares the
+ * substitution — nothing is ever dropped or steered away.
+ */
+export const dataStrategyRungs = [
+  "embedded-config",
+  "provisioned-service",
+  "client-stub",
+  "provider-recipe",
+  "declared-stub",
+] as const;
+export type DataStrategyRung = (typeof dataStrategyRungs)[number];
+
+/**
+ * Preparation's answer for one detected data service (N122): `service`
+ * names the repo profile's servicesRequired entry being addressed, `rung`
+ * the chosen ladder rung, and `detail` what was concretely done — the
+ * embedded driver and seeded data, the stubbed client layer, or the
+ * declared generated-data substitution. Enforcement rejects a manifest that
+ * leaves any detected service unanswered.
+ */
+type DataStrategyDeclaration = {
+  service: string;
+  rung: DataStrategyRung;
+  detail: string;
+};
+
+/**
  * The declared-proof vocabulary, shared by the schema reader, the manifest
  * contract, and the agent-facing feature-verification guide so the three can
  * never drift apart.
@@ -240,6 +274,8 @@ export type PreparationManifest = {
   mocksAndFixturesAdded: string[];
   /** Describes secret-free authentication state active before browser exploration. */
   authBypassOrDemoIdentity?: string;
+  /** Answers the repo profile's servicesRequired inventory (N122); required whenever detection found services. */
+  dataStrategy?: DataStrategyDeclaration[];
   blockedExternalServicesReplaced: string[];
   requiredLocalOnlyAssumptions: string[];
   knownLimitations: string[];
@@ -678,6 +714,7 @@ export function readPreparationManifest(value: unknown): PreparationManifest {
       record,
       "cleanupAndReproInstructions",
     ),
+    ...optionalKey(record, "dataStrategy", readDataStrategy),
     envUsed: readStringRecord(record, "envUsed"),
     id: readNonEmptyString(record, "id"),
     installCommandUsed: readNonEmptyString(record, "installCommandUsed"),
@@ -714,6 +751,9 @@ function assertValidPreparationManifestFields(
     ...(record.authBypassOrDemoIdentity === undefined
       ? []
       : [() => readNonEmptyString(record, "authBypassOrDemoIdentity")]),
+    ...(record.dataStrategy === undefined
+      ? []
+      : [() => readDataStrategy(record, "dataStrategy")]),
     () => readStringArray(record, "blockedExternalServicesReplaced"),
     () => readStringArray(record, "requiredLocalOnlyAssumptions"),
     () => readStringArray(record, "knownLimitations"),
@@ -735,6 +775,31 @@ function assertValidPreparationManifestFields(
       `PreparationManifest validation failed: ${errors.join("; ")}`,
     );
   }
+}
+
+function readDataStrategy(
+  record: Record<string, unknown>,
+  key: string,
+): DataStrategyDeclaration[] {
+  const value = record[key];
+  if (!Array.isArray(value)) {
+    throw new Error(`${key} must be an array`);
+  }
+  return value.map((entry, index) => {
+    const path = `${key}[${index}]`;
+    const entryRecord = assertRecord(entry, path);
+    const rung = readNonEmptyString(entryRecord, "rung", path);
+    if (!(dataStrategyRungs as readonly string[]).includes(rung)) {
+      throw new Error(
+        `${path}.rung must be one of: ${[...dataStrategyRungs].sort().join(", ")}`,
+      );
+    }
+    return {
+      detail: readNonEmptyString(entryRecord, "detail", path),
+      rung: rung as DataStrategyRung,
+      service: readNonEmptyString(entryRecord, "service", path),
+    };
+  });
 }
 
 function readProductContext(value: unknown): ProductContext {

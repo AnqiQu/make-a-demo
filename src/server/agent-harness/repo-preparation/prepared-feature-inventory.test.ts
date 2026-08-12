@@ -394,6 +394,193 @@ describe("assertPreparedFeatureInventory", () => {
       }),
     ).toThrow(/belongs to non-selected browser application apps\/website/);
   });
+
+  // N122(2): the enforcement half of the data-backend ladder's closed loop —
+  // detection fills servicesRequired, and preparation cannot be complete
+  // until every detected service is answered by a ladder rung.
+  it("rejects a manifest that leaves a detected data service unanswered", () => {
+    let thrown: Error | undefined;
+    try {
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest: manifestWithFeatures([
+          { id: "dashboard", label: "Dashboard" },
+        ]),
+        repoProfile: profileWithServices([
+          {
+            evidencePaths: ["docker-compose.yml", "prisma/schema.prisma"],
+            service: "postgres",
+          },
+          { evidencePaths: [".env.example"], service: "redis" },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      });
+    } catch (error) {
+      thrown = error as Error;
+    }
+
+    // One error names every unanswered service with its evidence and the
+    // rungs available today, so the repair states the fix (the
+    // flow-planning lesson: rules fire only when satisfiable).
+    expect(thrown?.message).toContain("postgres");
+    expect(thrown?.message).toContain("docker-compose.yml");
+    expect(thrown?.message).toContain("redis");
+    expect(thrown?.message).toContain(".env.example");
+    expect(thrown?.message).toContain("embedded-config");
+    expect(thrown?.message).toContain("client-stub");
+    expect(thrown?.message).toContain("declared-stub");
+  });
+
+  it("accepts a manifest whose data strategy answers every detected service", () => {
+    const preparationManifest = manifestWithFeatures([
+      { id: "dashboard", label: "Dashboard" },
+    ]);
+    preparationManifest.dataStrategy = [
+      {
+        detail: "Prisma provider switched to sqlite with a seeded demo file",
+        rung: "embedded-config",
+        service: "postgres",
+      },
+      {
+        detail: "cache layer returns in-code fixtures under the demo gate",
+        rung: "declared-stub",
+        service: "redis",
+      },
+    ];
+
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest,
+        repoProfile: profileWithServices([
+          { evidencePaths: ["prisma/schema.prisma"], service: "postgres" },
+          { evidencePaths: [".env.example"], service: "redis" },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects data strategy rungs the backend does not yet provide", () => {
+    const preparationManifest = manifestWithFeatures([
+      { id: "dashboard", label: "Dashboard" },
+    ]);
+    preparationManifest.dataStrategy = [
+      {
+        detail: "postgres provisioned in the sandbox",
+        rung: "provisioned-service",
+        service: "postgres",
+      },
+    ];
+
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest,
+        repoProfile: profileWithServices([
+          { evidencePaths: ["prisma/schema.prisma"], service: "postgres" },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).toThrow(
+      /provisioned-service.*not yet.*embedded-config, client-stub, declared-stub/s,
+    );
+  });
+
+  it("rejects duplicate data strategy entries for one service", () => {
+    const preparationManifest = manifestWithFeatures([
+      { id: "dashboard", label: "Dashboard" },
+    ]);
+    preparationManifest.dataStrategy = [
+      {
+        detail: "sqlite swap",
+        rung: "embedded-config",
+        service: "postgres",
+      },
+      {
+        detail: "also stubbed",
+        rung: "declared-stub",
+        service: "Postgres",
+      },
+    ];
+
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest,
+        repoProfile: profileWithServices([
+          { evidencePaths: ["prisma/schema.prisma"], service: "postgres" },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).toThrow(/postgres more than once/);
+  });
+
+  it("rejects residual template values in data strategy details", () => {
+    const preparationManifest = manifestWithFeatures([
+      { id: "dashboard", label: "Dashboard" },
+    ]);
+    preparationManifest.dataStrategy = [
+      {
+        detail: "replace-with-how-postgres-is-served-for-the-demo",
+        rung: "embedded-config",
+        service: "postgres",
+      },
+    ];
+
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest,
+        repoProfile: profileWithServices([
+          { evidencePaths: ["prisma/schema.prisma"], service: "postgres" },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).toThrow(/dataStrategy.*template/s);
+  });
+
+  it("requires no data strategy when detection found no services", () => {
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest: manifestWithFeatures([
+          { id: "dashboard", label: "Dashboard" },
+        ]),
+        repoProfile: profileWithServices([]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).not.toThrow();
+  });
+
+  it("allows additional declarations for services detection missed", () => {
+    const preparationManifest = manifestWithFeatures([
+      { id: "dashboard", label: "Dashboard" },
+    ]);
+    preparationManifest.dataStrategy = [
+      {
+        detail: "Prisma provider switched to sqlite with a seeded demo file",
+        rung: "embedded-config",
+        service: "postgres",
+      },
+      {
+        detail: "search index served from generated fixtures",
+        rung: "declared-stub",
+        service: "elasticsearch",
+      },
+    ];
+
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest,
+        repoProfile: profileWithServices([
+          { evidencePaths: ["prisma/schema.prisma"], service: "postgres" },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).not.toThrow();
+  });
 });
 
 function dashboardRunPlan(): RunPlan {
@@ -416,6 +603,34 @@ function dashboardRunPlan(): RunPlan {
       targetId: "apps/dashboard",
     },
     validationExpectations: [],
+  };
+}
+
+function profileWithServices(
+  servicesRequired: RepoProfile["servicesRequired"],
+): RepoProfile {
+  return {
+    authHints: [],
+    candidateAppDirs: ["."],
+    candidateBuildCommands: [],
+    candidateInstallCommands: ["npm ci"],
+    candidatePorts: [3000],
+    candidateStartCommands: ["npm start"],
+    confidence: { assumptions: [], overall: 1 },
+    detectedFrameworks: ["next"],
+    dockerHints: [],
+    envExamples: [],
+    externalServiceHints: [],
+    lockfiles: ["package-lock.json"],
+    packageManager: "npm",
+    packageScripts: { start: "next start" },
+    repoUrl: "https://github.com/example/app",
+    requiredEnvHints: [],
+    rootDir: "/workspace",
+    securityWarnings: [],
+    ...(servicesRequired === undefined ? {} : { servicesRequired }),
+    unsupportedReasons: [],
+    workspaces: { isMonorepo: false, packageDirectories: [] },
   };
 }
 

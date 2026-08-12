@@ -63,6 +63,26 @@ describe("createPreparationManifestContract", () => {
     expect(contract.invariants.join(" ")).toContain("accessible name");
   });
 
+  it("describes the data strategy answer to detected services", () => {
+    // N122(2): with additionalProperties: false the contract must name the
+    // field, its shape must force one typed rung per entry, and the
+    // invariants must tie it to the repo profile's servicesRequired.
+    const contract = createPreparationManifestContract();
+    const entry = contract.properties.dataStrategy.items;
+
+    expect(entry.required).toEqual(["detail", "rung", "service"]);
+    expect(entry.properties.rung.enum).toEqual([
+      "embedded-config",
+      "provisioned-service",
+      "client-stub",
+      "provider-recipe",
+      "declared-stub",
+    ]);
+    expect(contract.required).not.toContain("dataStrategy");
+    expect(contract.invariants.join(" ")).toContain("servicesRequired");
+    expect(contract.invariants.join(" ")).toContain("dataStrategy");
+  });
+
   it("carries no version field that nothing reads", () => {
     expect(createPreparationManifestContract()).not.toHaveProperty(
       "contractVersion",

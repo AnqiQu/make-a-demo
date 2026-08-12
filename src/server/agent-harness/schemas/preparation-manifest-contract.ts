@@ -1,4 +1,4 @@
-import type { PreparationManifest } from "./artifacts";
+import { type PreparationManifest, dataStrategyRungs } from "./artifacts";
 
 const stringArray = {
   items: { type: "string" },
@@ -57,6 +57,8 @@ export function createPreparationManifestContract() {
       "expectedProof locators, names, and texts are accessible names or on-screen strings — never CSS selectors or XPath",
       "a state-transition proof's from must never be disabled: seed fixture state so the control starts enabled (history pre-populated so Undo is clickable, a followable author whose control will rename)",
       "each feature's first entryPath must be a route no other feature claims",
+      "when the repo profile's servicesRequired is non-empty, dataStrategy must declare exactly one entry per detected service (copy the service names from servicesRequired) choosing a currently-provided rung: embedded-config (preferred when the repo supports an embedded driver such as sqlite — configure and seed it), client-stub (serve deterministic fixtures from the app's own fetch/API-client layer, never a service worker), or declared-stub (demo the feature on generated data and describe the substitution in detail); never drop a data-backed feature or steer the demo away from it",
+      "dataStrategy rungs provisioned-service and provider-recipe are reserved for backend capabilities that do not exist yet and are rejected today",
     ],
     outputPath: "/workspace/.makeademo/preparation-manifest.json",
     properties: {
@@ -72,6 +74,19 @@ export function createPreparationManifestContract() {
       blockedExternalServicesReplaced: stringArray,
       buildCommandUsed: { type: "string" },
       cleanupAndReproInstructions: stringArray,
+      dataStrategy: {
+        items: {
+          additionalProperties: false,
+          properties: {
+            detail: { minLength: 1, type: "string" },
+            rung: { enum: [...dataStrategyRungs], type: "string" },
+            service: { minLength: 1, type: "string" },
+          },
+          required: ["detail", "rung", "service"],
+          type: "object",
+        },
+        type: "array",
+      },
       envUsed: {
         additionalProperties: { type: "string" },
         type: "object",

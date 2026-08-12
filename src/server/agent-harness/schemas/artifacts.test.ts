@@ -455,6 +455,58 @@ describe("agent harness artifact schemas", () => {
     );
   });
 
+  it("parses the manifest's data strategy declarations", () => {
+    // N122(2): each detected data service must be answered by a rung of the
+    // data-backend ladder; the declaration rides the manifest so validators
+    // and repairs can hold preparation to it.
+    const manifest = validPreparationManifest();
+    (manifest as Record<string, unknown>).dataStrategy = [
+      {
+        detail: "DB_CLIENT=better-sqlite3 with a seeded demo database file",
+        rung: "embedded-config",
+        service: "postgres",
+      },
+      {
+        detail: "app fetch layer returns generated CRM fixtures",
+        rung: "client-stub",
+        service: "redis",
+      },
+    ];
+
+    const parsed = readPreparationManifest(manifest);
+
+    expect(parsed.dataStrategy).toEqual([
+      {
+        detail: "DB_CLIENT=better-sqlite3 with a seeded demo database file",
+        rung: "embedded-config",
+        service: "postgres",
+      },
+      {
+        detail: "app fetch layer returns generated CRM fixtures",
+        rung: "client-stub",
+        service: "redis",
+      },
+    ]);
+  });
+
+  it("rejects data strategy entries with unknown rungs or missing fields", () => {
+    const manifest = validPreparationManifest();
+    (manifest as Record<string, unknown>).dataStrategy = [
+      { rung: "cloud-database", service: "postgres" },
+    ];
+
+    expect(() => readPreparationManifest(manifest)).toThrow(
+      "dataStrategy[0].rung must be one of: client-stub, declared-stub, embedded-config, provider-recipe, provisioned-service",
+    );
+
+    (manifest as Record<string, unknown>).dataStrategy = [
+      { detail: "", rung: "declared-stub", service: "postgres" },
+    ];
+    expect(() => readPreparationManifest(manifest)).toThrow(
+      /dataStrategy\[0\]\.detail must be a non-empty string/,
+    );
+  });
+
   it("rejects data seams that escape the repo or omit the replaced function", () => {
     const manifest = validPreparationManifest();
     const feature = manifest.productContext.featureInventory[0];

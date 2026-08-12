@@ -1,4 +1,5 @@
 import type {
+  DataStrategyRung,
   PreparationManifest,
   RepoProfile,
   RunPlan,
@@ -114,6 +115,10 @@ export function assertPreparedFeatureInventory(input: {
     );
   }
   assertDeclaredProofs(context.featureInventory);
+  assertDataStrategyCoverage(
+    input.preparationManifest,
+    input.repoProfile?.servicesRequired ?? [],
+  );
 
   const requestedFeatures = input.demoBrief.keyProductFeatures ?? [];
   if (requestedFeatures.length === 0) {
@@ -248,6 +253,94 @@ function assertDeclaredProofs(
         .join(
           "; ",
         )}. Each feature's proof must name evidence only that feature produces.`,
+    );
+  }
+}
+
+/**
+ * The rungs of the data-backend ladder the backend can actually stand
+ * behind today. provisioned-service (N122 sub-item 5) and provider-recipe
+ * (sub-item 6) join this list when their provisioning lands — until then a
+ * manifest choosing one would pass validation and then fail every runtime
+ * round, so the rejection points at the rungs that work now.
+ */
+const backedDataStrategyRungs: DataStrategyRung[] = [
+  "embedded-config",
+  "client-stub",
+  "declared-stub",
+];
+
+/**
+ * The enforcement half of the data-backend ladder's closed loop (N122):
+ * detection filled `servicesRequired`; preparation is not complete until
+ * every detected service is answered by exactly one dataStrategy entry on
+ * a rung the backend provides. Rejections carry the service, its evidence,
+ * and the available rungs so the repair states the fix — and a service the
+ * app can run without is still answered here (declared-stub with the
+ * reason), never silently dropped.
+ */
+function assertDataStrategyCoverage(
+  manifest: PreparationManifest,
+  servicesRequired: NonNullable<RepoProfile["servicesRequired"]>,
+): void {
+  const declarations = manifest.dataStrategy ?? [];
+  const templateDetails = declarations.flatMap((declaration, index) =>
+    templateValuePattern.test(declaration.detail)
+      ? [`dataStrategy[${index}]`]
+      : [],
+  );
+  if (templateDetails.length > 0) {
+    throw new Error(
+      `PreparationManifest ${templateDetails.join(
+        "; ",
+      )} must replace template detail values with what was actually done for the service.`,
+    );
+  }
+  const unbackedRungs = declarations.flatMap((declaration, index) =>
+    backedDataStrategyRungs.includes(declaration.rung)
+      ? []
+      : [`dataStrategy[${index}] rung ${declaration.rung}`],
+  );
+  if (unbackedRungs.length > 0) {
+    throw new Error(
+      `PreparationManifest ${unbackedRungs.join(
+        "; ",
+      )} is not yet provided by the backend. Choose among: ${backedDataStrategyRungs.join(
+        ", ",
+      )}.`,
+    );
+  }
+  const declaredServiceCounts = new Map<string, number>();
+  for (const declaration of declarations) {
+    const service = normalizeFeature(declaration.service);
+    declaredServiceCounts.set(
+      service,
+      (declaredServiceCounts.get(service) ?? 0) + 1,
+    );
+  }
+  const duplicated = [...declaredServiceCounts.entries()]
+    .filter(([, count]) => count > 1)
+    .map(([service]) => service);
+  if (duplicated.length > 0) {
+    throw new Error(
+      `PreparationManifest.dataStrategy declares ${duplicated.join(
+        ", ",
+      )} more than once; declare exactly one entry per service.`,
+    );
+  }
+  const unanswered = servicesRequired.filter(
+    ({ service }) => !declaredServiceCounts.has(normalizeFeature(service)),
+  );
+  if (unanswered.length > 0) {
+    throw new Error(
+      `PreparationManifest.dataStrategy must answer every detected data service: ${unanswered
+        .map(
+          ({ evidencePaths, service }) =>
+            `${service} (evidence: ${evidencePaths.join(", ")})`,
+        )
+        .join(
+          "; ",
+        )}. Declare one entry per service choosing a rung — embedded-config (preferred when the repo supports an embedded driver such as sqlite), client-stub (serve deterministic fixtures from the app's own fetch/API-client layer), or declared-stub (demo the feature on generated data and describe the substitution in detail). Never drop a data-backed feature or steer the demo away from it.`,
     );
   }
 }
