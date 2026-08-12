@@ -1911,6 +1911,10 @@ function createExplorationValidationReport(input: {
       failure === undefined
         ? []
         : [
+            ...readServiceWorkerBanHint([
+              ...input.appMap.pageErrors,
+              ...input.appMap.consoleErrors,
+            ]),
             ...(input.appMap.pageErrors.length === 0
               ? []
               : [
@@ -2493,6 +2497,27 @@ function formatGroundedRoutes(
   ];
   if (routes.length === 0) return "";
   return ` Browser evidence was grounded on: ${routes.slice(0, 6).join(", ")}. Reselect featureInventory entries onto these routes (update entryPaths and sourcePaths).`;
+}
+
+/**
+ * Matches any browser's or mocking library's report that a Service Worker
+ * could not register (Chrome's "Failed to register a ServiceWorker", MSW's
+ * "[MSW] Failed to register the Service Worker", generic "ServiceWorker
+ * registration failed"). Exploration and capture contexts block service
+ * workers by design, so this failure is structural — repair rounds must be
+ * steered off the worker instead of chasing the registration symptom.
+ */
+const serviceWorkerRegistrationFailurePattern =
+  /failed to register.*service ?worker|service ?worker registration failed/i;
+
+function readServiceWorkerBanHint(observedErrors: string[]): string[] {
+  return observedErrors.some((error) =>
+    serviceWorkerRegistrationFailurePattern.test(error),
+  )
+    ? [
+        "The demo browser blocks Service Worker registration by design, so service-worker-based request mocking (such as MSW's browser worker) can never activate here — routes gated on it render only shells or navigation chrome. Do not retry, defer, or work around the worker registration. Serve demo data at the fetch/API-client layer instead: gate the app's own data client or fetch wrapper to return deterministic in-code fixtures, and remove the service-worker registration from the demo path.",
+      ]
+    : [];
 }
 
 function readMissingModule(pageErrors: string[]): string | undefined {

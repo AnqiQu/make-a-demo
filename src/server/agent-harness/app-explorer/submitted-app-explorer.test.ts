@@ -1050,6 +1050,39 @@ describe("exploreSubmittedApp", () => {
     });
   });
 
+  it("names the service-worker ban when registration fails as a page error", async () => {
+    // The demo browser blocks service workers by design (network lockdown),
+    // so MSW-style worker mocking can never activate — twenty rendered only
+    // navigation chrome on every route while repair rounds chased the
+    // symptom (2026-08-12). The hint must name the structural constraint.
+    const { result } = await exploreObservation({
+      featureInventory: [preparedFeature()],
+      pageErrors: [
+        "http://127.0.0.1:3001/: [MSW] Failed to register the Service Worker: Cannot read properties of undefined (reading 'active')",
+      ],
+      routes: [observedRoute({ headings: [], text: [] })],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    const hints = result.validationReport.suggestedRepairHints.join(" ");
+    expect(hints).toContain("blocks Service Worker registration");
+    expect(hints).toContain("fetch/API-client layer");
+  });
+
+  it("names the service-worker ban when registration fails only in console errors", async () => {
+    const { result } = await exploreObservation({
+      consoleErrors: [
+        "http://127.0.0.1:3001/: Failed to register a ServiceWorker for scope ('http://127.0.0.1:3001/') with script ('http://127.0.0.1:3001/mockServiceWorker.js')",
+      ],
+      featureInventory: [preparedFeature()],
+      routes: [observedRoute({ headings: [], text: [] })],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    const hints = result.validationReport.suggestedRepairHints.join(" ");
+    expect(hints).toContain("blocks Service Worker registration");
+  });
+
   it("attaches the observation to a grounding failure for diagnosis", async () => {
     const { result } = await exploreObservation({ routes: [] });
 
