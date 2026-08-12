@@ -10,6 +10,7 @@ import {
   type CaptureRuntimeProtocol,
   CaptureRuntimeProtocolError,
   CaptureScriptProtocolViolationError,
+  readCaptureAppServerError,
   readCaptureRuntimeProtocol,
   readCaptureValidationFailure,
   readSuccessfulCaptureProtocol,
@@ -36,6 +37,7 @@ export type PreparedWorkspaceCapturePathResult = {
   }>;
   browserUrl: string;
   failureClassification?:
+    | "app server error"
     | "assertion failure"
     | "harness/internal failure"
     | "locator failure"
@@ -172,6 +174,20 @@ export async function validatePreparedWorkspaceCapturePath(input: {
             `Runtime Network Lockdown suppressed ${blockedNetworkAttempts.length} uncached external request(s).`,
           ],
   };
+  // An app-origin 5xx outranks every other verdict: page.goto resolves on a
+  // server error, so an otherwise "successful" protocol can still have filmed a
+  // broken route. Deciding it here — before the protocol and exit-code checks —
+  // makes the classification sticky through the external-resource broker and
+  // non-transient in the orchestrator.
+  const appServerError = readCaptureAppServerError(protocol, input.baseUrl);
+  if (appServerError !== undefined) {
+    return {
+      ...common,
+      failureClassification: "app server error",
+      failureReason: `The app returned HTTP ${appServerError.status} for the main document at ${appServerError.url}. A server error on the app's own route is a hard capture failure that external-resource hydration or a retry cannot fix.`,
+      status: "failed",
+    };
+  }
   const protocolFailure = () => {
     try {
       readSuccessfulCaptureProtocol({

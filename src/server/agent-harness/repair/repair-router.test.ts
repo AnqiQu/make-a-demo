@@ -42,6 +42,16 @@ describe("RepairRouter", () => {
     }
   });
 
+  it("routes an app-origin server error to preparation repair with full repo latitude", () => {
+    // An app-origin 5xx (calcom's booking route hit an unprovisioned Postgres,
+    // 2026-08-11) is a runtime fault the prep can fix — by provisioning the
+    // service or steering the demo away from it — not a dependency-metadata edit.
+    expect(
+      classifyRepairRoute({ failureClassification: "app server error" }),
+    ).toBe("repo-preparation-repair");
+    expect(isDependencyRepairFailure("app server error")).toBe(false);
+  });
+
   it("does not restrict a listen failure to dependency-metadata repairs", () => {
     expect(isDependencyRepairFailure("listen failure")).toBe(false);
     expect(isDependencyRepairFailure("install failure")).toBe(true);

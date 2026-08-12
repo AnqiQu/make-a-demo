@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CaptureBrowserActionFailureError,
+  readCaptureAppServerError,
   readCaptureRuntimeProtocol,
   readSuccessfulCaptureProtocol,
 } from "./capture-runtime-protocol";
@@ -258,6 +259,49 @@ describe("Capture Runtime Protocol", () => {
     expect(readFailure).toThrow(
       "Browser action open-dashboard failed in Scene scene-one. button timed out",
     );
+  });
+
+  it("collects main-document navigation statuses from both streams in order", () => {
+    const protocol = readCaptureRuntimeProtocol({
+      stderr:
+        '[makeademo:navigation] {"status":500,"url":"http://127.0.0.1:3000/booking"}',
+      stdout:
+        '[makeademo:navigation] {"status":200,"url":"http://127.0.0.1:3000/"}',
+    });
+
+    expect(protocol.navigations).toEqual([
+      { status: 200, url: "http://127.0.0.1:3000/" },
+      { status: 500, url: "http://127.0.0.1:3000/booking" },
+    ]);
+  });
+
+  it("reads the first app-origin server error navigation", () => {
+    const protocol = readCaptureRuntimeProtocol({
+      stderr: "",
+      stdout: [
+        '[makeademo:navigation] {"status":200,"url":"http://127.0.0.1:3000/"}',
+        '[makeademo:navigation] {"status":503,"url":"http://127.0.0.1:3000/booking"}',
+        '[makeademo:navigation] {"status":500,"url":"http://127.0.0.1:3000/checkout"}',
+      ].join("\n"),
+    });
+
+    expect(
+      readCaptureAppServerError(protocol, "http://127.0.0.1:3000"),
+    ).toEqual({ status: 503, url: "http://127.0.0.1:3000/booking" });
+  });
+
+  it("ignores a sub-500 status and a cross-origin server error", () => {
+    const protocol = readCaptureRuntimeProtocol({
+      stderr: "",
+      stdout: [
+        '[makeademo:navigation] {"status":404,"url":"http://127.0.0.1:3000/missing"}',
+        '[makeademo:navigation] {"status":500,"url":"https://cdn.example.com/asset"}',
+      ].join("\n"),
+    });
+
+    expect(
+      readCaptureAppServerError(protocol, "http://127.0.0.1:3000"),
+    ).toBeUndefined();
   });
 });
 

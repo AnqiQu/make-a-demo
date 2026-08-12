@@ -17,6 +17,7 @@ const scriptFailureClassifications = new Set([
 const preparationFailureClassifications = new Set([
   "app route crashes",
   "app route not discoverable",
+  "app server error",
   "auth wall",
   "browser console/page error",
   "build failure",
