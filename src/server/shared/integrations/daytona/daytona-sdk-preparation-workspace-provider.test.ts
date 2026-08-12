@@ -569,6 +569,50 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     );
   });
 
+  it("survives a sustained control-plane 502 window with the default transfer ladder", async () => {
+    // A real Daytona incident (directus, 2026-08-12T20:40) 502-stormed the
+    // API for minutes, not one blip; the run died mid-window because the
+    // default transfer ladder covered ~5s. The default ladder must span a
+    // control-plane-scale outage before declaring a transfer dead.
+    const waits: number[] = [];
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, {
+        uploadError: Object.assign(
+          new Error("Request failed with status code 502"),
+          { statusCode: 502 },
+        ),
+        uploadFailuresBeforeSuccess: 5,
+      }),
+      controlPlane: createDaytonaControlPlaneEnvelope({
+        logger: {
+          error: async () => {},
+          info: async () => {},
+          warn: async () => {},
+        },
+        random: () => 0.5,
+        wait: async (delayMs) => {
+          waits.push(delayMs);
+        },
+      }),
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.writeTextFile(
+      "/workspace/.makeademo/runtime-target-selection-contract.json",
+      "{}",
+    );
+
+    expect(calls.filter((call) => "uploadFiles" in Object(call))).toHaveLength(
+      6,
+    );
+    const coveredWindowMs = waits.reduce(
+      (total, delayMs) => total + delayMs,
+      0,
+    );
+    expect(coveredWindowMs).toBeGreaterThanOrEqual(60_000);
+  });
+
   it("retries a transient 502 while uploading screened workspace files", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({

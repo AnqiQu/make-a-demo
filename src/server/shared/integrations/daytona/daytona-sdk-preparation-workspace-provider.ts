@@ -189,12 +189,18 @@ const teardownConflictPollLimit = 6;
  */
 const ptyCreateTransientBackoffMs = [1_000, 4_000];
 /**
- * One transient 502 during an artifact upload killed two matrix runs inside
- * the 11-way parallel launch window (homer, twenty, 2026-08-09). Transfers
- * are idempotent by design, so transport blips get absorbed by a short
- * bounded retry instead of ending the run.
+ * Artifact transfers are idempotent by design and have no outer retry loop
+ * above them — when this ladder exhausts, the run dies. So unlike pty.create
+ * above (whose short ladder is budgeted by the startup loop's fresh-id and
+ * restart recovery), transfers must ride out a control-plane incident on
+ * their own. A 2026-08-09 blip ladder of [1s, 4s] survived single 502s but
+ * lost directus (2026-08-12T20:40) to a minutes-long 502 storm; this ladder
+ * mirrors the control-plane ladder (~3.8 min coverage) so a transfer only
+ * fails once Daytona has been down longer than any observed incident window.
  */
-const defaultArtifactTransferBackoffMs = [1_000, 4_000];
+const defaultArtifactTransferBackoffMs = [
+  2_000, 5_000, 10_000, 20_000, 40_000, 60_000, 90_000,
+];
 const makeADemoArtifactDirectory = "/tmp/makeademo";
 const workspaceMakeADemoDirectory = "/workspace/.makeademo";
 const sandboxAuditLogPath = `${makeADemoArtifactDirectory}/sandbox-log.jsonl`;
