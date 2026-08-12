@@ -17,6 +17,7 @@ import {
   type RepoProfile,
   browserRuntimeScriptNames,
 } from "../schemas/artifacts";
+import { detectRequiredServices } from "./required-services";
 
 type RepoProfileFile = {
   path: string;
@@ -180,6 +181,7 @@ export function profileRepo(input: RepoProfileInput): RepoProfile {
       ]),
     ].sort(),
     rootDir: input.rootDir ?? "/workspace",
+    servicesRequired: detectRequiredServices(files),
     ...optionalString(
       "rootPackageName",
       typeof rootPackage?.json.name === "string" &&

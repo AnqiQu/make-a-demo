@@ -872,4 +872,207 @@ describe("profileRepo", () => {
       workspaceDependencies: ["@acme/events", "@acme/ui"],
     });
   });
+
+  // N122(1): the servicesRequired inventory is the detection half of the
+  // data-backend ladder's closed loop — every signal class a repo can use to
+  // declare a data service must land here with its evidence, so enforcement
+  // can demand a dataStrategy answer for each entry.
+  describe("servicesRequired detection", () => {
+    it("reports no required services for a repo without data-backend signals", () => {
+      const profile = profileRepo({
+        files: [
+          {
+            path: "package.json",
+            text: JSON.stringify({
+              dependencies: { react: "18" },
+              scripts: { dev: "vite" },
+            }),
+          },
+          { path: ".env.example", text: "PUBLIC_API_ORIGIN=\n" },
+          { path: "src/app/page.tsx", text: "export default () => null;" },
+        ],
+        repoUrl: "https://github.com/example/static-app",
+      });
+
+      expect(profile.servicesRequired).toEqual([]);
+    });
+
+    it("detects compose-declared services with the compose file as evidence", () => {
+      const profile = profileRepo({
+        files: [
+          { path: "package.json", text: JSON.stringify({}) },
+          {
+            path: "docker-compose.yml",
+            text: [
+              "services:",
+              "  db:",
+              "    image: postgres:16-alpine",
+              "  cache:",
+              "    image: redis:7",
+            ].join("\n"),
+          },
+        ],
+        repoUrl: "https://github.com/example/composed",
+      });
+
+      expect(profile.servicesRequired).toEqual([
+        { evidencePaths: ["docker-compose.yml"], service: "postgres" },
+        { evidencePaths: ["docker-compose.yml"], service: "redis" },
+      ]);
+    });
+
+    it("detects services from environment URL schemes", () => {
+      const profile = profileRepo({
+        files: [
+          { path: "package.json", text: JSON.stringify({}) },
+          {
+            path: ".env.example",
+            text: [
+              'DATABASE_URL="postgresql://user:pass@localhost:5432/app"',
+              "REDIS_URL=redis://localhost:6379",
+            ].join("\n"),
+          },
+        ],
+        repoUrl: "https://github.com/example/env-schemes",
+      });
+
+      expect(profile.servicesRequired).toEqual([
+        { evidencePaths: [".env.example"], service: "postgres" },
+        { evidencePaths: [".env.example"], service: "redis" },
+      ]);
+    });
+
+    it("detects the prisma datasource provider", () => {
+      const profile = profileRepo({
+        files: [
+          { path: "package.json", text: JSON.stringify({}) },
+          {
+            path: "packages/prisma/schema.prisma",
+            text: [
+              "datasource db {",
+              '  provider = "postgresql"',
+              '  url      = env("DATABASE_URL")',
+              "}",
+            ].join("\n"),
+          },
+        ],
+        repoUrl: "https://github.com/example/prisma-app",
+      });
+
+      expect(profile.servicesRequired).toEqual([
+        {
+          evidencePaths: ["packages/prisma/schema.prisma"],
+          service: "postgres",
+        },
+      ]);
+    });
+
+    it("detects database clients from ORM configuration files", () => {
+      const profile = profileRepo({
+        files: [
+          { path: "package.json", text: JSON.stringify({}) },
+          {
+            path: "knexfile.js",
+            text: "module.exports = { client: 'pg', connection: {} };",
+          },
+          {
+            path: "drizzle.config.ts",
+            text: 'export default { dialect: "mysql", schema: "./schema.ts" };',
+          },
+        ],
+        repoUrl: "https://github.com/example/orm-configs",
+      });
+
+      expect(profile.servicesRequired).toEqual([
+        { evidencePaths: ["drizzle.config.ts"], service: "mysql" },
+        { evidencePaths: ["knexfile.js"], service: "postgres" },
+      ]);
+    });
+
+    it("detects driver dependencies with their manifest as evidence", () => {
+      const profile = profileRepo({
+        files: [
+          {
+            path: "package.json",
+            text: JSON.stringify({
+              dependencies: { ioredis: "5", mongoose: "8" },
+            }),
+          },
+        ],
+        repoUrl: "https://github.com/example/driver-deps",
+      });
+
+      expect(profile.servicesRequired).toEqual([
+        { evidencePaths: ["package.json"], service: "mongodb" },
+        { evidencePaths: ["package.json"], service: "redis" },
+      ]);
+    });
+
+    it("merges one service's evidence across signal classes", () => {
+      const profile = profileRepo({
+        files: [
+          {
+            path: "package.json",
+            text: JSON.stringify({ dependencies: { pg: "8" } }),
+          },
+          {
+            path: "docker-compose.yml",
+            text: "services:\n  db:\n    image: postgres:16",
+          },
+          {
+            path: ".env.example",
+            text: "DATABASE_URL=postgres://localhost:5432/app\n",
+          },
+        ],
+        repoUrl: "https://github.com/example/merged-evidence",
+      });
+
+      expect(profile.servicesRequired).toEqual([
+        {
+          evidencePaths: [".env.example", "docker-compose.yml", "package.json"],
+          service: "postgres",
+        },
+      ]);
+    });
+
+    it("marks the embedded sqlite alternative on relational services", () => {
+      const profile = profileRepo({
+        files: [
+          {
+            path: "package.json",
+            text: JSON.stringify({
+              dependencies: { "better-sqlite3": "11", pg: "8" },
+            }),
+          },
+        ],
+        repoUrl: "https://github.com/example/multi-driver",
+      });
+
+      expect(profile.servicesRequired).toEqual([
+        {
+          embeddedAlternativeEvidencePaths: ["package.json"],
+          evidencePaths: ["package.json"],
+          service: "postgres",
+        },
+      ]);
+    });
+
+    it("treats a sqlite-only data layer as requiring no services", () => {
+      const profile = profileRepo({
+        files: [
+          {
+            path: "package.json",
+            text: JSON.stringify({ dependencies: { "better-sqlite3": "11" } }),
+          },
+          {
+            path: "prisma/schema.prisma",
+            text: 'datasource db {\n  provider = "sqlite"\n}',
+          },
+        ],
+        repoUrl: "https://github.com/example/sqlite-only",
+      });
+
+      expect(profile.servicesRequired).toEqual([]);
+    });
+  });
 });

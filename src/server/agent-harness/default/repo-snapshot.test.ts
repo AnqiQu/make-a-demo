@@ -91,6 +91,55 @@ describe("readGithubRepoSnapshot", () => {
     ).toEqual({ path: "package-link.json", symlinkTarget: "package.json" });
   });
 
+  it("reads compose files and prisma schemas for data-service detection", async () => {
+    // N122: servicesRequired detection reads docker-compose services and the
+    // Prisma datasource provider — those files must reach the profiler with
+    // text, not as bare paths.
+    const runDirectory = join(
+      tmpdir(),
+      `makeademo-services-snapshot-${crypto.randomUUID()}`,
+    );
+    await mkdir(runDirectory, { recursive: true });
+    const snapshot = await readGithubRepoSnapshot(
+      {
+        log: async () => undefined,
+        repoUrl: "https://github.com/acme/data-backed-app",
+        runDirectory,
+      },
+      {
+        git: {
+          async archiveRevision(input) {
+            await writeFile(input.archivePath, "data archive");
+          },
+          async clone(input) {
+            await mkdir(join(input.checkoutPath, "prisma"), {
+              recursive: true,
+            });
+            await writeFile(join(input.checkoutPath, "package.json"), "{}");
+            await writeFile(
+              join(input.checkoutPath, "docker-compose.yml"),
+              "services:\n  db:\n    image: postgres:16\n",
+            );
+            await writeFile(
+              join(input.checkoutPath, "prisma", "schema.prisma"),
+              'datasource db {\n  provider = "postgresql"\n}\n',
+            );
+          },
+          async readHead() {
+            return "abc123def456";
+          },
+        },
+      },
+    );
+
+    expect(
+      snapshot.files.find(({ path }) => path === "docker-compose.yml")?.text,
+    ).toContain("postgres:16");
+    expect(
+      snapshot.files.find(({ path }) => path === "prisma/schema.prisma")?.text,
+    ).toContain('provider = "postgresql"');
+  });
+
   it("kills a repository clone that hangs past its timeout", async () => {
     const server = createServer(() => {
       // Accept the connection and never respond, so the clone hangs.

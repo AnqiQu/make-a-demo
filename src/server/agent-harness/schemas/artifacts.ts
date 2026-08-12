@@ -78,6 +78,23 @@ export type NetworkAttempt = {
   url?: string;
 };
 
+/**
+ * One externally-provisioned data service the repository declares it needs
+ * (N122): `service` is the normalized backend name ("postgres", "mysql",
+ * "mongodb", "redis"), and `evidencePaths` are the screened repository files
+ * carrying the declaration. `embeddedAlternativeEvidencePaths`, when
+ * present, are files proving the same data layer can run embedded (a sqlite
+ * driver or dialect), so preparation can prefer the embedded-config rung of
+ * the data-backend ladder. Detection is a hint inventory, never a verdict:
+ * every entry must be answered by a preparation dataStrategy declaration,
+ * and a service the repo runs without is answered there, not deleted here.
+ */
+export type RequiredService = {
+  service: string;
+  evidencePaths: string[];
+  embeddedAlternativeEvidencePaths?: string[];
+};
+
 export type RepoProfile = {
   repoUrl: string;
   commitSha?: string;
@@ -108,6 +125,8 @@ export type RepoProfile = {
   requiredEnvHints: string[];
   authHints: string[];
   externalServiceHints: string[];
+  /** Data services the repo declares it needs (N122); absent on profiles persisted before detection existed. */
+  servicesRequired?: RequiredService[];
   dockerHints: string[];
   securityWarnings: string[];
   unsupportedReasons: string[];

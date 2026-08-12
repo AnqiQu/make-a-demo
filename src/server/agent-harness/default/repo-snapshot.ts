@@ -118,6 +118,12 @@ const readableFileNames = new Set([
   ".env.example",
   "astro.config.mjs",
   "bun.lock",
+  // Compose files carry the data-service declarations servicesRequired
+  // detection reads (N122).
+  "compose.yaml",
+  "compose.yml",
+  "docker-compose.yaml",
+  "docker-compose.yml",
   "package-lock.json",
   "package.json",
   "pnpm-lock.yaml",
@@ -135,6 +141,9 @@ const readableExtensions = new Set([
   ".jsx",
   ".md",
   ".mjs",
+  // Prisma schemas carry the datasource provider servicesRequired detection
+  // reads (N122).
+  ".prisma",
   ".ts",
   ".tsx",
   ".txt",
