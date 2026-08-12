@@ -2,11 +2,40 @@ import { describe, expect, it } from "vitest";
 import {
   batteryPowerWarning,
   matrixRepoEnvVar,
+  notifyMatrixRunComplete,
   renderMatrixReport,
   resolveMatrixEntries,
+  resolveMatrixNotification,
   runPipelineMatrix,
 } from "../scripts/run-pipeline-matrix";
 import type { DefaultDemoPipelineResult } from "../src/server/agent-harness/default/default-demo-pipeline";
+import type { MatrixRunReportEmailInput } from "../src/server/shared/integrations/email/matrix-run-email-notifier.interface";
+
+const enabledNotificationEnv = {
+  RESEND_API_KEY: "re_test",
+  RESEND_FROM_EMAIL: "MakeADemo <demo@makeademo.example>",
+  TEXTME: "true",
+  TEXTME_EMAIL: "operator@example.com",
+};
+
+function recordingNotifier(behaviour?: { throwOnSend?: boolean }) {
+  const sent: MatrixRunReportEmailInput[] = [];
+  return {
+    sendMatrixRunReportEmail: async (input: MatrixRunReportEmailInput) => {
+      sent.push(input);
+      if (behaviour?.throwOnSend) {
+        throw new Error("Resend failed to send matrix run email");
+      }
+    },
+    sent,
+  };
+}
+
+const oneOfEachResult = [
+  { detail: "run/final-video.mp4", name: "vite-spa", status: "passed" },
+  { detail: "exploration failed", name: "midday", status: "failed" },
+  { detail: "no repo URL", name: "pnpm-monorepo", status: "skipped" },
+] as const;
 
 const runnableEntry = {
   name: "vite-spa",
@@ -300,6 +329,121 @@ describe("renderMatrixReport", () => {
     expect(report).toContain("failed");
     expect(report).toContain("exploration failed");
     expect(report).toContain("skipped");
+  });
+});
+
+describe("resolveMatrixNotification", () => {
+  it("stays disabled unless TEXTME is explicitly on", () => {
+    expect(resolveMatrixNotification({}).status).toBe("disabled");
+    expect(resolveMatrixNotification({ TEXTME: "false" }).status).toBe(
+      "disabled",
+    );
+    expect(resolveMatrixNotification({ TEXTME: "0" }).status).toBe("disabled");
+  });
+
+  it("resolves the recipient and reused Resend credentials when fully configured", () => {
+    const notification = resolveMatrixNotification({
+      RESEND_API_KEY: "re_test",
+      RESEND_FROM_EMAIL: "MakeADemo <demo@makeademo.example>",
+      TEXTME: "true",
+      TEXTME_EMAIL: "operator@example.com",
+    });
+
+    expect(notification).toEqual({
+      apiKey: "re_test",
+      fromEmail: "MakeADemo <demo@makeademo.example>",
+      status: "enabled",
+      to: "operator@example.com",
+    });
+  });
+
+  it("reports misconfiguration by name instead of throwing when a value is missing", () => {
+    const notification = resolveMatrixNotification({
+      RESEND_API_KEY: "re_test",
+      RESEND_FROM_EMAIL: "MakeADemo <demo@makeademo.example>",
+      TEXTME: "1",
+    });
+
+    expect(notification.status).toBe("misconfigured");
+    if (notification.status !== "misconfigured") {
+      throw new Error("expected a misconfigured notification");
+    }
+    expect(notification.reason).toContain("TEXTME_EMAIL");
+  });
+});
+
+describe("notifyMatrixRunComplete", () => {
+  it("sends nothing when TEXTME is disabled", async () => {
+    const notifier = recordingNotifier();
+    await notifyMatrixRunComplete({
+      batchStamp: "2026-08-12T18-00-00-000Z",
+      env: {},
+      log: () => {},
+      notifier,
+      reportMarkdown: "| Entry | Status |\n",
+      results: [...oneOfEachResult],
+    });
+
+    expect(notifier.sent).toEqual([]);
+  });
+
+  it("emails the recipient the report with the per-status counts when enabled", async () => {
+    const notifier = recordingNotifier();
+    await notifyMatrixRunComplete({
+      batchStamp: "2026-08-12T18-00-00-000Z",
+      env: enabledNotificationEnv,
+      log: () => {},
+      notifier,
+      reportMarkdown: "| Entry | Status |\n",
+      results: [...oneOfEachResult],
+    });
+
+    expect(notifier.sent).toEqual([
+      {
+        batchStamp: "2026-08-12T18-00-00-000Z",
+        failed: 1,
+        passed: 1,
+        reportMarkdown: "| Entry | Status |\n",
+        skipped: 1,
+        to: "operator@example.com",
+      },
+    ]);
+  });
+
+  it("swallows and logs a notifier failure so the batch result is unaffected", async () => {
+    const notifier = recordingNotifier({ throwOnSend: true });
+    const logs: string[] = [];
+    await expect(
+      notifyMatrixRunComplete({
+        batchStamp: "2026-08-12T18-00-00-000Z",
+        env: enabledNotificationEnv,
+        log: (message) => logs.push(message),
+        notifier,
+        reportMarkdown: "| Entry | Status |\n",
+        results: [...oneOfEachResult],
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(notifier.sent).toHaveLength(1);
+    expect(logs.some((line) => line.includes("run notification failed"))).toBe(
+      true,
+    );
+  });
+
+  it("logs which value is missing and sends nothing when misconfigured", async () => {
+    const notifier = recordingNotifier();
+    const logs: string[] = [];
+    await notifyMatrixRunComplete({
+      batchStamp: "2026-08-12T18-00-00-000Z",
+      env: { ...enabledNotificationEnv, TEXTME_EMAIL: undefined },
+      log: (message) => logs.push(message),
+      notifier,
+      reportMarkdown: "| Entry | Status |\n",
+      results: [...oneOfEachResult],
+    });
+
+    expect(notifier.sent).toEqual([]);
+    expect(logs.some((line) => line.includes("TEXTME_EMAIL"))).toBe(true);
   });
 });
 

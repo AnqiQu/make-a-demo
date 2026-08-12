@@ -21,6 +21,8 @@ import {
   runDefaultDemoPipeline,
 } from "../src/server/agent-harness/default/default-demo-pipeline";
 import { destroyAllDaytonaWorkspaces } from "../src/server/shared/integrations/daytona/daytona-sdk-preparation-workspace-provider";
+import type { MatrixRunEmailNotifier } from "../src/server/shared/integrations/email/matrix-run-email-notifier.interface";
+import { ResendMatrixRunEmailNotifier } from "../src/server/shared/integrations/email/resend-matrix-run-email-notifier";
 
 export type MatrixEntryConfig = {
   demoLengthSeconds?: number;
@@ -294,6 +296,98 @@ async function guardAgainstHostSleep(log: (message: string) => void) {
   }
 }
 
+export type MatrixNotification =
+  | { status: "disabled" }
+  | { reason: string; status: "misconfigured" }
+  | { apiKey: string; fromEmail: string; status: "enabled"; to: string };
+
+/**
+ * Resolves whether a finished matrix batch should be emailed. Opt in with
+ * `TEXTME=1|true` and a `TEXTME_EMAIL` recipient; the send reuses the same
+ * `RESEND_API_KEY`/`RESEND_FROM_EMAIL` as the final-video email. Returns
+ * `misconfigured` (never throws) when the flag is on but a required value is
+ * missing, so a batch still reports its result instead of crashing at the end.
+ */
+export function resolveMatrixNotification(
+  env: Record<string, string | undefined>,
+): MatrixNotification {
+  const flag = env.TEXTME?.trim().toLowerCase();
+  if (flag !== "1" && flag !== "true") {
+    return { status: "disabled" };
+  }
+  const to = env.TEXTME_EMAIL?.trim();
+  const apiKey = env.RESEND_API_KEY?.trim();
+  const fromEmail = env.RESEND_FROM_EMAIL?.trim();
+  if (to && apiKey && fromEmail) {
+    return { apiKey, fromEmail, status: "enabled", to };
+  }
+  const missing = [
+    to ? undefined : "TEXTME_EMAIL",
+    apiKey ? undefined : "RESEND_API_KEY",
+    fromEmail ? undefined : "RESEND_FROM_EMAIL",
+  ].filter((name): name is string => name !== undefined);
+  return {
+    reason: `TEXTME is on but ${missing.join(", ")} ${
+      missing.length === 1 ? "is" : "are"
+    } not set`,
+    status: "misconfigured",
+  };
+}
+
+function countMatrixStatuses(results: MatrixEntryResult[]) {
+  return {
+    failed: results.filter((result) => result.status === "failed").length,
+    passed: results.filter((result) => result.status === "passed").length,
+    skipped: results.filter((result) => result.status === "skipped").length,
+  };
+}
+
+/**
+ * Emails the finished matrix report when `TEXTME` opts in. A notification
+ * failure is logged and swallowed: it must never fail an otherwise-successful
+ * batch or mask its exit code, since the run's real work is already done by the
+ * time this fires. Tests inject `notifier`; production builds the Resend one
+ * from the reused credentials.
+ */
+export async function notifyMatrixRunComplete(input: {
+  batchStamp: string;
+  env: Record<string, string | undefined>;
+  log: (message: string) => void;
+  notifier?: MatrixRunEmailNotifier;
+  reportMarkdown: string;
+  results: MatrixEntryResult[];
+}): Promise<void> {
+  const notification = resolveMatrixNotification(input.env);
+  if (notification.status === "disabled") {
+    return;
+  }
+  if (notification.status === "misconfigured") {
+    input.log(`skipping run notification: ${notification.reason}`);
+    return;
+  }
+  const notifier =
+    input.notifier ??
+    new ResendMatrixRunEmailNotifier({
+      apiKey: notification.apiKey,
+      fromEmail: notification.fromEmail,
+    });
+  const counts = countMatrixStatuses(input.results);
+  try {
+    await notifier.sendMatrixRunReportEmail({
+      batchStamp: input.batchStamp,
+      failed: counts.failed,
+      passed: counts.passed,
+      reportMarkdown: input.reportMarkdown,
+      skipped: counts.skipped,
+      to: notification.to,
+    });
+    input.log(`emailed run report to ${notification.to}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    input.log(`run notification failed (matrix result unaffected): ${message}`);
+  }
+}
+
 export function renderMatrixReport(results: MatrixEntryResult[]): string {
   const lines = [
     "| Entry | Status | Duration | Detail |",
@@ -344,12 +438,20 @@ async function main(): Promise<void> {
   const results = await runPipelineMatrix(entries, { launchStagger: {}, log });
 
   const report = renderMatrixReport(results);
+  const reportStamp = new Date().toISOString().replace(/[:.]/g, "-");
   const reportPath = join(
     ".makeademo-terminal-runs",
-    `matrix-report-${new Date().toISOString().replace(/[:.]/g, "-")}.json`,
+    `matrix-report-${reportStamp}.json`,
   );
   await writeFile(reportPath, `${JSON.stringify(results, null, 2)}\n`);
   process.stdout.write(`\n${report}\nReport written to ${reportPath}\n`);
+  await notifyMatrixRunComplete({
+    batchStamp: reportStamp,
+    env: process.env,
+    log,
+    reportMarkdown: report,
+    results,
+  });
   if (results.some((result) => result.status === "failed")) {
     process.exitCode = 1;
   }
