@@ -2797,6 +2797,16 @@ async function validateResolvedSubmittedCodeRuntime(
   };
   input.onAppStart?.(appStartInput);
   try {
+    await input.workspace.writeSandboxLog({
+      command: manifest.startCommandUsed,
+      event: "app.start.requested",
+      message:
+        "The managed submitted-code app start was requested; the readiness probe below carries its outcome.",
+    });
+  } catch {
+    // Attribution must never replace the operation it attributes.
+  }
+  try {
     await input.workspace.startSubmittedCodeApp(appStartInput);
   } catch (error) {
     if (isAgentHarnessInfrastructureError(error)) throw error;
@@ -3299,6 +3309,54 @@ async function executeGuardedSubmittedCommand(
   command: string,
   label: string,
   options: AgentHarnessWorkspaceExecuteOptions = {},
+): Promise<{
+  evidenceLogPath: string;
+  result: AgentHarnessWorkspaceCommandResult;
+}> {
+  // The sandbox log answers "did this command run, for how long, and with
+  // what exit" on its own: ghostfolio's phantom install (2026-08-12) took
+  // wall-clock archaeology across pipeline-log gaps because no record
+  // carried those facts. Best-effort by construction — attribution must
+  // never replace the operation it attributes.
+  const writeLifecycleLogBestEffort = async (
+    entry: Record<string, unknown>,
+  ) => {
+    try {
+      await workspace.writeSandboxLog(entry);
+    } catch {
+      // Attribution must never replace the operation it attributes.
+    }
+  };
+  await writeLifecycleLogBestEffort({
+    command: command.slice(0, 500),
+    event: "command.started",
+    label,
+    message: `The ${label} command started.`,
+  });
+  const startedAt = Date.now();
+  const outcome = await resolveGuardedSubmittedCommand(
+    workspace,
+    command,
+    label,
+    options,
+  );
+  // Written after transport-fault recovery so the recorded exit is the
+  // command's real outcome, never the kill that recovery overturned.
+  await writeLifecycleLogBestEffort({
+    durationMs: Date.now() - startedAt,
+    event: "command.finished",
+    exitCode: outcome.result.exitCode,
+    label,
+    message: `The ${label} command finished with exit ${outcome.result.exitCode}.`,
+  });
+  return outcome;
+}
+
+async function resolveGuardedSubmittedCommand(
+  workspace: AgentHarnessWorkspace,
+  command: string,
+  label: string,
+  options: AgentHarnessWorkspaceExecuteOptions,
 ): Promise<{
   evidenceLogPath: string;
   result: AgentHarnessWorkspaceCommandResult;

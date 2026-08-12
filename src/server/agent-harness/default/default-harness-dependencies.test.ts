@@ -5306,6 +5306,57 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(install).toContain("tee -a");
   });
 
+  it("records each heavy runtime command's lifecycle in the sandbox log", async () => {
+    // ghostfolio's phantom install (2026-08-12) was pinned by wall-clock
+    // archaeology across pipeline-log gaps because no record said whether
+    // the install ran, for how long, or with what exit. The sandbox log must
+    // answer that directly: started proves the attempt, finished carries the
+    // outcome and duration, and the start request brackets the app launch.
+    const sandboxLog: Array<Record<string, unknown>> = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async writeSandboxLog(entry) {
+        sandboxLog.push(entry);
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        buildCommandUsed: "vite build",
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    const depsStarted = sandboxLog.find(
+      (entry) => entry.event === "command.started" && entry.label === "deps",
+    );
+    expect(depsStarted?.command).toContain("npm ci --no-audit");
+    const depsFinished = sandboxLog.find(
+      (entry) => entry.event === "command.finished" && entry.label === "deps",
+    );
+    expect(depsFinished).toMatchObject({ exitCode: 0 });
+    expect(typeof depsFinished?.durationMs).toBe("number");
+    const buildFinished = sandboxLog.find(
+      (entry) => entry.event === "command.finished" && entry.label === "build",
+    );
+    expect(buildFinished).toMatchObject({ exitCode: 0 });
+    const startRequested = sandboxLog.find(
+      (entry) => entry.event === "app.start.requested",
+    );
+    expect(startRequested?.command).toContain(
+      preparationManifest().startCommandUsed,
+    );
+  });
+
   it("recovers a completed command's exit code from the teed record instead of reporting a false kill", async () => {
     // Ghostfolio (2026-08-09): prisma generate finished, a spinner stole
     // the PTY sentinel, and the idle shell was killed as exit 124 — three
