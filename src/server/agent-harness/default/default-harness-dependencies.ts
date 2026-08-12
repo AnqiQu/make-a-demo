@@ -3267,10 +3267,18 @@ async function executeSubmittedWithDeadlineEvidence(
     });
   } catch (error) {
     if (!isAgentHarnessCommandTimeout(error)) throw error;
+    // The coda must not claim a kill the harness never issued: a transport
+    // loss means the PTY died with the outcome unobserved, and mislabeled
+    // evidence sends the diagnosis down the wrong seam.
+    const coda =
+      error instanceof AgentHarnessCommandTimeoutError &&
+      error.kind === "transport"
+        ? "The PTY transport was lost before the exit status arrived; output above is partial."
+        : "The command was killed at its deadline; output above is partial.";
     return {
       exitCode: 124,
       stderr: "",
-      stdout: `${streamed.join("")}\n[makeademo:timeout] ${readErrorMessage(error)} The command was killed at its deadline; output above is partial.`,
+      stdout: `${streamed.join("")}\n[makeademo:timeout] ${readErrorMessage(error)} ${coda}`,
     };
   }
 }

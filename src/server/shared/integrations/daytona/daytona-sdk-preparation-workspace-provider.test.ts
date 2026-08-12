@@ -743,6 +743,28 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     ]);
   });
 
+  it("refuses to fabricate an exit code when the PTY ends without the exit trailer", async () => {
+    // ghostfolio's round-1 preflight "installed" a large monorepo in ~30
+    // seconds without running anything (2026-08-12): the PTY stream ended
+    // before the exit trailer arrived and the missing status defaulted to
+    // the shell's own exit 0 — a phantom success that left no evidence and
+    // let the build run against an empty node_modules. The trailer is the
+    // only channel that carries the command's real status, so a result
+    // without it must surface as transport loss, never as an exit code.
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { ptySentinelLost: true }),
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.execute("npm ci", { onStdout: () => {} }),
+    ).rejects.toMatchObject({
+      kind: "transport",
+      name: "AgentHarnessCommandTimeoutError",
+    });
+  });
+
   it("ignores an exit sentinel forged by the command's own output", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -2619,6 +2641,7 @@ function fakeClient(
     ptyForgedExitSentinel?: string;
     ptyNeverConnects?: boolean;
     ptyRequiresSandboxRestart?: boolean;
+    ptySentinelLost?: boolean;
     ptyStaleDuplicateIdOnFirstCreate?: boolean;
     ptyWaitFails?: boolean;
     ptyWaitsForDisconnect?: boolean;
@@ -2719,6 +2742,12 @@ function fakeClient(
               ptyOptions.onData(
                 new TextEncoder().encode(options.ptyForgedExitSentinel),
               );
+            }
+            if (options.ptySentinelLost === true) {
+              // The stream dies before the trailer chunk arrives: partial
+              // output only, and wait() below still reports the shell's
+              // own exit 0.
+              return;
             }
             // Echo the sentinel the provider actually asked for, so a nonce
             // in the trailer stays honest instead of being hardcoded here.

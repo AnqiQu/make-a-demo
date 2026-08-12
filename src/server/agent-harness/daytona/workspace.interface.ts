@@ -3,19 +3,26 @@ import type { DependencyInstallCommandResult } from "../tools/dependency-install
 export type AgentHarnessWorkspaceCommandResult = DependencyInstallCommandResult;
 
 /**
- * Signals that a workspace command exceeded its caller-provided deadline.
- * Adapters must use this error only for command deadlines so orchestration can
- * safely convert it into bounded agent feedback and retry behavior.
+ * Signals that a workspace command's outcome was never observed: it exceeded
+ * its caller-provided deadline, went silent past its inactivity window, or
+ * its transport ended without carrying the command's exit status. Adapters
+ * must use this error only for those unknown-outcome shapes so orchestration
+ * can safely convert it into bounded agent feedback and retry behavior.
  */
 export class AgentHarnessCommandTimeoutError extends Error {
-  readonly kind: "deadline" | "inactivity";
+  readonly kind: "deadline" | "inactivity" | "transport";
   readonly timeoutMs: number;
 
-  constructor(timeoutMs: number, kind: "deadline" | "inactivity" = "deadline") {
+  constructor(
+    timeoutMs: number,
+    kind: "deadline" | "inactivity" | "transport" = "deadline",
+  ) {
     super(
       kind === "inactivity"
         ? `Daytona command produced no output for ${timeoutMs}ms.`
-        : `Daytona command did not finish within ${timeoutMs}ms.`,
+        : kind === "transport"
+          ? "Daytona PTY session ended without the command's exit trailer; the command's outcome is unknown."
+          : `Daytona command did not finish within ${timeoutMs}ms.`,
     );
     this.name = "AgentHarnessCommandTimeoutError";
     this.kind = kind;

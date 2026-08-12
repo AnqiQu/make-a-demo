@@ -1343,8 +1343,17 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
         () => new AgentHarnessCommandTimeoutError(timeoutMs),
       );
       const stdout = output.join("");
-      const exitCode =
-        readExitCode(stdout, exitSentinel) ?? result.exitCode ?? 0;
+      const exitCode = readExitCode(stdout, exitSentinel);
+      // The trailer is the only channel that carries the command's real
+      // status: the PTY shell's own exit code is bash's, not the command's,
+      // and a session that ends without the trailer proves only that the
+      // transport died — not that anything ran. Defaulting the missing
+      // status reported a large install as exit 0 after ~30 seconds when
+      // the PTY died before running it (ghostfolio, 2026-08-12), so a
+      // trailerless end is transport loss for the caller's retry lane.
+      if (exitCode === undefined) {
+        throw new AgentHarnessCommandTimeoutError(timeoutMs, "transport");
+      }
 
       return {
         exitCode,
