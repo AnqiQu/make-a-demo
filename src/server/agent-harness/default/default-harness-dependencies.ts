@@ -629,6 +629,10 @@ export async function createDefaultAgentHarnessDependencies(
   const runWithExternalResourceBroker = async <T>(input: {
     markUnresolved?: (result: T, attempts: NetworkAttempt[]) => T;
     readBlockedAttempts: (result: T) => NetworkAttempt[];
+    // Returns a verdict that must survive later passes unchanged. Hydrating an
+    // external resource can never fix the app's own route erroring, so an
+    // app-origin failure recognized here is never overwritten by a lucky retry.
+    readStickyFailure?: (result: T) => T | undefined;
     run: () => Promise<T>;
     stage: string;
     workspace: AgentHarnessWorkspace;
@@ -682,6 +686,13 @@ export async function createDefaultAgentHarnessDependencies(
     };
     const unresolved = (result: T, attempts: NetworkAttempt[]) =>
       input.markUnresolved?.(result, attempts) ?? result;
+    // The first sticky failure seen on any pass outranks every later verdict,
+    // success included: an app-origin server error is real no matter which
+    // lucky retry follows it.
+    let stickyFailure: T | undefined;
+    const rememberSticky = (result: T) => {
+      stickyFailure ??= input.readStickyFailure?.(result);
+    };
 
     for (
       let pass = 1;
@@ -689,8 +700,9 @@ export async function createDefaultAgentHarnessDependencies(
       pass += 1
     ) {
       const offlineResult = await runOffline();
+      rememberSticky(offlineResult);
       const uncached = await readUncachedAttempts(offlineResult);
-      if (uncached.length === 0) return offlineResult;
+      if (uncached.length === 0) return stickyFailure ?? offlineResult;
 
       const hydration = await hydrateExternalResources(
         uncached,
@@ -700,18 +712,25 @@ export async function createDefaultAgentHarnessDependencies(
       if (hydration.addedResources === 0) {
         const remainingAttempts =
           readUncachedExternalResourceAttempts(uncached);
-        return remainingAttempts.length === 0
-          ? offlineResult
-          : unresolved(offlineResult, remainingAttempts);
+        return (
+          stickyFailure ??
+          (remainingAttempts.length === 0
+            ? offlineResult
+            : unresolved(offlineResult, remainingAttempts))
+        );
       }
       await restartSubmittedCodeApp();
     }
 
     const finalResult = await runOffline();
+    rememberSticky(finalResult);
     const remainingAttempts = await readUncachedAttempts(finalResult);
-    return remainingAttempts.length === 0
-      ? finalResult
-      : unresolved(finalResult, remainingAttempts);
+    return (
+      stickyFailure ??
+      (remainingAttempts.length === 0
+        ? finalResult
+        : unresolved(finalResult, remainingAttempts))
+    );
   };
   // N108: once the runtime preflight passes, re-run the gate's own
   // entry-route exploration against the live prepared app. A feature the
@@ -1648,6 +1667,10 @@ export async function createDefaultAgentHarnessDependencies(
                   status: "failed" as const,
                 }),
                 readBlockedAttempts: (result) => result.blockedNetworkAttempts,
+                readStickyFailure: (result) =>
+                  result.failureClassification === "app server error"
+                    ? result
+                    : undefined,
                 run: async () => {
                   captureValidationRun += 1;
                   return await validatePreparedWorkspaceCapturePath({

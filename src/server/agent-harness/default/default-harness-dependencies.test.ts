@@ -8329,6 +8329,85 @@ describe("createDefaultAgentHarnessDependencies", () => {
     }
   });
 
+  it("keeps an app-origin server error sticky when a later broker pass gets a lucky success", async () => {
+    const outputRoot = await mkdtemp(
+      join(tmpdir(), "makeademo-capture-sticky-5xx-"),
+    );
+    let captureRuns = 0;
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (!command.includes("NODE_PATH=")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        captureRuns += 1;
+        return {
+          exitCode: 0,
+          // The app route 5xx's on the first pass while an external image is
+          // still uncached; the broker hydrates and reruns, and the second
+          // pass gets a lucky 2xx. The sticky verdict must survive it.
+          stderr:
+            captureRuns === 1
+              ? '[makeademo:navigation] {"status":500,"url":"http://127.0.0.1:3000/booking"}'
+              : "",
+          stdout: [
+            '[makeademo:validation] script started {"baseUrl":"http://127.0.0.1:3000"}',
+            '[makeademo:scene] {"elapsedMs":10,"event":"started","sceneId":"scene_one"}',
+            '[makeademo:step] {"elapsedMs":11,"event":"started","sceneId":"scene_one","stepId":"reveal-visible"}',
+            '[makeademo:action] {"elapsedMs":12,"event":"started","label":"expect.toBeVisible(locator(main))","sceneId":"scene_one"}',
+            '[makeademo:action] {"elapsedMs":18,"event":"succeeded","label":"expect.toBeVisible(locator(main))","sceneId":"scene_one"}',
+            '[makeademo:step] {"elapsedMs":19,"event":"succeeded","sceneId":"scene_one","stepId":"reveal-visible"}',
+            ...(captureRuns === 1
+              ? [
+                  '[makeademo:network-blocked] {"direction":"outbound","hasCredentials":false,"host":"assets.example.com","method":"GET","phase":"runtime","resourceType":"image","url":"https://assets.example.com/reveal.png"}',
+                ]
+              : []),
+            '[makeademo:scene] {"elapsedMs":20,"event":"succeeded","sceneId":"scene_one"}',
+            '[makeademo:validation] script succeeded {"title":"Demo"}',
+          ].join("\n"),
+        };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      externalResourceFetcher: async () => ({
+        body: new TextEncoder().encode("action-reveal-image"),
+        contentType: "image/png",
+        headers: {},
+        status: 200,
+      }),
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot,
+      repoSourceArchive: await repoSourceArchive(),
+      workspaceProvider: {
+        async create() {
+          return { async destroy() {}, id: "workspace", workspace };
+        },
+      },
+    });
+
+    try {
+      await harness.dependencies.createWorkspace({
+        repoProfile: repoProfile(),
+      });
+      const report = await harness.dependencies.validateCapturePath({
+        actionCatalog: actionCatalog(),
+        appMap: appMap(),
+        flowSpec: flowSpec(),
+        preparationManifest: preparationManifest(),
+        scriptCandidate: capturePathScriptCandidate(),
+        workspace,
+      });
+
+      expect(captureRuns).toBe(2);
+      expect(report).toMatchObject({
+        failureClassification: "app server error",
+        status: "failed",
+      });
+    } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
   it("classifies readiness-probe execution errors as harness failures without a shell retry loop", async () => {
     const commands: string[] = [];
     const workspace = createFakeAgentHarnessWorkspace({
