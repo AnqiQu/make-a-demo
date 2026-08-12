@@ -5640,3 +5640,68 @@ on the app env), then N117 gap 1 (re-probe scene routes),
 then N117 gap 2 (the app-origin nav-status instrumentation
 and its sticky verdict). N112 (empty chart-surface class)
 remains recorded, deliberately not implemented.
+
+### N118 (Medium, mixed) — post-landing review hardening for N114, N115, and N117
+
+A full review of the landed wave-3/wave-4 range
+(`e6f40b9..4dd8367`, 2026-08-11) confirmed every fix
+behaves as designed and generalizes — lint, typecheck,
+the 1148-test suite, and knip all pass — and surfaced
+five residual gaps. None is a regression; each tightens
+a landed fix. One task, five sub-items, in value order.
+
+(1) N114 selector coverage: `readAbsentWorkspacePackage`
+(`runtime-target-resolution.ts`) scans only the long-form
+flags (`--filter/--workspace/--scope/--project(s)`), so
+the cal.com failure class still slips through three
+spellings it never sees: the positional
+`yarn workspace <name> <cmd>`, npm's `-w <name>` short
+flag, and comma lists (`--projects=a,b`). Extend the
+scan to all three; keep the existing fail-safe posture
+(judge only literal names, never paths, globs, or graph
+patterns). Test first per spelling.
+
+(2) N114 npm directory selectors: npm's `--workspace=`
+also accepts a workspace *directory*. A bare selector
+naming a root-level workspace dir whose package name
+differs (`--workspace=docs` for a package named
+`docs-site`) is flagged absent in unscoped-name repos —
+the one known false positive. Add each workspace's dir
+basename to the known short names.
+
+(3) N117 gap-1 policy is cookie-less and cold by design:
+a scene route behind a bare-401 document GET (no
+redirect) or one that exists only after an earlier
+scene's create action now fails the reset gate and spends
+repair rounds reaching the authStrategy/fixture fix.
+Move that cost from repair to prevention: state in the
+script-generation contract (and its prompt) that every
+`goto` path must serve cold and unauthenticated-or-
+redirecting, so the script agent authors demo-gated
+routes and fixture-backed paths from the start.
+
+(4) Broker economics after a sticky verdict
+(`runWithExternalResourceBroker`,
+`default-harness-dependencies.ts`): once
+`readStickyFailure` records an app-origin 5xx, later
+passes still hydrate and restart before the sticky
+verdict is returned, and the returned result carries
+pass-1 evidence (its blocked-attempt list can be stale
+after hydration). Decide once: short-circuit on sticky,
+or keep hydrating for post-repair cache warmth — and
+either way return the sticky classification with
+final-pass evidence attached. Document the choice at the
+seam.
+
+(5) N115 cosmetic: when a rejection reason recurs after
+being deduped (A, B, A again), `accumulatedArtifactError`
+names B as "the most recent rejection" though the run
+just rejected on A. Track last-seen order instead of
+relying on insertion order.
+
+Sub-items (1), (2), (4), and (5) are runtime changes and
+follow TDD (failing behavior test first, through the
+public seam). Sub-item (3) is prompt/contract steering
+and is verified by its observable contract, not prompt
+text. None blocks a matrix run; schedule behind any
+active N-numbered failure class.
