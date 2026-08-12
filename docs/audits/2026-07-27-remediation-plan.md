@@ -5705,3 +5705,306 @@ public seam). Sub-item (3) is prompt/contract steering
 and is verified by its observable contract, not prompt
 text. None blocks a matrix run; schedule behind any
 active N-numbered failure class.
+
+## Addendum (2026-08-12, two same-day matrices — install truth lands, and the walls behind the walls: N119–N122)
+
+The morning batch (2026-08-12T06-26) exposed four pipeline
+seams: a control-plane call that could hang a batch
+forever, a PTY loss mode that reported a never-run install
+as exit 0, a flow-planning rejection that restated a rule
+the candidate already satisfied, and harness-executed
+install/build/start commands that left no record of having
+run. All four fixes landed the same day (wave 5, below).
+The evening rerun (2026-08-12T20-27) validated every one
+of them and surfaced four new signatures — each one layer
+deeper than the wall it replaced. homer passed both
+batches end-to-end.
+
+### Landed (2026-08-12, wave 5: install truth and hang immunity)
+
+- `bdedf67` — every Daytona control-plane attempt is
+  bounded (default 10 min); a call that hangs without
+  rejecting is abandoned as transport loss and re-issued
+  through the transient ladder. Validated in production
+  the same evening: directus's `fs.upload` hung exactly
+  600000ms, was reclaimed, and the retry succeeded — the
+  class that wedged the 2026-08-11 batch overnight now
+  self-heals. Fired exactly once across five entries; no
+  spurious timeouts.
+- `e534d72` — a PTY stream that ends without the exit
+  trailer is transport loss (new `"transport"` timeout
+  kind), never a fabricated exit code. The sentinel is
+  the only channel carrying the command's real status;
+  the shell's own exit is bash's, not the command's.
+  Closes the phantom-install class (ghostfolio's 27–42s
+  "installs", 06-26 batch).
+- `04f6d4a` — the flow-planning no-exercised-interaction
+  rule now names its actual requirement (anchor on a
+  tagged navigate, candidates enumerated) instead of
+  reusing the pairing-rule wording; enforced only when a
+  usable navigate exists (auth-wall navigates excluded
+  for non-auth features), so the retry loop can never
+  wedge on a navigate-free catalog.
+- `feb0ee6` — `command.started`/`command.finished`
+  sandbox-log events (label, bounded command text, exit,
+  duration; written after transport-fault recovery) for
+  every guarded heavy command, plus `app.start.requested`
+  before the managed launch. Evening-run payoff was
+  immediate: ghostfolio's installs are now provably real
+  (deps events, exit 0, 19–21s), and diagnosis is a grep
+  instead of wall-clock archaeology.
+
+### Diagnoses (2026-08-12T20-27)
+
+directus — run-plan synthesis, infrastructure. The Daytona
+control plane had an incident window (20:30–20:41): one
+repo-archive upload hung ten minutes (recovered by the new
+attempt bound), immediately followed by an HTTP 502 storm.
+The run then died writing the 7.5KB
+`runtime-target-selection-contract.json` into the agent
+workspace: the artifact-transfer seam is the only envelope
+caller with a blip-sized ladder (`[1_000, 4_000]`, built
+for one-off 502s on 2026-08-09), and ~15s of total budget
+across its outer retries could not outlast a real window.
+Every other seam's default ladder (~227s plus conflict
+polling) would have survived this exact storm. → N119
+
+ghostfolio — preparation-preflight, readiness semantics.
+Six rounds visibly converged (round 1 crashed on a missing
+module, rounds 2–5 had not bound yet, round 6 bound), and
+then the probe killed the round 46 seconds after start on
+its first HTTP response: a 404 served by the dev server
+mid-compile. The prep's start command compiles the Angular
+client at start time (manifest has no build command), the
+server binds before its first bundle completes, and
+`probeSubmittedCodeRuntime` retries only
+`connection-refused` — any HTTP response is terminal by
+design. A warm-up 404 is not "app route not discoverable";
+it is "not ready yet", and the compile needed minutes the
+probe never granted. → N120
+
+twenty — feature verification, a browser-contract gap. The
+build finally passed (round 4) and the app served. The
+prep's data strategy was an MSW demo worker ("deterministic
+local CRM data", per its own manifest limitation) — but the
+explorer and capture browser contexts deliberately set
+`serviceWorkers: "block"` (network-lockdown integrity:
+a service worker can intercept requests route interception
+never sees). Every route logged `[MSW] Failed to register
+the Service Worker`, no data ever loaded, all four routes
+rendered globally-repeated chrome, and the run failed as
+"empty/unmeaningful app state". Service-worker mocking is
+structurally impossible in this pipeline, and nothing ever
+tells the prep agent. → N121
+
+calcom — the database, now the binding constraint. Rounds
+oscillated between two walls: preflight 500s where the
+Next.js compile could not resolve Prisma-generated
+artifacts (`packages/prisma/enums`) despite an exit-0
+offline lifecycle — generated-state flakiness across
+workspace resets — and, more telling, rounds 3 and 5 where
+preflight fully passed and the feature probe found no
+browser evidence for "show the event type dashboard" or
+"choose an available time and complete a booking". Those
+features read and write Postgres through Prisma on the
+server; no mock at any browser boundary can reach them,
+and prep has no way to provide a service. Product decision
+recorded (2026-08-12): demos are never steered away from
+data-backed features — the pipeline gains a data-backend
+capability instead. → N122
+
+### N119 (High, bugfix) — transfer retries sized for control-plane windows
+
+Generality: the fix is at
+`runTransferThroughEnvelope` (the provider's single funnel
+for every idempotent filesystem transfer — contract
+writes, artifact uploads, archive pushes — for every
+repo); nothing is directus-specific. The transfer
+docstring already declares the operations idempotent by
+design, so a longer ladder is strictly safe; and the
+envelope's own doctrine (N103) says control-plane windows
+are multi-minute events a few-second budget always loses
+to. Fix: drop `artifactTransferBackoffMs` to the default
+control ladder (or a transfer ladder spanning minutes),
+keeping `wrapExhausted: false` rethrow semantics.
+`pty.create` keeps its short inner ladder deliberately —
+its outer fresh-id/sandbox-restart loop supplies the
+budget there; document that contrast at the seam. TDD at
+the provider envelope seam.
+
+### N120 (High, bugfix) — readiness treats any not-ready response as not ready yet
+
+Generality: `probeSubmittedCodeRuntime` gates every repo's
+preflight, and compile-at-start dev servers are a
+framework-wide class (Angular's esbuild server, Vite
+cold-transform, Next dev first-compile all bind before
+they can serve). Two parts, both general:
+
+(1) Within the readiness budget, an HTTP error response
+is retryable exactly like connection-refused. Terminal
+outcomes stay terminal: process exit (`runtime-exited`),
+probe execution failure, and budget exhaustion — where
+the final classification reads from the last observed
+status, so a stable 404 still reports "app route not
+discoverable" and a stable 500 still reports its server
+error. Single-shot callers (`budgetMs = 0` — the N117
+scene-route gate) are unchanged. Cost: a genuinely wrong
+route burns its round's budget before failing; bounded,
+and N118 sub-item (3) attacks that from the prevention
+side.
+
+(2) The budget extends while the managed app demonstrably
+works: if app output grew since the last poll, the window
+slides (absolute cap ~10 min, mirroring the
+build-timeout scale); silence spends the base 180s
+budget. A compiling server prints; a wedged one does not
+— the same output-is-progress doctrine the inactivity
+watchdog already applies to commands. Without (2), a
+correct (1) still fails any app whose start-time compile
+outlives 180s — ghostfolio's likely does.
+
+TDD through the preflight seam with a fake workspace
+whose probe responses transition refused → 404 → 200 and
+whose app status carries growing output.
+
+### N121 (High, mixed) — the browser contract bans service workers, and says so
+
+Generality: MSW is the ecosystem-standard mocking layer
+for SPAs — any repo whose prep agent reaches for
+service-worker mocking hits this wall; twenty merely got
+there first. The block itself is correct and stays (a
+service worker bypasses route interception, so Runtime
+Network Lockdown accounting would go blind); the gap is
+that the constraint is enforced silently. Two parts:
+
+(1) Contract steering: the preparation and repair
+contracts (and prompts) declare that the demo browser
+blocks service workers, and that data mocking belongs at
+the fetch/API-client layer with deterministic generated
+data — stable IDs and stable visible text, because
+capture assertions bind to on-screen strings. In-memory
+session state is acceptable ("created" rows may live only
+for the browser session).
+
+(2) Detection: a page-error pattern for service-worker
+registration failure (generic
+`/Failed to register.*Service ?Worker/i` — not an
+MSW-specific string) in exploration and validation page
+errors produces a targeted repair hint naming the
+constraint and the fetch-layer alternative, so an agent
+that chose a service worker is redirected in one round
+instead of never.
+
+Part (1) is contract/prompt work verified by observable
+behavior; part (2) is a runtime seam and follows TDD.
+
+### N122 (Critical, feature + infra, phased) — the data-backend ladder: detect, enforce, provide
+
+Product decision (2026-08-12): never steer demos away
+from data-backed features. Strategy: a closed loop where
+the pipeline detects what a repo's data layer needs,
+refuses to call preparation complete until every detected
+need is addressed by some rung of a support ladder, and
+the matrix carries one representative repo per rung as
+its acceptance gate. Backend classes then cannot fall
+through silently — an unsupported backend becomes a named
+failure pointing at its rung. The rungs, in preference
+order: embedded-config, provisioned-service, client-stub,
+provider-recipe, declared-stub (the last still demos the
+feature against deterministic generated data and declares
+the substitution in the manifest — nothing is dropped).
+
+(1) Detection — `servicesRequired` in the repo profile.
+A pure profiling module reading only repo-declared
+signals: `docker-compose.yml` services, `.env.example`
+URL schemes (`postgres://`, `mysql://`, `mongodb://`,
+`redis://`), Prisma `provider`, knex/drizzle/typeorm
+configs, dependency names (`pg`, `mysql2`, `ioredis`,
+`mongoose`). Output: normalized inventory with evidence
+paths. Fixture-repo TDD per class, including "none".
+Immediate side win: `findRuntimeConfigurationIssue` can
+fail round 1 with "this start command needs Postgres and
+nothing provides it" instead of six empirical rounds.
+
+(2) Enforcement — the manifest answers the inventory.
+The preparation contract gains a `dataStrategy`
+declaration mapping every detected required service to a
+rung; the manifest validator rejects prep output that
+leaves one unaddressed, with a message naming the
+service, its evidence, and the available rungs (the
+flow-planning lesson: rejections state the fix; rules
+fire only when satisfiable). This sub-item is the
+"make sure" mechanism for every class.
+
+(3) Rung 1, embedded steering (no infra): when detection
+shows the repo supports an embedded backend, prefer it
+(Prisma sqlite provider, directus's multi-driver config).
+Acceptance: directus green on SQLite.
+
+(4) Rung 3, client-boundary stubbing (with N121):
+fetch/API-client interception serving deterministic
+generated matrices. Acceptance: twenty green with
+generated CRM data.
+
+(5) Rung 2, ephemeral services (the infra lift): bake
+postgres + mysql + redis binaries into the submitted-code
+snapshot (`infra:`, versioned with the snapshot). One
+deep module (`sandbox-services`): provision inside the
+existing submitted-code sandbox on loopback only — no new
+sandboxes (Daytona quota), no cross-sandbox networking,
+Runtime Network Lockdown untouched. Provision during the
+open install window and before the build step (SSG and
+schema-introspection apps query at build time);
+health-check; run the repo's own migrate/seed commands
+through the guarded-command wrapper (disk markers, teed
+evidence, and lifecycle events come free); reseed per
+preflight round for determinism; teardown rides the app
+lifecycle. Distinct preflight classifications and repair
+hints per failure mode (service start, migration, seed).
+Orchestration and command construction are TDD'd against
+fake workspaces; the real-implementation exercise of an
+actual Postgres boot is the matrix itself — stated
+plainly: calcom (event types + booking on seeded
+Postgres) and ghostfolio (postgres + redis) green are
+the acceptance gate.
+
+(6) Rung 4, provider recipes on demand: serverless/cloud
+drivers get per-provider recipes only when a repo of that
+class appears (Neon driver → `pg` swap, Turso → local
+`sqld`, Firebase → local emulator), per the
+smallest-correct-module rule. The sub-item (2) loop makes
+deferral safe: an unrecognized cloud backend lands on the
+declared-stub rung with generated data and an explicit
+manifest declaration, never a silent gap.
+
+Coverage guarantee: `tests/fixtures/pipeline-matrix.json`
+keeps at least one repo per rung (homer: none, directus:
+embedded, calcom: postgres, ghostfolio: postgres+redis,
+twenty: client-stub); a new backend class enters the
+ladder by adding its fixture repo first and driving it
+red to green — the TDD loop at matrix scale.
+
+### Recommended order
+
+1. N119 — smallest diff, removes the only class that can
+   kill a run in an infrastructure incident window;
+   directus's only wall this batch.
+2. N120 — ghostfolio's only remaining wall; one probe
+   seam, both parts.
+3. N121 — twenty's wall; contract text plus one detection
+   seam, and a prerequisite for N122 sub-item (4).
+4. N122 (1) + (2) — the structural loop: detection and
+   enforcement land together so the manifest contract
+   never demands what profiling cannot yet see.
+5. N122 (3) + (4) — the cheap rungs; directus and twenty
+   green without any provisioning infrastructure.
+6. N122 (5) — the infra lift, started only after a matrix
+   with 1–5 landed shows its acceptance repos clean of
+   unrelated walls.
+7. N122 (6) — on demand, never speculatively.
+
+N118's hardening sub-items stay scheduled behind these
+active failure classes, as before. The expected matrix
+trajectory: after steps 1–3, directus and ghostfolio
+green and twenty reaching data-strategy repair with a
+named constraint; after step 5, five of five.
