@@ -6512,6 +6512,19 @@ doc comment already promises. One fingerprint per
 actual cause; the repeated-failure limit then means
 what it says.
 
+Landed (this session): a wrapper-epilogue pattern in
+the cause-line reader covering the pnpm, npm (including
+the Failed at / not-a-problem-with-npm / log-location
+block), and yarn shapes; epilogue lines are skipped
+while any tool-authored cause line exists and kept as
+the answer only when nothing above them qualifies, so
+a bare epilogue never turns into "no cause found". The
+generic command-failed shape anchors to the line end so
+execa-style lines that append the failing command keep
+their identity. Locked by an orchestration test:
+distinct causes above identical pnpm epilogues no
+longer collapse into one repeated-failure fingerprint.
+
 ### N131 (Medium, bugfix) — stop hinting a channel the resolver deletes
 
 The unbuilt-workspace-package hints say "Set
