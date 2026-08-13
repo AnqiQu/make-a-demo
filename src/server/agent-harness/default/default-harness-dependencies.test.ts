@@ -8498,6 +8498,84 @@ describe("createDefaultAgentHarnessDependencies", () => {
     }
   });
 
+  it("forwards the manifest data strategy into schema-gap repair hints", async () => {
+    // N126: the schema-gap hint is gated on the manifest's declared
+    // client-stub rung, so the dependency seam must hand the dataStrategy
+    // declarations to exploration.
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-schema-gap-"));
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (!command.includes("explore-app.mjs")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout: JSON.stringify({
+            blockedNetworkAttempts: [],
+            consoleErrors: [],
+            pageErrors: [
+              "http://127.0.0.1:3000/: TypeError: Cannot read properties of undefined (reading 'authProviders')",
+            ],
+            routes: [
+              {
+                buttons: [],
+                forms: [],
+                headings: [],
+                inputs: [],
+                links: [],
+                path: "/",
+                primaryNavigation: [],
+                requestedPath: "/",
+                screenshot: "/workspace/.makeademo/exploration/root.png",
+                snapshot: "/workspace/.makeademo/exploration/root.aria.yml",
+                text: [],
+                title: "Blank shell",
+              },
+            ],
+          }),
+        };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot,
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    try {
+      const result = await harness.dependencies.exploreApp({
+        actionCatalogPath: "/workspace/.makeademo/action-catalog.json",
+        appMapPath: "/workspace/.makeademo/app-map.json",
+        demoBrief: { keyProductFeatures: ["dashboard"] },
+        preparationManifest: {
+          ...preparationManifest(),
+          dataStrategy: [
+            {
+              detail: "Stubbed the GraphQL client transport with fixtures.",
+              rung: "client-stub",
+              service: "postgres",
+            },
+          ],
+        },
+        preparationValidation: validationReport(
+          "preparation-preflight",
+          "passed",
+        ),
+        repoProfile: repoProfile(),
+        workspace,
+      });
+
+      expect(result.validationReport.status).toBe("failed");
+      const hints = result.validationReport.suggestedRepairHints.join(" ");
+      expect(hints).toContain("authProviders");
+      expect(hints).toContain("complete response schema");
+    } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
   it("mirrors exploration evidence into the run directory when exploration fails", async () => {
     const outputRoot = await mkdtemp(
       join(tmpdir(), "makeademo-exploration-evidence-"),

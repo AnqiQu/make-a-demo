@@ -753,6 +753,9 @@ export async function createDefaultAgentHarnessDependencies(
       run: () =>
         exploreSubmittedApp({
           baseUrl: input.preparationManifest.baseUrl,
+          ...(input.preparationManifest.dataStrategy === undefined
+            ? {}
+            : { dataStrategy: input.preparationManifest.dataStrategy }),
           ...(externalResourceManifest === undefined
             ? {}
             : { externalResourceManifest }),
@@ -974,6 +977,9 @@ export async function createDefaultAgentHarnessDependencies(
           exploreSubmittedApp({
             baseUrl: preparationManifest.baseUrl,
             ...(captureFailure === undefined ? {} : { captureFailure }),
+            ...(preparationManifest.dataStrategy === undefined
+              ? {}
+              : { dataStrategy: preparationManifest.dataStrategy }),
             ...(externalResourceManifest === undefined
               ? {}
               : { externalResourceManifest }),

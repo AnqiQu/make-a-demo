@@ -1083,6 +1083,81 @@ describe("exploreSubmittedApp", () => {
     expect(hints).toContain("blocks Service Worker registration");
   });
 
+  it("names the schema-gap fields when a client-stub declaration crashes at runtime", async () => {
+    // A client-stub rung that satisfies only part of the response schema
+    // crashes the app generically: error boundaries report the field the
+    // component dereferenced, client caches report the field they could not
+    // write. The hint must extract those identifiers and state the stub's
+    // schema obligation so repair targets the transport, not the symptom
+    // (twenty, 2026-08-12).
+    const { result } = await exploreObservation({
+      consoleErrors: [
+        "http://127.0.0.1:3001/: Missing field 'currentWorkspace' while writing result",
+      ],
+      dataStrategy: [
+        {
+          detail: "Stubbed the GraphQL client transport with fixtures.",
+          rung: "client-stub",
+          service: "postgres",
+        },
+      ],
+      featureInventory: [preparedFeature()],
+      pageErrors: [
+        "http://127.0.0.1:3001/: TypeError: Cannot read properties of undefined (reading 'authProviders')",
+      ],
+      routes: [observedRoute({ headings: [], text: [] })],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    const hints = result.validationReport.suggestedRepairHints.join(" ");
+    expect(hints).toContain("client-stub");
+    expect(hints).toContain("authProviders");
+    expect(hints).toContain("currentWorkspace");
+    expect(hints).toContain("complete response schema");
+  });
+
+  it("omits the schema-gap hint when no client-stub rung is declared", async () => {
+    const { result } = await exploreObservation({
+      dataStrategy: [
+        {
+          detail: "Embedded SQLite with seeded demo rows.",
+          rung: "embedded-config",
+          service: "postgres",
+        },
+      ],
+      featureInventory: [preparedFeature()],
+      pageErrors: [
+        "http://127.0.0.1:3001/: TypeError: Cannot read properties of undefined (reading 'authProviders')",
+      ],
+      routes: [observedRoute({ headings: [], text: [] })],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(
+      result.validationReport.suggestedRepairHints.join(" "),
+    ).not.toContain("complete response schema");
+  });
+
+  it("keeps the schema-gap hint quiet when crash diagnostics match no schema pattern", async () => {
+    const { result } = await exploreObservation({
+      dataStrategy: [
+        {
+          detail: "Stubbed the GraphQL client transport with fixtures.",
+          rung: "client-stub",
+          service: "postgres",
+        },
+      ],
+      featureInventory: [preparedFeature()],
+      pageErrors: ["http://127.0.0.1:3001/: Error: WebSocket handshake failed"],
+      routes: [observedRoute({ headings: [], text: [] })],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(
+      result.validationReport.suggestedRepairHints.join(" "),
+    ).not.toContain("complete response schema");
+  });
+
   it("attaches the observation to a grounding failure for diagnosis", async () => {
     const { result } = await exploreObservation({ routes: [] });
 
@@ -4014,6 +4089,7 @@ async function exploreObservation(input: {
   capacityProbeOutput?: string;
   captureFailure?: Parameters<typeof exploreSubmittedApp>[0]["captureFailure"];
   consoleErrors?: string[];
+  dataStrategy?: Parameters<typeof exploreSubmittedApp>[0]["dataStrategy"];
   declaredProofs?: Array<{
     detail: string;
     featureId: string;
@@ -4043,6 +4119,9 @@ async function exploreObservation(input: {
     ...(input.captureFailure === undefined
       ? {}
       : { captureFailure: input.captureFailure }),
+    ...(input.dataStrategy === undefined
+      ? {}
+      : { dataStrategy: input.dataStrategy }),
     ...(input.featureInventory === undefined
       ? {}
       : { featureInventory: input.featureInventory }),

@@ -16,6 +16,7 @@ import {
   type AppMap,
   type FeatureVerdict,
   type NetworkAttempt,
+  type PreparationManifest,
   type PreparedDemoFeature,
   type ValidationReport,
   type VerifiedLocatorCandidate,
@@ -312,6 +313,12 @@ export async function exploreSubmittedApp(input: {
    * capture-failed candidate to re-verify by scene-prefix replay.
    */
   captureFailure?: CaptureLocatorFailure;
+  /**
+   * The manifest's dataStrategy declarations (N122). Exploration uses them
+   * only to interpret failures: a declared client-stub rung turns generic
+   * crash diagnostics into a stub schema-gap repair hint (N126).
+   */
+  dataStrategy?: PreparationManifest["dataStrategy"];
   externalResourceManifest?: ExternalResourceManifest;
   featureInventory?: PreparedDemoFeature[];
   preparationManifestId: string;
@@ -443,6 +450,9 @@ export async function exploreSubmittedApp(input: {
 
   const artifacts = createExplorationArtifacts({
     baseUrl: input.baseUrl,
+    ...(input.dataStrategy === undefined
+      ? {}
+      : { dataStrategy: input.dataStrategy }),
     featureInventory,
     observation,
     preparationManifestId: input.preparationManifestId,
@@ -624,6 +634,7 @@ function createHungExplorationFailure(input: {
 
 function createExplorationArtifacts(input: {
   baseUrl: string;
+  dataStrategy?: PreparationManifest["dataStrategy"];
   featureInventory: PreparedDemoFeature[];
   observation: BrowserExplorationProtocol;
   preparationManifestId: string;
@@ -742,6 +753,9 @@ function createExplorationArtifacts(input: {
   const validationReport = createExplorationValidationReport({
     actionCatalog,
     appMap,
+    ...(input.dataStrategy === undefined
+      ? {}
+      : { dataStrategy: input.dataStrategy }),
     declaredProofResults,
     distinctContentByRoute,
     emptyDataTablesByRoute,
@@ -1913,6 +1927,7 @@ function readFeatureVerdicts(input: {
 function createExplorationValidationReport(input: {
   actionCatalog: ActionCatalog;
   appMap: AppMap;
+  dataStrategy?: PreparationManifest["dataStrategy"];
   declaredProofResults?: ReadonlyMap<string, DeclaredProofResult>;
   distinctContentByRoute: ReadonlyMap<string, string[]>;
   emptyDataTablesByRoute?: ReadonlyMap<
@@ -2029,6 +2044,10 @@ function createExplorationValidationReport(input: {
               ...input.appMap.pageErrors,
               ...input.appMap.consoleErrors,
             ]),
+            ...readClientStubSchemaGapHint(
+              [...input.appMap.pageErrors, ...input.appMap.consoleErrors],
+              input.dataStrategy,
+            ),
             ...(input.appMap.pageErrors.length === 0
               ? []
               : [
@@ -2632,6 +2651,45 @@ function readServiceWorkerBanHint(observedErrors: string[]): string[] {
         "The demo browser blocks Service Worker registration by design, so service-worker-based request mocking (such as MSW's browser worker) can never activate here — routes gated on it render only shells or navigation chrome. Do not retry, defer, or work around the worker registration. Serve demo data at the fetch/API-client layer instead: gate the app's own data client or fetch wrapper to return deterministic in-code fixtures, and remove the service-worker registration from the demo path.",
       ]
     : [];
+}
+
+// A partial client stub crashes apps generically: error boundaries report the
+// field a component dereferenced on an undefined object, client caches
+// (Apollo and kin) report the field a response failed to supply. Both quote
+// the identifier, so one pattern table extracts it for any app. Extend this
+// table per the N122 detection precedent when new client stacks surface new
+// missing-field shapes.
+const clientStubSchemaGapPatterns = [
+  /Cannot read properties of undefined \(reading '([^']+)'\)/,
+  /Missing field '([^']+)'/,
+];
+
+/**
+ * Turns generic runtime-crash diagnostics into a stub schema-gap repair hint
+ * (N126). Fires only when the manifest actually declares a `client-stub`
+ * dataStrategy rung and the observed errors quote at least one field
+ * identifier — apps crashing for unrelated reasons never see this hint.
+ */
+function readClientStubSchemaGapHint(
+  observedErrors: string[],
+  dataStrategy: PreparationManifest["dataStrategy"],
+): string[] {
+  const stubServices = (dataStrategy ?? [])
+    .filter((declaration) => declaration.rung === "client-stub")
+    .map((declaration) => declaration.service);
+  if (stubServices.length === 0) return [];
+  const missingFields = unique(
+    observedErrors.flatMap((error) =>
+      clientStubSchemaGapPatterns.flatMap((pattern) => {
+        const field = pattern.exec(error)?.[1];
+        return field === undefined ? [] : [field];
+      }),
+    ),
+  );
+  if (missingFields.length === 0) return [];
+  return [
+    `The manifest declares a client-stub dataStrategy for ${stubServices.join(", ")}, and the app's crash diagnostics name response fields the stub never supplied: ${missingFields.join(", ")}. The stub transport must satisfy the complete response schema for the queries powering the entry routes, starting with the named fields — partial fixtures crash components and client caches exactly like this. Extend the stubbed responses instead of repairing the individual crash sites.`,
+  ];
 }
 
 function readMissingModule(pageErrors: string[]): string | undefined {
