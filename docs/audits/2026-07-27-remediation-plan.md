@@ -6601,6 +6601,23 @@ exists (the repo's own pre-start hook / predev, or the
 manifest's install scope). The hint and the resolver
 must agree on who owns the build command.
 
+Landed (this session): honor, plus hint wording that
+states the contract. `resolvePreparationRuntime` now
+keeps an agent-set buildCommandUsed whenever resolution
+itself produced no build command (dev-server starts,
+buildless targets) and the command — or the app script
+body it runs one level down — references a known
+workspace package by full name or directory (including
+`./<dir>` path filters) while selecting no absent one.
+A resolved build command still wins, and commands
+naming no real workspace target are still stripped, so
+backend ownership is unchanged everywhere except the
+hinted channel. The three unbuilt-workspace-package
+hints now say to name the package in the command and
+that the backend keeps such a command even for
+dev-server starts — hint and resolver state the same
+contract.
+
 ### Watchlist (no fix scheduled; re-check next matrix)
 
 - Failed agent-artifact validations emit no pipeline
