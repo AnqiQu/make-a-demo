@@ -6258,3 +6258,285 @@ declaration, no hint.
    and calcom still stopped at the data wall — which is
    the gate signal for N122(5), not a failure of this
    wave.
+
+## Addendum (2026-08-13, wave-7 acceptance matrix — first multi-pass batch; the N122(5) gate misses on calcom alone)
+
+The 2026-08-13T05-45 batch: homer and ghostfolio
+PASSED end-to-end (final videos composited), directus,
+twenty, and calcom failed. Every wave-6 fix behaved:
+N123's envelope stamped all ~1300 control-plane calls
+across the batch with attempt events (zero retries
+needed — infrastructure was calm, so the envelope was
+armed but untriggered), N124 unblocked homer through
+flow planning on the first pass, N125's structured
+failedAction fired in homer's capture round and routed
+cleanly through plain script-repair (regrounding and
+the breaker never needed to arm), and N126's gate
+correctly stayed silent on twenty — the client stub was
+never reached, so there were no quoted-field crash
+diagnostics to match. The three failures are: one
+harness sequencing bug in front of calcom's data wall
+(N127), one classification hole plus a gate-silencing
+repair on twenty (N128, N129), and one new prep-quality
+wall on directus amplified by two pre-existing harness
+seams (N130, N131).
+
+### Diagnoses (2026-08-13T05-45)
+
+homer — passed, 416s, with two absorbed events worth
+recording. (a) Flow-planning attempt 1 failed FlowSpec
+validation and re-ran invisibly: failed agent-artifact
+validations emit no pipeline-log event at all, so
+repair-round accounting from the log undercounts
+(watchlist). (b) One capture-path failure
+(dashboard-assert-services timed out because a leftover
+`?search=notes` filter hid the tile group) was repaired
+by typing "" instead of removing the step — the FlowSpec
+still declares "enter a value and observe the search
+control accept it", so the shipped demo has a dead beat
+(watchlist: repairs may neuter a step's declared intent
+without any validator noticing).
+
+ghostfolio — passed, 1867s, on repair round 4 of 4:
+zero budget margin (watchlist). The pass rode the
+client-stub rung for both postgres and redis (an
+Angular HTTP interceptor serving fixture envelopes; no
+DATABASE_URL at all), which is legal under N122(2) but
+means the add-investment-activity scene shows a write
+that persists nothing (knownLimitations concedes it).
+The four repair rounds were coherent: fidelity
+violation → nx build path → missing env crash →
+logo-endpoint 500s, each fixed in turn. As the N122(5)
+acceptance repo, this run is "clean of unrelated
+walls" — but its acceptance criterion (postgres+redis
+green on the provisioned rung) is only now possible.
+
+calcom — NOT stopped at the data wall alone; the
+terminal failure is a harness sequencing bug. Rounds 1
+and 3 ran fs.sync → install → offline lifecycle →
+start; rounds 2 and 4 ran fs.sync → start directly.
+The install uses --mode=skip-build, so `prisma
+generate` outputs exist only via the separate lifecycle
+step — and fs.sync re-materializes /workspace/repo,
+destroying those untracked generated files. Rounds 2
+and 4 therefore compiled against a repo with no
+generated Prisma client: 1189 module-not-found
+(`../enums`, `@calcom/prisma/enums`, ×1025) surfacing
+as the 500 the matrix report shows, classified "missing
+dependency". Zero Prisma connection errors anywhere in
+the run (no ECONNREFUSED, no :5432, no P1001) — the
+data wall never got to speak in the terminal round.
+Round 3, the one correctly-sequenced round, showed the
+real wall exactly as predicted: preflight passed,
+/event-types rendered chrome with three skeleton rows
+and a disabled "Loading..." user button, feature probe
+failed 2 of 3 features. Aggravations: two of five
+repair rounds were burned on fidelity oscillation (a
+replacement-UI detour, then a .yarnrc.yml candidate the
+adjudicator had already approved being re-litigated to
+"unadjudicated" — a flake), and those fidelity rounds
+were charged against the runtime-repair budget. The
+rung chosen was declared-stub; no hint ever named the
+database. → N127 (and watchlist)
+
+directus — a new prep-quality wall, not the 2026-08-11
+predev ghost and not infrastructure (305 Daytona calls,
+all attempt 1). Upstream `packages/extensions` fans
+`build` out to two tsdown invocations sharing one
+--out-dir; tsdown cleans the dir at start of each run,
+so whichever entry builds second deletes the other's
+output — parallel order broke `dist/node.js` (round 3),
+the round-4 serialization deterministically broke
+`dist/index.*` the other way. Neither ordering can
+work; the fix (--no-clean on one entry) was one
+hypothesis past the budget. The predev fix DID land in
+round 3 and ran the workspace build. Two harness seams
+amplified it: (a) every preflight hint said "Set
+buildCommandUsed to build @directus/extensions" while
+runtime-target resolution unconditionally strips
+agent-set buildCommandUsed and forces build undefined
+for dev-server starts — the hinted channel does not
+exist (→ N131); (b) the repeated-failure fingerprint
+keys on the last error-class line, which for pnpm is
+always the ` ELIFECYCLE  Command failed` epilogue, so
+three distinct crashes counted as one repeat and the
+run died on the repeated-failure limit (2) with the
+global budget barely touched (→ N130).
+
+twenty — never reached the client stub; the wall is the
+Nx workspace build graph, terminating in a Vite
+dev-server 500. Rounds 1–5: build failures around
+twenty-shared (`twenty-shared/dist/vite.mjs` missing,
+then a self-recursive `"build": "npx nx build
+twenty-front"` rewrite). Round 6 "fixed" the build by
+rewriting the app's build script to `npx nx build
+twenty-shared` — a command that succeeds by no longer
+building the app (→ N129). At runtime, `twenty-ui`'s
+CSS build outputs don't exist, Vite's import-analysis
+500s on the entry chunk `/src/index.tsx`, and every
+route serves a full-screen Vite error overlay. The
+probe classified this "empty/unmeaningful app state"
+with a data-fixtures hint: the overlay text lives in a
+shadow root the aria snapshot pierces but the
+visible-content extraction does not, and an entry-chunk
+5xx produces neither pageErrors nor field-quoting
+diagnostics — so repairs were pointed at the data layer
+while the fault was module resolution (→ N128). N126's
+non-fire was correct behavior on wrong-layer input.
+
+### The N122(5) gate
+
+Gate text: acceptance repos (calcom, ghostfolio) clean
+of unrelated walls. ghostfolio: clean — passed.
+calcom: NOT clean — N127 sits in front of the data
+wall, and the terminal round failed on it, not on the
+missing database. Strict reading: the gate misses on
+calcom alone. Product reading: the data wall is
+directly observed in every correctly-sequenced round
+(round 3 this batch, round 5 last batch), the blocking
+bug is diagnosed with a one-line cause, and waiting one
+more matrix to re-observe a wall we can already see
+buys nothing. Decision: N122(5) implementation
+proceeds; N127 must land before (or with) the
+acceptance rerun, or calcom will fail for non-data
+reasons again.
+
+### N122(5) — landed (this session)
+
+Implementation as specified in the 2026-08-12 plan:
+postgres + mariadb (mysql protocol) + redis binaries
+baked into the submitted-code snapshot (`infra:`
+commit, dockerfile content test); one deep module
+`sandbox-services` — loopback DSNs published as
+constants, reset-then-boot provision scripts per
+service (initdb/pg_ctl as postgres, mariadb-install-db
++ socket-auth root with TCP makeademo account,
+redis-server with persistence off), `[makeademo:service]
+ready` markers as evidence; manifest declarations gain
+optional migrationCommand/seedCommand (schema reader,
+contract JSON + invariants publishing the exact DSNs,
+enforcement flip moving provisioned-service into the
+backed rungs with provisionable-service and
+command-placement checks); the template and the
+data-strategy prompt steer embedded-config →
+provisioned-service → client-stub → declared-stub; the
+offline lifecycle provisions declared services after
+install/reseal and before the build, runs migrate/seed
+through the guarded wrapper with envUsed, and reseeds
+by reprovisioning on every validation round; three new
+preparation-routed classifications (service start /
+migration / seed failure) with per-mode hints stating
+the empty-database reseed contract. The real-Postgres
+exercise is the matrix itself, per the plan.
+
+### New items
+
+### N127 (Critical, bugfix) — lifecycle must follow every workspace re-sync
+
+calcom's terminal wall. Invariant: a round that
+re-materializes /workspace/repo (fs.sync) must not
+start the app against a tree whose install/lifecycle
+outputs were destroyed by that re-sync. Either re-run
+the deps + offline-lifecycle step unconditionally after
+any fs.sync, or make the sync preserve untracked
+generated outputs (node_modules survives; generated
+source like prisma client does not). The skip logic
+that decides "install unchanged, skip it" is deciding
+about a tree the sync just replaced. Also blocks the
+N122(5) acceptance rerun: with a provisioned database,
+rounds 2/4-style sequencing would still 500 before
+touching it.
+
+### N128 (High, bugfix) — an entry-chunk 5xx is a serve failure, not empty app state
+
+twenty's misrouted terminal round. When exploration
+observes the app's entry module (or any same-origin
+script the document requires) answering 5xx, classify
+as a serve/build failure routed to preparation repair
+with the failing URL and status in the summary — before
+any empty-state or data-strategy interpretation (N126
+included). Companion fix: visible-content extraction
+must see shadow-root text the aria snapshot already
+captures (Vite's error overlay rendered a page of
+diagnostic text that the probe read as "no visible
+content"); the overlay text names the exact missing
+import and belongs in the failure summary.
+
+### N129 (High, bugfix) — the build gate must build the app under test
+
+twenty round 6 bought a green build gate by rewriting
+the app package's own build script to build a different
+project. The gate's question must be "did the app under
+test build", not "did buildCommandUsed exit 0". Options
+in strength order: verify the app's build outputs exist
+after the build step (framework-generic: the start
+command's entry artifacts); reject repairs that rewrite
+the selected app package's build script to a target
+that no longer references the app; at minimum, surface
+a fidelity check when a repair narrows the effective
+build scope.
+
+### N130 (High, bugfix) — fingerprint on the cause, not the package-manager epilogue
+
+directus died on the repeated-failure limit with three
+distinct crashes. `readLastErrorCauseLine` must skip
+wrapper epilogue lines — pnpm's ` ELIFECYCLE `,
+`ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL`, `Exit status N`,
+npm's `npm ERR! Lifecycle script`, yarn's `Command
+failed with exit code` — and land on the last
+tool-authored error line above them, exactly as its
+doc comment already promises. One fingerprint per
+actual cause; the repeated-failure limit then means
+what it says.
+
+### N131 (Medium, bugfix) — stop hinting a channel the resolver deletes
+
+The unbuilt-workspace-package hints say "Set
+buildCommandUsed to …" while runtime-target resolution
+strips agent-set buildCommandUsed and forces build
+undefined for dev-server starts — directus's agent
+obeyed the hint into a wall three rounds running.
+Either honor a preflight-repair-set buildCommandUsed
+(resolution keeps it when it names a real workspace
+build target), or reword the hints to the channel that
+exists (the repo's own pre-start hook / predev, or the
+manifest's install scope). The hint and the resolver
+must agree on who owns the build command.
+
+### Watchlist (no fix scheduled; re-check next matrix)
+
+- Failed agent-artifact validations emit no pipeline
+  event (homer's invisible flow-planning retry);
+  dashboards undercount repair rounds.
+- Script repair can neuter a step's declared FlowSpec
+  intent without failing anything (homer's "" search).
+- Fidelity-repair rounds charge the runtime-repair
+  budget, and the adjudicator re-litigated an
+  already-approved .yarnrc.yml candidate to
+  "unadjudicated" (calcom; one full round lost).
+- ghostfolio passed on its last repair round — if 4 is
+  the cap, zero margin.
+- ghostfolio's manifest carried a stray top-level
+  `"rung": null` alongside the per-service rungs;
+  whitelist readers drop it, but whatever writes it is
+  sloppy.
+
+### Recommended order
+
+1. N127 — gates the N122(5) acceptance rerun; calcom
+   cannot show the provisioned database working while
+   rounds still start against a wiped tree.
+2. N130 — cheap, and it is currently terminating
+   pnpm-monorepo runs that are making progress.
+3. N128 — twenty's repairs cannot aim until the 500 is
+   named as a serve failure with the overlay text.
+4. N129 + N131 — the build gate and its repair channel,
+   one seam conversation.
+5. Matrix rerun: expected trajectory is homer and
+   ghostfolio holding green (ghostfolio ideally
+   choosing provisioned-service under the new
+   steering), calcom green through preflight on a
+   seeded Postgres (the N122(5) acceptance), directus
+   surviving to the tsdown hypothesis with per-cause
+   fingerprints, twenty reaching its client stub with
+   the serve failure named.
