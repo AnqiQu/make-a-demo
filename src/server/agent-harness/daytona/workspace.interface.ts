@@ -191,6 +191,24 @@ export type AgentHarnessWorkspaceExecuteOptions = {
    */
   onStderr?: (chunk: string) => void;
   onStdout?: (chunk: string) => void;
+  /**
+   * How the adapter may respond to a transient control-plane failure whose
+   * outcome is unknown (the request may or may not have reached the sandbox).
+   * `"transient"` re-issues the command on an escalating ladder — at-least-once
+   * semantics, legal only for idempotent commands. `"none"` never re-issues;
+   * the failure surfaces as a classified infrastructure error.
+   *
+   * Defaults differ by sandbox: `execute` (agent sandbox) defaults to
+   * `"transient"` because its commands are harness-authored bookkeeping that
+   * must stay idempotent — callers running at-most-once commands (patch
+   * application) must pass `"none"`. `executeSubmittedCode` defaults to
+   * `"none"` because submitted-code commands can drive the app under test
+   * (exploration crawls, capture scripts) and a masked success must never be
+   * double-executed — provably idempotent reads opt into `"transient"`.
+   * Command deadlines are never re-issued under either setting: a timeout is
+   * the command's outcome, not transport loss.
+   */
+  retry?: "none" | "transient";
   timeoutMs?: number;
 };
 

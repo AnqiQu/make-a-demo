@@ -743,6 +743,151 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     );
   });
 
+  it("retries an agent-sandbox command past a transient control-plane 502", async () => {
+    // ghostfolio 2026-08-13T01-12: the first harness step after an
+    // 11-minute prep agent succeeded was `cat`-ing the manifest, and one
+    // raw 502 killed the run. Agent-sandbox commands are harness-authored
+    // idempotent bookkeeping, so they ride the transient ladder (N123).
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { executeCommand502FailuresBeforeSuccess: 1 }),
+      controlPlane: instantControlPlane(),
+    });
+    const handle = await provider.create();
+
+    const result = await handle.workspace.execute(
+      "cat /workspace/.makeademo/preparation-manifest.json",
+    );
+
+    expect(result).toEqual({ exitCode: 0, stderr: "", stdout: "ok" });
+    expect(
+      calls.filter((call) => "executeCommand" in Object(call)),
+    ).toHaveLength(2);
+  });
+
+  it("wraps a persistent command 502 window as a typed infrastructure failure", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, {
+        executeCommand502FailuresBeforeSuccess: 99,
+      }),
+      controlPlane: instantControlPlane(),
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.execute("git status --porcelain"),
+    ).rejects.toBeInstanceOf(AgentHarnessControlPlaneError);
+  });
+
+  it("never re-issues a command whose deadline elapsed", async () => {
+    // A command deadline is the command's outcome — the harness converts it
+    // into bounded feedback; blindly re-running a possibly-completed
+    // command could double its side effects.
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { executeCommandNeverResolves: true }),
+      commandTimeoutMs: 1,
+      controlPlane: instantControlPlane(),
+    });
+    const handle = await provider.create();
+
+    await expect(handle.workspace.execute("npm ci")).rejects.toThrow(
+      "Daytona command did not finish within 1ms.",
+    );
+    expect(
+      calls.filter((call) => "executeCommand" in Object(call)),
+    ).toHaveLength(1);
+  });
+
+  it("classifies a transient failure on an at-most-once command without re-issuing it", async () => {
+    // The restore path's `git apply` may already have taken effect when a
+    // 502 masks its success; retry: "none" keeps at-most-once semantics
+    // while still classifying the loss as infrastructure.
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, { executeCommand502FailuresBeforeSuccess: 1 }),
+      controlPlane: instantControlPlane(),
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.execute("git apply --binary /tmp/restore.patch", {
+        retry: "none",
+      }),
+    ).rejects.toBeInstanceOf(AgentHarnessControlPlaneError);
+    expect(
+      calls.filter((call) => "executeCommand" in Object(call)),
+    ).toHaveLength(1);
+  });
+
+  it("does not re-issue a submitted-code command on a transient failure by default", async () => {
+    // Submitted-code commands can drive the app under test (exploration
+    // crawls, capture scripts); a 502 can mask a command that already ran,
+    // so the default is classify-only — never a blind re-issue.
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls, {
+        submittedExecute502: { commandIncludes: "capture.mjs", failures: 1 },
+      }),
+      controlPlane: instantControlPlane(),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.executeSubmittedCode("bun /tmp/capture.mjs"),
+    ).rejects.toBeInstanceOf(AgentHarnessControlPlaneError);
+    expect(
+      calls.filter((call) => {
+        const command = Object(call).executeCommand as
+          | { command?: string; sandbox?: string }
+          | string
+          | undefined;
+        return (
+          typeof command === "object" &&
+          command?.command?.includes("capture.mjs") === true
+        );
+      }),
+    ).toHaveLength(1);
+  });
+
+  it("retries a submitted-code command that opted into transient retry", async () => {
+    // Provably idempotent submitted-code reads (cat exploration output,
+    // readiness curls) declare retry: "transient" explicitly.
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls, {
+        submittedExecute502: {
+          commandIncludes: "exploration.json",
+          failures: 1,
+        },
+      }),
+      controlPlane: instantControlPlane(),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    const result = await handle.workspace.executeSubmittedCode(
+      "cat /workspace/.makeademo/exploration/exploration.json",
+      { retry: "transient" },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(
+      calls.filter((call) => {
+        const command = Object(call).executeCommand as
+          | { command?: string; sandbox?: string }
+          | string
+          | undefined;
+        return (
+          typeof command === "object" &&
+          command?.command?.includes("exploration.json") === true
+        );
+      }),
+    ).toHaveLength(2);
+  });
+
   it("streams command output through a Daytona PTY when callbacks are provided", async () => {
     const calls: unknown[] = [];
     const streamed: string[] = [];
@@ -995,6 +1140,56 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         stage: "project-validation",
       }),
     ).rejects.toThrow("Daytona sandbox log write did not finish within 1ms.");
+  });
+
+  it("retries a durable sandbox log write past a transient 502", async () => {
+    // A duplicated audit line is acceptable; a run killed by one 502 while
+    // appending its own audit trail is not (N123).
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, {
+        sandboxLogWrite502FailuresBeforeSuccess: 1,
+      }),
+      controlPlane: instantControlPlane(),
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.writeSandboxLog({
+      event: "repo-preparation.started",
+      stage: "repo-preparation",
+    });
+
+    expect(
+      calls.filter((call) => {
+        const command = Object(call).executeCommand;
+        return (
+          typeof command === "string" &&
+          command.includes(">> '/tmp/makeademo/sandbox-log.jsonl'")
+        );
+      }),
+    ).toHaveLength(2);
+  });
+
+  it("retries sandbox log collection past a transient 502", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls, {
+        sandboxLogCollect502FailuresBeforeSuccess: 1,
+        sandboxLogContents: '{"event":"repo-preparation.failed"}',
+      }),
+      controlPlane: instantControlPlane(),
+    });
+    const handle = await provider.create();
+
+    await expect(handle.workspace.collectSandboxLogs()).resolves.toEqual([
+      '{"event":"repo-preparation.failed"}',
+    ]);
+    expect(
+      calls.filter((call) => {
+        const command = Object(call).executeCommand;
+        return typeof command === "string" && command.includes("tail -c");
+      }),
+    ).toHaveLength(2);
   });
 
   it("disconnects active streaming commands before deleting the sandbox", async () => {
@@ -1811,6 +2006,56 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
   });
 
+  it("classifies a transient failure launching the managed app without re-issuing it", async () => {
+    // A 502 can mask a launch that already started the app; re-issuing
+    // would run two app processes, so the launch is at most once and its
+    // transport loss surfaces classified (N123).
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls, {
+        sessionLaunch502FailuresBeforeSuccess: 1,
+      }),
+      controlPlane: instantControlPlane(),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await expect(
+      handle.workspace.startSubmittedCodeApp({
+        command: "npm run dev",
+        cwd: "/workspace/repo",
+      }),
+    ).rejects.toBeInstanceOf(AgentHarnessControlPlaneError);
+    expect(
+      calls.filter((call) => "executeSessionCommand" in Object(call)),
+    ).toHaveLength(1);
+  });
+
+  it("retries a managed-app status read past a transient 502", async () => {
+    // Status polls are pure reads issued continuously by the readiness
+    // loop; one 502 mid-incident must not end the round.
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls, {
+        sessionStatus502FailuresBeforeSuccess: 1,
+      }),
+      controlPlane: instantControlPlane(),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.startSubmittedCodeApp({
+      command: "npm run dev",
+      cwd: "/workspace/repo",
+    });
+    const status = await handle.workspace.readSubmittedCodeAppStatus();
+
+    expect(status.running).toBe(false);
+    expect(
+      calls.filter((call) => "getSessionCommand" in Object(call)),
+    ).toHaveLength(2);
+  });
+
   it("passes the configured command timeout to submitted-code Daytona commands", async () => {
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
@@ -2274,7 +2519,10 @@ function fakeLinkedClient(
     networkCloseError?: Error;
     networkError?: Error;
     remoteCleanupNeverResolves?: boolean;
+    sessionLaunch502FailuresBeforeSuccess?: number;
+    sessionStatus502FailuresBeforeSuccess?: number;
     submittedDeleteFailuresBeforeSuccess?: number;
+    submittedExecute502?: { commandIncludes: string; failures: number };
     submittedUploadFailuresBeforeSuccess?: number;
   } = {},
 ) {
@@ -2546,10 +2794,16 @@ function fakeLinkedSandbox(
     networkCloseError?: Error;
     networkError?: Error;
     remoteCleanupNeverResolves?: boolean;
+    sessionLaunch502FailuresBeforeSuccess?: number;
+    sessionStatus502FailuresBeforeSuccess?: number;
+    submittedExecute502?: { commandIncludes: string; failures: number };
     submittedUploadFailuresBeforeSuccess?: number;
   } = {},
 ) {
   let uploadAttempts = 0;
+  let submittedExecute502Failures = 0;
+  let sessionLaunch502Failures = 0;
+  let sessionStatus502Failures = 0;
   return {
     fs: {
       async downloadFiles(
@@ -2594,6 +2848,18 @@ function fakeLinkedSandbox(
       },
       async executeCommand(command: string) {
         calls.push({ executeCommand: { command, sandbox: id } });
+        if (
+          id === "submitted_sandbox" &&
+          options.submittedExecute502 !== undefined &&
+          command.includes(options.submittedExecute502.commandIncludes) &&
+          submittedExecute502Failures < options.submittedExecute502.failures
+        ) {
+          submittedExecute502Failures += 1;
+          throw Object.assign(
+            new Error("Request failed with status code 502"),
+            { statusCode: 502 },
+          );
+        }
         if (options.executeCommandNeverResolves === true) {
           await new Promise(() => {});
         }
@@ -2639,12 +2905,34 @@ function fakeLinkedSandbox(
         calls.push({
           executeSessionCommand: { ...request, sandbox: id, sessionId },
         });
+        if (
+          id === "submitted_sandbox" &&
+          sessionLaunch502Failures <
+            (options.sessionLaunch502FailuresBeforeSuccess ?? 0)
+        ) {
+          sessionLaunch502Failures += 1;
+          throw Object.assign(
+            new Error("Request failed with status code 502"),
+            { statusCode: 502 },
+          );
+        }
         return { cmdId: "cmd_123" };
       },
       async getSessionCommand(sessionId: string, commandId: string) {
         calls.push({
           getSessionCommand: { commandId, sandbox: id, sessionId },
         });
+        if (
+          id === "submitted_sandbox" &&
+          sessionStatus502Failures <
+            (options.sessionStatus502FailuresBeforeSuccess ?? 0)
+        ) {
+          sessionStatus502Failures += 1;
+          throw Object.assign(
+            new Error("Request failed with status code 502"),
+            { statusCode: 502 },
+          );
+        }
         return { exitCode: 0 };
       },
       async getSessionCommandLogs(sessionId: string, commandId: string) {
@@ -2672,6 +2960,7 @@ function fakeClient(
   options: {
     commandsRequireSandboxRestart?: boolean;
     downloadError?: string;
+    executeCommand502FailuresBeforeSuccess?: number;
     executeCommandFails?: boolean;
     executeCommandNeverResolves?: boolean;
     executeCommandOmitsExitCode?: boolean;
@@ -2689,7 +2978,9 @@ function fakeClient(
     ptyStaleDuplicateIdOnFirstCreate?: boolean;
     ptyWaitFails?: boolean;
     ptyWaitsForDisconnect?: boolean;
+    sandboxLogCollect502FailuresBeforeSuccess?: number;
     sandboxLogContents?: string;
+    sandboxLogWrite502FailuresBeforeSuccess?: number;
     sandboxRestartDoesNotRecover?: boolean;
     uploadError?: Error;
     uploadFailuresBeforeSuccess?: number;
@@ -2699,6 +2990,9 @@ function fakeClient(
   let uploadFailures = 0;
   let networkFailures = 0;
   let ptyConnectionFailures = 0;
+  let executeCommand502Failures = 0;
+  let sandboxLogWrite502Failures = 0;
+  let sandboxLogCollect502Failures = 0;
   let sandboxStarted =
     options.ptyRequiresSandboxRestart !== true &&
     options.commandsRequireSandboxRestart !== true;
@@ -2846,10 +3140,42 @@ function fakeClient(
           command.includes("tail -c") &&
           command.includes("/tmp/makeademo/sandbox-log.jsonl")
         ) {
+          if (
+            sandboxLogCollect502Failures <
+            (options.sandboxLogCollect502FailuresBeforeSuccess ?? 0)
+          ) {
+            sandboxLogCollect502Failures += 1;
+            throw Object.assign(
+              new Error("Request failed with status code 502"),
+              { statusCode: 502 },
+            );
+          }
           return {
             exitCode: 0,
             result: options.sandboxLogContents ?? "",
           };
+        }
+        if (
+          command.includes(">> '/tmp/makeademo/sandbox-log.jsonl'") &&
+          sandboxLogWrite502Failures <
+            (options.sandboxLogWrite502FailuresBeforeSuccess ?? 0)
+        ) {
+          sandboxLogWrite502Failures += 1;
+          throw Object.assign(
+            new Error("Request failed with status code 502"),
+            { statusCode: 502 },
+          );
+        }
+        if (
+          !command.includes("/tmp/makeademo/sandbox-log.jsonl") &&
+          executeCommand502Failures <
+            (options.executeCommand502FailuresBeforeSuccess ?? 0)
+        ) {
+          executeCommand502Failures += 1;
+          throw Object.assign(
+            new Error("Request failed with status code 502"),
+            { statusCode: 502 },
+          );
         }
         if (options.executeCommandFails === true) {
           throw new Error("executeCommand failed");

@@ -32,6 +32,7 @@ import { createPtyCommandPayload } from "../../shell/pty-command-payload";
 import { shellQuote } from "../../shell/shell-quote";
 import {
   type DaytonaControlPlaneEnvelope,
+  classifyDaytonaControlPlaneError,
   createDaytonaControlPlaneEnvelope,
   formatErrorDiagnostic,
 } from "./daytona-control-plane";
@@ -580,22 +581,73 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     }
 
     const timeoutMs = options.timeoutMs ?? this.commandTimeoutMs;
-    const response = await withTimeout(
-      this.sandbox.process.executeCommand(
-        command,
-        undefined,
-        options.env,
-        toSdkTimeoutSeconds(timeoutMs),
-      ),
+    const response = await this.runCommandThroughEnvelope({
+      attempt: () =>
+        this.sandbox.process.executeCommand(
+          command,
+          undefined,
+          options.env,
+          toSdkTimeoutSeconds(timeoutMs),
+        ),
+      operation: "process.execute",
+      // Agent-sandbox commands are harness-authored idempotent bookkeeping
+      // (reads, mkdir -p, rm -f); see AgentHarnessWorkspaceExecuteOptions.
+      retry: options.retry ?? "transient",
+      sandboxId: this.agentSandboxId,
       timeoutMs,
-      () => new AgentHarnessCommandTimeoutError(timeoutMs),
-    );
+    });
 
     return {
       exitCode: response.exitCode ?? 1,
       stderr: response.stderr ?? "",
       stdout: response.stdout ?? response.result ?? "",
     };
+  }
+
+  /**
+   * Runs one non-streaming command request through the control-plane
+   * envelope. Each attempt carries its own deadline, and a deadline is the
+   * command's outcome — classified fatal so the envelope surfaces it raw
+   * instead of re-issuing a possibly-completed command. `retry: "none"`
+   * empties the ladder and the conflict polls, so the command is issued at
+   * most once while its transport loss still wraps as infrastructure.
+   */
+  private runCommandThroughEnvelope<T>(input: {
+    attempt: () => Promise<T>;
+    operation: string;
+    retry: "none" | "transient";
+    sandboxId: string;
+    /** Overrides the deadline error; the default is the command-timeout shape. */
+    timeoutError?: () => Error;
+    timeoutMs: number;
+  }): Promise<T> {
+    const timeoutError =
+      input.timeoutError ??
+      (() => new AgentHarnessCommandTimeoutError(input.timeoutMs));
+    let deadlineError: Error | undefined;
+    return this.controlPlane.run(
+      input.operation,
+      () =>
+        withTimeout(input.attempt(), input.timeoutMs, () => {
+          deadlineError = timeoutError();
+          return deadlineError;
+        }),
+      {
+        // The per-attempt deadline above already bounds every attempt; the
+        // envelope's transport-loss bound would re-issue a long-running
+        // command mid-flight.
+        attemptTimeoutMs: Number.POSITIVE_INFINITY,
+        classify: (error) =>
+          error === deadlineError ||
+          error instanceof AgentHarnessCommandTimeoutError
+            ? "fatal"
+            : classifyDaytonaControlPlaneError(error),
+        ...(input.retry === "none"
+          ? { conflictPollLimit: 0, ladderMs: [] }
+          : {}),
+        sandboxId: input.sandboxId,
+      },
+    );
   }
 
   private async executeStreaming(
@@ -625,16 +677,23 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
 
   async collectSandboxLogs(): Promise<string[]> {
     const collect = () =>
-      withTimeout(
-        this.sandbox.process.executeCommand(
-          `sh -lc ${shellQuote(`test ! -f ${sandboxAuditLogPath} || tail -c ${sandboxLogCollectionByteCap} ${sandboxAuditLogPath}`)}`,
-          undefined,
-          undefined,
-          toSdkTimeoutSeconds(sandboxLogCollectionTimeoutMs),
-        ),
-        sandboxLogCollectionTimeoutMs,
-        `Daytona sandbox log collection did not finish within ${sandboxLogCollectionTimeoutMs}ms.`,
-      );
+      this.runCommandThroughEnvelope({
+        attempt: () =>
+          this.sandbox.process.executeCommand(
+            `sh -lc ${shellQuote(`test ! -f ${sandboxAuditLogPath} || tail -c ${sandboxLogCollectionByteCap} ${sandboxAuditLogPath}`)}`,
+            undefined,
+            undefined,
+            toSdkTimeoutSeconds(sandboxLogCollectionTimeoutMs),
+          ),
+        operation: "process.log-collect",
+        retry: "transient",
+        sandboxId: this.agentSandboxId,
+        timeoutError: () =>
+          new Error(
+            `Daytona sandbox log collection did not finish within ${sandboxLogCollectionTimeoutMs}ms.`,
+          ),
+        timeoutMs: sandboxLogCollectionTimeoutMs,
+      });
     let response: Awaited<ReturnType<typeof collect>>;
     try {
       response = await collect();
@@ -680,13 +739,22 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
   }
 
   private async writeSandboxLogLine(line: string): Promise<void> {
-    const response = await withTimeout(
-      this.sandbox.process.executeCommand(
-        `mkdir -p ${shellQuote(makeADemoArtifactDirectory)} && printf '%s' ${shellQuote(line)} >> ${shellQuote(sandboxAuditLogPath)}`,
-      ),
-      this.logWriteTimeoutMs,
-      `Daytona sandbox log write did not finish within ${this.logWriteTimeoutMs}ms.`,
-    );
+    // Transient retry may duplicate one audit line when a 502 masks a
+    // successful append; that beats losing the run to its own logging.
+    const response = await this.runCommandThroughEnvelope({
+      attempt: () =>
+        this.sandbox.process.executeCommand(
+          `mkdir -p ${shellQuote(makeADemoArtifactDirectory)} && printf '%s' ${shellQuote(line)} >> ${shellQuote(sandboxAuditLogPath)}`,
+        ),
+      operation: "process.log-append",
+      retry: "transient",
+      sandboxId: this.agentSandboxId,
+      timeoutError: () =>
+        new Error(
+          `Daytona sandbox log write did not finish within ${this.logWriteTimeoutMs}ms.`,
+        ),
+      timeoutMs: this.logWriteTimeoutMs,
+    });
 
     if ((response.exitCode ?? 1) !== 0) {
       throw new Error("Failed to write Daytona sandbox audit log.");
@@ -697,29 +765,27 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     command: string,
     options: AgentHarnessWorkspaceExecuteOptions = {},
   ): Promise<AgentHarnessWorkspaceCommandResult> {
-    if (this.submittedCodeSandbox === undefined) {
-      throw new Error("Submitted-code Daytona sandbox is not configured.");
-    }
-
+    const sandbox = this.requireSubmittedCodeSandbox();
     if (options.onStdout !== undefined || options.onStderr !== undefined) {
-      return this.executeStreamingInSandbox(
-        this.submittedCodeSandbox,
-        command,
-        options,
-      );
+      return this.executeStreamingInSandbox(sandbox, command, options);
     }
 
     const timeoutMs = options.timeoutMs ?? this.commandTimeoutMs;
-    const response = await withTimeout(
-      this.submittedCodeSandbox.process.executeCommand(
-        command,
-        undefined,
-        options.env,
-        toSdkTimeoutSeconds(timeoutMs),
-      ),
+    const response = await this.runCommandThroughEnvelope({
+      attempt: () =>
+        sandbox.process.executeCommand(
+          command,
+          undefined,
+          options.env,
+          toSdkTimeoutSeconds(timeoutMs),
+        ),
+      operation: "submitted-code.process.execute",
+      // Submitted-code commands can drive the app under test; see
+      // AgentHarnessWorkspaceExecuteOptions for why "none" is the default.
+      retry: options.retry ?? "none",
+      sandboxId: readSandboxId(sandbox),
       timeoutMs,
-      () => new AgentHarnessCommandTimeoutError(timeoutMs),
-    );
+    });
 
     return {
       exitCode: response.exitCode ?? 1,
@@ -736,20 +802,36 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
 
     const sessionId = `makeademo-app-${randomUUID()}`;
     try {
-      await withTimeout(
-        sandbox.process.createSession(sessionId),
-        this.managedProcessControlTimeoutMs,
-        `Daytona managed-process session creation did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
-      );
-      const response = await withTimeout(
-        sandbox.process.executeSessionCommand(sessionId, {
-          command: createManagedAppCommand(input),
-          runAsync: true,
-          suppressInputEcho: true,
-        }),
-        this.managedProcessControlTimeoutMs,
-        `Daytona managed-process launch did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
-      );
+      // Session creation and the launch are at most once: a 502 can mask a
+      // launch that already started the app, and re-issuing it would run
+      // two app processes.
+      await this.runCommandThroughEnvelope({
+        attempt: () => sandbox.process.createSession(sessionId),
+        operation: "app-session.create",
+        retry: "none",
+        sandboxId: readSandboxId(sandbox),
+        timeoutError: () =>
+          new Error(
+            `Daytona managed-process session creation did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
+          ),
+        timeoutMs: this.managedProcessControlTimeoutMs,
+      });
+      const response = await this.runCommandThroughEnvelope({
+        attempt: () =>
+          sandbox.process.executeSessionCommand(sessionId, {
+            command: createManagedAppCommand(input),
+            runAsync: true,
+            suppressInputEcho: true,
+          }),
+        operation: "app-session.launch",
+        retry: "none",
+        sandboxId: readSandboxId(sandbox),
+        timeoutError: () =>
+          new Error(
+            `Daytona managed-process launch did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
+          ),
+        timeoutMs: this.managedProcessControlTimeoutMs,
+      });
       const commandId = response.cmdId?.trim();
       if (commandId === undefined || commandId.length === 0) {
         throw new Error(
@@ -763,14 +845,32 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       };
     } catch (error) {
       await Promise.allSettled([
-        withTimeout(
-          sandbox.process.deleteSession(sessionId),
-          this.managedProcessControlTimeoutMs,
-          `Daytona managed-process cleanup did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
-        ),
+        this.deleteAppSessionThroughEnvelope(sandbox, sessionId),
       ]);
       throw error;
     }
+  }
+
+  /**
+   * Session deletion is at most once: a masked success would make a re-issue
+   * fail on the now-missing session, so its transport loss is classified
+   * without a retry.
+   */
+  private deleteAppSessionThroughEnvelope(
+    sandbox: DaytonaSdkSandbox,
+    sessionId: string,
+  ): Promise<void> {
+    return this.runCommandThroughEnvelope({
+      attempt: () => sandbox.process.deleteSession(sessionId),
+      operation: "app-session.delete",
+      retry: "none",
+      sandboxId: readSandboxId(sandbox),
+      timeoutError: () =>
+        new Error(
+          `Daytona managed-process cleanup did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
+        ),
+      timeoutMs: this.managedProcessControlTimeoutMs,
+    });
   }
 
   async readSubmittedCodeAppStatus(): Promise<AgentHarnessSubmittedCodeAppStatus> {
@@ -780,17 +880,33 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       throw new Error("No submitted-code app session is active.");
     }
 
+    // Status and log reads are pure and issued continuously by readiness
+    // polling; they ride the transient ladder.
     const [command, logs] = await Promise.all([
-      withTimeout(
-        sandbox.process.getSessionCommand(app.sessionId, app.commandId),
-        this.managedProcessControlTimeoutMs,
-        `Daytona managed-process status did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
-      ),
-      withTimeout(
-        sandbox.process.getSessionCommandLogs(app.sessionId, app.commandId),
-        this.managedProcessControlTimeoutMs,
-        `Daytona managed-process log collection did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
-      ),
+      this.runCommandThroughEnvelope({
+        attempt: () =>
+          sandbox.process.getSessionCommand(app.sessionId, app.commandId),
+        operation: "app-session.status",
+        retry: "transient",
+        sandboxId: readSandboxId(sandbox),
+        timeoutError: () =>
+          new Error(
+            `Daytona managed-process status did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
+          ),
+        timeoutMs: this.managedProcessControlTimeoutMs,
+      }),
+      this.runCommandThroughEnvelope({
+        attempt: () =>
+          sandbox.process.getSessionCommandLogs(app.sessionId, app.commandId),
+        operation: "app-session.logs",
+        retry: "transient",
+        sandboxId: readSandboxId(sandbox),
+        timeoutError: () =>
+          new Error(
+            `Daytona managed-process log collection did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
+          ),
+        timeoutMs: this.managedProcessControlTimeoutMs,
+      }),
     ]);
     const exitCode = command.exitCode;
     if (exitCode !== undefined && app.endedAt === undefined) {
@@ -814,11 +930,7 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       return;
     }
     const sandbox = this.requireSubmittedCodeSandbox();
-    await withTimeout(
-      sandbox.process.deleteSession(app.sessionId),
-      this.managedProcessControlTimeoutMs,
-      `Daytona managed-process cleanup did not finish within ${this.managedProcessControlTimeoutMs}ms.`,
-    );
+    await this.deleteAppSessionThroughEnvelope(sandbox, app.sessionId);
     if (this.activeSubmittedCodeApp === app) {
       this.activeSubmittedCodeApp = undefined;
     }
