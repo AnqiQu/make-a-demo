@@ -4621,6 +4621,264 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
   });
 
+  it("re-runs the offline lifecycle when a re-synced validation round reuses the install", async () => {
+    // N127 (calcom, 2026-08-13): the workspace re-sync replaces every
+    // in-tree file while preserving node_modules, so the install survives
+    // but lifecycle codegen written into the tree (the generated Prisma
+    // client) does not. A round that reuses the install must still re-run
+    // the offline lifecycle after its re-sync, or the app starts against a
+    // tree whose generated source the sync just destroyed.
+    const commands: string[] = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async syncSubmittedCodeWorkspace() {
+        commands.push("[test] workspace-sync");
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+    const manifest = {
+      ...preparationManifest(),
+      installCommandUsed: "npm ci --no-audit",
+    };
+
+    await harness.dependencies.validatePreparation({
+      preparationManifest: manifest,
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+    await harness.dependencies.validatePreparation({
+      installDependencies: false,
+      preparationManifest: manifest,
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    const installIndexes = commands.flatMap((command, index) =>
+      command.includes("npm ci") ? [index] : [],
+    );
+    const rebuildIndexes = commands.flatMap((command, index) =>
+      command.includes("npm rebuild") ? [index] : [],
+    );
+    const syncIndexes = commands.flatMap((command, index) =>
+      command === "[test] workspace-sync" ? [index] : [],
+    );
+    expect(installIndexes).toHaveLength(1);
+    expect(syncIndexes).toHaveLength(2);
+    expect(rebuildIndexes).toHaveLength(2);
+    expect(rebuildIndexes[1]).toBeGreaterThan(syncIndexes[1] ?? -1);
+    // The cache prune at the end of every install round removes the staging
+    // TMPDIR; the reuse round's lifecycle must recreate it before running.
+    const stagingIndexes = commands.flatMap((command, index) =>
+      command.includes("mkdir -p /root/.makeademo-staging") ? [index] : [],
+    );
+    expect(
+      stagingIndexes.some(
+        (index) =>
+          index > (syncIndexes[1] ?? -1) && index < (rebuildIndexes[1] ?? -1),
+      ),
+    ).toBe(true);
+  });
+
+  it("carries the retried install's engine bypass into an install-reuse round's lifecycle", async () => {
+    // The reuse round has no fresh install to read retry flags from, so the
+    // harness must remember the command that actually installed — the
+    // manifest's own command never carries the engine-strict bypass, and a
+    // rebuild without it dies exactly like the un-retried install did.
+    const commands: string[] = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        if (
+          command.includes("pnpm install") &&
+          !command.includes("--config.engine-strict=false")
+        ) {
+          return {
+            exitCode: 1,
+            stderr: "ERR_PNPM_UNSUPPORTED_ENGINE  Unsupported environment",
+            stdout: "",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+    const manifest = {
+      ...preparationManifest(),
+      installCommandUsed: "pnpm install --frozen-lockfile",
+    };
+
+    await harness.dependencies.validatePreparation({
+      preparationManifest: manifest,
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+    commands.length = 0;
+    await harness.dependencies.validatePreparation({
+      installDependencies: false,
+      preparationManifest: manifest,
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(commands).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("pnpm rebuild -r --config.engine-strict=false"),
+      ]),
+    );
+  });
+
+  it("classifies a lifecycle failure on an install-reuse round as an install failure", async () => {
+    // A reuse round with no remembered install falls back to the manifest's
+    // install command for the lifecycle re-run, and its failure keeps the
+    // install-failure classification — which also invalidates the reuse, so
+    // the next round reinstalls from scratch instead of oscillating.
+    const commands: string[] = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        if (command.includes("npm rebuild")) {
+          return {
+            exitCode: 1,
+            stderr: "Error: @prisma/client did not initialize yet",
+            stdout: "",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      installDependencies: false,
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "install failure",
+      logsSummary: expect.stringContaining("did not initialize yet"),
+      status: "failed",
+    });
+    expect(commands.some((command) => command.includes("npm ci"))).toBe(false);
+  });
+
+  it("re-runs the offline lifecycle when the capture reset re-syncs the workspace", async () => {
+    // The capture reset re-syncs and never installs, so it destroys the
+    // same in-tree lifecycle outputs a repair round's re-sync does — the
+    // clean take must not film an app missing its generated source.
+    const commands: string[] = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async syncSubmittedCodeWorkspace() {
+        commands.push("[test] workspace-sync");
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+    const manifest = {
+      ...preparationManifest(),
+      installCommandUsed: "npm ci --no-audit",
+    };
+
+    await harness.dependencies.validatePreparation({
+      preparationManifest: manifest,
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+    await harness.dependencies.resetCaptureRuntime({
+      preparationManifest: manifest,
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      scriptCandidate: sceneRouteScriptCandidate("/dashboard"),
+      workspace,
+    });
+
+    const rebuildIndexes = commands.flatMap((command, index) =>
+      command.includes("npm rebuild") ? [index] : [],
+    );
+    const syncIndexes = commands.flatMap((command, index) =>
+      command === "[test] workspace-sync" ? [index] : [],
+    );
+    expect(syncIndexes).toHaveLength(2);
+    expect(rebuildIndexes).toHaveLength(2);
+    expect(rebuildIndexes[1]).toBeGreaterThan(syncIndexes[1] ?? -1);
+  });
+
+  it("reapplies the berry disk-fallback linker before an install-reuse lifecycle", async () => {
+    // The re-sync restores the repo's own .yarnrc.yml; when the disk
+    // fallback's sentinel is armed, a rebuild against the preserved
+    // node_modules tree needs the node-modules linker back first, exactly
+    // as a fresh install would reapply it.
+    const commands: string[] = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await harness.dependencies.validatePreparation({
+      installDependencies: false,
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "yarn install --immutable",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    const linkerIndex = commands.findIndex((command) =>
+      command.includes("yarn config set nodeLinker node-modules"),
+    );
+    const rebuildIndex = commands.findIndex((command) =>
+      command.includes("yarn rebuild"),
+    );
+    expect(linkerIndex).toBeGreaterThanOrEqual(0);
+    expect(rebuildIndex).toBeGreaterThan(linkerIndex);
+  });
+
   it("provisions declared services and runs migrate and seed before the app starts", async () => {
     // N122(5): a provisioned-service declaration boots the real service on
     // loopback after the install and runs the repo's own schema and seed

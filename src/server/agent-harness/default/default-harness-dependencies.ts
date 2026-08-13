@@ -221,6 +221,11 @@ export async function createDefaultAgentHarnessDependencies(
     "external-resources",
   );
   let externalResourceManifest: ExternalResourceManifest | undefined;
+  // N127: the command that actually installed, retry flags included. Rounds
+  // that reuse the install still re-run the offline lifecycle after their
+  // workspace re-sync, and the manifest's own command never carries the
+  // flags a retried install needed (directus's engine-strict bypass).
+  let lastExecutedInstallCommand: string | undefined;
   const policyDeniedExternalResourceUrls = new Set<string>();
   const externalResourceHydrationOutcomes: Array<{
     error?: string;
@@ -567,7 +572,12 @@ export async function createDefaultAgentHarnessDependencies(
   const validateRuntimeWithExternalResources = async (
     input: Omit<
       Parameters<typeof validateSubmittedCodeRuntime>[0],
-      "buildApp" | "externalResourceCache" | "onAppStart" | "resetWorkspace"
+      | "buildApp"
+      | "externalResourceCache"
+      | "onAppStart"
+      | "onInstallExecuted"
+      | "resetWorkspace"
+      | "reusedInstallCommand"
     >,
   ): Promise<ValidationReport> => {
     const runValidation = async (inputRun: {
@@ -591,7 +601,13 @@ export async function createDefaultAgentHarnessDependencies(
         onAppStart: (appStartInput) => {
           submittedCodeAppStartInput = appStartInput;
         },
+        onInstallExecuted: (executedCommand) => {
+          lastExecutedInstallCommand = executedCommand;
+        },
         resetWorkspace: inputRun.initialRun,
+        ...(lastExecutedInstallCommand === undefined
+          ? {}
+          : { reusedInstallCommand: lastExecutedInstallCommand }),
       });
     const readUncachedAttempts = (report: ValidationReport) =>
       readUncachedExternalResourceAttempts(report.blockedNetworkAttempts);
@@ -2204,10 +2220,19 @@ type SubmittedCodeRuntimeValidationInput = {
   };
   installDependencies?: boolean;
   onAppStart?: (input: AgentHarnessSubmittedCodeAppStartInput) => void;
+  /** Reports the command that actually installed, retry flags included. */
+  onInstallExecuted?: (executedCommand: string) => void;
   preparationManifest: PreparationManifest;
   reconcileLockfile?: boolean;
   repoProfile: RepoProfile;
   resetWorkspace?: boolean;
+  /**
+   * N127: the last executed install command, for rounds that reuse the
+   * install. The re-sync destroys in-tree lifecycle outputs while preserving
+   * node_modules, so the lifecycle re-runs from this command even when the
+   * install itself is skipped.
+   */
+  reusedInstallCommand?: string;
   runPlan: RunPlan;
   stage?: string;
   workspace: AgentHarnessWorkspace;
@@ -2249,9 +2274,44 @@ async function validateResolvedSubmittedCodeRuntime(
     });
   }
 
+  const installDirectory = absoluteAppDirectory(
+    runtimeTarget?.install.cwd ?? manifest.appDir,
+  );
+  const manifestInstallCommand =
+    manifest.installCommandUsed || input.runPlan.installCommand;
+  // The disk fallback outlives one round only through its /root sentinel:
+  // every reset restores the repo's own .yarnrc.yml, and without the
+  // reapply each later round would pay a full out-of-disk install before
+  // rediscovering the switch. Lifecycle-only rounds need it too — a rebuild
+  // under the restored linker would not match the preserved node_modules.
+  const isBerryYarnInstall = (installCommand: string): boolean =>
+    parseInstallCommand(installCommand).packageManager === "yarn" &&
+    readYarnInstallVariant(installCommand, input.repoProfile.yarnVariant) ===
+      "berry";
+  const reapplyBerryDiskFallbackIfArmed = async (
+    installCommand: string,
+  ): Promise<boolean> => {
+    if (!isBerryYarnInstall(installCommand)) return false;
+    const sentinel = await executeSubmitted(
+      input.workspace,
+      `test -f ${shellQuote(berryDiskFallbackSentinelPath)}`,
+    );
+    if (sentinel.exitCode !== 0) return false;
+    await executeSubmitted(
+      input.workspace,
+      createBerryDiskFallbackLinkerCommand(installDirectory),
+    );
+    return true;
+  };
+  // N127: the re-sync above replaced every in-tree file while preserving
+  // node_modules and the package-manager caches, so a reused install is
+  // still whole but the lifecycle's in-tree codegen (calcom's generated
+  // Prisma client, 2026-08-13) is not. Whichever way this round obtained
+  // its dependencies, the offline lifecycle must run again on the freshly
+  // synced tree before anything starts against it.
+  let lifecycleInstallCommand: string | undefined;
   if (input.installDependencies !== false) {
-    const installCommand =
-      manifest.installCommandUsed || input.runPlan.installCommand;
+    const installCommand = manifestInstallCommand;
     // The attempts that most need headroom are the failing ones: a failed
     // install leaves its partial cache behind and never reaches the
     // success-path prune, so the next attempt refetches into a full overlay
@@ -2259,9 +2319,6 @@ async function validateResolvedSubmittedCodeRuntime(
     // install starts by dropping trees it provably cannot reuse and pruning
     // the caches; the open window refetches what it needs. Best-effort by
     // construction.
-    const installDirectory = absoluteAppDirectory(
-      runtimeTarget?.install.cwd ?? manifest.appDir,
-    );
     const staleTreeDrop = createStaleDependencyTreeDropCommand({
       installCommand,
       installDirectory,
@@ -2279,28 +2336,8 @@ async function validateResolvedSubmittedCodeRuntime(
         "true",
       ].join("; "),
     );
-    // The disk fallback outlives one round only through its /root sentinel:
-    // every reset restores the repo's own .yarnrc.yml, and without the
-    // reapply each later round would pay a full out-of-disk install before
-    // rediscovering the switch.
-    const berryYarnInstall =
-      parseInstallCommand(installCommand).packageManager === "yarn" &&
-      readYarnInstallVariant(installCommand, input.repoProfile.yarnVariant) ===
-        "berry";
-    let berryDiskFallbackActive = false;
-    if (berryYarnInstall) {
-      const sentinel = await executeSubmitted(
-        input.workspace,
-        `test -f ${shellQuote(berryDiskFallbackSentinelPath)}`,
-      );
-      if (sentinel.exitCode === 0) {
-        berryDiskFallbackActive = true;
-        await executeSubmitted(
-          input.workspace,
-          createBerryDiskFallbackLinkerCommand(installDirectory),
-        );
-      }
-    }
+    let berryDiskFallbackActive =
+      await reapplyBerryDiskFallbackIfArmed(installCommand);
     let installEvidenceLogPath: string | undefined;
     const runInstall = (command: string) =>
       runDependencyInstallThroughGate({
@@ -2421,7 +2458,7 @@ async function validateResolvedSubmittedCodeRuntime(
     }
     if (
       result.status === "failed" &&
-      berryYarnInstall &&
+      isBerryYarnInstall(installCommand) &&
       !berryDiskFallbackActive &&
       diskExhaustionPattern.test(`${result.stderr}\n${result.stdout}`)
     ) {
@@ -2537,13 +2574,34 @@ async function validateResolvedSubmittedCodeRuntime(
         stage,
       });
     }
+    input.onInstallExecuted?.(result.executedCommand);
+    lifecycleInstallCommand = result.executedCommand;
+  } else if (input.resetWorkspace !== false) {
+    // An install-reuse round after a re-sync: node_modules survived, the
+    // in-tree lifecycle outputs did not. Fall back to the manifest command
+    // when no install ran in this process yet. The staging TMPDIR was
+    // pruned at the end of the install round that made reuse possible.
+    lifecycleInstallCommand =
+      input.reusedInstallCommand ?? manifestInstallCommand;
+    await executeSubmitted(
+      input.workspace,
+      `mkdir -p ${packageManagerStagingDirectory}`,
+    );
+    await reapplyBerryDiskFallbackIfArmed(lifecycleInstallCommand);
+  }
+
+  if (lifecycleInstallCommand !== undefined) {
     // The gate installed with lifecycle scripts suppressed; now that the
     // network is verifiably resealed, run the skipped lifecycle work offline
     // so native builds and postinstall codegen exist before preflight. The
     // executed command (not the manifest's) carries any retry flags the
-    // install needed, and the rebuild inherits them.
+    // install needed, and the rebuild inherits them. Install-reuse rounds
+    // run this too (N127): the lifecycle's outputs live in the tree the
+    // re-sync just replaced, and its failure keeps the install-failure
+    // classification, which also invalidates the reuse so the next round
+    // reinstalls from scratch.
     const lifecycleCommand = createOfflineLifecycleCommand({
-      installCommand: result.executedCommand,
+      installCommand: lifecycleInstallCommand,
       packageScripts: input.repoProfile.packageScripts,
       ...(input.repoProfile.yarnVariant === undefined
         ? {}
@@ -2680,13 +2738,16 @@ async function validateResolvedSubmittedCodeRuntime(
         });
       }
     }
-    // Nothing sealed reads the archives after the offline lifecycle (the
-    // --immutable re-run needed them; this slots after it), so the space
-    // returns to build outputs and capture. Best-effort by construction.
-    await executeSubmitted(
-      input.workspace,
-      `${packageManagerCachePruneCommand}; df -k /workspace 2>/dev/null | tail -1 | sed "s|^|[makeademo:disk] cache-prune after |"; true`,
-    );
+    if (input.installDependencies !== false) {
+      // Nothing sealed reads the archives after the offline lifecycle (the
+      // --immutable re-run needed them; this slots after it), so the space
+      // returns to build outputs and capture. Reuse rounds refilled no
+      // caches, so they have nothing to prune. Best-effort by construction.
+      await executeSubmitted(
+        input.workspace,
+        `${packageManagerCachePruneCommand}; df -k /workspace 2>/dev/null | tail -1 | sed "s|^|[makeademo:disk] cache-prune after |"; true`,
+      );
+    }
   }
 
   if (input.externalResourceCache !== undefined) {
