@@ -45,7 +45,6 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
-    "@playwright/test": "1.60.0",
     "@railway/cli": "5.8.0",
     "@types/node": "^22.15.3",
     "@types/react": "^18.3.18",
