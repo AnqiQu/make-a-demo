@@ -1743,6 +1743,95 @@ describe("runAgentHarnessPipeline", () => {
     expect(installFlags).toEqual([undefined, undefined]);
   });
 
+  it("stops reusing the install after a reuse round's lifecycle times out", async () => {
+    // N127: a reuse round re-runs the offline lifecycle on the re-synced
+    // tree. A lifecycle timeout there gets a full-latitude repair, so a
+    // source-only fix keeps dependency inputs unchanged — holding on to the
+    // reused install would replay the identical timeout every round.
+    const installFlags: Array<boolean | undefined> = [];
+    let preflightAttempts = 0;
+    let diffCalls = 0;
+    const diffAfterRepair = (round: number) => ({
+      changedFileSha256: {
+        "/workspace/repo/src/demo-fixtures.ts":
+          `sha256:${String(round).repeat(64).slice(0, 64)}` as const,
+      },
+      changedPaths: ["/workspace/repo/src/demo-fixtures.ts"],
+      patch: [
+        "diff --git a/src/demo-fixtures.ts b/src/demo-fixtures.ts",
+        "new file mode 100644",
+        `+export const fixtureRows = [${round}];`,
+      ].join("\n"),
+      patchSha256: `sha256:${String(round).repeat(64).slice(0, 64)}` as const,
+      sourceCommitSha: "abc123def456",
+    });
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_reuse_round_lifecycle_failure" }),
+      stubPipelineDependencies({
+        async capturePreparationWorkspaceDiff() {
+          diffCalls += 1;
+          // Call order: round-1 fidelity diff; after repair 1; after
+          // repair 2. Each repair lands a fresh source-only change.
+          if (diffCalls === 1) return unchangedWorkspaceDiff();
+          if (diffCalls === 2) return diffAfterRepair(1);
+          return diffAfterRepair(2);
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation() {
+          return { manifest: preparationManifest() };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation({ installDependencies }) {
+          preflightAttempts += 1;
+          installFlags.push(installDependencies);
+          if (preflightAttempts === 1) {
+            return {
+              ...report("preparation-preflight", "failed"),
+              failureClassification: "start failure",
+              logsSummary: "boot failed round 1",
+            };
+          }
+          if (preflightAttempts === 2) {
+            return {
+              ...report("preparation-preflight", "failed"),
+              failureClassification: "lifecycle timeout",
+              logsSummary:
+                "Network-closed lifecycle scripts were killed after 5 minutes of silence (exit 124).",
+            };
+          }
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    // Round 2 reuses round 1's install and its lifecycle times out, so
+    // round 3 must reinstall even though repair 2 touched only source.
+    expect(installFlags).toEqual([undefined, false, undefined]);
+  });
+
   it("never dispatches a repair agent for a harness-internal validation failure", async () => {
     // Repair-evidence contract clause 5 (N62): infra errors must not reach
     // agent prompts or spend repair budget — outline's fallback once asked a

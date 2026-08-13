@@ -1776,20 +1776,29 @@ async function ensureValidPreparation(input: {
       input.validationAttemptCounts,
       input.preparationRepairAttemptsByPhase["preparation-preflight"] ?? 0,
     );
+    // The pre/at-install classifications are listed conservatively —
+    // anything ambiguous forces a reinstall.
+    const installLayerFailed = [
+      "install failure",
+      // A timed-out lifecycle left native builds and postinstall codegen
+      // unfinished — reuse would skip the re-run entirely (N98).
+      "lifecycle timeout",
+      "external network attempted",
+      "harness/internal failure",
+    ].includes(preparationValidation.failureClassification ?? "");
     if (reuseInstallFromAttempt === undefined) {
       // Install ran this validation: it stays reusable unless the failure
-      // happened at or before install. The pre/at-install classifications
-      // are listed conservatively — anything ambiguous forces a reinstall.
-      lastCleanInstallAttempt = [
-        "install failure",
-        // A timed-out lifecycle left native builds and postinstall codegen
-        // unfinished — reuse would skip the re-run entirely (N98).
-        "lifecycle timeout",
-        "external network attempted",
-        "harness/internal failure",
-      ].includes(preparationValidation.failureClassification ?? "")
+      // happened at or before install.
+      lastCleanInstallAttempt = installLayerFailed
         ? undefined
         : (input.validationAttemptCounts["preparation-preflight"] ?? 0);
+    } else if (installLayerFailed) {
+      // N127: a reuse round re-runs the offline lifecycle on the re-synced
+      // tree; when the install layer fails there, the reused install can no
+      // longer be trusted — the next round reinstalls instead of replaying
+      // the same failure for as long as repairs leave dependency inputs
+      // untouched.
+      lastCleanInstallAttempt = undefined;
     }
     if (
       preparationValidation.status === "failed" &&
@@ -1827,7 +1836,7 @@ async function ensureValidPreparation(input: {
             ...preparationValidation,
             suggestedRepairHints: [
               ...preparationValidation.suggestedRepairHints,
-              `Dependency install reused from validation attempt ${reuseInstallFromAttempt} (this repair changed no dependency inputs).`,
+              `Dependency install reused from validation attempt ${reuseInstallFromAttempt} (this repair changed no dependency inputs; the offline lifecycle still re-ran on the freshly synced tree).`,
             ],
           };
   }
