@@ -316,6 +316,90 @@ describe("exploreSubmittedApp", () => {
     );
   });
 
+  it("classifies a same-origin script 5xx as an app server error, not empty app state", async () => {
+    // N128 (twenty, 2026-08-13): Vite's import-analysis answered 500 on the
+    // entry chunk, every route rendered the error overlay, and the probe
+    // read "empty/unmeaningful app state" with a data-fixtures hint —
+    // repairs aimed at the data layer while the fault was module serving.
+    const { result } = await exploreObservation({
+      failedScriptResponses: [{ status: 500, url: `${baseUrl}/src/index.tsx` }],
+      routes: [observedRoute({ title: "Vite + React" })],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "app server error",
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain(
+      `${baseUrl}/src/index.tsx`,
+    );
+    expect(result.validationReport.logsSummary).toContain("500");
+  });
+
+  it("keeps the empty-state reading when the failing script belongs to another origin", async () => {
+    const { result } = await exploreObservation({
+      failedScriptResponses: [
+        { status: 500, url: "https://cdn.example.com/analytics.js" },
+      ],
+      routes: [observedRoute({ title: "Vite + React" })],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "empty/unmeaningful app state",
+      status: "failed",
+    });
+  });
+
+  it("never fails a grounded exploration over a script 5xx alone", async () => {
+    // The serve-failure reading exists to redirect an already-failing run;
+    // an app that grounds its features despite a stray 5xx is working.
+    const invoicing = preparedFeature({
+      description: "Demonstrate invoicing",
+      entryPaths: ["/en/invoices"],
+      id: "invoicing",
+      label: "Invoices",
+      requestedFeature: "invoicing",
+    });
+    const { result } = await exploreObservation({
+      failedScriptResponses: [
+        { status: 500, url: `${baseUrl}/optional-widget.js` },
+      ],
+      featureInventory: [invoicing],
+      routes: [
+        observedRoute({
+          featureIds: ["invoicing"],
+          headings: ["Invoice INV-001 for Aperture Labs"],
+          path: "/en/invoices",
+          primaryNavigation: ["Overview"],
+          requestedPath: "/en/invoices",
+          text: ["Due in 14 days"],
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "none",
+      status: "passed",
+    });
+  });
+
+  it("lets a named missing module outrank the script 5xx reading", async () => {
+    // A page error that names the unresolvable module is deeper evidence
+    // than the 5xx that delivered it; the dependency hint stays first.
+    const { result } = await exploreObservation({
+      failedScriptResponses: [{ status: 500, url: `${baseUrl}/src/index.tsx` }],
+      pageErrors: [
+        `${baseUrl}/: Module not found: Can't resolve '@calcom/prisma/enums'`,
+      ],
+      routes: [observedRoute({ title: "Vite + React" })],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "missing dependency",
+      status: "failed",
+    });
+  });
+
   it("fails a hollow app whose feature routes render only shared navigation chrome", async () => {
     const chrome = [
       "Categories",
@@ -4095,6 +4179,7 @@ async function exploreObservation(input: {
     featureId: string;
     passed: boolean;
   }>;
+  failedScriptResponses?: Array<{ status: number; url: string }>;
   featureInventory?: PreparedDemoFeature[];
   pageErrors?: string[];
   readSubmittedCodeAppStatus?: AgentHarnessWorkspace["readSubmittedCodeAppStatus"];
@@ -4148,6 +4233,9 @@ async function exploreObservation(input: {
             ...(input.declaredProofs === undefined
               ? {}
               : { declaredProofs: input.declaredProofs }),
+            ...(input.failedScriptResponses === undefined
+              ? {}
+              : { failedScriptResponses: input.failedScriptResponses }),
             pageErrors: input.pageErrors ?? [],
             ...(input.replayVerification === undefined
               ? {}

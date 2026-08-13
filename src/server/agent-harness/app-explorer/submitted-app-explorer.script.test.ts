@@ -1602,6 +1602,144 @@ document.body.appendChild(document.createElement("vite-error-overlay"));
     }
   }, 30_000);
 
+  it("reports a same-origin script 5xx and leaves other failed resources out", async () => {
+    // N128 (twenty, 2026-08-13): Vite answered 500 on the entry chunk, so
+    // every route was the error overlay; the backend needs the failing
+    // script's URL and status to call it a serve failure instead of
+    // interpreting the hollow page as empty app state.
+    const server = createServer((request, response) => {
+      if (request.url?.startsWith("/src/index.tsx")) {
+        response.writeHead(500, { "content-type": "text/plain" });
+        response.end("[vite] Internal server error: transform failed");
+        return;
+      }
+      if (request.url?.startsWith("/missing.js")) {
+        response.writeHead(404, { "content-type": "text/plain" });
+        response.end("not found");
+        return;
+      }
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(`<!doctype html><html><head><title>Vite + React</title></head><body>
+<div id="root"></div>
+<script type="module" src="/src/index.tsx"></script>
+<script src="/missing.js"></script>
+</body></html>`);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-5xx-"),
+      );
+      // The page renders nothing, so the content waits run long; clamp the
+      // script's own deadline the way the shadow-root test does.
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      )
+        .replaceAll("/workspace/.makeademo/exploration", outputDirectory)
+        .replace(
+          /deadlineAtMs = Date\.now\(\) \+ \d+/,
+          "deadlineAtMs = Date.now() + 15000",
+        );
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        failedScriptResponses?: Array<{ status: number; url: string }>;
+        fatalError?: string;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      expect(result.failedScriptResponses).toEqual([
+        {
+          status: 500,
+          url: `http://127.0.0.1:${address.port}/src/index.tsx`,
+        },
+      ]);
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
+  it("carries shadow-rooted overlay text as the route's text sample", async () => {
+    // body.innerText cannot see into the overlay's shadow root, so the
+    // bare-error-body sample comes up empty; the aria-derived text must
+    // fill the sample or the backend reads the route as silently blank.
+    const shadowOverlayPage = `<!doctype html><html><head><title>Overlay</title></head><body>
+<div id="root"></div>
+<script>
+class ErrorOverlay extends HTMLElement {
+  constructor() {
+    super();
+    const root = this.attachShadow({ mode: "open" });
+    root.innerHTML = "<div>[plugin:vite:import-analysis] Failed to resolve import \\"@directus-extensions\\" from \\"src/extensions.ts\\". Does the file exist?</div>";
+  }
+}
+customElements.define("vite-error-overlay", ErrorOverlay);
+document.body.appendChild(document.createElement("vite-error-overlay"));
+</script>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(shadowOverlayPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-shadow-sample-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      )
+        .replaceAll("/workspace/.makeademo/exploration", outputDirectory)
+        .replace(
+          /deadlineAtMs = Date\.now\(\) \+ \d+/,
+          "deadlineAtMs = Date.now() + 15000",
+        );
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        routes: Array<{ textSample?: string }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      expect(result.routes[0]?.textSample).toContain(
+        "Failed to resolve import",
+      );
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
   it("crawls only declared feature entry routes in feature-entries scope", async () => {
     // N108: the preparation-time feature probe re-runs the gate's own
     // harvest, but scoped to the manifest's entry routes — a link the full

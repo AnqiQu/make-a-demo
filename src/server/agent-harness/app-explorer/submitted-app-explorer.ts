@@ -170,7 +170,10 @@ type ObservedRoute = {
    * Bounded body innerText captured only when the selector harvest found no
    * headings and no text. A crashed SPA route paints its exception as bare
    * unstructured body text — this sample lets an error-shaped body carry
-   * its own diagnosis instead of reading as missing content.
+   * its own diagnosis instead of reading as missing content. When innerText
+   * is also empty, falls back to the aria snapshot's text runs, which pierce
+   * open shadow roots (Vite's error overlay renders there), unfiltered by
+   * cross-route dedupe so every broken route carries its own sample.
    */
   textSample?: string;
   title: string;
@@ -237,6 +240,13 @@ type BrowserExplorationProtocol = {
   >;
   consoleErrors: string[];
   declaredProofs?: DeclaredProofResult[];
+  /**
+   * Same-origin script responses that answered a server error (5xx, minus
+   * the 504 stale-module case the crawler reloads through). An app whose
+   * own module server cannot deliver its entry chunks is a serve failure,
+   * not an empty app — the page content below it is the error output.
+   */
+  failedScriptResponses?: Array<{ status: number; url: string }>;
   fatalError?: string;
   pageErrors: string[];
   replayVerification?: ReplayVerification;
@@ -750,6 +760,10 @@ function createExplorationArtifacts(input: {
     appMapId,
     id: actionCatalogId,
   });
+  const failedScriptResponses = readFailedAppScriptResponses(
+    input.baseUrl,
+    input.observation.failedScriptResponses,
+  );
   const validationReport = createExplorationValidationReport({
     actionCatalog,
     appMap,
@@ -761,6 +775,7 @@ function createExplorationArtifacts(input: {
     emptyDataTablesByRoute,
     errorEvidenceByRoute: errorState.evidenceByRoute,
     explicitAuthenticationFeatureIds,
+    ...(failedScriptResponses.length === 0 ? {} : { failedScriptResponses }),
     featureInventory: input.featureInventory,
     networkAttempts,
     populatedTableRoutes,
@@ -1936,6 +1951,7 @@ function createExplorationValidationReport(input: {
   >;
   errorEvidenceByRoute?: ReadonlyMap<string, string[]>;
   explicitAuthenticationFeatureIds: ReadonlySet<string>;
+  failedScriptResponses?: Array<{ status: number; url: string }>;
   featureInventory: PreparedDemoFeature[];
   networkAttempts: NetworkAttempt[];
   populatedTableRoutes?: ReadonlySet<string>;
@@ -1984,13 +2000,28 @@ function createExplorationValidationReport(input: {
     groundingFailure === undefined
       ? undefined
       : readMissingModule(input.appMap.pageErrors);
+  // N128 (twenty, 2026-08-13): when the app's own server answers 5xx on a
+  // script it was asked to serve, every route renders the error overlay and
+  // the hollow page reads as "empty/unmeaningful app state" — steering
+  // repairs at the data layer while the fault is module serving. The serve
+  // failure outranks any page-shape interpretation; a named missing module
+  // still outranks it because it identifies the cause, not the delivery.
+  const failedScriptResponse =
+    groundingFailure === undefined || missingModule !== undefined
+      ? undefined
+      : input.failedScriptResponses?.[0];
   const failure =
-    missingModule === undefined
-      ? groundingFailure
-      : {
+    missingModule !== undefined
+      ? {
           classification: "missing dependency",
           message: `App routes crash before rendering: Module not found: Can't resolve '${missingModule}'. Install or declare the missing package for the selected app; feature grounding cannot proceed until routes render.`,
-        };
+        }
+      : failedScriptResponse !== undefined
+        ? {
+            classification: "app server error",
+            message: `App server error: the app's own script ${failedScriptResponse.url} answered HTTP ${failedScriptResponse.status}, so routes rendered the server's error output instead of the app. Fix the module compile/serve failure in the prepared runtime; the page content is a symptom, not the app state.`,
+          }
+        : groundingFailure;
   const actionableConsoleErrors = input.appMap.consoleErrors.filter(
     isActionableBrowserConsoleError,
   );
@@ -2703,6 +2734,28 @@ function readMissingModule(pageErrors: string[]): string | undefined {
   return undefined;
 }
 
+/**
+ * Keeps only the failed script responses the app server itself answered:
+ * same-origin, 5xx, and not the 504 stale-module shape the crawler reloads
+ * through. The explorer script applies the same policy before reporting, so
+ * this is defense in depth against a drifted or hand-crafted protocol —
+ * a third-party CDN's 500 must never read as an app serve failure.
+ */
+function readFailedAppScriptResponses(
+  baseUrl: string,
+  reported: Array<{ status: number; url: string }> | undefined,
+): Array<{ status: number; url: string }> {
+  const appOrigin = new URL(baseUrl).origin;
+  return (reported ?? []).filter((response) => {
+    if (response.status < 500 || response.status === 504) return false;
+    try {
+      return new URL(response.url).origin === appOrigin;
+    } catch {
+      return false;
+    }
+  });
+}
+
 function isActionableBrowserConsoleError(error: string): boolean {
   return !/(?:ERR_BLOCKED_BY_CLIENT|_next\/webpack-hmr.*ERR_INVALID_HTTP_RESPONSE)/i.test(
     error,
@@ -2913,7 +2966,7 @@ const replayTarget = ${JSON.stringify(
   )};
 const outputDirectory = ${JSON.stringify(explorerDirectory)};
 const deadlineAtMs = Date.now() + ${Math.floor(explorationCommandTimeoutMs * 0.7)};
-const result = { blockedNetworkAttempts: [], consoleErrors: [], declaredProofs: [], pageErrors: [], routes: [], unreachableRoutes: [] };
+const result = { blockedNetworkAttempts: [], consoleErrors: [], declaredProofs: [], failedScriptResponses: [], pageErrors: [], routes: [], unreachableRoutes: [] };
 const isAppUnavailableError = (error) => /(?:ERR_CONNECTION_(?:CLOSED|REFUSED|RESET)|Target page, context or browser has been closed)/i.test(
   error instanceof Error ? error.message : String(error),
 );
@@ -3152,6 +3205,17 @@ try {
   page.on("response", (response) => {
     if (response.status() >= 400) recordFailedResource(response.url(), "HTTP " + response.status());
     if (response.status() === 504 && response.request().resourceType() === "script") staleModule504 = true;
+    // A script the app's own server answered with 5xx is a serve failure —
+    // the page below it is the server's error output, not the app. 504 is
+    // excluded: it is the stale-module shape the reload above absorbs.
+    if (response.status() >= 500 && response.status() !== 504 && response.request().resourceType() === "script") {
+      try {
+        const url = response.url();
+        if (new URL(url).origin === baseOrigin && result.failedScriptResponses.length < 20 && !result.failedScriptResponses.some((entry) => entry.url === url)) {
+          result.failedScriptResponses.push({ status: response.status(), url });
+        }
+      } catch {}
+    }
   });
   const remainingMs = () => Math.max(0, deadlineAtMs - Date.now());
   const gotoRouteOnce = async (url) => {
@@ -3343,7 +3407,8 @@ try {
       // A page whose selector harvest saw nothing may still be painting a
       // bare error body; a bounded innerText sample lets the backend read
       // the exception text that no heading or paragraph selector reaches.
-      if (observed.headings.length === 0 && observed.text.length === 0) {
+      const selectorHarvestSawNothing = observed.headings.length === 0 && observed.text.length === 0;
+      if (selectorHarvestSawNothing) {
         const bodySample = await page.evaluate(() => ((document.body && document.body.innerText) || "").replace(/\\s+/g, " ").trim().slice(0, 400)).catch(() => "");
         if (bodySample) observed.textSample = bodySample;
       }
@@ -3413,11 +3478,21 @@ try {
             : trimmed;
           return unquoted.slice(0, 120).trim();
         };
-        const ariaTextCandidates = [...new Set([
+        const ariaTextRuns = [...new Set([
           ...[...aria.matchAll(/-\\s+[a-z]+ "([^"\\n]{3,80})"/g)].map((match) => match[1]),
           ...[...aria.matchAll(/-\\s+text: (\\S[^\\n]{2,399})$/gm)].map((match) => cleanAriaText(match[1])),
-        ])].filter((candidate) => !observed.text.includes(candidate) && !observed.headings.includes(candidate) && !harvestedOnEarlierRoutes.has(candidate) && !isEmptyTableStructure(candidate) && !(observed.alerts || []).some((alert) => alert.includes(candidate))).slice(0, 24);
+        ])];
+        const ariaTextCandidates = ariaTextRuns.filter((candidate) => !observed.text.includes(candidate) && !observed.headings.includes(candidate) && !harvestedOnEarlierRoutes.has(candidate) && !isEmptyTableStructure(candidate) && !(observed.alerts || []).some((alert) => alert.includes(candidate))).slice(0, 24);
         observed.text.push(...ariaTextCandidates);
+        // Shadow-rooted content (Vite's error overlay) is invisible to
+        // body.innerText, so the bare-error-body sample above came up
+        // empty; the aria runs are the only readable evidence. Built from
+        // the unfiltered runs so every broken route carries its sample,
+        // even when the same overlay text was harvested on an earlier one.
+        if (selectorHarvestSawNothing && observed.textSample === undefined) {
+          const ariaSample = ariaTextRuns.join(" ").replace(/\\s+/g, " ").trim().slice(0, 400);
+          if (ariaSample) observed.textSample = ariaSample;
+        }
       } catch {}
       for (const value of [...observed.headings, ...observed.text]) {
         if (value) harvestedOnEarlierRoutes.add(value);
