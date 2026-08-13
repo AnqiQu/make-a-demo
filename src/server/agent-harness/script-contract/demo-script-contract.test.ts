@@ -519,6 +519,58 @@ describe("DemoScriptContract", () => {
     ).toMatchObject({ status: "passed" });
   });
 
+  it("prints both locators when a script locator differs from its verified candidate", () => {
+    // N125(4): "does not match" without the two locators forces the repair
+    // agent to guess which side drifted; naming expected and actual makes a
+    // genuine drafting slip fixable in one round.
+    const catalog = readActionCatalog(actionCatalog());
+    const sourceAction = catalog.actions[0];
+    if (sourceAction === undefined) {
+      throw new Error("Expected the dashboard action fixture");
+    }
+    sourceAction.locatorCandidates = [
+      {
+        id: "open-dashboard-locator-1",
+        locator: {
+          exact: false,
+          name: "Open dashboard",
+          role: "button",
+          strategy: "role",
+        },
+        verification: { matchCount: 1, route: "/", visible: true },
+      },
+    ];
+    sourceAction.preferredLocatorCandidateId = "open-dashboard-locator-1";
+    const script = structuredClone(validDemoScript()) as unknown as {
+      scenes: Array<{ actions: BrowserAction[] }>;
+    };
+    const firstAction = script.scenes[0]?.actions[0];
+    if (firstAction === undefined || !("locator" in firstAction)) {
+      throw new Error("Expected the dashboard click fixture");
+    }
+    firstAction.locator = {
+      exact: false,
+      name: "Open dashboards",
+      role: "button",
+      strategy: "role",
+    };
+    firstAction.locatorCandidateId = "open-dashboard-locator-1";
+
+    const validation = validateDemoScriptCandidateContract({
+      actionCatalog: catalog,
+      flowSpec: flowSpec(),
+      preparationManifest: preparationManifest(),
+      scriptCandidate: scriptCandidate(script),
+    });
+
+    expect(validation).toMatchObject({ status: "failed" });
+    expect(validation.logsSummary).toContain(
+      "locator does not match browser-verified candidate open-dashboard-locator-1",
+    );
+    expect(validation.logsSummary).toContain('"Open dashboards"');
+    expect(validation.logsSummary).toContain('"Open dashboard"');
+  });
+
   it("accepts a navigate-grounded goto without requiring FlowSpec selection", () => {
     const catalog = readActionCatalog({
       ...actionCatalog(),

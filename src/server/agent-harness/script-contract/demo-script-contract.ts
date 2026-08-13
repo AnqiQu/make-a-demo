@@ -809,8 +809,11 @@ function assertActionMatchesCatalog(
         );
       }
       if (!browserLocatorsEqual(action.locator, candidate.locator)) {
+        // Both locators are named (N125): without them the repair agent
+        // must guess which side drifted, and the ping-pong breaker keys on
+        // this message's stable prefix.
         throw new Error(
-          `Browser action ${action.id} locator does not match browser-verified candidate ${candidate.id}`,
+          `Browser action ${action.id} locator does not match browser-verified candidate ${candidate.id}: the script wrote ${JSON.stringify(action.locator)} but the verified candidate is ${JSON.stringify(candidate.locator)}`,
         );
       }
     } else {
