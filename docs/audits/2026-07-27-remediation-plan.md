@@ -6447,6 +6447,29 @@ N122(5) acceptance rerun: with a provisioned database,
 rounds 2/4-style sequencing would still 500 before
 touching it.
 
+Landed (this session), as the first option with the
+install reuse kept: the offline lifecycle moved out of
+the install gate and now follows every re-sync — the
+skip decision stays sound because it only concerns
+node_modules and the caches, the exact trees the sync
+preserves. Install-reuse rounds (repair preflight with
+unchanged dependency inputs, and the capture reset) run
+the lifecycle standalone from the remembered executed
+install command, so retry flags like directus's
+engine-strict bypass carry over; with no in-process
+install yet it falls back to the manifest command. The
+reuse path also recreates the staging TMPDIR (pruned at
+the end of every install round) and reapplies the Berry
+disk-fallback linker when its sentinel is armed, since
+the sync restores the repo's own .yarnrc.yml. A failed
+reuse-round lifecycle keeps the install-failure /
+lifecycle-timeout classification, and the orchestration
+now also clears the reuse marker when a reuse round
+fails at the install layer — without that, a
+lifecycle-timeout's full-latitude source-only repair
+would keep dependency inputs unchanged and replay the
+identical timeout every round.
+
 ### N128 (High, bugfix) — an entry-chunk 5xx is a serve failure, not empty app state
 
 twenty's misrouted terminal round. When exploration
