@@ -85,6 +85,8 @@ const repairHints = {
   gate: "Read the active MAKEADEMO_DEMO flag from envUsed directly or through one shared helper imported in the changed file, then conditionally select the demo path while preserving the normal behavior.",
   keepWorkspaces:
     "Keep the original workspace configuration; scope commands to the app instead.",
+  buildAppUnderTest:
+    "Keep the selected app's build script building the app itself — optionally after its workspace dependencies; a build redirected entirely at other packages exits green while leaving the app unbuilt.",
   preserveBehavior:
     "Re-add the removed lines on the non-demo branch; the gate must wrap original behavior, not delete it.",
   preserveUi:
@@ -519,6 +521,14 @@ export function readPreparationFidelityCandidates(input: {
         "package.json removes the original workspace configuration instead of adapting the original app.",
       path: "package.json",
     });
+  }
+  const narrowedBuildScope = readNarrowedBuildScope(
+    input.preparationManifest.appDir,
+    filePatches,
+    input.repoSourceFiles,
+  );
+  if (narrowedBuildScope !== undefined) {
+    violations.push(narrowedBuildScope);
   }
   for (const path of createdPaths) {
     if (!isDemoSeamPath(path) && packagePatch.addedText.includes(path)) {
@@ -1118,6 +1128,105 @@ function readResolvedStartCommands(
     if (script !== undefined) commands.push(script);
   }
   return commands;
+}
+
+// Explicit workspace-target selectors inside a build script body: an nx
+// task target, a filter/scope/project flag (turbo, pnpm, lerna, nx), a yarn
+// `workspace <name>` subcommand, or an npm `-w`/`--workspace` flag. These
+// are the shapes that make a build script build some OTHER package.
+const buildSelectorPatterns = [
+  /\bnx\s+(?:build|run|serve)\s+([\w@./:-]+)/g,
+  /--(?:filter|scope|projects?)[=\s]+([^\s'"]+)/g,
+  /\bworkspace\s+([\w@./-]+)/g,
+  /(?:^|\s)(?:-w|--workspace)[=\s]([^\s'"]+)/g,
+];
+
+function readBuildSelectorTargets(segment: string): string[] {
+  return buildSelectorPatterns.flatMap((pattern) =>
+    [...segment.matchAll(pattern)].flatMap((match) => {
+      const target = (match[1] ?? "").split(":")[0] ?? "";
+      return target === "" ? [] : [target];
+    }),
+  );
+}
+
+/**
+ * Detects a repair buying a green build gate by narrowing the build's scope:
+ * the selected app package's own `build` script rewritten so that every step
+ * is redirected at a different workspace package (twenty round 6 rewrote it
+ * to `npx nx build twenty-shared`, which exits 0 by no longer building the
+ * app, 2026-08-13). Fires only when the patch changes the script, every
+ * command segment carries an explicit workspace-target selector, and none of
+ * the targets reference the app by package name or directory — a script that
+ * keeps any in-place step or names the app is the legitimate shape of the
+ * same edit, and adjudication can rescue task runners whose project names
+ * match none of the app's identifiers.
+ */
+function readNarrowedBuildScope(
+  appDir: string,
+  filePatches: ReadonlyMap<string, PatchSection>,
+  repoSourceFiles: ReadonlyMap<string, string | undefined>,
+): FidelityViolation | undefined {
+  const normalizedAppDir = appDir.replace(/^\.\/?/, "").replace(/\/$/, "");
+  const packagePath =
+    normalizedAppDir === ""
+      ? "package.json"
+      : `${normalizedAppDir}/package.json`;
+  const patch = filePatches.get(packagePath);
+  if (patch === undefined) return undefined;
+  const readBuildScript = (lines: string[]) =>
+    lines
+      .map((line) => /"build"\s*:\s*"([^"]+)"/.exec(line)?.[1])
+      .find((body) => body !== undefined);
+  const rewrittenBuild = readBuildScript(patch.added);
+  if (rewrittenBuild === undefined) return undefined;
+  const originalSource = repoSourceFiles.get(packagePath) ?? "";
+  const originalBuild =
+    /"build"\s*:\s*"([^"]+)"/.exec(originalSource)?.[1] ??
+    readBuildScript(patch.removed);
+  if (rewrittenBuild === originalBuild) return undefined;
+  const packageName = /"name"\s*:\s*"([^"]+)"/.exec(originalSource)?.[1];
+  const appTokens = new Set(
+    [
+      packageName,
+      packageName?.split("/").at(-1),
+      normalizedAppDir,
+      normalizedAppDir.split("/").at(-1),
+    ]
+      .filter((token): token is string => token !== undefined && token !== "")
+      .map((token) => token.toLowerCase()),
+  );
+  const referencesApp = (target: string) => {
+    const cleaned = target
+      .toLowerCase()
+      .replace(/^\.\//, "")
+      .replace(/\.{3}$/, "");
+    return (
+      appTokens.has(cleaned) || appTokens.has(cleaned.split("/").at(-1) ?? "")
+    );
+  };
+  const segments = rewrittenBuild
+    .split(/&&|\|\||;/)
+    .map((segment) => segment.trim())
+    .filter((segment) => segment !== "");
+  const segmentTargets = segments.map(readBuildSelectorTargets);
+  if (
+    segments.length === 0 ||
+    segmentTargets.some((targets) => targets.length === 0)
+  ) {
+    return undefined;
+  }
+  const targets = [...new Set(segmentTargets.flat())];
+  if (targets.some(referencesApp)) return undefined;
+  return {
+    hint: repairHints.buildAppUnderTest,
+    message: `${packagePath} rewrites the selected app's "build" script to "${rewrittenBuild}", which builds only ${targets.join(
+      ", ",
+    )} and never references the app under test (${
+      packageName ?? (normalizedAppDir === "" ? packagePath : normalizedAppDir)
+    }); the build gate would pass without building the app.`,
+    path: packagePath,
+  };
 }
 
 /**

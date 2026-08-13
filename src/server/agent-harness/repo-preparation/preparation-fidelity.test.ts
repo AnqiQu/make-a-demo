@@ -1297,6 +1297,105 @@ describe("validatePreparationFidelity", () => {
     expect(report.suggestedRepairHints[1]).toContain("original application");
   });
 
+  it("rejects a repair that redirects the app's build script at a different workspace package", () => {
+    // N129 (twenty, 2026-08-13): round 6 bought a green build gate by
+    // rewriting the app package's own build script to build a sibling
+    // package — a command that exits 0 by no longer building the app.
+    const report = validateDiff({
+      manifestOverrides: { appDir: "packages/twenty-front" },
+      modifiedFiles: ["packages/twenty-front/package.json"],
+      patch: [
+        "diff --git a/packages/twenty-front/package.json b/packages/twenty-front/package.json",
+        '-    "build": "npx nx build twenty-front",',
+        '+    "build": "npx nx build twenty-shared",',
+      ].join("\n"),
+      sourceFiles: {
+        "packages/twenty-front/package.json":
+          '{ "name": "twenty-front", "scripts": { "build": "npx nx build twenty-front" } }',
+      },
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.failureClassification).toBe("product fidelity violation");
+    expect(report.logsSummary).toContain("twenty-shared");
+    expect(report.logsSummary).toContain('"build" script');
+  });
+
+  it("rejects a build script redirected through a package-manager filter at another package", () => {
+    const report = validateDiff({
+      modifiedFiles: ["package.json"],
+      patch: [
+        "diff --git a/package.json b/package.json",
+        '-    "build": "vite build",',
+        '+    "build": "pnpm --filter @acme/docs run build",',
+      ].join("\n"),
+      sourceFiles: {
+        "package.json":
+          '{ "name": "acme-app", "scripts": { "build": "vite build" } }',
+      },
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain("@acme/docs");
+  });
+
+  it("allows a rewritten build script that still builds the app after its dependencies", () => {
+    const report = validateDiff({
+      manifestOverrides: { appDir: "packages/twenty-front" },
+      modifiedFiles: ["packages/twenty-front/package.json"],
+      patch: [
+        "diff --git a/packages/twenty-front/package.json b/packages/twenty-front/package.json",
+        '-    "build": "npx nx build twenty-front",',
+        '+    "build": "npx nx build twenty-shared && npx nx build twenty-front",',
+      ].join("\n"),
+      sourceFiles: {
+        "packages/twenty-front/package.json":
+          '{ "name": "twenty-front", "scripts": { "build": "npx nx build twenty-front" } }',
+      },
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("allows a rewritten build script that builds in place without a workspace selector", () => {
+    const report = validateDiff({
+      manifestOverrides: { appDir: "packages/twenty-front" },
+      modifiedFiles: ["packages/twenty-front/package.json"],
+      patch: [
+        "diff --git a/packages/twenty-front/package.json b/packages/twenty-front/package.json",
+        '-    "build": "npx nx build twenty-front",',
+        '+    "build": "tsc -b && vite build",',
+      ].join("\n"),
+      sourceFiles: {
+        "packages/twenty-front/package.json":
+          '{ "name": "twenty-front", "scripts": { "build": "npx nx build twenty-front" } }',
+      },
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
+  it("allows a build script that adds a sibling build ahead of an in-place build step", () => {
+    // Building a workspace dependency first, then the app itself in place,
+    // is the legitimate shape of the same edit; only a script whose every
+    // step is redirected away from the app buys the gate without it.
+    const report = validateDiff({
+      manifestOverrides: { appDir: "packages/twenty-front" },
+      modifiedFiles: ["packages/twenty-front/package.json"],
+      patch: [
+        "diff --git a/packages/twenty-front/package.json b/packages/twenty-front/package.json",
+        '-    "build": "vite build",',
+        '+    "build": "npx nx build twenty-shared && vite build",',
+      ].join("\n"),
+      sourceFiles: {
+        "packages/twenty-front/package.json":
+          '{ "name": "twenty-front", "scripts": { "build": "vite build" } }',
+      },
+    });
+
+    expect(report.status).toBe("passed");
+  });
+
   it("resolves the start command through the package script table to reject created entrypoints", () => {
     const report = validateDiff({
       createdFiles: ["server.mjs"],
