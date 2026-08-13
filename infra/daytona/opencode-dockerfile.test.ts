@@ -110,6 +110,23 @@ describe("Daytona OpenCode prepared image", () => {
     expect(dockerfile).not.toContain("npm install -g --force pnpm");
   });
 
+  it("bakes loopback data-service binaries for the provisioned-service rung", async () => {
+    // N122(5): the provisioned-service rung runs real databases inside the
+    // sealed submitted-code sandbox on loopback. The binaries must ship in
+    // the snapshot — the sealed network can never fetch them — and mariadb
+    // provides the mysql protocol (detection already normalizes mariadb to
+    // the mysql service class).
+    const dockerfile = await readFile(
+      join(import.meta.dirname, "submitted-code-node-browser.Dockerfile"),
+      "utf8",
+    );
+
+    expect(dockerfile).toContain("postgresql");
+    expect(dockerfile).toContain("postgresql-contrib");
+    expect(dockerfile).toContain("mariadb-server");
+    expect(dockerfile).toContain("redis-server");
+  });
+
   it("defines the generic Node/browser submitted-code runtime image", async () => {
     const dockerfile = await readFile(
       join(import.meta.dirname, "submitted-code-node-browser.Dockerfile"),
