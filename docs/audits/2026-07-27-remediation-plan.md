@@ -6540,6 +6540,27 @@ that no longer references the app; at minimum, surface
 a fidelity check when a repair narrows the effective
 build scope.
 
+Landed (this session): option 2, at the fidelity seam.
+`readPreparationFidelityCandidates` now raises a
+candidate when a repair rewrites the selected app
+package's own `build` script so that every command
+segment carries an explicit workspace-target selector
+(nx build/run/serve, --filter/--scope/--project(s),
+yarn `workspace <name>`, npm -w/--workspace) and none
+of the targets reference the app by package name or
+directory. A script keeping any in-place step or naming
+the app stays legal, and adjudication can rescue task
+runners whose project names match none of the app's
+identifiers. Option 1 (predict build artifacts
+framework-generically) was deliberately not taken:
+artifact locations are framework-specific and guessing
+them across arbitrary repos is the overfitting this
+plan forbids; the runtime side of the same failure is
+now caught generically by N128's serve-failure
+classification. Original repos never pass through the
+fidelity seam, so unusual-but-legitimate build scripts
+in submitted repos are unaffected.
+
 ### N130 (High, bugfix) — fingerprint on the cause, not the package-manager epilogue
 
 directus died on the repeated-failure limit with three
