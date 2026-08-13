@@ -467,8 +467,8 @@ describe("assertPreparedFeatureInventory", () => {
     ]);
     preparationManifest.dataStrategy = [
       {
-        detail: "postgres provisioned in the sandbox",
-        rung: "provisioned-service",
+        detail: "neon driver swapped for pg against a local socket",
+        rung: "provider-recipe",
         service: "postgres",
       },
     ];
@@ -483,8 +483,86 @@ describe("assertPreparedFeatureInventory", () => {
         repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
       }),
     ).toThrow(
-      /provisioned-service.*not yet.*embedded-config, client-stub, declared-stub/s,
+      /provider-recipe.*not yet.*embedded-config, provisioned-service, client-stub, declared-stub/s,
     );
+  });
+
+  it("accepts a provisioned-service declaration for a provisionable service", () => {
+    // N122(5): the provisioned-service rung is real for postgres, mysql,
+    // and redis — the sandbox boots them on loopback and runs the declared
+    // migrate and seed commands.
+    const preparationManifest = manifestWithFeatures([
+      { id: "dashboard", label: "Dashboard" },
+    ]);
+    preparationManifest.dataStrategy = [
+      {
+        detail: "harness Postgres on loopback with prisma migrate and seed",
+        migrationCommand: "npx prisma migrate deploy",
+        rung: "provisioned-service",
+        seedCommand: "npx prisma db seed",
+        service: "postgres",
+      },
+    ];
+
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest,
+        repoProfile: profileWithServices([
+          { evidencePaths: ["prisma/schema.prisma"], service: "postgres" },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects provisioned-service declarations the sandbox cannot boot", () => {
+    const preparationManifest = manifestWithFeatures([
+      { id: "dashboard", label: "Dashboard" },
+    ]);
+    preparationManifest.dataStrategy = [
+      {
+        detail: "documents served from a real mongo",
+        rung: "provisioned-service",
+        service: "mongodb",
+      },
+    ];
+
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest,
+        repoProfile: profileWithServices([
+          { evidencePaths: ["package.json"], service: "mongodb" },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).toThrow(/mongodb.*mysql, postgres, redis/s);
+  });
+
+  it("rejects migration and seed commands outside the provisioned-service rung", () => {
+    const preparationManifest = manifestWithFeatures([
+      { id: "dashboard", label: "Dashboard" },
+    ]);
+    preparationManifest.dataStrategy = [
+      {
+        detail: "Prisma provider switched to sqlite with a seeded demo file",
+        migrationCommand: "npx prisma migrate deploy",
+        rung: "embedded-config",
+        service: "postgres",
+      },
+    ];
+
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest,
+        repoProfile: profileWithServices([
+          { evidencePaths: ["prisma/schema.prisma"], service: "postgres" },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).toThrow(/migrationCommand.*provisioned-service/s);
   });
 
   it("rejects duplicate data strategy entries for one service", () => {

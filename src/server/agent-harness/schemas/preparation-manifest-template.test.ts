@@ -57,8 +57,9 @@ describe("Preparation Manifest template", () => {
   it("pre-fills one data strategy entry per detected service", () => {
     // N122(3): the template is the steering surface — the rung defaults to
     // embedded-config exactly when detection proved an embedded driver
-    // exists, and the template detail forces a real answer (enforcement
-    // rejects unreplaced template values).
+    // exists, then provisioned-service when the sandbox can boot the real
+    // service (N122(5)), then client-stub; the template detail forces a
+    // real answer (enforcement rejects unreplaced template values).
     const template = createPreparationManifestTemplate(
       {
         allowedPorts: [3000],
@@ -82,6 +83,7 @@ describe("Preparation Manifest template", () => {
             service: "postgres",
           },
           { evidencePaths: [".env.example"], service: "redis" },
+          { evidencePaths: ["package.json"], service: "mongodb" },
         ],
       },
     );
@@ -95,8 +97,13 @@ describe("Preparation Manifest template", () => {
       },
       {
         detail: "replace-with-how-redis-is-served-for-the-demo",
-        rung: "client-stub",
+        rung: "provisioned-service",
         service: "redis",
+      },
+      {
+        detail: "replace-with-how-mongodb-is-served-for-the-demo",
+        rung: "client-stub",
+        service: "mongodb",
       },
     ]);
   });

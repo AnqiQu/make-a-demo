@@ -1,3 +1,7 @@
+import {
+  provisionableServices,
+  sandboxServiceConnectionUrls,
+} from "../sandbox-services/sandbox-services";
 import { type PreparationManifest, dataStrategyRungs } from "./artifacts";
 
 const stringArray = {
@@ -57,8 +61,9 @@ export function createPreparationManifestContract() {
       "expectedProof locators, names, and texts are accessible names or on-screen strings — never CSS selectors or XPath",
       "a state-transition proof's from must never be disabled: seed fixture state so the control starts enabled (history pre-populated so Undo is clickable, a followable author whose control will rename)",
       "each feature's first entryPath must be a route no other feature claims",
-      "when the repo profile's servicesRequired is non-empty, dataStrategy must declare exactly one entry per detected service (copy the service names from servicesRequired) choosing a currently-provided rung: embedded-config (preferred when the repo supports an embedded driver such as sqlite — configure and seed it), client-stub (serve deterministic fixtures from the app's own fetch/API-client layer, never a service worker), or declared-stub (demo the feature on generated data and describe the substitution in detail); never drop a data-backed feature or steer the demo away from it",
-      "dataStrategy rungs provisioned-service and provider-recipe are reserved for backend capabilities that do not exist yet and are rejected today",
+      `when the repo profile's servicesRequired is non-empty, dataStrategy must declare exactly one entry per detected service (copy the service names from servicesRequired) choosing a currently-provided rung in preference order: embedded-config (preferred when the repo supports an embedded driver such as sqlite — configure and seed it), provisioned-service (a real ${provisionableServices.join(", ")} booted by the harness on loopback), client-stub (serve deterministic fixtures from the app's own fetch/API-client layer, never a service worker), or declared-stub (demo the feature on generated data and describe the substitution in detail); never drop a data-backed feature or steer the demo away from it`,
+      `on the provisioned-service rung the harness boots the service before the build step and the app must connect through envUsed to exactly ${sandboxServiceConnectionUrls.postgres} for postgres, ${sandboxServiceConnectionUrls.mysql} for mysql, or ${sandboxServiceConnectionUrls.redis} for redis; declare the repo's own migrationCommand and seedCommand (each optional, run in appDir after the service health check and re-run against a reset service on every validation round) so schema and demo data are deterministic`,
+      "dataStrategy rung provider-recipe is reserved for backend capabilities that do not exist yet and is rejected today",
     ],
     outputPath: "/workspace/.makeademo/preparation-manifest.json",
     properties: {
@@ -79,7 +84,9 @@ export function createPreparationManifestContract() {
           additionalProperties: false,
           properties: {
             detail: { minLength: 1, type: "string" },
+            migrationCommand: { minLength: 1, type: "string" },
             rung: { enum: [...dataStrategyRungs], type: "string" },
+            seedCommand: { minLength: 1, type: "string" },
             service: { minLength: 1, type: "string" },
           },
           required: ["detail", "rung", "service"],

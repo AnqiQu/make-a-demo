@@ -83,6 +83,35 @@ describe("createPreparationManifestContract", () => {
     expect(contract.invariants.join(" ")).toContain("dataStrategy");
   });
 
+  it("publishes the provisioned-service rung with its loopback connection urls", () => {
+    // N122(5): the agent can wire envUsed to the harness-booted services
+    // only if the contract states the exact DSNs, and the reserved-rung
+    // list shrinks to provider-recipe alone.
+    const contract = createPreparationManifestContract();
+    const entry = contract.properties.dataStrategy.items;
+
+    expect(entry.properties.migrationCommand).toEqual({
+      minLength: 1,
+      type: "string",
+    });
+    expect(entry.properties.seedCommand).toEqual({
+      minLength: 1,
+      type: "string",
+    });
+    const invariants = contract.invariants.join(" ");
+    expect(invariants).toContain(
+      "postgres://makeademo:makeademo@127.0.0.1:5432/makeademo",
+    );
+    expect(invariants).toContain(
+      "mysql://makeademo:makeademo@127.0.0.1:3306/makeademo",
+    );
+    expect(invariants).toContain("redis://127.0.0.1:6379");
+    expect(invariants).toContain("migrationCommand");
+    expect(invariants).not.toContain(
+      "provisioned-service and provider-recipe are reserved",
+    );
+  });
+
   it("carries no version field that nothing reads", () => {
     expect(createPreparationManifestContract()).not.toHaveProperty(
       "contractVersion",

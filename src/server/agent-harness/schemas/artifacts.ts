@@ -204,11 +204,19 @@ export type DataStrategyRung = (typeof dataStrategyRungs)[number];
  * embedded driver and seeded data, the stubbed client layer, or the
  * declared generated-data substitution. Enforcement rejects a manifest that
  * leaves any detected service unanswered.
+ *
+ * On the provisioned-service rung (N122(5)) the declaration may carry the
+ * repo's own schema and data commands: the lifecycle runs `migrationCommand`
+ * then `seedCommand` in the app directory after the harness-provisioned
+ * service passes its health check, and re-runs them against a reset service
+ * on every preflight round so demo data stays deterministic.
  */
 type DataStrategyDeclaration = {
   service: string;
   rung: DataStrategyRung;
   detail: string;
+  migrationCommand?: string;
+  seedCommand?: string;
 };
 
 /**
@@ -804,7 +812,21 @@ function readDataStrategy(
     }
     return {
       detail: readNonEmptyString(entryRecord, "detail", path),
+      ...(entryRecord.migrationCommand === undefined
+        ? {}
+        : {
+            migrationCommand: readNonEmptyString(
+              entryRecord,
+              "migrationCommand",
+              path,
+            ),
+          }),
       rung: rung as DataStrategyRung,
+      ...(entryRecord.seedCommand === undefined
+        ? {}
+        : {
+            seedCommand: readNonEmptyString(entryRecord, "seedCommand", path),
+          }),
       service: readNonEmptyString(entryRecord, "service", path),
     };
   });

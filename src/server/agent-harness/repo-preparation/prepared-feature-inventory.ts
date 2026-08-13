@@ -1,3 +1,4 @@
+import { provisionableServices } from "../sandbox-services/sandbox-services";
 import type {
   DataStrategyRung,
   PreparationManifest,
@@ -259,13 +260,14 @@ function assertDeclaredProofs(
 
 /**
  * The rungs of the data-backend ladder the backend can actually stand
- * behind today. provisioned-service (N122 sub-item 5) and provider-recipe
- * (sub-item 6) join this list when their provisioning lands — until then a
- * manifest choosing one would pass validation and then fail every runtime
+ * behind today, in ladder preference order. provider-recipe (N122 sub-item
+ * 6) joins this list when its per-provider recipes land — until then a
+ * manifest choosing it would pass validation and then fail every runtime
  * round, so the rejection points at the rungs that work now.
  */
 const backedDataStrategyRungs: DataStrategyRung[] = [
   "embedded-config",
+  "provisioned-service",
   "client-stub",
   "declared-stub",
 ];
@@ -308,6 +310,37 @@ function assertDataStrategyCoverage(
       )} is not yet provided by the backend. Choose among: ${backedDataStrategyRungs.join(
         ", ",
       )}.`,
+    );
+  }
+  const unprovisionable = declarations.flatMap((declaration, index) =>
+    declaration.rung === "provisioned-service" &&
+    !(provisionableServices as readonly string[]).includes(
+      declaration.service.trim().toLowerCase(),
+    )
+      ? [`dataStrategy[${index}] provisions ${declaration.service}`]
+      : [],
+  );
+  if (unprovisionable.length > 0) {
+    throw new Error(
+      `PreparationManifest ${unprovisionable.join(
+        "; ",
+      )}, but the sandbox can only provision: ${provisionableServices.join(
+        ", ",
+      )}. Choose another rung for this service.`,
+    );
+  }
+  const strayCommands = declarations.flatMap((declaration, index) =>
+    declaration.rung !== "provisioned-service" &&
+    (declaration.migrationCommand !== undefined ||
+      declaration.seedCommand !== undefined)
+      ? [`dataStrategy[${index}] (rung ${declaration.rung})`]
+      : [],
+  );
+  if (strayCommands.length > 0) {
+    throw new Error(
+      `PreparationManifest ${strayCommands.join(
+        "; ",
+      )} declares migrationCommand or seedCommand, which the harness executes only on the provisioned-service rung. Remove the commands or move the service to provisioned-service.`,
     );
   }
   const declaredServiceCounts = new Map<string, number>();

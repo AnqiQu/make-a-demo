@@ -1,3 +1,4 @@
+import { provisionableServices } from "../sandbox-services/sandbox-services";
 import type {
   PreparationManifest,
   RequiredService,
@@ -9,9 +10,10 @@ import type {
  * and enrich. The returned value must always satisfy PreparationManifest so a
  * model never has to infer field types from prose. When the repo profile
  * detected required data services (N122), the template pre-fills one
- * dataStrategy entry per service — rung embedded-config exactly when
- * detection proved an embedded driver exists, else client-stub — with a
- * template detail the enforcement validator refuses until replaced.
+ * dataStrategy entry per service in ladder preference order — embedded-config
+ * exactly when detection proved an embedded driver exists, provisioned-service
+ * when the sandbox can boot the real service (N122(5)), else client-stub —
+ * with a template detail the enforcement validator refuses until replaced.
  */
 export function createPreparationManifestTemplate(
   runPlan: RunPlan,
@@ -33,7 +35,11 @@ export function createPreparationManifestTemplate(
             rung:
               (service.embeddedAlternativeEvidencePaths?.length ?? 0) > 0
                 ? ("embedded-config" as const)
-                : ("client-stub" as const),
+                : (provisionableServices as readonly string[]).includes(
+                      service.service,
+                    )
+                  ? ("provisioned-service" as const)
+                  : ("client-stub" as const),
             service: service.service,
           })),
         }),

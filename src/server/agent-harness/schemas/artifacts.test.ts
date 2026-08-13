@@ -489,6 +489,51 @@ describe("agent harness artifact schemas", () => {
     ]);
   });
 
+  it("parses provisioned-service migration and seed commands", () => {
+    // N122(5): the provisioned-service rung runs the repo's own migrate and
+    // seed commands against the harness-provisioned loopback service; they
+    // ride the declaration so the lifecycle can execute them and re-run
+    // them deterministically on every preflight round.
+    const manifest = validPreparationManifest();
+    (manifest as Record<string, unknown>).dataStrategy = [
+      {
+        detail: "harness Postgres on loopback with prisma migrate and seed",
+        migrationCommand: "npx prisma migrate deploy",
+        rung: "provisioned-service",
+        seedCommand: "npx prisma db seed",
+        service: "postgres",
+      },
+    ];
+
+    const parsed = readPreparationManifest(manifest);
+
+    expect(parsed.dataStrategy).toEqual([
+      {
+        detail: "harness Postgres on loopback with prisma migrate and seed",
+        migrationCommand: "npx prisma migrate deploy",
+        rung: "provisioned-service",
+        seedCommand: "npx prisma db seed",
+        service: "postgres",
+      },
+    ]);
+  });
+
+  it("rejects blank provisioned-service migration and seed commands", () => {
+    const manifest = validPreparationManifest();
+    (manifest as Record<string, unknown>).dataStrategy = [
+      {
+        detail: "harness Postgres on loopback",
+        migrationCommand: " ",
+        rung: "provisioned-service",
+        service: "postgres",
+      },
+    ];
+
+    expect(() => readPreparationManifest(manifest)).toThrow(
+      /dataStrategy\[0\]\.migrationCommand must be a non-empty string/,
+    );
+  });
+
   it("rejects data strategy entries with unknown rungs or missing fields", () => {
     const manifest = validPreparationManifest();
     (manifest as Record<string, unknown>).dataStrategy = [
