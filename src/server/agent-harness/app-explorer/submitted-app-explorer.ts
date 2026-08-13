@@ -2666,6 +2666,7 @@ async function readExplorationProtocolFile(
   try {
     const result = await workspace.executeSubmittedCode(
       `cat ${explorerDirectory}/exploration.json`,
+      { retry: "transient" },
     );
     return result.exitCode === 0
       ? readExplorationProtocol(result.stdout)

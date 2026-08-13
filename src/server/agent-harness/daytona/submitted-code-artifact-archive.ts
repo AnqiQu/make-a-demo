@@ -30,9 +30,11 @@ export async function uploadSubmittedCodeArchive(input: {
       directory: input.localDirectory,
       entries: input.entries,
     });
+    // Every archive-transfer command is idempotent (mkdir -p, re-extraction
+    // of the same archive, rm -f), so all opt into transient retry.
     const directoryCreation = await input.workspace.executeSubmittedCode(
       `mkdir -p ${shellQuote(input.remoteDirectory)}`,
-      { timeoutMs: archiveTransferCommandTimeoutMs },
+      { retry: "transient", timeoutMs: archiveTransferCommandTimeoutMs },
     );
     if (directoryCreation.exitCode !== 0) {
       throw new Error(
@@ -48,7 +50,7 @@ export async function uploadSubmittedCodeArchive(input: {
         `tar ${input.compression === "none" ? "-xf" : "-xzf"} ${shellQuote(remoteArchivePath)} -C ${shellQuote(input.remoteDirectory)}`,
         `rm -f ${shellQuote(remoteArchivePath)}`,
       ].join(" && "),
-      { timeoutMs: archiveTransferCommandTimeoutMs },
+      { retry: "transient", timeoutMs: archiveTransferCommandTimeoutMs },
     );
     if (extraction.exitCode !== 0) {
       throw new Error(
@@ -63,7 +65,10 @@ export async function uploadSubmittedCodeArchive(input: {
         ? [
             input.workspace.executeSubmittedCode(
               `rm -f ${shellQuote(remoteArchivePath)}`,
-              { timeoutMs: archiveTransferCommandTimeoutMs },
+              {
+                retry: "transient",
+                timeoutMs: archiveTransferCommandTimeoutMs,
+              },
             ),
           ]
         : []),
@@ -88,12 +93,14 @@ export async function downloadSubmittedCodeArchive(input: {
   await mkdir(input.localDirectory, { recursive: true });
   const localArchivePath = join(input.localDirectory, input.archiveName);
   const remoteArchivePath = `${input.remoteDirectory}/${input.archiveName}`;
+  // Archive creation always starts from rm -f, so a re-issued command
+  // rebuilds the same archive rather than corrupting a partial one.
   const creation = await input.workspace.executeSubmittedCode(
     [
       `rm -f ${shellQuote(remoteArchivePath)}`,
       `tar ${input.compression === "none" ? "-cf" : "-czf"} ${shellQuote(remoteArchivePath)} -C ${shellQuote(input.remoteDirectory)} -- ${input.entries.map(shellQuote).join(" ")}`,
     ].join(" && "),
-    { timeoutMs: archiveTransferCommandTimeoutMs },
+    { retry: "transient", timeoutMs: archiveTransferCommandTimeoutMs },
   );
   if (creation.exitCode !== 0) {
     throw new Error(
@@ -111,7 +118,7 @@ export async function downloadSubmittedCodeArchive(input: {
   await rm(localArchivePath, { force: true });
   await input.workspace.executeSubmittedCode(
     `rm -f ${shellQuote(remoteArchivePath)}`,
-    { timeoutMs: archiveTransferCommandTimeoutMs },
+    { retry: "transient", timeoutMs: archiveTransferCommandTimeoutMs },
   );
 }
 

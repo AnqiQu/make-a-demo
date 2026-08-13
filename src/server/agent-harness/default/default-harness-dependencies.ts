@@ -921,8 +921,10 @@ export async function createDefaultAgentHarnessDependencies(
         const patchPath = `${makeADemoDirectory}/accepted-preparation.patch`;
         await writeWorkspaceText(workspace, patchPath, workspaceDiff.patch);
         try {
+          // At-most-once: a masked success would double-apply the patch.
           const result = await workspace.execute(
             `git -C ${shellQuote(workspaceRepoDirectory)} apply --binary ${shellQuote(patchPath)}`,
+            { retry: "none" },
           );
           if (result.exitCode !== 0) {
             throw new Error(
@@ -3738,6 +3740,9 @@ async function probeSubmittedCodeRuntime(
     result = await executeSubmitted(
       workspace,
       `curl -fsS --location --max-redirs 5 --connect-timeout 2 --max-time 90 --write-out ${shellQuote(`\n[makeademo:probe] {"httpStatus":%{http_code},"url":"%{url_effective}"}\n`)} ${shellQuote(url)} -o /tmp/makeademo/preflight.html`,
+      // The probe loop already re-issues this GET by design (N120), so a
+      // transient control-plane loss may retry it too.
+      { retry: "transient" },
     );
     responseMetadata = readRuntimeProbeResponseMetadata(result.stdout);
     const status = await readSubmittedCodeAppStatusSafely(workspace);

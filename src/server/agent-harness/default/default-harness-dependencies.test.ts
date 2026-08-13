@@ -2761,6 +2761,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
 
   it("restores a fidelity-approved preparation patch and manifest", async () => {
     const commands: string[] = [];
+    let patchApplyRetry: "none" | "transient" | undefined;
     const written = new Map<string, string>();
     const patch = [
       "diff --git a/src/demo.ts b/src/demo.ts",
@@ -2771,8 +2772,11 @@ describe("createDefaultAgentHarnessDependencies", () => {
       "+export const demo = true;",
     ].join("\n");
     const workspace = createFakeAgentHarnessWorkspace({
-      async execute(command) {
+      async execute(command, executeOptions) {
         commands.push(command);
+        if (command.includes("apply --binary")) {
+          patchApplyRetry = executeOptions?.retry;
+        }
         return { exitCode: 0, stderr: "", stdout: "" };
       },
       async writeTextFile(path, contents) {
@@ -2816,6 +2820,10 @@ describe("createDefaultAgentHarnessDependencies", () => {
         ),
       ]),
     );
+    // A transient control-plane failure can mask an apply that already took
+    // effect; the restore declares at-most-once semantics so the adapter
+    // classifies the loss instead of re-issuing the patch (N123).
+    expect(patchApplyRetry).toBe("none");
   });
 
   it("keeps install repairs scoped to dependency files and preserves the approved manifest", async () => {
