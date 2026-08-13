@@ -81,6 +81,14 @@ type DaytonaControlPlaneRunOptions = {
    * outlast it.
    */
   attemptTimeoutMs?: number;
+  /**
+   * Reclassifies attempt errors; defaults to
+   * `classifyDaytonaControlPlaneError`. Seams whose attempt callbacks throw
+   * domain outcomes mark them `fatal` so they pass through raw — a command
+   * deadline is the command's result, not transport loss, and re-issuing it
+   * could double a side effect the harness must instead surface.
+   */
+  classify?: (error: unknown) => DaytonaControlPlaneErrorClassification;
   /** Conflict polls before giving up; each waits `conflictPollDelayMs`. */
   conflictPollLimit?: number;
   /** Transient-retry delays; its length bounds the retries. */
@@ -179,10 +187,15 @@ function runAttemptWithTimeout<T>(
  * transport loss and re-issued through the transient ladder, so one stuck
  * HTTP call can never wedge the run.
  *
- * Deliberately excluded: command execution and managed-app session
- * commands. A transport error there can mask a command that already ran,
- * so a blind re-issue could double side effects — those failures surface
- * into the validation record instead.
+ * Command execution and managed-app session commands run through the
+ * envelope too (N123: a raw 502 on a manifest `cat` killed a finished
+ * ghostfolio run), but with per-caller retry semantics: a transport error
+ * can mask a command that already ran, so only commands their callers
+ * declare idempotent ride the transient ladder — the rest use an empty
+ * ladder and zero conflict polls, gaining classification and attribution
+ * without a re-issue. A command deadline is reclassified fatal by the
+ * caller (`classify`) because it is the command's outcome, not transport
+ * loss.
  *
  * Events go to the local pipeline log only: control-plane observability
  * must never itself depend on the control plane.
@@ -218,6 +231,7 @@ export function createDaytonaControlPlaneEnvelope(envelopeOptions: {
       options: DaytonaControlPlaneRunOptions = {},
     ): Promise<T> {
       const ladderMs = options.ladderMs ?? controlLadderMs;
+      const classify = options.classify ?? classifyDaytonaControlPlaneError;
       const attemptTimeoutMs =
         options.attemptTimeoutMs ?? defaultAttemptTimeoutMs;
       const conflictPollLimit =
@@ -243,7 +257,7 @@ export function createDaytonaControlPlaneEnvelope(envelopeOptions: {
             attemptTimeoutMs,
           );
         } catch (error) {
-          const classification = classifyDaytonaControlPlaneError(error);
+          const classification = classify(error);
           const delayMs =
             classification === "conflict"
               ? conflictPolls < conflictPollLimit

@@ -379,4 +379,36 @@ describe("createDaytonaControlPlaneEnvelope", () => {
 
     expect(result).toBe("uploaded");
   });
+
+  it("lets a caller-supplied classifier mark a domain outcome fatal so it passes through raw", async () => {
+    // A command deadline is the command's result, not transport loss: the
+    // default classifier reads any /Timeout/ name as transient, so without
+    // the override the envelope would blindly re-issue a command whose
+    // outcome the harness must instead surface (N123).
+    const { envelope, waits } = createRecordingEnvelope();
+    const deadline = Object.assign(
+      new Error("Daytona command did not finish within 5ms."),
+      { name: "AgentHarnessCommandTimeoutError" },
+    );
+    let attempts = 0;
+
+    await expect(
+      envelope.run(
+        "process.execute",
+        () => {
+          attempts += 1;
+          throw deadline;
+        },
+        {
+          classify: (error) =>
+            error === deadline
+              ? "fatal"
+              : classifyDaytonaControlPlaneError(error),
+        },
+      ),
+    ).rejects.toBe(deadline);
+
+    expect(attempts).toBe(1);
+    expect(waits).toEqual([]);
+  });
 });
