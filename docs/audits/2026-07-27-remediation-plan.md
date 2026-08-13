@@ -6655,3 +6655,184 @@ contract.
    surviving to the tsdown hypothesis with per-cause
    fingerprints, twenty reaching its client stub with
    the serve failure named.
+
+## Addendum (2026-08-13, wave-7 rerun — all five failed: a Daytona platform incident plus a stale snapshot; the wave-7 code held)
+
+The 2026-08-13T19-21 batch: all five entries failed,
+and none of the failures implicate N127–N131. Two
+environmental causes explain everything. First, a
+Daytona platform incident spanning roughly 19:33–21:42
+UTC: control-plane fs.upload/fs.sync/fs.write-text
+calls hung without responding (each burning the full
+10-minute attempt timeout), and sandbox egress DNS was
+broken (EAI_AGAIN to registry.npmjs.org inside open
+install windows). That killed homer, directus, and
+twenty on the 90-minute wall clock — amplified by the
+N123 envelope's own design, whose 10-min-per-attempt ×
+8-attempt ladder let a single envelope legally consume
+60–84 minutes (→ N133). Second, the deployed
+submitted-code snapshot
+(makeademo-submitted-code-browser-ca-20260809-mem8,
+built 2026-08-09) predates the Dockerfile's N122(5)
+services layer, so the postgres/mariadb/redis binaries
+the provisioned-service rung depends on do not exist in
+the sandbox — the rung's boot script fails on its first
+shell line. That killed calcom and derailed ghostfolio
+(→ N132). The N122(5) acceptance question is therefore
+unanswered, not failed: no run in this batch ever
+executed against a real provisioned database.
+
+### Diagnoses (2026-08-13T19-21)
+
+homer — wall-clock death, pure incident. One fs.upload
+envelope opened at 20:02 and did not fail until 20:59 —
+57 minutes inside a single control-plane call — and the
+install windows that did open hit EAI_AGAIN resolving
+registry.npmjs.org (sandbox egress DNS was down too, so
+even successful uploads led to dead installs). Nothing
+app-specific or wave-7-specific in the run at all.
+
+directus — wall-clock death, pure incident. Two fs.sync
+storms (19:49→20:28 and 20:38→21:39) consumed nearly
+the entire budget before any repair hypothesis could
+run; the tsdown --out-dir wall from the previous batch
+was never reached. The per-cause fingerprints (N130)
+never got input to discriminate.
+
+twenty — wall-clock death, but with the batch's one
+piece of real progress first: round 3 passed preflight
+and ran exploration for the first time — the N129
+fidelity veto and N131's honored build channel got the
+workspace build through, and the serve failure of the
+previous batch did not recur. The new wall is past the
+build: object routes rendered only navigation chrome
+because the client stub injected no data (watchlist).
+Then the incident took over: round 4's lifecycle timed
+out on yarn retrying a sealed-network fetch until exit
+124, and round 5 died on ENOSPC in
+/root/.makeademo-staging (watchlist) before the clock
+ran out.
+
+calcom — the N122(5) image gap, end to end. The
+provisioned-service rung's postgres boot script failed
+on its first line: `ls: cannot access
+'/usr/lib/postgresql/*/bin': No such file or directory`
+then `chown: invalid user: 'postgres'` — the snapshot
+simply does not contain the binaries the rung was built
+against. The run then oscillated: service boot fails →
+repair drops the rung → the app starts but every
+DB-backed feature (event types, booking) is
+unobservable → repair re-adds the rung → boot fails
+again — to the repair limit. The oscillation is
+rational agent behavior against an impossible
+environment; no harness bug.
+
+ghostfolio — image gap, then an unhinted retreat path.
+Round 1 hit the same missing-binaries boot failure and
+the agent legally retreated to the client-stub rung —
+but the retreat rewrote startup to `npm run start`
+(`node dist/apps/api/main`), and dist/ had never been
+built: MODULE_NOT_FOUND every round after. The resolver
+derives no build command for this shape and the
+unbuilt-workspace-package hints (N131) only match
+workspace-package paths, not root-level dist/ output —
+so no hint ever named the missing build (watchlist:
+retreat-path build channel).
+
+### New items
+
+### N132 (Critical, infra) — the deployed snapshot must contain its own services layer
+
+The Dockerfile has shipped the
+mariadb-server/postgresql/redis-server layer since the
+N122(5) landing; the deployed snapshot predates it, and
+nothing between "Dockerfile changed" and "matrix run"
+checks that the deployed image matches. Fix in two
+parts. (1) Rotate: build a fresh snapshot from the
+current Dockerfile via the established runbook
+(`daytona snapshot create`, CPU 2 / memory 8GB / disk
+10GB), repoint MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT,
+run `bun run verify:daytona-image`. (2) Guard: the
+verifier must provision all three services with the
+real createServiceProvisionCommand inside the
+submitted-code sandbox and demand each
+`[makeademo:service] <name> ready` marker, so a
+snapshot missing the binaries fails verification
+instead of failing mid-matrix.
+
+Landed (this session): the verifier guard runs every
+provisionable service through the exact harness call
+shape (sh -ec + shellQuote) and asserts the ready
+markers; snapshot
+makeademo-submitted-code-browser-ca-20260813-services-mem8
+built from the unchanged Dockerfile and `.env`
+repointed. The guard earned its keep immediately: the
+first run against the fresh snapshot failed on a latent
+bug in the mysql provision script — its first-ever real
+execution (the matrix never got past the missing
+binaries). mariadbd drops to the mysql user before
+creating its socket and pid file, and both paths sat
+directly in the root-owned services root: TCP bound
+fine, then "Can't start server : Bind on unix socket:
+Permission denied" and abort. Fixed by moving both
+inside the mysql-owned data directory (regression test
+on the script contract); postgres and redis were never
+exposed — postgres writes only inside its chowned
+subdirectory and redis runs as root. One retry also ate
+a residual incident flicker (the parent sandbox
+transiently could not resolve github.com — egress DNS,
+the same symptom that killed homer's installs). The
+rerun passed everything: all three ready markers, plus
+the full pre-existing runtime verification.
+
+### N133 (High, bugfix) — hung attempts must not inherit the transient ladder
+
+The escalating ladder (2s→90s backoff, 8 attempts)
+exists for fast-rejecting transients — 502s, resets —
+where retrying is cheap and the 2026-08-12 batch proved
+patience wins. A hung attempt is a different animal:
+each one costs the full 10-minute attempt timeout
+before the envelope even learns it failed, so the same
+ladder prices a persistent control-plane outage at
+60–84 minutes per envelope against a 90-minute run.
+Attempts abandoned by the attempt timeout (error name
+DaytonaControlPlaneAttemptTimeoutError) now count
+against a separate hungAttemptLimit (default 2)
+regardless of remaining ladder rungs: a persistently
+hung envelope fails in ~21 minutes, while fast
+transients keep the full ladder unchanged.
+
+Landed (this session): the cap in the control-plane
+envelope with two tests — persistent hangs stop at the
+cap with the attempts count and classification
+preserved in the terminal error, and a hang followed by
+fast 502s still walks the whole ladder to success.
+
+### Watchlist (no fix scheduled; re-check next matrix)
+
+- ghostfolio's retreat path has no build channel: a
+  client-stub retreat that switches startup to a
+  root-level dist/ entry (`node dist/apps/api/main`)
+  gets MODULE_NOT_FOUND with no hint and no resolver
+  build derivation — the unbuilt-workspace hints only
+  match workspace-package paths.
+- twenty's client stub injected no data: object routes
+  rendered navigation chrome only. The stub reached is
+  not the stub working.
+- twenty round 5 hit ENOSPC in /root/.makeademo-staging
+  — staging-dir hygiene under repeated repair rounds.
+- Incident-mode observability: nothing in the run
+  distinguishes "the platform is down" from "the app is
+  slow" until the wall clock kills the run; a batch
+  health canary (verify:daytona-image before launch)
+  is now the manual mitigation.
+
+### Rerun
+
+All five entries, after the N132 rotation is verified.
+Expected trajectory: calcom and ghostfolio finally ask
+the N122(5) acceptance question against real binaries;
+homer green as before the incident; directus reaching
+the tsdown hypothesis with N130's per-cause
+fingerprints; twenty resuming from its round-3 progress
+into the client-stub data question.
