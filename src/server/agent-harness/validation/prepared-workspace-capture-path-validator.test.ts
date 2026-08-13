@@ -324,6 +324,13 @@ describe("validatePreparedWorkspaceCapturePath", () => {
       failureReason: expect.stringContaining("click-dashboard"),
       status: "failed",
     });
+    // N125: the typed failure identity survives as structured data, not
+    // only inside the prose failureReason, so regrounding can name the
+    // exact failed action instead of re-exploring blind.
+    expect(result.failedAction).toEqual({
+      actionId: "click-dashboard",
+      sceneId: "scene-main",
+    });
     expect(result.logs.join("\n")).toContain("locator click timed out");
     expect(await readFile(result.stdoutPath, "utf8")).toContain(
       "[makeademo:validation] script failed",

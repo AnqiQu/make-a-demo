@@ -369,6 +369,14 @@ export type ValidationReport = {
   stage: string;
   attemptedCommand?: string;
   exitCode?: number;
+  /**
+   * The typed identity of the browser action a capture-path dry run failed
+   * on (N125). `actionId` is the Demo Script step id, so the orchestrator
+   * can join it back to the script action's locator candidate and scene
+   * prefix; regrounding consumes that identity instead of re-exploring
+   * blind.
+   */
+  failedAction?: { actionId?: string; sceneId: string };
   featureVerdicts?: FeatureVerdict[];
   fidelityAdjudication?: FidelityAdjudicationRecord;
   logsSummary: string;
@@ -1151,6 +1159,9 @@ export function readValidationReport(value: unknown): ValidationReport {
     browserObservations: readStringArray(record, "browserObservations"),
     consoleErrors: readStringArray(record, "consoleErrors"),
     ...optionalKey(record, "exitCode", readNonNegativeNumber),
+    ...(record.failedAction === undefined
+      ? {}
+      : { failedAction: readFailedActionRecord(record.failedAction) }),
     ...optionalKey(record, "failingFeatureIds", readStringArray),
     ...optionalKey(record, "failureClassification", readNonEmptyString),
     ...(record.featureVerdicts === undefined
@@ -1177,6 +1188,19 @@ export function readValidationReport(value: unknown): ValidationReport {
     stdoutExcerpts: readStringArray(record, "stdoutExcerpts"),
     suggestedRepairHints: readStringArray(record, "suggestedRepairHints"),
     ...optionalKey(record, "urlChecked", readLocalHttpUrl),
+  };
+}
+
+function readFailedActionRecord(
+  value: unknown,
+): NonNullable<ValidationReport["failedAction"]> {
+  const path = "failedAction";
+  const record = assertRecord(value, path);
+  return {
+    ...(record.actionId === undefined
+      ? {}
+      : { actionId: readNonEmptyString(record, "actionId", path) }),
+    sceneId: readNonEmptyString(record, "sceneId", path),
   };
 }
 

@@ -57,6 +57,46 @@ describe("validateDynamicCapturePath", () => {
     });
   });
 
+  it("carries the failed action identity and names it in the locator repair hint", async () => {
+    // N125: the structured identity — not the prose summary — is what
+    // regrounding consumes, and the hint names the exact failed action
+    // instead of suggesting a blind re-exploration.
+    const report = await validateDynamicCapturePath(
+      {
+        preparationManifest: { baseUrl: "http://127.0.0.1:3000" },
+        scriptCandidate: {
+          outputPath: "/workspace/.makeademo/demo-script.json",
+        },
+      },
+      {
+        async runCapturePath() {
+          return {
+            blockedNetworkAttempts: [],
+            browserUrl: "http://127.0.0.1:3000",
+            failedAction: {
+              actionId: "click-dashboard",
+              sceneId: "scene-main",
+            },
+            failureClassification: "locator failure",
+            failureReason:
+              "Browser action click-dashboard failed in Scene scene-main. locator click timed out",
+            logs: [],
+            status: "failed" as const,
+            warnings: [],
+          };
+        },
+      },
+    );
+
+    expect(report.failedAction).toEqual({
+      actionId: "click-dashboard",
+      sceneId: "scene-main",
+    });
+    expect(report.suggestedRepairHints).toEqual([
+      expect.stringContaining("click-dashboard"),
+    ]);
+  });
+
   it("classifies an exhausted Daytona artifact transfer separately from script failures", async () => {
     const report = await validateDynamicCapturePath(
       {

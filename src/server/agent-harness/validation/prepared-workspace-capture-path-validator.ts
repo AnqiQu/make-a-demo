@@ -36,6 +36,14 @@ export type PreparedWorkspaceCapturePathResult = {
     url?: string;
   }>;
   browserUrl: string;
+  /**
+   * The typed identity of the browser action that failed the dry run, when
+   * the runtime protocol named one (N125). `actionId` is the script step id
+   * — the id space shared with the Demo Script's browser actions — so
+   * consumers can look up the failed action's locator candidate and scene
+   * prefix instead of regexing the prose failureReason.
+   */
+  failedAction?: { actionId?: string; sceneId: string };
   failureClassification?:
     | "app server error"
     | "assertion failure"
@@ -199,8 +207,10 @@ export async function validatePreparedWorkspaceCapturePath(input: {
       });
       return undefined;
     } catch (error) {
+      const failedAction = readFailedAction(error);
       return {
         ...common,
+        ...(failedAction === undefined ? {} : { failedAction }),
         failureClassification: classifyCaptureFailure(error),
         failureReason: formatProtocolFailure(error),
         status: "failed" as const,
@@ -280,6 +290,18 @@ function formatProtocolFailure(error: unknown) {
     return `Capture Runtime Protocol Error: ${error.message}`;
   }
   return formatErrorDiagnostic(error);
+}
+
+function readFailedAction(
+  error: unknown,
+): PreparedWorkspaceCapturePathResult["failedAction"] {
+  if (!(error instanceof CaptureBrowserActionFailureError)) {
+    return undefined;
+  }
+  return {
+    ...(error.actionId === undefined ? {} : { actionId: error.actionId }),
+    sceneId: error.sceneId,
+  };
 }
 
 function classifyCaptureFailure(
