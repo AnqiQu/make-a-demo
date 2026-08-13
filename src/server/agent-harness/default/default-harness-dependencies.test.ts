@@ -6940,7 +6940,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
     const hints = report.suggestedRepairHints.join("\n");
     expect(hints).toContain("twenty-shared");
     expect(hints).toContain("workspace package");
-    expect(hints).toContain("instead of changing the import");
+    expect(hints).toContain("Do not change the import");
   });
 
   it("steers an unresolved workspace entry at the repo's own build target", async () => {

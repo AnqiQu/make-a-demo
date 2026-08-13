@@ -798,6 +798,188 @@ describe("resolveRuntimeTarget", () => {
     );
   });
 
+  it("keeps a repair-set buildCommandUsed that names a real workspace build target", () => {
+    // N131 (directus, 2026-08-13): the unbuilt-workspace hints steer the
+    // agent to "Set buildCommandUsed to build <package>", and resolution
+    // then stripped exactly that for dev-server starts — whose servers
+    // rebuild the app on demand but never a sibling workspace package.
+    const preparationManifest = manifest("apps/dashboard/src/app/page.tsx");
+    preparationManifest.buildCommandUsed = "pnpm --filter=@acme/ui run build";
+
+    const resolution = resolvePreparationRuntime({
+      preparationManifest,
+      repoProfile: profile({
+        workspacePackages: [
+          {
+            dir: "apps/dashboard",
+            name: "@acme/dashboard",
+            ports: [3001],
+            scripts: { dev: "next dev -p 3001" },
+          },
+          {
+            dir: "packages/ui",
+            name: "@acme/ui",
+            ports: [],
+            scripts: { build: "vite build" },
+          },
+        ],
+      }),
+    });
+
+    expect(resolution.preparationManifest.buildCommandUsed).toBe(
+      "pnpm --filter=@acme/ui run build",
+    );
+  });
+
+  it("keeps a task-runner buildCommandUsed that names the workspace package directly", () => {
+    const preparationManifest = manifest("packages/twenty-front/src/index.tsx");
+    preparationManifest.buildCommandUsed = "npx nx run twenty-shared:build";
+
+    const resolution = resolvePreparationRuntime({
+      preparationManifest,
+      repoProfile: profile({
+        workspacePackages: [
+          {
+            dir: "packages/twenty-front",
+            name: "twenty-front",
+            ports: [3001],
+            scripts: { dev: "vite --port 3001" },
+          },
+          {
+            dir: "packages/twenty-shared",
+            name: "twenty-shared",
+            ports: [],
+            scripts: { build: "tsup" },
+          },
+        ],
+      }),
+    });
+
+    expect(resolution.preparationManifest.buildCommandUsed).toBe(
+      "npx nx run twenty-shared:build",
+    );
+  });
+
+  it("keeps a buildCommandUsed whose app script body names the workspace package", () => {
+    const preparationManifest = manifest("apps/dashboard/src/app/page.tsx");
+    preparationManifest.buildCommandUsed = "bun run build";
+
+    const resolution = resolvePreparationRuntime({
+      preparationManifest,
+      repoProfile: profile({
+        workspacePackages: [
+          {
+            dir: "apps/dashboard",
+            name: "@acme/dashboard",
+            ports: [3001],
+            scripts: {
+              build: "nx build @acme/ui",
+              dev: "next dev -p 3001",
+            },
+          },
+          {
+            dir: "packages/ui",
+            name: "@acme/ui",
+            ports: [],
+            scripts: { build: "vite build" },
+          },
+        ],
+      }),
+    });
+
+    expect(resolution.preparationManifest.buildCommandUsed).toBe(
+      "bun run build",
+    );
+  });
+
+  it("keeps a buildCommandUsed that names the workspace by directory path filter", () => {
+    const preparationManifest = manifest("apps/dashboard/src/app/page.tsx");
+    preparationManifest.buildCommandUsed =
+      "pnpm --filter=./packages/ui run build";
+
+    const resolution = resolvePreparationRuntime({
+      preparationManifest,
+      repoProfile: profile({
+        workspacePackages: [
+          {
+            dir: "apps/dashboard",
+            name: "@acme/dashboard",
+            ports: [3001],
+            scripts: { dev: "next dev -p 3001" },
+          },
+          {
+            dir: "packages/ui",
+            ports: [],
+            scripts: { build: "vite build" },
+          },
+        ],
+      }),
+    });
+
+    expect(resolution.preparationManifest.buildCommandUsed).toBe(
+      "pnpm --filter=./packages/ui run build",
+    );
+  });
+
+  it("still strips a buildCommandUsed whose selector names an absent package", () => {
+    const preparationManifest = manifest("apps/dashboard/src/app/page.tsx");
+    preparationManifest.buildCommandUsed =
+      "pnpm --filter=@acme/website run build";
+
+    const resolution = resolvePreparationRuntime({
+      preparationManifest,
+      repoProfile: profile({
+        workspacePackages: [
+          {
+            dir: "apps/dashboard",
+            name: "@acme/dashboard",
+            ports: [3001],
+            scripts: { dev: "next dev -p 3001" },
+          },
+          {
+            dir: "packages/ui",
+            name: "@acme/ui",
+            ports: [],
+            scripts: { build: "vite build" },
+          },
+        ],
+      }),
+    });
+
+    expect(resolution.preparationManifest).not.toHaveProperty(
+      "buildCommandUsed",
+    );
+  });
+
+  it("prefers the resolved build command over an agent-set one when resolution finds a build", () => {
+    const preparationManifest = manifest("apps/web/src/page.tsx");
+    preparationManifest.buildCommandUsed = "pnpm --filter=@acme/ui run build";
+
+    const resolution = resolvePreparationRuntime({
+      preparationManifest,
+      repoProfile: profile({
+        workspacePackages: [
+          {
+            dir: "apps/web",
+            name: "@acme/web",
+            ports: [],
+            scripts: { build: "vite build", dev: "serve -s dist -l 3000" },
+          },
+          {
+            dir: "packages/ui",
+            name: "@acme/ui",
+            ports: [],
+            scripts: { build: "vite build" },
+          },
+        ],
+      }),
+    });
+
+    expect(resolution.preparationManifest.buildCommandUsed).toBe(
+      "bun run build",
+    );
+  });
+
   it("uses the RunPlan target instead of inferring an easier sibling from feature paths", () => {
     const repoProfile = profile({
       browserRuntimeCandidates: [

@@ -127,22 +127,82 @@ export function resolvePreparationRuntime(input: {
         : { unresolved: outcome.unresolved }),
     };
   }
-  const { buildCommandUsed: _agentBuildCommand, ...manifest } =
+  const { buildCommandUsed: agentBuildCommand, ...manifest } =
     input.preparationManifest;
+  const buildCommandUsed =
+    runtimeTarget.build?.command ??
+    readHonoredWorkspaceBuildCommand(
+      agentBuildCommand,
+      input.repoProfile,
+      runtimeTarget.targetId,
+    );
   return {
     preparationManifest: {
       ...manifest,
       appDir: runtimeTarget.start.cwd,
       baseUrl: runtimeTarget.baseUrl,
-      ...(runtimeTarget.build === undefined
-        ? {}
-        : { buildCommandUsed: runtimeTarget.build.command }),
+      ...(buildCommandUsed === undefined ? {} : { buildCommandUsed }),
       installCommandUsed: runtimeTarget.install.command,
       ports: runtimeTarget.ports,
       startCommandUsed: runtimeTarget.start.command,
     },
     runtimeTarget,
   };
+}
+
+/**
+ * The one agent-authored runtime field resolution honors instead of
+ * replacing: a buildCommandUsed that names a real workspace package. A dev
+ * server rebuilds the app on demand but never a sibling workspace package,
+ * so when resolution forces build undefined the only channel for "build
+ * <sibling> before the app" is the manifest — and the unbuilt-workspace
+ * hints steer repairs to exactly that channel (N131: directus's agent
+ * obeyed the hint three rounds running while resolution stripped it).
+ * Honored only when the command, or the app script body it runs one level
+ * down, references a known workspace package by its full name and selects
+ * no absent one; anything else stays backend-owned and is dropped.
+ */
+function readHonoredWorkspaceBuildCommand(
+  agentBuildCommand: string | undefined,
+  repoProfile: RepoProfile,
+  targetDir: string,
+): string | undefined {
+  if (agentBuildCommand === undefined) {
+    return undefined;
+  }
+  const knownWorkspaceNames = new Set(
+    (repoProfile.workspacePackages ?? []).flatMap(({ name }) =>
+      name === undefined ? [] : [name],
+    ),
+  );
+  const scriptName = readScriptName(agentBuildCommand);
+  const scripts =
+    targetDir === "."
+      ? repoProfile.packageScripts
+      : repoProfile.workspacePackages?.find(({ dir }) => dir === targetDir)
+          ?.scripts;
+  const surfaces = [
+    agentBuildCommand,
+    scriptName === undefined ? undefined : scripts?.[scriptName],
+  ]
+    .filter((value): value is string => value !== undefined)
+    .join(" ");
+  if (readAbsentWorkspacePackage(surfaces, knownWorkspaceNames) !== undefined) {
+    return undefined;
+  }
+  // Unnamed workspace packages are hinted by directory, and pnpm-style path
+  // filters spell directories as `./<dir>` — both count as naming a target.
+  const referenceIdentifiers = [
+    ...knownWorkspaceNames,
+    ...(repoProfile.workspacePackages ?? []).flatMap(({ dir }) =>
+      dir === "." ? [] : [dir, `./${dir}`],
+    ),
+  ];
+  return referenceIdentifiers.some((identifier) =>
+    referencesPackageName(surfaces, identifier),
+  )
+    ? agentBuildCommand
+    : undefined;
 }
 
 /**

@@ -3092,7 +3092,7 @@ function readUnbuiltWorkspacePackageHints(
   hints.push(
     ...[...missingFilePackages].map(
       (name) =>
-        `${name} resolves into the repo's own node_modules but the imported file does not exist — it is likely an internal workspace package whose build output was never produced, and dependency install builds no workspace member. Set buildCommandUsed to the repository's own target that builds ${name} before the app (check the repo's build, nx, or turbo scripts) instead of changing the import.`,
+        `${name} resolves into the repo's own node_modules but the imported file does not exist — it is likely an internal workspace package whose build output was never produced, and dependency install builds no workspace member. Set buildCommandUsed to the repository's own target that builds ${name} before the app, naming ${name} in the command (check the repo's build, nx, or turbo scripts); the backend keeps a build command that names a real workspace package, even for dev-server starts. Do not change the import.`,
     ),
   );
 
@@ -3116,7 +3116,7 @@ function readUnbuiltWorkspacePackageHints(
   hints.push(
     ...[...entryPackages].map(
       (name) =>
-        `${name} is an internal workspace package whose entry point does not resolve — its package.json main/module/exports names build output that dependency install never produces. Set buildCommandUsed to the repository's own target that builds ${name} before the app (check the repo's build, nx, or turbo scripts) instead of changing the import.`,
+        `${name} is an internal workspace package whose entry point does not resolve — its package.json main/module/exports names build output that dependency install never produces. Set buildCommandUsed to the repository's own target that builds ${name} before the app, naming ${name} in the command (check the repo's build, nx, or turbo scripts); the backend keeps a build command that names a real workspace package, even for dev-server starts. Do not change the import.`,
     ),
   );
 
@@ -3147,7 +3147,7 @@ function readUnbuiltWorkspacePackageHints(
         const label = sibling.name ?? sibling.dir;
         missingAssetHints.set(
           sibling.dir,
-          `${path} is missing at runtime and lives under the internal workspace ${label} — that file is its build output, and dependency install builds no workspace member. Extend buildCommandUsed with the repository's own target that builds ${label} before the app instead of creating the file by hand.`,
+          `${path} is missing at runtime and lives under the internal workspace ${label} — that file is its build output, and dependency install builds no workspace member. Extend buildCommandUsed with the repository's own target that builds ${label} before the app, naming ${label} in the command so the backend keeps it, instead of creating the file by hand.`,
         );
       }
     }
