@@ -141,4 +141,65 @@ describe("readLastErrorCauseLine", () => {
     ).toBeUndefined();
     expect(readLastErrorCauseLine("")).toBeUndefined();
   });
+
+  it("lands on the tool-authored cause above the pnpm epilogue", () => {
+    // N130 (directus, 2026-08-13): pnpm ends every failure with the same
+    // ` ELIFECYCLE  Command failed with exit code 1.` epilogue, so three
+    // distinct crashes fingerprinted as one repeat and the run died on the
+    // repeated-failure limit with the budget barely touched.
+    expect(
+      readLastErrorCauseLine(
+        [
+          "/workspace/repo/packages/extensions build$ tsdown",
+          '✗ [ERROR] Could not resolve "./dist/node.js"',
+          " ELIFECYCLE  Command failed with exit code 1.",
+          'ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  "@directus/extensions#build" failed',
+        ].join("\n"),
+      ),
+    ).toBe('✗ [ERROR] Could not resolve "./dist/node.js"');
+  });
+
+  it("lands on the script line above the npm lifecycle epilogue block", () => {
+    expect(
+      readLastErrorCauseLine(
+        [
+          "npm ERR! code ELIFECYCLE",
+          "npm ERR! errno 127",
+          "npm ERR! app@1.0.0 dev: `vite`",
+          "npm ERR! Exit status 127",
+          "npm ERR! Failed at the app@1.0.0 dev script.",
+          "npm ERR! This is probably not a problem with npm.",
+          "npm ERR! A complete log of this run can be found in: /root/.npm/_logs/2026-08-13T07_12_22_532Z-debug.log",
+        ].join("\n"),
+      ),
+    ).toBe("npm ERR! app@1.0.0 dev: `vite`");
+  });
+
+  it("lands on the compiler error above the yarn epilogue", () => {
+    expect(
+      readLastErrorCauseLine(
+        [
+          "$ tsc && vite build",
+          "src/App.tsx(12,3): error TS2322: Type 'string' is not assignable to type 'number'.",
+          "error Command failed with exit code 2.",
+          "info Visit https://yarnpkg.com/en/docs/cli/run for documentation about this command.",
+        ].join("\n"),
+      ),
+    ).toBe(
+      "src/App.tsx(12,3): error TS2322: Type 'string' is not assignable to type 'number'.",
+    );
+  });
+
+  it("falls back to the epilogue when nothing above it names an error", () => {
+    // A wrapper epilogue is still a real error line; skipping it must never
+    // turn a failing excerpt into "no cause found".
+    expect(
+      readLastErrorCauseLine(
+        [
+          "building for production...",
+          " ELIFECYCLE  Command failed with exit code 1.",
+        ].join("\n"),
+      ),
+    ).toBe("ELIFECYCLE  Command failed with exit code 1.");
+  });
 });

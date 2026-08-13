@@ -3056,6 +3056,77 @@ describe("runAgentHarnessPipeline", () => {
     expect(preflightAttempts).toBe(4);
   });
 
+  it("does not collapse distinct causes behind the same package-manager epilogue", async () => {
+    // N130 (directus, 2026-08-13): pnpm ends every failed run with the same
+    // ` ELIFECYCLE ` epilogue, and the fingerprint's cause line landed on it
+    // — three distinct crashes counted as one repeat and the run died on the
+    // repeated-failure limit with the global budget barely touched.
+    let preflightAttempts = 0;
+    let repairAttempts = 0;
+    const causes = [
+      '✗ [ERROR] Could not resolve "./dist/node.js"',
+      "SyntaxError: Unexpected end of JSON input in /workspace/repo/packages/extensions/package.json",
+      'Error: Cannot find module "@directus/extensions/dist/index.mjs"',
+    ];
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_epilogue_distinct_causes" }),
+      stubPipelineDependencies({
+        capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation() {
+          repairAttempts += 1;
+          return { manifest: preparationManifest() };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          const cause = causes[preflightAttempts - 1];
+          if (cause === undefined) {
+            return report("preparation-preflight", "passed");
+          }
+          return {
+            ...report("preparation-preflight", "failed"),
+            attemptedCommand: "pnpm run dev",
+            failureClassification: "start failure",
+            logsSummary: [
+              "Start command exited with code 1",
+              cause,
+              " ELIFECYCLE  Command failed with exit code 1.",
+              'ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  "@directus/extensions#build" failed',
+            ].join("\n"),
+          };
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      { repoPreparationRepairLimit: 5 },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(repairAttempts).toBe(3);
+    expect(preflightAttempts).toBe(4);
+  });
+
   it("collapses failures whose symptom lines differ while the decisive cause repeats", async () => {
     // The curl exit code drifts run to run, but every attempt dies on the
     // same EADDRINUSE cause line — the same wall, so the repeated-failure

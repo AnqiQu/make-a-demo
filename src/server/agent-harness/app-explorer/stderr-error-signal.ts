@@ -24,6 +24,17 @@ const warningOnlyPattern =
 // kernel's disk-exhaustion prose, which archive and install tools relay
 // verbatim ("tar: ...: No space left on device").
 const causeProsePattern = /^x\s+no package found\b|no space left on device/i;
+// Package-manager epilogue lines: the wrapper narrating that its child
+// failed, printed identically under every distinct cause. pnpm ends every
+// failed run with ` ELIFECYCLE  Command failed with exit code N.` (and `-r`
+// runs add ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL); npm prints its Exit status /
+// Failed at / log-location block; yarn closes with "Command failed with
+// exit code N." — none of them carry failure identity. The generic
+// command-failed shape is anchored to the line end so execa-style lines
+// that append the failing command ("… exit code 1: prisma generate") keep
+// qualifying as causes.
+const wrapperEpiloguePattern =
+  /\bELIFECYCLE\b|\bERR_PNPM_RECURSIVE_RUN_FIRST_FAIL\b|\bexit status \d+\b|\blifecycle script\b|npm err! (?:failed at the\b|this is probably not a problem with npm|a complete log of this run can be found in)|\bcommand failed with exit code \d+\.?$/i;
 
 /**
  * Extracts the error-class lines from a managed app's stderr tail. Dev
@@ -64,15 +75,19 @@ export function readStderrErrorSignal(
  * usually the outermost symptom (a probe's `curl: (7)`, a wrapper's exit
  * status). Toolchains print root causes below their symptoms and excerpts
  * are tail-biased, so the last qualifying line is the closest to why the
- * command died. Recognizes the same error-word and errno shapes as
- * {@link readStderrErrorSignal} plus package-resolution and disk-exhaustion
- * prose, and returns undefined when no line qualifies so callers can fall
- * back to their own summary line.
+ * command died — except the package-manager epilogue, which sits below the
+ * cause and reads identically for every distinct failure (N130: three
+ * different directus crashes fingerprinted as one ` ELIFECYCLE ` repeat).
+ * Epilogue lines are skipped while any tool-authored cause line exists and
+ * kept as the answer only when nothing above them qualifies. Recognizes the
+ * same error-word and errno shapes as {@link readStderrErrorSignal} plus
+ * package-resolution and disk-exhaustion prose, and returns undefined when
+ * no line qualifies so callers can fall back to their own summary line.
  */
 export function readLastErrorCauseLine(
   outputExcerpt: string,
 ): string | undefined {
-  return outputExcerpt
+  const causeLines = outputExcerpt
     .split("\n")
     .map((line) => line.trim())
     .filter(
@@ -83,6 +98,9 @@ export function readLastErrorCauseLine(
         (errorWordPattern.test(line) ||
           errorCodePattern.test(line) ||
           causeProsePattern.test(line)),
-    )
-    .at(-1);
+    );
+  const toolAuthoredCauseLines = causeLines.filter(
+    (line) => !wrapperEpiloguePattern.test(line),
+  );
+  return toolAuthoredCauseLines.at(-1) ?? causeLines.at(-1);
 }
