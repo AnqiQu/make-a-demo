@@ -6510,6 +6510,22 @@ diagnostic text that the probe read as "no visible
 content"); the overlay text names the exact missing
 import and belongs in the failure summary.
 
+Landed (this session): the explorer script records
+same-origin script responses answering 5xx (minus the
+504 stale-module shape the crawler reloads through)
+into `failedScriptResponses`, deduped and bounded; the
+backend re-filters them against the app origin and,
+when the run already failed grounding, classifies as
+"app server error" (existing preparation-repair route)
+with the failing URL and status in the summary. A named
+missing-module page error still outranks it, and a run
+that grounds its features never converts to failed.
+Companion landed: when the selector harvest and
+body.innerText both come up empty, `textSample` falls
+back to the aria snapshot's text runs — which pierce
+open shadow roots — unfiltered by cross-route dedupe,
+so every overlay-only route carries its own evidence.
+
 ### N129 (High, bugfix) — the build gate must build the app under test
 
 twenty round 6 bought a green build gate by rewriting
