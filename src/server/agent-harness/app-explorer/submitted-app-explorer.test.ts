@@ -3280,6 +3280,56 @@ describe("feature verdict ledger", () => {
     );
   });
 
+  it("normalizes a bare fragment entryPath into observed route space for declared-proof actions", async () => {
+    // N124 (homer): the manifest contract legally allows entryPaths that
+    // start with "#" or "?", but every observed AppMap route lives in
+    // pathname+search+hash space. A declared-proof action carrying the raw
+    // "#additional-page" would point Capture at a route the catalog never
+    // observed, so ingestion must normalize entryPaths against the base URL.
+    const { result } = await exploreObservation({
+      declaredProofs: [
+        {
+          detail: '"This is another page" is visible on /#additional-page',
+          featureId: "additional-page",
+          passed: true,
+        },
+      ],
+      featureInventory: [
+        preparedFeature({
+          entryPaths: ["#additional-page"],
+          expectedProof: {
+            kind: "visible-text",
+            text: "This is another page",
+          },
+          id: "additional-page",
+          label: "Additional page",
+          requestedFeature: "additional page",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["additional-page"],
+          headings: ["Additional page"],
+          path: "/#additional-page",
+          requestedPath: "/#additional-page",
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    expect(artifacts.actionCatalog.actions).toContainEqual(
+      expect.objectContaining({
+        id: "declared-proof-additional-page",
+        route: "/#additional-page",
+      }),
+    );
+    // Ingestion-time normalization is the invariant: no catalog action may
+    // ever carry a route outside the observed pathname+search+hash space.
+    for (const action of artifacts.actionCatalog.actions) {
+      expect(action.route).toMatch(/^\//);
+    }
+  });
+
   it("fails a feature whose declared proof failed even when wording would ground it", async () => {
     // The excalidraw vacuous-pass hole: "undo/redo" must pass its declared
     // transition, not ride a nearby heading. A failed proof subsumes every

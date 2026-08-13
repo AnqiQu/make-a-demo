@@ -232,6 +232,27 @@ export function normalizeCrawlUrl(rawUrl: string): string {
   return url.toString().replace(/[?#]+$/, "");
 }
 
+/**
+ * Projects a manifest entryPath into the route space browser observations
+ * live in (`url.pathname + url.search + url.hash`). The authoring contract
+ * legally admits entryPaths starting with `/`, `#`, or `?`, but every
+ * observed AppMap route carries a pathname, so a bare `#additional-page`
+ * could never match its own observed route (N124) — declared-proof actions
+ * and verdict fallbacks would cite a route the catalog never saw.
+ * Cross-origin and unparseable entryPaths pass through untouched so the
+ * crawl planners' origin checks keep rejecting them on the raw value.
+ */
+function entryPathToRoute(entryPath: string, baseUrl: string): string {
+  try {
+    const base = new URL(baseUrl);
+    const url = new URL(entryPath, base);
+    if (url.origin !== base.origin) return entryPath;
+    return url.pathname + url.search + url.hash;
+  } catch {
+    return entryPath;
+  }
+}
+
 const explorerDirectory = "/workspace/.makeademo/exploration";
 // The script itself lives outside /workspace: bun resolves imports by walking
 // up from the script's directory before consulting NODE_PATH, so a submitted
@@ -263,9 +284,18 @@ export async function exploreSubmittedApp(input: {
   scope?: "feature-entries" | "full";
   workspace: AgentHarnessWorkspace;
 }): Promise<SubmittedAppExplorationResult> {
+  // Normalized once at ingestion: every downstream consumer — crawl
+  // targets, declared-proof actions, verdict fallbacks, repair messages —
+  // then shares one route identity space with the observed AppMap.
+  const featureInventory = (input.featureInventory ?? []).map((feature) => ({
+    ...feature,
+    entryPaths: feature.entryPaths.map((entryPath) =>
+      entryPathToRoute(entryPath, input.baseUrl),
+    ),
+  }));
   const script = createExplorerScript(
     input.baseUrl,
-    input.featureInventory ?? [],
+    featureInventory,
     input.externalResourceManifest,
     input.scope ?? "full",
   );
@@ -361,7 +391,7 @@ export async function exploreSubmittedApp(input: {
 
   const artifacts = createExplorationArtifacts({
     baseUrl: input.baseUrl,
-    featureInventory: input.featureInventory ?? [],
+    featureInventory,
     observation,
     preparationManifestId: input.preparationManifestId,
     requestedFeatures: input.requestedFeatures ?? [],
