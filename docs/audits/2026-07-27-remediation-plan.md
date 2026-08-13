@@ -6008,3 +6008,253 @@ active failure classes, as before. The expected matrix
 trajectory: after steps 1–3, directus and ghostfolio
 green and twenty reaching data-strategy repair with a
 named constraint; after step 5, five of five.
+
+## Addendum (2026-08-13, wave-6 acceptance matrix — five failures, five causes: N123–N126)
+
+The 2026-08-13T01-12 five-repo batch went 0/5 — but with
+five distinct signatures, and every wave-5 fix visibly
+working: N119 absorbed a 502 storm at 01:16–01:17
+(upload and write-text retries, attempt 2 succeeded),
+N120 carried calcom and twenty past startup 500s into
+feature verification for the first time, N121 kept
+twenty off service workers entirely (zero SW errors;
+the prep built an Apollo-transport stub instead), and
+N122(2) made every prep answer for its detected
+services. Two failures are harness bugs (a raw Daytona
+call outside the N103 envelope; a route-identity
+mismatch that made flow planning unwinnable), one is a
+repair-loop contradiction (evidence verified in one
+context, replayed in another, two validators vetoing
+each other's fix), one is agent quality missing a
+steering hint (schema-incomplete client stub), and one
+is the N122(5) wall arriving exactly as predicted. The
+N122(5) gate — acceptance repos clean of unrelated
+walls — is therefore not yet met: ghostfolio died to
+infrastructure and homer/directus to harness bugs.
+
+### Diagnoses (2026-08-13T01-12)
+
+ghostfolio — repo-preparation, an unenveloped Daytona
+call. The 11-minute prep agent command succeeded at
+01:28:52; ~300ms later the run died on a raw "Request
+failed with status code 502" with no `daytona.*.attempt`
+events. The harness's next step after agent success is
+reading the manifest via `tryReadWorkspaceJson` →
+`workspace.execute("cat …")`, and the provider's
+`execute` calls `sandbox.process.executeCommand` raw —
+no envelope, no retry, no classification. Daytona was
+broadly 502ing at that instant (teardown log persistence
+502'd too). The `preparation.diff.patch.succeeded` and
+three `artifact.written` events after the failure are
+the catch path (diff capture, fallback, run manifest),
+not the crime scene. Aggravation: the raw DaytonaError
+is not an infrastructure error, so the pipeline wrote a
+preparation fallback and the matrix report shows a bare
+transport error as if the product failed. → N123
+
+homer — flow planning, a latent route-identity bug. All
+three attempts burned on one contradiction: the
+declared-proof catalog action carried
+`route: '#additional-page'` (the manifest entryPath,
+copied verbatim at action creation) while the AppMap and
+every other catalog action use the normalized
+`/#additional-page`. The validator alternately rejected
+"belongs to unselected route" and "unknown AppMap
+route" — no agent output could satisfy it. The manifest
+contract legally admits bare `#` entryPaths, so the trap
+is armed on every run and sprung by whichever entryPath
+form the prep agent happens to write. → N124
+
+directus — deepest run to date, then an
+exploration-vs-capture reality gap. The script passed
+static contract using the browser-verified candidate
+(`getByPlaceholder('Email Address', { exact: true })`,
+matchCount 1, visible at exploration). Capture-path
+validation timed out waiting for that same locator —
+the element never appeared in the capture context.
+Locator regrounding "passed" by re-verifying the same
+locator in the exploration context, where it is
+visible; the script-repair agent then deviated from the
+candidate to work around the runtime failure, and
+static contract vetoed the deviation (verbatim locator
+equality). Pass/fail alternated until the script-repair
+budget died. The terminal report ("locator does not
+match browser-verified candidate") is the secondary
+symptom; the root is evidence certified in a context
+that capture does not reproduce, plus a repair loop
+with no channel to say so. → N125
+
+twenty — client-stub rung chosen correctly, fixture
+schema-incomplete. Real repair progress: rounds 1–3
+build failures, round 4 rendered but landed on the
+sign-in page, round 5 had a genuine Apollo-link stub
+(`dataStrategy: client-stub` for postgres and redis, no
+service worker — N121 steering worked). But the stubbed
+ClientConfig response is missing `authProviders` (and
+Apollo logged dozens of missing fields), so every object
+route crashed into the error boundary — "Cannot read
+properties of undefined (reading 'authProviders')" — and
+all three features failed as not observable. One missing
+fixture field took down the app; nothing told the repair
+agent which field or query. → N126
+
+calcom — the data wall, honestly reported. N120 carried
+preflight past the startup 500s that killed prior runs;
+N122(2) forced a dataStrategy answer and the prep chose
+`declared-stub` for postgres and redis ("no replacement
+was added because an alternate screen or untyped mock
+would not preserve the product flow" — the honest rung).
+Consequence exactly as the 2026-08-12 addendum
+predicted: `/event-types` renders its shell (that
+verdict passed round 5), but the Prisma-backed routes
+500 with no database behind them, so booking and
+availability have no browser evidence. Five rounds,
+correct classification. This is the acceptance case for
+N122(5), blocked only by the gate above. → N122(5)
+
+### N123 (Critical, bugfix + infra) — no Daytona call outside the envelope
+
+Generality: the invariant is on the provider, not any
+call site — no Daytona SDK rejection may escape
+unclassified. Every control-plane request runs inside
+`controlPlane.run`: transient ladder, attempt/retrying
+events, exhaustion wrapped as an infrastructure error.
+Audit every `this.sandbox.*` /
+`this.submittedCodeSandbox.*` call site; known raw
+today: `execute`, `executeStreaming`,
+`executeSubmittedCode`, `executeStreamingInSandbox`,
+`writeSandboxLogLine`, and the teardown log collectors
+(calls already inside `runTransferThroughEnvelope`
+attempt callbacks are covered). Command execution gets
+the default control ladder — commands have no outer
+retry loop, the same argument N119 made for transfers —
+with the existing `withTimeout` composition kept inside
+the attempt. Streaming executes envelope the initiation
+call only; mid-stream disconnects stay with their
+existing command-failure repair paths. Document the
+at-least-once invariant on the `execute` seam docstring:
+a retried command may run twice when the control plane
+fails after execution; every `execute` caller is a
+harness-authored idempotent command (`cat`, `mkdir -p`,
+`rm -f`, log appends — a duplicated audit line is
+acceptable), and agent commands ride the PTY seam,
+which is unaffected. Classification falls out free:
+default `wrapExhausted` makes exhausted retries an
+infrastructure error, so the orchestrator stops writing
+preparation fallbacks for infra deaths and the matrix
+report names the incident instead of echoing a bare
+502. TDD at the provider seam: 502-then-success on
+`executeCommand` retries with attempt events; exhaustion
+surfaces the wrapped error; a sandbox-log write survives
+one 502.
+
+### N124 (High, bugfix) — one route-identity space at evidence ingestion
+
+Generality: every route stored in the ActionCatalog,
+AppMap, or FlowSpec lives in one normalized route space;
+authoring contracts stay permissive (bare `#` and `?`
+entryPaths remain legal to write) and normalization
+happens once, at the seam where an entryPath becomes a
+route identity. Fix: a small helper converting a
+manifest entryPath to route space by resolving against
+the base URL (`#additional-page` → `/#additional-page`,
+`?q=1` → `/?q=1`), applied at declared-proof action
+creation — today the raw entryPath is copied verbatim
+into the action's `route`. Sweep the other entryPath
+consumers and normalize any that compare against route
+identity; the navigation use resolves against the base
+URL already and stays as-is. No double normalization
+inside comparators (it would mask drift), and no
+tightening of the authoring contract (the flow-planning
+lesson: rules fire only when satisfiable — here the rule
+must compare in the space the evidence actually uses).
+Regression: entryPath `#x` yields a declared-proof
+action whose route equals the AppMap-normalized form;
+plus a catalog-level invariant test that every produced
+action route parses in AppMap route space, so the class
+cannot silently return.
+
+### N125 (High, mixed) — evidence verified where it replays, and the ping-pong breaker
+
+Generality: browser evidence must be verified in the
+context in which it will be replayed, and a candidate
+that failed at replay may not be re-certified unchanged.
+Four parts:
+
+(1) Failure identity flows into regrounding: a
+capture-path locator failure on a browser-verified
+candidate passes `{actionId, candidateId, locator}` and
+the already-downloaded failure screenshot into the
+regrounding input, replacing the generic "re-run App
+Exploration" hint.
+
+(2) Regrounding verifies by prefix replay: for a failed
+candidate it executes the scene's action prefix before
+verifying, reproducing capture context rather than
+merely loading the route. Cost bounded by scene length.
+
+(3) Honest reclassification: if the element is still
+absent after prefix replay, the verdict is "evidence
+unreproducible at replay" — an app-state divergence
+dispatched to the preparation/runtime repair channel
+with the exploration-vs-replay evidence pair. The
+script channel cannot fix an app that no longer shows
+the element; today it burns its whole budget trying.
+
+(4) The breaker: if, for the same actionId, a
+static-contract locator-equality rejection follows a
+capture-path locator failure twice consecutively, stop
+and fail with one combined diagnosis naming the
+contradiction instead of exhausting the budget
+silently. Cheap adjunct: the locator-equality error
+prints both locators (expected candidate vs actual), so
+a genuine drafting slip is fixable in one round.
+
+TDD through the validation seams with fakes: regrounding
+input carries the failed candidate; prefix replay
+precedes verification; unreproducible evidence
+reclassifies to the preparation channel; the breaker
+trips on the alternating pattern; the contract error
+names both locators.
+
+### N126 (Medium, feature) — client-stub schema-gap hints
+
+Generality: when a run declares a `client-stub`
+dataStrategy and the app crashes at runtime, the
+explorer converts crash diagnostics into a targeted
+repair hint — the N121 mechanism, driven by pattern
+tables, never by any app's specifics. Detector beside
+the service-worker hint: error-boundary crash signals
+(`Cannot read properties of undefined (reading 'X')`)
+and client-cache missing-field signals (Apollo's
+`Missing field 'X' while writing result`), extracting
+the quoted identifiers generically. The hint names the
+extracted fields and states the obligation: the stub
+transport must satisfy the complete response schema for
+the queries powering the entry routes, starting with
+the named fields. Gated on the manifest actually
+declaring a `client-stub` rung so it never fires noise
+at apps crashing for unrelated reasons. Pattern tables
+extensible per the N122 detection precedent. TDD: fake
+observed errors containing both pattern classes produce
+the hint with extracted names; no client-stub
+declaration, no hint.
+
+### Recommended order
+
+1. N123 — kills runs nondeterministically in any
+   incident window; ghostfolio's only wall this batch,
+   and the misclassification fix rides along.
+2. N124 — makes runs unwinnable on an agent wording
+   coin-flip; homer's only wall.
+3. N125 — directus's wall; the largest seam work of the
+   four.
+4. N126 — twenty's accelerator; smallest diff.
+5. Matrix rerun, then evaluate the N122(5) gate:
+   expected trajectory is ghostfolio green or failing as
+   a named infrastructure incident, homer green through
+   flow planning, directus green or honestly
+   reclassified, twenty reaching schema-specific repair,
+   and calcom still stopped at the data wall — which is
+   the gate signal for N122(5), not a failure of this
+   wave.
