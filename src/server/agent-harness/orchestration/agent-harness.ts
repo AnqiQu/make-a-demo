@@ -1,5 +1,12 @@
+import {
+  type BrowserAction,
+  readBrowserActions,
+} from "../../pipeline/06-footage-capture/browser-action-plan";
 import { readLastErrorCauseLine } from "../app-explorer/stderr-error-signal";
-import type { SubmittedAppExplorationResult } from "../app-explorer/submitted-app-explorer";
+import type {
+  CaptureLocatorFailure,
+  SubmittedAppExplorationResult,
+} from "../app-explorer/submitted-app-explorer";
 import {
   AgentHarnessJobDeadlineError,
   type AgentHarnessWorkspace,
@@ -140,6 +147,14 @@ export type AgentHarnessPipelineDependencies = {
   exploreApp(input: {
     actionCatalogPath: string;
     appMapPath: string;
+    /**
+     * Present only on locator-regrounding calls (N125): the typed identity
+     * of the capture-failed action — its verified locator and candidate id,
+     * the scene's action prefix ahead of it, and the failure screenshot —
+     * so exploration can re-verify the candidate in the context capture
+     * will replay it in, instead of from a fresh route load.
+     */
+    captureFailure?: CaptureLocatorFailure;
     demoBrief: AgentHarnessPipelineInput["demoBrief"];
     preparationManifest: PreparationManifest;
     preparationValidation: ValidationReport;
@@ -477,6 +492,18 @@ export async function runAgentHarnessPipeline(
     const preparationRepairAttemptsByPhase: Record<string, number> = {};
     const scriptRepairAttemptsByPhase: Record<string, number> = {};
     const dynamicActionFailureCounts: Record<string, number> = {};
+    // N125(4): the ping-pong breaker's chain state. A capture-path locator
+    // failure arms `pendingCaptureLocatorFailure`; a static locator-equality
+    // rejection naming the same action completes one alternation pair. Two
+    // pairs on one action mean the two validation channels contradict each
+    // other — capture rejects the browser-verified candidate at replay while
+    // the static contract rejects every locator that differs from it — so
+    // the run stops with the combined diagnosis instead of silently
+    // exhausting both repair budgets.
+    let pendingCaptureLocatorFailure:
+      | { actionId: string; summary: string }
+      | undefined;
+    let locatorAlternation: { actionId: string; pairs: number } | undefined;
     const excludedCatalogActionIds = new Set<string>();
     const withoutExcludedActions = (catalog: ActionCatalog): ActionCatalog =>
       excludedCatalogActionIds.size === 0
@@ -718,6 +745,32 @@ export async function runAgentHarnessPipeline(
           staticRepairAttempts,
         );
         if (staticContractValidation.status === "failed") {
+          const equalityRejectionActionId =
+            /Browser action ([A-Za-z0-9_][A-Za-z0-9_-]*) locator does not match browser-verified candidate/.exec(
+              staticContractValidation.logsSummary,
+            )?.[1];
+          if (
+            equalityRejectionActionId !== undefined &&
+            pendingCaptureLocatorFailure?.actionId === equalityRejectionActionId
+          ) {
+            const pairs =
+              locatorAlternation?.actionId === equalityRejectionActionId
+                ? locatorAlternation.pairs + 1
+                : 1;
+            locatorAlternation = {
+              actionId: equalityRejectionActionId,
+              pairs,
+            };
+            if (pairs >= 2) {
+              throw new Error(
+                `Locator ping-pong on browser action ${equalityRejectionActionId}: capture-path validation keeps failing its browser-verified locator at replay, while static contract validation rejects every locator that differs from that candidate. The two channels contradict each other — the candidate's evidence does not hold at replay, so the fix is re-grounded evidence or preparation repair, not another script repair. Capture failure: ${pendingCaptureLocatorFailure.summary} Static rejection: ${staticContractValidation.logsSummary}`,
+              );
+            }
+          } else if (equalityRejectionActionId === undefined) {
+            // A static failure of any other shape breaks the alternation.
+            locatorAlternation = undefined;
+          }
+          pendingCaptureLocatorFailure = undefined;
           scriptCandidate = await repairScriptCandidate({
             actionCatalog,
             appMap,
@@ -801,6 +854,26 @@ export async function runAgentHarnessPipeline(
           continue;
         }
 
+        // N125(4): a locator failure arms the breaker's pending half-pair;
+        // any other capture verdict breaks the alternation chain.
+        if (capturePathValidation.failureClassification === "locator failure") {
+          const failedActionId =
+            capturePathValidation.failedAction?.actionId ??
+            /Browser action ([A-Za-z0-9_][A-Za-z0-9_-]*) failed/.exec(
+              capturePathValidation.logsSummary,
+            )?.[1];
+          pendingCaptureLocatorFailure =
+            failedActionId === undefined
+              ? undefined
+              : {
+                  actionId: failedActionId,
+                  summary: capturePathValidation.logsSummary,
+                };
+        } else {
+          pendingCaptureLocatorFailure = undefined;
+          locatorAlternation = undefined;
+        }
+
         if (
           classifyRepairRoute(capturePathValidation) ===
           "repo-preparation-repair"
@@ -839,6 +912,10 @@ export async function runAgentHarnessPipeline(
           !flowReplanned &&
           capturePathValidation.failureClassification === "locator failure"
         ) {
+          const captureFailure = readCaptureLocatorFailure(
+            capturePathValidation,
+            scriptCandidate,
+          );
           const regrounding = await runAsyncStage(
             "locator-regrounding",
             stageStatuses,
@@ -847,6 +924,7 @@ export async function runAgentHarnessPipeline(
               dependencies.exploreApp({
                 actionCatalogPath: artifactPaths.actionCatalog,
                 appMapPath: artifactPaths.appMap,
+                ...(captureFailure === undefined ? {} : { captureFailure }),
                 demoBrief: input.demoBrief,
                 preparationManifest,
                 preparationValidation,
@@ -878,6 +956,19 @@ export async function runAgentHarnessPipeline(
               regroundingValidation,
             ),
           ]);
+          // N125(3): a regrounding that honestly reports app-state
+          // divergence (the candidate stayed missing after prefix replay)
+          // is a preparation defect, not a reason to kill the run — the
+          // pipeline re-enters from validated preparation like every other
+          // preparation-routed capture failure.
+          if (
+            regroundingValidation.status === "failed" &&
+            classifyRepairRoute(regroundingValidation) ===
+              "repo-preparation-repair"
+          ) {
+            await revalidatePreparation(regroundingValidation);
+            continue pipelineAttempt;
+          }
           assertValidationPassed(regroundingValidation);
           if (regrounding.kind !== "artifacts") {
             throw new Error(
@@ -1976,6 +2067,67 @@ function readFailingCatalogActionId(
   return actionCatalog.actions.some((action) => action.id === candidateId)
     ? candidateId
     : undefined;
+}
+
+/**
+ * Joins a capture-path locator failure's typed identity back to the Demo
+ * Script action it names (N125): the action's verified locator and candidate
+ * id plus the failing scene's action prefix ahead of it, so regrounding can
+ * re-verify the candidate in its replay context. Returns undefined when the
+ * report carries no identity or the failing scene no longer contains the
+ * action — regrounding then falls back to a plain re-exploration.
+ */
+function readCaptureLocatorFailure(
+  report: ValidationReport,
+  scriptCandidate: ScriptCandidate,
+): CaptureLocatorFailure | undefined {
+  const failedAction = report.failedAction;
+  if (failedAction?.actionId === undefined) {
+    return undefined;
+  }
+  const script = scriptCandidate.scriptJsonContent;
+  const scenes =
+    typeof script === "object" && script !== null
+      ? (script as { scenes?: unknown }).scenes
+      : undefined;
+  if (!Array.isArray(scenes)) {
+    return undefined;
+  }
+  for (const scene of scenes) {
+    if (typeof scene !== "object" || scene === null) {
+      continue;
+    }
+    if ((scene as { id?: unknown }).id !== failedAction.sceneId) {
+      continue;
+    }
+    let actions: BrowserAction[];
+    try {
+      actions = readBrowserActions(
+        (scene as { actions?: unknown }).actions ?? [],
+      );
+    } catch {
+      continue;
+    }
+    const index = actions.findIndex(
+      (action) => action.id === failedAction.actionId,
+    );
+    const action = actions[index];
+    if (action === undefined) {
+      continue;
+    }
+    const screenshotPath = report.screenshots[0];
+    return {
+      actionId: failedAction.actionId,
+      ...("locator" in action ? { locator: action.locator } : {}),
+      ...(action.locatorCandidateId === undefined
+        ? {}
+        : { locatorCandidateId: action.locatorCandidateId }),
+      sceneId: failedAction.sceneId,
+      scenePrefix: actions.slice(0, index),
+      ...(screenshotPath === undefined ? {} : { screenshotPath }),
+    };
+  }
+  return undefined;
 }
 
 const preparationProgressBonusLimit = 2;

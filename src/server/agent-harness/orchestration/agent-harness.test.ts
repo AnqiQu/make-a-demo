@@ -805,6 +805,321 @@ describe("runAgentHarnessPipeline", () => {
     );
   });
 
+  it("passes the failed candidate identity into locator regrounding", async () => {
+    // N125: regrounding must know which candidate failed at replay — the
+    // action, its verified locator, the scene prefix ahead of it, and the
+    // failure screenshot — instead of re-exploring blind.
+    const exploreInputs: Array<Record<string, unknown>> = [];
+    let captureAttempts = 0;
+    const scriptWithScenes = {
+      ...scriptCandidate(),
+      scriptJsonContent: {
+        scenes: [
+          {
+            actions: [
+              { id: "goto-dashboard", path: "/", type: "goto" },
+              {
+                id: "click-dashboard",
+                locator: {
+                  name: "Open dashboard",
+                  role: "button",
+                  strategy: "role",
+                },
+                locatorCandidateId: "open-dashboard-locator-1",
+                sourceActionId: "open-dashboard",
+                type: "click",
+              },
+            ],
+            id: "scene-main",
+          },
+        ],
+        scriptId: "script_001",
+      },
+    };
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_regrounding_identity" }),
+      stubPipelineDependencies({
+        async exploreApp(input) {
+          exploreInputs.push(input);
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairScript() {
+          return scriptWithScenes;
+        },
+        async resetCaptureRuntime() {
+          return report("capture-runtime-reset", "passed");
+        },
+        async validateCapturePath() {
+          captureAttempts += 1;
+          return captureAttempts === 1
+            ? {
+                ...report("capture-path-validation", "failed"),
+                failedAction: {
+                  actionId: "click-dashboard",
+                  sceneId: "scene-main",
+                },
+                failureClassification: "locator failure",
+                logsSummary:
+                  "Browser action click-dashboard failed in Scene scene-main. locator resolution timed out",
+                screenshots: ["/tmp/run/makeademo-validation-failure.png"],
+              }
+            : report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptWithScenes;
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    expect(exploreInputs).toHaveLength(2);
+    expect(exploreInputs[0]).not.toHaveProperty("captureFailure");
+    expect(exploreInputs[1]).toMatchObject({
+      captureFailure: {
+        actionId: "click-dashboard",
+        locator: { name: "Open dashboard", role: "button", strategy: "role" },
+        locatorCandidateId: "open-dashboard-locator-1",
+        sceneId: "scene-main",
+        scenePrefix: [{ id: "goto-dashboard", path: "/", type: "goto" }],
+        screenshotPath: "/tmp/run/makeademo-validation-failure.png",
+      },
+    });
+  });
+
+  it("routes unreproducible regrounding evidence to preparation repair", async () => {
+    // N125(3): when regrounding's prefix replay cannot reproduce the failed
+    // candidate, the run must not die on the failed regrounding report or
+    // burn the script budget — the app-state divergence goes to preparation
+    // repair and the pipeline re-enters from validated preparation.
+    const calls: string[] = [];
+    let captureAttempts = 0;
+    let exploreAttempts = 0;
+    const scriptWithScenes = {
+      ...scriptCandidate(),
+      scriptJsonContent: {
+        scenes: [
+          {
+            actions: [
+              { id: "goto-root", path: "/", type: "goto" },
+              {
+                id: "click-save",
+                locator: {
+                  name: "Save entry",
+                  role: "button",
+                  strategy: "role",
+                },
+                locatorCandidateId: "save-entry-locator-1",
+                sourceActionId: "open-dashboard",
+                type: "click",
+              },
+            ],
+            id: "scene-main",
+          },
+        ],
+        scriptId: "script_001",
+      },
+    };
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_unreproducible_regrounding" }),
+      stubPipelineDependencies({
+        async exploreApp(input) {
+          exploreAttempts += 1;
+          if (input.captureFailure !== undefined) {
+            calls.push(`reground:${exploreAttempts}`);
+            return {
+              kind: "repairable-failure" as const,
+              validationReport: {
+                ...report("app-exploration", "failed"),
+                failureClassification: "evidence unreproducible at replay",
+                logsSummary:
+                  "Browser action click-save's locator could not be reproduced in its replay context.",
+              },
+            };
+          }
+          calls.push(`explore:${exploreAttempts}`);
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation({ failureReport }) {
+          calls.push(`repair:${failureReport.failureClassification}`);
+          return {
+            manifest: { ...preparationManifest(), id: "prep_replay_fixed" },
+          };
+        },
+        async resetCaptureRuntime() {
+          return report("capture-runtime-reset", "passed");
+        },
+        async validateCapturePath() {
+          captureAttempts += 1;
+          calls.push(`capture:${captureAttempts}`);
+          return captureAttempts === 1
+            ? {
+                ...report("capture-path-validation", "failed"),
+                failedAction: {
+                  actionId: "click-save",
+                  sceneId: "scene-main",
+                },
+                failureClassification: "locator failure",
+                logsSummary:
+                  "Browser action click-save failed in Scene scene-main. locator resolution timed out",
+              }
+            : report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptWithScenes;
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    expect(calls).toEqual([
+      "explore:1",
+      "capture:1",
+      "reground:2",
+      "repair:evidence unreproducible at replay",
+      "explore:3",
+      "capture:2",
+    ]);
+  });
+
+  it("stops a capture/static locator ping-pong with a combined diagnosis", async () => {
+    // N125(4): capture keeps failing the browser-verified candidate at
+    // replay while the static contract rejects every locator that differs
+    // from it. Two consecutive pairs must stop the run with one combined
+    // diagnosis instead of silently exhausting both repair budgets.
+    let captureAttempts = 0;
+    let staticAttempts = 0;
+    const equalityRejection =
+      'Browser action click-save locator does not match browser-verified candidate open-dashboard-locator-1: the script wrote {"name":"Save","role":"button","strategy":"role"} but the verified candidate is {"name":"Save entry","role":"button","strategy":"role"}';
+    const scriptWithScenes = {
+      ...scriptCandidate(),
+      scriptJsonContent: {
+        scenes: [
+          {
+            actions: [
+              { id: "goto-root", path: "/", type: "goto" },
+              {
+                id: "click-save",
+                locator: {
+                  name: "Save entry",
+                  role: "button",
+                  strategy: "role",
+                },
+                locatorCandidateId: "open-dashboard-locator-1",
+                sourceActionId: "open-dashboard",
+                type: "click",
+              },
+            ],
+            id: "scene-main",
+          },
+        ],
+        scriptId: "script_001",
+      },
+    };
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({ runId: "run_locator_ping_pong" }),
+        stubPipelineDependencies({
+          async exploreApp() {
+            const catalog = actionCatalog();
+            const [firstAction] = catalog.actions;
+            if (firstAction === undefined) {
+              throw new Error("Expected the dashboard action fixture");
+            }
+            // A second action keeps the catalog legal when the flow-lock
+            // escape excludes the failing one before the breaker trips.
+            return {
+              kind: "artifacts" as const,
+              actionCatalog: {
+                ...catalog,
+                actions: [firstAction, { ...firstAction, id: "open-settings" }],
+              },
+              appMap: appMap(),
+              validationReport: report("app-exploration", "passed"),
+            };
+          },
+          async planFlow() {
+            return flowSpec();
+          },
+          async prepareRepo() {
+            return { manifest: preparationManifest() };
+          },
+          async repairScript() {
+            return scriptWithScenes;
+          },
+          async resetCaptureRuntime() {
+            return report("capture-runtime-reset", "passed");
+          },
+          async validateCapturePath() {
+            captureAttempts += 1;
+            return {
+              ...report("capture-path-validation", "failed"),
+              failedAction: { actionId: "click-save", sceneId: "scene-main" },
+              failureClassification: "locator failure",
+              logsSummary: `Browser action click-save failed in Scene scene-main. locator resolution timed out (attempt ${captureAttempts})`,
+            };
+          },
+          async validatePreparation() {
+            return report("preparation-preflight", "passed");
+          },
+          async validateScriptContract() {
+            staticAttempts += 1;
+            // Pass on odd attempts so capture runs; reject the repaired
+            // script on even attempts — the alternating pattern.
+            return staticAttempts % 2 === 1
+              ? report("static-script-contract-validation", "passed")
+              : {
+                  ...report("static-script-contract-validation", "failed"),
+                  failureClassification: "script contract failure",
+                  logsSummary: equalityRejection,
+                };
+          },
+          async writeScript() {
+            return scriptWithScenes;
+          },
+        }),
+      ),
+    ).rejects.toThrow(/Locator ping-pong on browser action click-save/);
+
+    expect(captureAttempts).toBe(2);
+  });
+
   it("derives missing scene navigation before validating the script contract", async () => {
     let validatedCandidate: unknown;
 
