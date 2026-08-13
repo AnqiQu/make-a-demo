@@ -1,4 +1,8 @@
 import { readFile } from "node:fs/promises";
+import {
+  createServiceProvisionCommand,
+  provisionableServices,
+} from "../src/server/agent-harness/sandbox-services/sandbox-services";
 import { createNodeLineSwapCommand } from "../src/server/agent-harness/tools/node-line-resolution";
 import {
   assertSandboxMeetsCapacityFloor,
@@ -127,6 +131,31 @@ try {
     "Verifying exact submitted-code runtime and Capture SDK under network lockdown...",
   );
   await verifyDaytonaSubmittedCodeRuntime(handle.workspace);
+
+  // The provisioned-service rung (N122(5)) boots real data services from
+  // binaries the snapshot must carry. A snapshot built before the services
+  // layer passes every other check here yet fails calcom's first preflight
+  // round on `ls /usr/lib/postgresql/*/bin` (2026-08-13 matrix) — so
+  // provision each service exactly as the harness does, sealed, and demand
+  // its ready marker.
+  console.log(
+    "Verifying provisioned data services in the submitted-code sandbox...",
+  );
+  for (const service of provisionableServices) {
+    const provision = await handle.workspace.executeSubmittedCode(
+      `sh -ec ${shellQuote(createServiceProvisionCommand(service))}`,
+      {
+        onStderr: (chunk) => process.stderr.write(chunk),
+        onStdout: (chunk) => process.stdout.write(chunk),
+      },
+    );
+    assertCommandSucceeded(`${service} provision`, provision);
+    if (!provision.stdout.includes(`[makeademo:service] ${service} ready`)) {
+      throw new Error(
+        `${service} provision exited 0 without printing its ready marker.`,
+      );
+    }
+  }
 
   // Runs sealed: the swap must work from baked tarballs alone, and the
   // node-gyp configure smoke proves offline native builds compile against
