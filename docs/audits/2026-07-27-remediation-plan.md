@@ -3702,6 +3702,31 @@ ids, twenty's disk markers must prove or retire N87 prong 3, and
 cyberchef-class tool UIs now have the revealed-evidence lane to
 ground and script against.
 
+## Addendum (2026-08-13, remotion delayRender smoke flake root-caused: display sleep, not host load)
+
+The recurring `remotion-video-renderer` smoke failure (`delayRender
+"Waiting for root component to load" not cleared`, 28s on 2026-08-02
+and 118s in the 2026-08-08 and 2026-08-12 windows, previously
+attributed to machine load / a memory-starved host) is
+display-coupled, not load-coupled. The test pinned Playwright's
+full-Chrome build (Chrome for Testing 148); a full-Chrome page keeps
+executing JS and timers while the macOS display sleeps but produces
+no frames, so the requestAnimationFrame that clears the
+root-component handle never runs. Evidence: every failing launch on
+2026-08-12 (20:20-21:16) and 2026-08-13 (10:22-10:27) started while
+`pmset -g log` shows the display off, and every pass ran display-on;
+in a single failing window, full Chrome failed 5/5 across
+gl=default/swangle and --headless=old/new while Remotion's managed
+chrome-headless-shell passed in the same window. The prior
+load/memory correlation was coincidental: away-from-keyboard windows
+are both when matrix sessions run and when the display sleeps. Fix:
+the smoke test now uses the Remotion-managed chrome-headless-shell
+with no `browserExecutable`, exactly like production compositing
+(`createDefaultRenderer`), and the now-unused `@playwright/test`
+devDependency is removed; verified 5/5 green with the display asleep.
+Raising `timeoutInMilliseconds` can never fix this class — an asleep
+display stalls frames indefinitely.
+
 ## Addendum (2026-08-09, tenth 11-repo matrix — conduit and cyberchef first videos; the fidelity false-veto class; N92–N97)
 
 Run `matrix-2026-08-09T04-38-20-486Z` / report
