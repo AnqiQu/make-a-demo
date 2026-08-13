@@ -82,6 +82,19 @@ describe("sandbox services", () => {
     expect(command).toContain("[makeademo:service] mysql ready");
   });
 
+  it("keeps every file mariadbd creates inside the mysql-owned data directory", () => {
+    // mariadbd drops to the mysql user before creating its socket and pid
+    // file; the services root stays root-owned, so either path directly
+    // under it aborts the boot with "Bind on unix socket: Permission
+    // denied" (caught by verify:daytona-image, 2026-08-13).
+    const command = createServiceProvisionCommand("mysql");
+
+    expect(command).not.toContain('"$SERVICES_ROOT/mysql.sock"');
+    expect(command).not.toContain('"$SERVICES_ROOT/mysql.pid"');
+    expect(command).toContain('"$SERVICES_ROOT/mysql/mysql.sock"');
+    expect(command).toContain('"$SERVICES_ROOT/mysql/mysql.pid"');
+  });
+
   it("boots redis bound to loopback with persistence disabled", () => {
     const command = createServiceProvisionCommand("redis");
 

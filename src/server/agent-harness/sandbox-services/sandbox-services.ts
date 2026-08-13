@@ -127,18 +127,20 @@ const postgresProvisionLines = [
 // the unix socket (mariadb's root auth is unix_socket, and the sandbox shell
 // is root); the app-facing makeademo account is TCP with a password, matching
 // the published DSN. The final TCP ping proves the loopback listener — the
-// address every driver dials — not just the socket.
+// address every driver dials — not just the socket. The socket and pid file
+// live inside the data directory because mariadbd creates them as the mysql
+// user, and the services root stays root-owned.
 const mysqlProvisionLines = [
-  `if [ -f "$SERVICES_ROOT/mysql.pid" ]; then kill "$(cat "$SERVICES_ROOT/mysql.pid")" >/dev/null 2>&1 || true; fi`,
-  'for attempt in $(seq 1 10); do [ -f "$SERVICES_ROOT/mysql.pid" ] && kill -0 "$(cat "$SERVICES_ROOT/mysql.pid")" >/dev/null 2>&1 || break; sleep 1; done',
+  `if [ -f "$SERVICES_ROOT/mysql/mysql.pid" ]; then kill "$(cat "$SERVICES_ROOT/mysql/mysql.pid")" >/dev/null 2>&1 || true; fi`,
+  'for attempt in $(seq 1 10); do [ -f "$SERVICES_ROOT/mysql/mysql.pid" ] && kill -0 "$(cat "$SERVICES_ROOT/mysql/mysql.pid")" >/dev/null 2>&1 || break; sleep 1; done',
   'rm -rf "$SERVICES_ROOT/mysql"',
   'mkdir -p "$SERVICES_ROOT/mysql"',
   'chown -R mysql "$SERVICES_ROOT/mysql"',
   'mariadb-install-db --datadir="$SERVICES_ROOT/mysql" --user=mysql --skip-test-db >/dev/null',
-  `nohup /usr/sbin/mariadbd --user=mysql --datadir="$SERVICES_ROOT/mysql" --bind-address=127.0.0.1 --port=3306 --socket="$SERVICES_ROOT/mysql.sock" --pid-file="$SERVICES_ROOT/mysql.pid" >"$SERVICES_ROOT/mysql.log" 2>&1 &`,
-  'for attempt in $(seq 1 30); do mysqladmin --socket="$SERVICES_ROOT/mysql.sock" -u root status >/dev/null 2>&1 && break; sleep 1; done',
-  'mysqladmin --socket="$SERVICES_ROOT/mysql.sock" -u root status >/dev/null',
-  `mariadb --socket="$SERVICES_ROOT/mysql.sock" -u root -e "CREATE DATABASE IF NOT EXISTS makeademo; CREATE USER IF NOT EXISTS 'makeademo'@'%' IDENTIFIED BY 'makeademo'; CREATE USER IF NOT EXISTS 'makeademo'@'localhost' IDENTIFIED BY 'makeademo'; GRANT ALL PRIVILEGES ON *.* TO 'makeademo'@'%'; GRANT ALL PRIVILEGES ON *.* TO 'makeademo'@'localhost'; FLUSH PRIVILEGES;"`,
+  `nohup /usr/sbin/mariadbd --user=mysql --datadir="$SERVICES_ROOT/mysql" --bind-address=127.0.0.1 --port=3306 --socket="$SERVICES_ROOT/mysql/mysql.sock" --pid-file="$SERVICES_ROOT/mysql/mysql.pid" >"$SERVICES_ROOT/mysql.log" 2>&1 &`,
+  'for attempt in $(seq 1 30); do mysqladmin --socket="$SERVICES_ROOT/mysql/mysql.sock" -u root status >/dev/null 2>&1 && break; sleep 1; done',
+  'mysqladmin --socket="$SERVICES_ROOT/mysql/mysql.sock" -u root status >/dev/null',
+  `mariadb --socket="$SERVICES_ROOT/mysql/mysql.sock" -u root -e "CREATE DATABASE IF NOT EXISTS makeademo; CREATE USER IF NOT EXISTS 'makeademo'@'%' IDENTIFIED BY 'makeademo'; CREATE USER IF NOT EXISTS 'makeademo'@'localhost' IDENTIFIED BY 'makeademo'; GRANT ALL PRIVILEGES ON *.* TO 'makeademo'@'%'; GRANT ALL PRIVILEGES ON *.* TO 'makeademo'@'localhost'; FLUSH PRIVILEGES;"`,
   "mysqladmin --protocol=tcp --host=127.0.0.1 --port=3306 -u makeademo -pmakeademo ping >/dev/null",
   'echo "[makeademo:service] mysql ready at 127.0.0.1:3306"',
 ];
