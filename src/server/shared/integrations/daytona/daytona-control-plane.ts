@@ -91,6 +91,16 @@ type DaytonaControlPlaneRunOptions = {
   classify?: (error: unknown) => DaytonaControlPlaneErrorClassification;
   /** Conflict polls before giving up; each waits `conflictPollDelayMs`. */
   conflictPollLimit?: number;
+  /**
+   * How many attempts abandoned by `attemptTimeoutMs` the envelope tolerates
+   * before exhausting, independent of remaining ladder steps. Hung attempts
+   * are the expensive failure shape — each burns the full per-attempt bound
+   * and a repeat carries no new information — so their cap is far below the
+   * ladder length that fast-rejecting transients deserve (N133: an 8-attempt
+   * ladder of 10-minute hangs legally consumed ~80 minutes in one envelope
+   * during the 2026-08-13 incident).
+   */
+  hungAttemptLimit?: number;
   /** Transient-retry delays; its length bounds the retries. */
   ladderMs?: readonly number[];
   /** Runs before each wait — seams with their own retry events hook here. */
@@ -131,6 +141,8 @@ const defaultConflictPollLimit = 24;
 // 2026-08-11). Ten minutes polices hangs without ever racing a
 // legitimate operation.
 const defaultAttemptTimeoutMs = 10 * 60_000;
+const attemptTimeoutErrorName = "DaytonaControlPlaneAttemptTimeoutError";
+const defaultHungAttemptLimit = 2;
 
 /**
  * Awaits one attempt under the per-attempt bound. A timeout rejects with
@@ -185,7 +197,10 @@ function runAttemptWithTimeout<T>(
  * a terminal failure names its seam. Every attempt is also bounded by
  * `attemptTimeoutMs`: a call that hangs without rejecting is abandoned as
  * transport loss and re-issued through the transient ladder, so one stuck
- * HTTP call can never wedge the run.
+ * HTTP call can never wedge the run. Hung attempts also count against
+ * `hungAttemptLimit` (default 2), a cap independent of the ladder: each
+ * hang burns the full per-attempt bound, so retrying them at ladder length
+ * would let one envelope consume most of a job's wall clock (N133).
  *
  * Command execution and managed-app session commands run through the
  * envelope too (N123: a raw 502 on a manifest `cat` killed a finished
@@ -236,10 +251,13 @@ export function createDaytonaControlPlaneEnvelope(envelopeOptions: {
         options.attemptTimeoutMs ?? defaultAttemptTimeoutMs;
       const conflictPollLimit =
         options.conflictPollLimit ?? defaultConflictPollLimit;
+      const hungAttemptLimit =
+        options.hungAttemptLimit ?? defaultHungAttemptLimit;
       const attribution =
         options.sandboxId === undefined ? {} : { sandboxId: options.sandboxId };
       let transientRetries = 0;
       let conflictPolls = 0;
+      let hungAttempts = 0;
       for (let attemptNumber = 1; ; attemptNumber += 1) {
         await logBestEffort(
           "info",
@@ -257,17 +275,25 @@ export function createDaytonaControlPlaneEnvelope(envelopeOptions: {
             attemptTimeoutMs,
           );
         } catch (error) {
+          if (
+            (error as { name?: unknown } | null)?.name ===
+            attemptTimeoutErrorName
+          ) {
+            hungAttempts += 1;
+          }
           const classification = classify(error);
           const delayMs =
-            classification === "conflict"
-              ? conflictPolls < conflictPollLimit
-                ? jittered(conflictPollDelayMs)
-                : undefined
-              : classification === "transient"
-                ? transientRetries < ladderMs.length
-                  ? jittered(ladderMs[transientRetries] ?? 0)
+            hungAttempts >= hungAttemptLimit
+              ? undefined
+              : classification === "conflict"
+                ? conflictPolls < conflictPollLimit
+                  ? jittered(conflictPollDelayMs)
                   : undefined
-                : undefined;
+                : classification === "transient"
+                  ? transientRetries < ladderMs.length
+                    ? jittered(ladderMs[transientRetries] ?? 0)
+                    : undefined
+                  : undefined;
           if (classification === "fatal" || delayMs === undefined) {
             await logBestEffort(
               "error",

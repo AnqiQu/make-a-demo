@@ -341,6 +341,62 @@ describe("createDaytonaControlPlaneEnvelope", () => {
     expect(events.at(-1)?.entry.classification).toBe("transient");
   });
 
+  it("stops retrying hung attempts after the hang cap instead of burning the ladder", async () => {
+    // N133 (2026-08-13 incident): fs.sync attempts hung the full 10-minute
+    // per-attempt bound each, and the 8-attempt ladder legally consumed
+    // ~80 minutes — most of the job's wall clock — inside one envelope.
+    // A hung attempt carries no new information after the first repeat;
+    // two exhaust the envelope even when ladder steps remain.
+    const { envelope, events } = createRecordingEnvelope();
+    let attempts = 0;
+
+    const thrown: unknown = await envelope
+      .run(
+        "fs.sync",
+        () => {
+          attempts += 1;
+          return new Promise<void>(() => {});
+        },
+        {
+          attemptTimeoutMs: 10,
+          ladderMs: [1_000, 1_000, 1_000, 1_000, 1_000, 1_000, 1_000],
+        },
+      )
+      .then(() => undefined)
+      .catch((error: unknown) => error);
+
+    expect(attempts).toBe(2);
+    expect(thrown).toBeInstanceOf(AgentHarnessControlPlaneError);
+    expect(thrown).toMatchObject({ attempts: 2, classification: "transient" });
+    expect(events.at(-1)?.entry.event).toBe("daytona.fs.sync.failed");
+  });
+
+  it("keeps the full ladder for fast-rejecting transients after a hung attempt", async () => {
+    // The hang cap must not shorten the escalating ladder that fast 502
+    // storms need (the 2026-08-12 lesson): only attempts abandoned by the
+    // per-attempt bound count against it.
+    const { envelope } = createRecordingEnvelope();
+    let attempts = 0;
+
+    const result = await envelope.run(
+      "fs.sync",
+      () => {
+        attempts += 1;
+        if (attempts === 1) {
+          return new Promise<string>(() => {});
+        }
+        if (attempts < 5) {
+          return Promise.reject(transient502());
+        }
+        return Promise.resolve("synced");
+      },
+      { attemptTimeoutMs: 10, ladderMs: [1_000, 1_000, 1_000, 1_000] },
+    );
+
+    expect(result).toBe("synced");
+    expect(attempts).toBe(5);
+  });
+
   it("ignores a timed-out attempt's late settlement without an unhandled rejection", async () => {
     const { envelope } = createRecordingEnvelope();
     let attempts = 0;
