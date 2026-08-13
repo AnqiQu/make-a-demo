@@ -30,10 +30,12 @@ async function buildExplorerScript(
   baseUrl: string,
   featureInventory?: PreparedDemoFeature[],
   scope?: "feature-entries",
+  captureFailure?: Parameters<typeof exploreSubmittedApp>[0]["captureFailure"],
 ): Promise<string> {
   const commands: string[] = [];
   await exploreSubmittedApp({
     baseUrl,
+    ...(captureFailure === undefined ? {} : { captureFailure }),
     ...(featureInventory === undefined ? {} : { featureInventory }),
     preparationManifestId: "prep_script_test",
     ...(scope === undefined ? {} : { scope }),
@@ -1689,4 +1691,173 @@ document.body.appendChild(document.createElement("vite-error-overlay"));
       server.close();
     }
   }, 30_000);
+
+  it("re-verifies a capture-failed candidate after replaying its scene prefix", async () => {
+    // N125: the failed candidate's element exists only in the state the
+    // scene's earlier actions produce. A fresh-route verification would
+    // certify or reject it in the wrong context; the replay verification
+    // must execute the prefix first and find the element reproduced.
+    const editorPage = `<!doctype html><html><head><title>Editor App</title></head><body>
+<h1>Records workspace</h1>
+<main><p>Weekly records for the demo workspace</p></main>
+<button onclick="document.getElementById('panel').innerHTML='<button>Save entry</button>'">Open editor</button>
+<div id="panel"></div>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(editorPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-replay-"),
+      );
+      const script = (
+        await buildExplorerScript(
+          `http://127.0.0.1:${address.port}`,
+          undefined,
+          undefined,
+          {
+            actionId: "click-save",
+            locator: { name: "Save entry", role: "button", strategy: "role" },
+            locatorCandidateId: "save-entry-locator-1",
+            sceneId: "scene-editor",
+            scenePrefix: [
+              { id: "goto-root", path: "/", type: "goto" },
+              {
+                id: "open-editor",
+                locator: {
+                  name: "Open editor",
+                  role: "button",
+                  strategy: "role",
+                },
+                type: "click",
+              },
+            ],
+          },
+        )
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 60_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        replayVerification?: {
+          actionId: string;
+          detail: string;
+          locatorCandidateId?: string;
+          reproduced: boolean;
+          sceneId: string;
+        };
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      expect(result.replayVerification).toMatchObject({
+        actionId: "click-save",
+        locatorCandidateId: "save-entry-locator-1",
+        reproduced: true,
+        sceneId: "scene-editor",
+      });
+    } finally {
+      server.close();
+    }
+  }, 60_000);
+
+  it("reports a candidate its scene prefix cannot reproduce as unreproduced", async () => {
+    // N125: when the element is absent even in the replayed state, the
+    // evidence is unreproducible at replay — app-state divergence, not a
+    // locator drafting problem — and the verdict must say so.
+    const editorPage = `<!doctype html><html><head><title>Editor App</title></head><body>
+<h1>Records workspace</h1>
+<main><p>Weekly records for the demo workspace</p></main>
+<button onclick="document.getElementById('panel').innerHTML='<button>Save entry</button>'">Open editor</button>
+<div id="panel"></div>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(editorPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-replay-"),
+      );
+      const script = (
+        await buildExplorerScript(
+          `http://127.0.0.1:${address.port}`,
+          undefined,
+          undefined,
+          {
+            actionId: "click-publish",
+            locator: {
+              name: "Publish entry",
+              role: "button",
+              strategy: "role",
+            },
+            locatorCandidateId: "publish-entry-locator-1",
+            sceneId: "scene-editor",
+            scenePrefix: [
+              { id: "goto-root", path: "/", type: "goto" },
+              {
+                id: "open-editor",
+                locator: {
+                  name: "Open editor",
+                  role: "button",
+                  strategy: "role",
+                },
+                type: "click",
+              },
+            ],
+          },
+        )
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 60_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        fatalError?: string;
+        replayVerification?: { detail: string; reproduced: boolean };
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      expect(result.replayVerification).toMatchObject({
+        actionId: "click-publish",
+        reproduced: false,
+        sceneId: "scene-editor",
+      });
+      expect(result.replayVerification?.detail).toContain(
+        "after replaying 2 prefix action(s)",
+      );
+    } finally {
+      server.close();
+    }
+  }, 60_000);
 });

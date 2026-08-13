@@ -3330,6 +3330,74 @@ describe("feature verdict ledger", () => {
     }
   });
 
+  it("reclassifies regrounding as unreproducible when prefix replay cannot find the candidate", async () => {
+    // N125(3): the candidate stayed missing even in the replayed capture
+    // context, so the exploration-time evidence does not exist in the state
+    // the demo replays. That is app-state divergence for preparation
+    // repair; the script channel cannot fix an app that no longer shows
+    // the element.
+    const { result } = await exploreObservation({
+      captureFailure: {
+        actionId: "click-save",
+        locator: { name: "Save entry", role: "button", strategy: "role" },
+        locatorCandidateId: "save-entry-locator-1",
+        sceneId: "scene-editor",
+        scenePrefix: [{ id: "goto-root", path: "/", type: "goto" }],
+        screenshotPath: "/tmp/run/makeademo-validation-failure.png",
+      },
+      replayVerification: {
+        actionId: "click-save",
+        detail:
+          "locator matched 0 visible element(s) after replaying 1 prefix action(s) in Scene scene-editor",
+        locatorCandidateId: "save-entry-locator-1",
+        reproduced: false,
+        sceneId: "scene-editor",
+      },
+      routes: [observedRoute({ headings: ["Records workspace"] })],
+    });
+
+    expect(result.kind).toBe("repairable-failure");
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "evidence unreproducible at replay",
+      status: "failed",
+    });
+    // The exploration-vs-replay evidence pair: the certified locator on one
+    // side, the replayed observation on the other.
+    expect(result.validationReport.logsSummary).toContain("click-save");
+    expect(result.validationReport.logsSummary).toContain("Save entry");
+    expect(result.validationReport.logsSummary).toContain(
+      "matched 0 visible element(s)",
+    );
+    expect(result.validationReport.screenshots).toContain(
+      "/tmp/run/makeademo-validation-failure.png",
+    );
+  });
+
+  it("keeps regrounding artifacts when prefix replay reproduces the candidate", async () => {
+    // A reproduced candidate means the exploration evidence stands; the
+    // capture failure was transient, and regrounding proceeds normally.
+    const { result } = await exploreObservation({
+      captureFailure: {
+        actionId: "click-save",
+        locator: { name: "Save entry", role: "button", strategy: "role" },
+        locatorCandidateId: "save-entry-locator-1",
+        sceneId: "scene-editor",
+        scenePrefix: [{ id: "goto-root", path: "/", type: "goto" }],
+      },
+      replayVerification: {
+        actionId: "click-save",
+        detail:
+          "locator resolved to one visible element after replaying 1 prefix action(s) in Scene scene-editor",
+        locatorCandidateId: "save-entry-locator-1",
+        reproduced: true,
+        sceneId: "scene-editor",
+      },
+      routes: [observedRoute({ headings: ["Records workspace"] })],
+    });
+
+    requireArtifacts(result);
+  });
+
   it("fails a feature whose declared proof failed even when wording would ground it", async () => {
     // The excalidraw vacuous-pass hole: "undo/redo" must pass its declared
     // transition, not ride a nearby heading. A failed proof subsumes every
@@ -3944,6 +4012,7 @@ async function exploreObservation(input: {
     url?: string;
   }>;
   capacityProbeOutput?: string;
+  captureFailure?: Parameters<typeof exploreSubmittedApp>[0]["captureFailure"];
   consoleErrors?: string[];
   declaredProofs?: Array<{
     detail: string;
@@ -3953,6 +4022,13 @@ async function exploreObservation(input: {
   featureInventory?: PreparedDemoFeature[];
   pageErrors?: string[];
   readSubmittedCodeAppStatus?: AgentHarnessWorkspace["readSubmittedCodeAppStatus"];
+  replayVerification?: {
+    actionId: string;
+    detail: string;
+    locatorCandidateId?: string;
+    reproduced: boolean;
+    sceneId: string;
+  };
   requestedFeatures?: string[];
   routes: Array<Record<string, unknown>>;
   unreachableRoutes?: Array<{
@@ -3964,6 +4040,9 @@ async function exploreObservation(input: {
   const commands: string[] = [];
   const result = await exploreSubmittedApp({
     baseUrl,
+    ...(input.captureFailure === undefined
+      ? {}
+      : { captureFailure: input.captureFailure }),
     ...(input.featureInventory === undefined
       ? {}
       : { featureInventory: input.featureInventory }),
@@ -3991,6 +4070,9 @@ async function exploreObservation(input: {
               ? {}
               : { declaredProofs: input.declaredProofs }),
             pageErrors: input.pageErrors ?? [],
+            ...(input.replayVerification === undefined
+              ? {}
+              : { replayVerification: input.replayVerification }),
             routes: input.routes,
             unreachableRoutes: input.unreachableRoutes ?? [],
           })}\n`,

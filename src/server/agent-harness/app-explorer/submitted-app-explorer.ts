@@ -1,3 +1,7 @@
+import type {
+  BrowserAction,
+  BrowserLocator,
+} from "../../pipeline/06-footage-capture/browser-action-plan";
 import { createBrowserRuntimeNetworkPolicySource } from "../../shared/external-resources/browser-runtime-network-policy";
 import type { ExternalResourceManifest } from "../../shared/external-resources/external-resource-manifest.schema";
 import { shellQuote } from "../../shared/shell/shell-quote";
@@ -45,6 +49,24 @@ export type SubmittedAppExplorationResult =
       observation?: BrowserExplorationProtocol;
       validationReport: ValidationReport;
     };
+
+/**
+ * The typed identity of a Demo Script action that failed capture-path
+ * validation on its browser-verified locator (N125). When exploration runs
+ * as locator regrounding it receives this bundle and must re-verify the
+ * candidate in its replay context: execute `scenePrefix` — the failing
+ * scene's actions ahead of the failed one — from clean state, then check
+ * the stored locator there. A fresh-route verification cannot see the
+ * app-state divergence that failed the capture.
+ */
+export type CaptureLocatorFailure = {
+  actionId: string;
+  locator?: BrowserLocator;
+  locatorCandidateId?: string;
+  sceneId: string;
+  scenePrefix: BrowserAction[];
+  screenshotPath?: string;
+};
 
 type ObservedLocatorEvidence = Omit<VerifiedLocatorCandidate, "id">;
 type ObservedLink = {
@@ -201,6 +223,13 @@ type DeclaredProofResult = {
   locatorEvidence?: ObservedLocatorEvidence | null;
   passed: boolean;
 };
+type ReplayVerification = {
+  actionId: string;
+  detail: string;
+  locatorCandidateId?: string;
+  reproduced: boolean;
+  sceneId: string;
+};
 type BrowserExplorationProtocol = {
   blockedNetworkAttempts: Array<
     Pick<NetworkAttempt, "host"> & Partial<NetworkAttempt>
@@ -209,6 +238,7 @@ type BrowserExplorationProtocol = {
   declaredProofs?: DeclaredProofResult[];
   fatalError?: string;
   pageErrors: string[];
+  replayVerification?: ReplayVerification;
   routes: ObservedRoute[];
   unreachableRoutes?: UnreachableRoute[];
 };
@@ -277,6 +307,11 @@ const explorationCommandTimeoutMs = 7 * 60_000;
  */
 export async function exploreSubmittedApp(input: {
   baseUrl: string;
+  /**
+   * Present when this exploration runs as locator regrounding (N125): the
+   * capture-failed candidate to re-verify by scene-prefix replay.
+   */
+  captureFailure?: CaptureLocatorFailure;
   externalResourceManifest?: ExternalResourceManifest;
   featureInventory?: PreparedDemoFeature[];
   preparationManifestId: string;
@@ -298,6 +333,7 @@ export async function exploreSubmittedApp(input: {
     featureInventory,
     input.externalResourceManifest,
     input.scope ?? "full",
+    input.captureFailure,
   );
   const encodedScript = Buffer.from(script).toString("base64");
   const capacityFailure = async (
@@ -388,6 +424,22 @@ export async function exploreSubmittedApp(input: {
       })
     );
   }
+  // N125(3): a candidate still missing after its scene prefix replayed is
+  // app-state divergence, and it outranks whatever the fresh crawl found —
+  // re-certifying the candidate from a fresh route load is exactly the
+  // mistake that failed the capture.
+  if (
+    input.captureFailure !== undefined &&
+    observation.replayVerification !== undefined &&
+    !observation.replayVerification.reproduced
+  ) {
+    return createUnreproducibleEvidenceFailure({
+      baseUrl: input.baseUrl,
+      captureFailure: input.captureFailure,
+      observation,
+      replayVerification: observation.replayVerification,
+    });
+  }
 
   const artifacts = createExplorationArtifacts({
     baseUrl: input.baseUrl,
@@ -455,6 +507,7 @@ function explorationFailure(input: {
   networkAttempts?: NetworkAttempt[];
   observation?: BrowserExplorationProtocol;
   pageErrors?: string[];
+  screenshots?: string[];
   summary: string;
 }): Extract<SubmittedAppExplorationResult, { kind: "repairable-failure" }> {
   return {
@@ -472,7 +525,7 @@ function explorationFailure(input: {
       networkAttempts: input.networkAttempts ?? [],
       pageErrors: input.pageErrors ?? [],
       retryCount: 0,
-      screenshots: [],
+      screenshots: input.screenshots ?? [],
       stage: "app-exploration",
       status: "failed",
       stderrExcerpts: input.diagnostics.stderrExcerpts,
@@ -481,6 +534,37 @@ function explorationFailure(input: {
       urlChecked: input.baseUrl,
     }),
   };
+}
+
+/**
+ * N125(3): the capture-failed candidate stayed missing even after its scene
+ * prefix replayed, so the exploration-time evidence does not exist in the
+ * state capture replays it in. That is an app-state divergence — a prepared
+ * runtime or data defect — dispatched to preparation repair with the
+ * exploration-vs-replay evidence pair; the script channel cannot fix an app
+ * that no longer shows the element and would burn its whole budget trying.
+ */
+function createUnreproducibleEvidenceFailure(input: {
+  baseUrl: string;
+  captureFailure: CaptureLocatorFailure;
+  observation: BrowserExplorationProtocol;
+  replayVerification: ReplayVerification;
+}): Extract<SubmittedAppExplorationResult, { kind: "repairable-failure" }> {
+  const locatorJson = JSON.stringify(input.captureFailure.locator);
+  const candidateId = input.captureFailure.locatorCandidateId;
+  return explorationFailure({
+    baseUrl: input.baseUrl,
+    classification: "evidence unreproducible at replay",
+    diagnostics: { stderrExcerpts: [], stdoutExcerpts: [] },
+    hints: [
+      `Repair the prepared runtime or its data fixtures so the element behind ${locatorJson} exists after Scene ${input.captureFailure.sceneId}'s earlier actions replay, or reselect the feature's evidence onto state that survives replay.`,
+    ],
+    observation: input.observation,
+    ...(input.captureFailure.screenshotPath === undefined
+      ? {}
+      : { screenshots: [input.captureFailure.screenshotPath] }),
+    summary: `Browser action ${input.captureFailure.actionId}'s locator ${locatorJson}${candidateId === undefined ? "" : ` (candidate ${candidateId})`} was browser-verified during exploration but could not be reproduced in its replay context: ${input.replayVerification.detail}. The prepared app does not show this element in the state the demo replays it in — an app-state divergence for preparation repair, not a script drafting problem.`,
+  });
 }
 
 function createSandboxCapacityFailure(input: {
@@ -2738,6 +2822,7 @@ function createExplorerScript(
   featureInventory: PreparedDemoFeature[],
   externalResourceManifest?: ExternalResourceManifest,
   scope: "feature-entries" | "full" = "full",
+  captureFailure?: CaptureLocatorFailure,
 ): string {
   const featureEntryTargets = createFeatureEntryTargets(
     baseUrl,
@@ -2753,6 +2838,21 @@ const baseOrigin = new URL(baseUrl).origin;
 const crawlScope = ${JSON.stringify(scope)};
 const featureEntryTargets = ${JSON.stringify(featureEntryTargets)};
 const declaredProofTargets = ${JSON.stringify(createDeclaredProofTargets(baseUrl, featureInventory))};
+const replayTarget = ${JSON.stringify(
+    captureFailure === undefined
+      ? null
+      : {
+          actionId: captureFailure.actionId,
+          ...(captureFailure.locator === undefined
+            ? {}
+            : { locator: captureFailure.locator }),
+          ...(captureFailure.locatorCandidateId === undefined
+            ? {}
+            : { locatorCandidateId: captureFailure.locatorCandidateId }),
+          sceneId: captureFailure.sceneId,
+          scenePrefix: captureFailure.scenePrefix,
+        },
+  )};
 const outputDirectory = ${JSON.stringify(explorerDirectory)};
 const deadlineAtMs = Date.now() + ${Math.floor(explorationCommandTimeoutMs * 0.7)};
 const result = { blockedNetworkAttempts: [], consoleErrors: [], declaredProofs: [], pageErrors: [], routes: [], unreachableRoutes: [] };
@@ -3588,6 +3688,68 @@ try {
       }
     } catch (error) {
       if (isAppUnavailableError(error)) break;
+    }
+  }
+  // N125: a capture-failed candidate is re-verified in its replay context.
+  // The failing scene's action prefix executes from clean state — the state
+  // capture will actually replay the candidate in — and only then is the
+  // stored locator checked. Fresh-route verification cannot see the
+  // app-state divergence that failed the capture. Asserts observe without
+  // mutating, so replay skips them; a prefix action that itself fails means
+  // the replay context cannot be reconstructed, which is the same
+  // unreproducible verdict.
+  if (replayTarget && replayTarget.locator && Date.now() < deadlineAtMs) {
+    const resolveReplayLocator = (locator) => locator.strategy === "role"
+      ? page.getByRole(locator.role, { exact: locator.exact === true, ...(locator.name === undefined ? {} : { name: locator.name }) })
+      : locator.strategy === "label"
+        ? page.getByLabel(locator.value, { exact: locator.exact === true })
+        : locator.strategy === "placeholder"
+          ? page.getByPlaceholder(locator.value, { exact: locator.exact === true })
+          : locator.strategy === "text"
+            ? page.getByText(locator.value, { exact: locator.exact === true })
+            : locator.strategy === "test-id"
+              ? page.getByTestId(locator.value)
+              : page.locator(locator.strategy === "xpath" && !locator.value.startsWith("xpath=") ? "xpath=" + locator.value : locator.value);
+    let replayedActions = 0;
+    try {
+      if (replayTarget.scenePrefix[0]?.type !== "goto") await gotoRoute(baseUrl);
+      for (const action of replayTarget.scenePrefix) {
+        if (Date.now() >= deadlineAtMs) break;
+        if (action.type === "goto") {
+          await gotoRoute(new URL(action.path, baseUrl).toString());
+        } else if (action.type === "click" || action.type === "hover" || action.type === "fill" || action.type === "press" || action.type === "select-option" || action.type === "scroll") {
+          const actionLocator = resolveReplayLocator(action.locator);
+          if (action.type === "click") await actionLocator.click({ timeout: 4000 });
+          else if (action.type === "hover") await actionLocator.hover({ timeout: 4000 });
+          else if (action.type === "fill") await actionLocator.fill(action.value, { timeout: 4000 });
+          else if (action.type === "press") await actionLocator.press(action.key, { timeout: 4000 });
+          else if (action.type === "select-option") await actionLocator.selectOption(action.value, { timeout: 4000 });
+          else await actionLocator.scrollIntoViewIfNeeded({ timeout: 4000 });
+          await waitForQuietDom(250, 1500);
+        }
+        replayedActions += 1;
+      }
+      const candidateLocator = resolveReplayLocator(replayTarget.locator);
+      const matchCount = await candidateLocator.count();
+      const reproduced = matchCount === 1 && await candidateLocator.first().isVisible().catch(() => false);
+      result.replayVerification = {
+        actionId: replayTarget.actionId,
+        ...(replayTarget.locatorCandidateId ? { locatorCandidateId: replayTarget.locatorCandidateId } : {}),
+        detail: (reproduced
+          ? "locator resolved to one visible element"
+          : "locator matched " + matchCount + " visible element(s)")
+          + " after replaying " + replayedActions + " prefix action(s) in Scene " + replayTarget.sceneId,
+        reproduced,
+        sceneId: replayTarget.sceneId,
+      };
+    } catch (error) {
+      result.replayVerification = {
+        actionId: replayTarget.actionId,
+        ...(replayTarget.locatorCandidateId ? { locatorCandidateId: replayTarget.locatorCandidateId } : {}),
+        detail: "prefix replay failed after " + replayedActions + " action(s) in Scene " + replayTarget.sceneId + ": " + (error instanceof Error ? error.message : String(error)),
+        reproduced: false,
+        sceneId: replayTarget.sceneId,
+      };
     }
   }
   // Learn the app's not-found signature: what renders for a URL that cannot

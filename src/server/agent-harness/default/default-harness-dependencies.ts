@@ -953,7 +953,12 @@ export async function createDefaultAgentHarnessDependencies(
       workspaceHandle = await provider.create();
       return workspaceHandle.workspace;
     },
-    async exploreApp({ demoBrief, preparationManifest, workspace }) {
+    async exploreApp({
+      captureFailure,
+      demoBrief,
+      preparationManifest,
+      workspace,
+    }) {
       const result = await runWithExternalResourceBroker({
         markUnresolved: (result, attempts) => ({
           ...result,
@@ -968,6 +973,7 @@ export async function createDefaultAgentHarnessDependencies(
         run: () =>
           exploreSubmittedApp({
             baseUrl: preparationManifest.baseUrl,
+            ...(captureFailure === undefined ? {} : { captureFailure }),
             ...(externalResourceManifest === undefined
               ? {}
               : { externalResourceManifest }),

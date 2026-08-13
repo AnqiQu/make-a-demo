@@ -8442,6 +8442,62 @@ describe("createDefaultAgentHarnessDependencies", () => {
     }
   });
 
+  it("forwards the capture failure identity into the exploration script", async () => {
+    // N125: replay verification runs inside the generated explorer, so the
+    // dependency seam must thread the failed candidate — action, locator,
+    // candidate id, scene prefix — through to the script.
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-regrounding-"));
+    const commands: string[] = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        if (!command.includes("explore-app.mjs")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        return { exitCode: 0, stderr: "", stdout: explorationProtocol() };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot,
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    try {
+      await harness.dependencies.exploreApp({
+        actionCatalogPath: "/workspace/.makeademo/action-catalog.json",
+        appMapPath: "/workspace/.makeademo/app-map.json",
+        captureFailure: {
+          actionId: "click-save",
+          locator: { name: "Save entry", role: "button", strategy: "role" },
+          locatorCandidateId: "save-entry-locator-1",
+          sceneId: "scene-editor",
+          scenePrefix: [{ id: "goto-root", path: "/", type: "goto" }],
+        },
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest: preparationManifest(),
+        preparationValidation: validationReport(
+          "preparation-preflight",
+          "passed",
+        ),
+        repoProfile: repoProfile(),
+        workspace,
+      });
+
+      const encoded = /printf %s '([^']+)'/.exec(
+        commands.find((command) => command.includes("explore-app.mjs")) ?? "",
+      )?.[1];
+      expect(encoded).toBeDefined();
+      const script = Buffer.from(encoded ?? "", "base64").toString("utf8");
+      expect(script).toContain('"actionId":"click-save"');
+      expect(script).toContain('"locatorCandidateId":"save-entry-locator-1"');
+      expect(script).toContain('"scenePrefix"');
+    } finally {
+      await rm(outputRoot, { force: true, recursive: true });
+    }
+  });
+
   it("mirrors exploration evidence into the run directory when exploration fails", async () => {
     const outputRoot = await mkdtemp(
       join(tmpdir(), "makeademo-exploration-evidence-"),

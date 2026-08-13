@@ -22,6 +22,7 @@ const preparationFailureClassifications = new Set([
   "browser console/page error",
   "build failure",
   "empty/unmeaningful app state",
+  "evidence unreproducible at replay",
   "external network attempted",
   "external network required",
   "feature auth barrier",

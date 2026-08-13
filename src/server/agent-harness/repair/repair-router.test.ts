@@ -69,6 +69,20 @@ describe("RepairRouter", () => {
     expect(isDependencyRepairFailure("lifecycle timeout")).toBe(false);
   });
 
+  it("routes unreproducible replay evidence to preparation repair", () => {
+    // N125(3): the element behind a browser-verified candidate no longer
+    // exists in the state capture replays it in. The script channel cannot
+    // fix an app that no longer shows the element; only preparation can.
+    expect(
+      classifyRepairRoute({
+        failureClassification: "evidence unreproducible at replay",
+      }),
+    ).toBe("repo-preparation-repair");
+    expect(isDependencyRepairFailure("evidence unreproducible at replay")).toBe(
+      false,
+    );
+  });
+
   it("fails a sandbox capacity failure instead of routing it to any repair agent", () => {
     expect(
       classifyRepairRoute({
