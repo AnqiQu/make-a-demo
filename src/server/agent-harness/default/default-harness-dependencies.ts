@@ -87,6 +87,12 @@ import {
   readModelRuntimeTargetSelection,
 } from "../run-planner/runtime-target-selection";
 import {
+  createServiceProvisionCommand,
+  provisionableServices,
+  readProvisionedServicePlans,
+  sandboxServiceConnectionUrls,
+} from "../sandbox-services/sandbox-services";
+import {
   makeADemoArtifactPaths,
   makeADemoDirectory,
 } from "../schemas/artifact-paths";
@@ -2739,6 +2745,76 @@ async function validateResolvedSubmittedCodeRuntime(
     npm_config_engine_strict: "false",
   };
 
+  // N122(5): provisioned services boot before the build so build-time schema
+  // introspection and the app both see a live database. Reset-then-boot on
+  // every validation round is the reseed contract — migrate and seed run
+  // against an empty service each time, so demo data cannot drift between
+  // rounds. The migrate/seed commands are the repo's own and run through the
+  // guarded wrapper (sealed network, teed evidence, lifecycle events);
+  // anything they would download must be vendored or install-window cached.
+  for (const plan of readProvisionedServicePlans(manifest.dataStrategy)) {
+    const provision = await executeSubmitted(
+      input.workspace,
+      `sh -ec ${shellQuote(createServiceProvisionCommand(plan.service))}`,
+      { timeoutMs: serviceProvisionTimeoutMs },
+    );
+    if (provision.exitCode !== 0) {
+      return failedPreparationValidation({
+        classification: "service start failure",
+        exitCode: provision.exitCode,
+        logsSummary: `The sandbox could not boot the declared ${plan.service} service on loopback: ${legibleFailureExcerpt(provision)}`,
+        manifest,
+        stage,
+        stderr: provision.stderr,
+        stdout: provision.stdout,
+        suggestedRepairHints: [
+          `The harness boots provisioned services itself, so no repository change can fix this boot; if it repeats, move ${plan.service} to another dataStrategy rung the demo can stand on (embedded-config or client-stub).`,
+        ],
+      });
+    }
+    for (const step of [
+      {
+        classification: "service migration failure",
+        command: plan.migrationCommand,
+        kind: "migration",
+      },
+      {
+        classification: "service seed failure",
+        command: plan.seedCommand,
+        kind: "seed",
+      },
+    ] as const) {
+      if (step.command === undefined) continue;
+      const { evidenceLogPath, result } = await executeGuardedSubmittedCommand(
+        input.workspace,
+        commandInAppDirectory(manifest.appDir, step.command),
+        `${plan.service}-${step.kind}`,
+        { env: guardedRuntimeEnv, timeoutMs: serviceSetupTimeoutMs },
+      );
+      if (result.exitCode !== 0) {
+        const fileTail = await readCommandEvidenceTail(
+          input.workspace,
+          evidenceLogPath,
+        );
+        return failedPreparationValidation({
+          attemptedCommand: step.command,
+          classification: step.classification,
+          exitCode: result.exitCode,
+          logsSummary: `The declared ${plan.service} ${step.kind} command failed against the freshly provisioned service: ${legibleFailureExcerpt(
+            { fileTail, stderr: result.stderr, stdout: result.stdout },
+          )}`,
+          manifest,
+          stage,
+          stderr: result.stderr,
+          stdout: result.stdout,
+          suggestedRepairHints: [
+            `Every validation round reprovisions ${plan.service} from an empty state and re-runs the declared commands, so the ${step.kind} command must succeed from an empty database with no manual steps. Repair the command or the files it runs; the service answers exactly at ${sandboxServiceConnectionUrls[plan.service]}.`,
+          ],
+        });
+      }
+    }
+  }
+
   if (input.buildApp !== false && manifest.buildCommandUsed !== undefined) {
     const { evidenceLogPath: buildEvidenceLogPath, result: buildResult } =
       await executeGuardedSubmittedCommand(
@@ -3722,6 +3798,11 @@ function createStaleDependencyTreeDropCommand(input: {
   return `if [ -d ${shellQuote(tree)} ] && [ ! -e ${shellQuote(`${tree}/${marker}`)} ]; then find /workspace -mindepth 1 -name node_modules -prune -exec rm -rf {} + 2>/dev/null; echo "[makeademo:disk] stale-tree dropped node_modules not built by ${manager}"; fi`;
 }
 const submittedCodeBuildTimeoutMs = 15 * 60_000;
+// A service boot is init + bind + health check — seconds when healthy, and a
+// service that has not bound in three minutes never will. Migrate/seed run
+// repo code (schema DDL, fixture loads) and get build-class headroom.
+const serviceProvisionTimeoutMs = 3 * 60_000;
+const serviceSetupTimeoutMs = 10 * 60_000;
 
 async function probeSubmittedCodeRuntime(
   workspace: AgentHarnessWorkspace,
@@ -5227,7 +5308,7 @@ function createDataStrategyInstruction(repoProfile: RepoProfile): string[] {
     )
     .join("; ");
   return [
-    `This repository requires data services: ${inventory}. Answer every one in the manifest's dataStrategy (the template pre-filled one entry per service) with the highest workable rung, in this preference order: (1) embedded-config — when an embedded driver exists (sqlite dependency, multi-driver config) or can be added as a dependency, configure the app onto it and seed deterministic demo data through the repo's own migration/seed path; (2) client-stub — serve deterministic in-code fixtures from the app's own fetch/API-client layer per the fixture playbook, never a service worker; (3) declared-stub — demo the feature on generated deterministic data and describe the substitution in the entry's detail. Never drop a data-backed feature, steer the demo away from it, or leave its queries pending; the demo must show the feature working on deterministic data.`,
+    `This repository requires data services: ${inventory}. Answer every one in the manifest's dataStrategy (the template pre-filled one entry per service) with the highest workable rung, in this preference order: (1) embedded-config — when an embedded driver exists (sqlite dependency, multi-driver config) or can be added as a dependency, configure the app onto it and seed deterministic demo data through the repo's own migration/seed path; (2) provisioned-service — for ${provisionableServices.join(", ")} the harness boots the real service on loopback before the build: point the app's connection env at ${sandboxServiceConnectionUrls.postgres} (postgres), ${sandboxServiceConnectionUrls.mysql} (mysql), or ${sandboxServiceConnectionUrls.redis} (redis) through envUsed, and declare the repo's own migrationCommand and seedCommand in the entry so schema and demo data load deterministically on every validation round; (3) client-stub — serve deterministic in-code fixtures from the app's own fetch/API-client layer per the fixture playbook, never a service worker; (4) declared-stub — demo the feature on generated deterministic data and describe the substitution in the entry's detail. Never drop a data-backed feature, steer the demo away from it, or leave its queries pending; the demo must show the feature working on deterministic data.`,
   ];
 }
 

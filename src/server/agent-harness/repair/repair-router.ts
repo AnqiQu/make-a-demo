@@ -36,6 +36,9 @@ const preparationFailureClassifications = new Set([
   "requested feature not observable",
   "render timeout",
   "runtime crash",
+  "service migration failure",
+  "service seed failure",
+  "service start failure",
   "start failure",
 ]);
 

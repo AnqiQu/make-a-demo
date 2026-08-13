@@ -83,6 +83,22 @@ describe("RepairRouter", () => {
     );
   });
 
+  it("routes provisioned-service failures to preparation repair", () => {
+    // N122(5): a service that cannot boot, migrate, or seed is repaired by
+    // changing the manifest's declarations (another rung, a fixed command),
+    // never by editing the demo script.
+    for (const classification of [
+      "service start failure",
+      "service migration failure",
+      "service seed failure",
+    ]) {
+      expect(
+        classifyRepairRoute({ failureClassification: classification }),
+      ).toBe("repo-preparation-repair");
+      expect(isDependencyRepairFailure(classification)).toBe(false);
+    }
+  });
+
   it("fails a sandbox capacity failure instead of routing it to any repair agent", () => {
     expect(
       classifyRepairRoute({

@@ -4621,6 +4621,210 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
   });
 
+  it("provisions declared services and runs migrate and seed before the app starts", async () => {
+    // N122(5): a provisioned-service declaration boots the real service on
+    // loopback after the install and runs the repo's own schema and seed
+    // commands before the app (and any build) runs, so everything
+    // downstream sees a ready, deterministically seeded database.
+    const commands: string[] = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async startSubmittedCodeApp() {
+        commands.push("[test] app-start");
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        dataStrategy: [
+          {
+            detail: "harness Postgres on loopback with prisma migrate",
+            migrationCommand: "npx prisma migrate deploy",
+            rung: "provisioned-service",
+            seedCommand: "npx prisma db seed",
+            service: "postgres",
+          },
+        ],
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    // The bare fake cannot answer the readiness probe, so the report fails
+    // downstream of this test's subject; what matters here is that no
+    // service stage failed and the ordering held.
+    expect(report.failureClassification ?? "none").not.toMatch(/^service /);
+    const installIndex = commands.findIndex((command) =>
+      command.includes("npm ci"),
+    );
+    const provisionIndex = commands.findIndex((command) =>
+      command.includes("initdb"),
+    );
+    const migrateIndex = commands.findIndex((command) =>
+      command.includes("npx prisma migrate deploy"),
+    );
+    const seedIndex = commands.findIndex((command) =>
+      command.includes("npx prisma db seed"),
+    );
+    const appStartIndex = commands.indexOf("[test] app-start");
+    expect(installIndex).toBeGreaterThanOrEqual(0);
+    expect(provisionIndex).toBeGreaterThan(installIndex);
+    expect(migrateIndex).toBeGreaterThan(provisionIndex);
+    expect(seedIndex).toBeGreaterThan(migrateIndex);
+    expect(appStartIndex).toBeGreaterThan(seedIndex);
+  });
+
+  it("classifies a service that cannot boot as a service start failure", async () => {
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("initdb")) {
+          return {
+            exitCode: 1,
+            stderr: "pg_ctl: could not start server",
+            stdout: "",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        dataStrategy: [
+          {
+            detail: "harness Postgres on loopback",
+            rung: "provisioned-service",
+            service: "postgres",
+          },
+        ],
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "service start failure",
+      logsSummary: expect.stringContaining("pg_ctl: could not start server"),
+      status: "failed",
+    });
+    expect(report.suggestedRepairHints.join(" ")).toContain("rung");
+  });
+
+  it("classifies a failed migration command as a service migration failure", async () => {
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("prisma migrate deploy")) {
+          return {
+            exitCode: 1,
+            stderr: "P3018: migration 0002_add_bookings failed",
+            stdout: "",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        dataStrategy: [
+          {
+            detail: "harness Postgres on loopback with prisma migrate",
+            migrationCommand: "npx prisma migrate deploy",
+            rung: "provisioned-service",
+            seedCommand: "npx prisma db seed",
+            service: "postgres",
+          },
+        ],
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "service migration failure",
+      logsSummary: expect.stringContaining("0002_add_bookings"),
+      status: "failed",
+    });
+    // The reseed contract: the command must work from an empty database on
+    // every round, and the hint owes the agent that constraint.
+    expect(report.suggestedRepairHints.join(" ")).toContain("empty");
+  });
+
+  it("classifies a failed seed command as a service seed failure", async () => {
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("prisma db seed")) {
+          return {
+            exitCode: 1,
+            stderr: "Unique constraint failed on the fields: (`email`)",
+            stdout: "",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        dataStrategy: [
+          {
+            detail: "harness Postgres on loopback with prisma seed",
+            rung: "provisioned-service",
+            seedCommand: "npx prisma db seed",
+            service: "postgres",
+          },
+        ],
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "service seed failure",
+      logsSummary: expect.stringContaining("Unique constraint failed"),
+      status: "failed",
+    });
+  });
+
   it("brackets the heavy submitted-code commands with disk usage markers", async () => {
     // Twenty has died on ENOSPC across three matrices while diagnosis
     // guessed at where the 10GB went; the markers turn the budget into
