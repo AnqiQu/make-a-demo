@@ -1634,14 +1634,36 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         create: {
           autoStopInterval: 0,
           autoDeleteInterval: 0,
-          disk: 10,
           ephemeral: true,
           linkedSandbox: "parent_sandbox",
           networkBlockAll: true,
+          resources: { disk: 10 },
           snapshot: "makeademo-submitted-code-browser",
         },
       },
     ]);
+  });
+
+  it("doubles CPU and memory for a heavyweight submitted-code sandbox", async () => {
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls),
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+
+    await provider.create({ submittedCodeSandboxClass: "heavyweight" });
+
+    expect(calls[1]).toEqual({
+      create: {
+        autoDeleteInterval: 0,
+        autoStopInterval: 0,
+        ephemeral: true,
+        linkedSandbox: "parent_sandbox",
+        networkBlockAll: true,
+        resources: { cpu: 4, disk: 10, memory: 16 },
+        snapshot: "makeademo-submitted-code-browser",
+      },
+    });
   });
 
   it("continues when org policy rejects submitted-code network overrides", async () => {
@@ -1947,10 +1969,10 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         create: {
           autoStopInterval: 0,
           autoDeleteInterval: 0,
-          disk: 10,
           ephemeral: true,
           linkedSandbox: "parent_sandbox",
           networkBlockAll: true,
+          resources: { disk: 10 },
           snapshot: "makeademo-submitted-code-browser",
         },
       },

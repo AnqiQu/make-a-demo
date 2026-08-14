@@ -109,6 +109,27 @@ describe("runAgentHarnessPipeline", () => {
     expect(downstreamCalls).toEqual([]);
   });
 
+  it("profiles the screened archive size before creating the workspace", async () => {
+    let profiledArchiveSizeBytes: number | undefined;
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({ archiveSizeBytes: 134_113_964 }),
+        stubPipelineDependencies({
+          async createWorkspace({ repoProfile }) {
+            profiledArchiveSizeBytes = repoProfile.archiveSizeBytes;
+            return workspace();
+          },
+          async synthesizeRunPlan() {
+            throw new Error("profile observed");
+          },
+        }),
+      ),
+    ).rejects.toThrow("profile observed");
+
+    expect(profiledArchiveSizeBytes).toBe(134_113_964);
+  });
+
   it("runs the artifact-driven pipeline in order and hands durable artifacts to each stage", async () => {
     const calls: string[] = [];
     const artifacts: Record<string, unknown> = {};

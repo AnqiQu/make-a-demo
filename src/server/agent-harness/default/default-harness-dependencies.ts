@@ -44,6 +44,7 @@ import {
 } from "../app-explorer/submitted-app-explorer";
 import { downloadSubmittedCodeArchive } from "../daytona/submitted-code-artifact-archive";
 import { uploadSubmittedCodeExternalResourceCache } from "../daytona/submitted-code-external-resource-cache";
+import { selectSubmittedCodeSandboxClass } from "../daytona/submitted-code-sandbox-class";
 import {
   AgentHarnessAgentLaunchError,
   AgentHarnessCommandTimeoutError,
@@ -980,7 +981,7 @@ export async function createDefaultAgentHarnessDependencies(
       );
       opencodeSessionId = undefined;
     },
-    async createWorkspace() {
+    async createWorkspace({ repoProfile }) {
       const provider =
         options.workspaceProvider ??
         (await createDaytonaWorkspaceProvider({
@@ -988,7 +989,9 @@ export async function createDefaultAgentHarnessDependencies(
           logger: options.logger,
           providerID,
         }));
-      workspaceHandle = await provider.create();
+      workspaceHandle = await provider.create({
+        submittedCodeSandboxClass: selectSubmittedCodeSandboxClass(repoProfile),
+      });
       return workspaceHandle.workspace;
     },
     async exploreApp({
@@ -2381,7 +2384,7 @@ async function validateResolvedSubmittedCodeRuntime(
       [
         ...(staleTreeDrop === undefined ? [] : [staleTreeDrop]),
         packageManagerCachePruneCommand,
-        `mkdir -p ${packageManagerStagingDirectory}`,
+        packageManagerStagingResetCommand,
         `df -k /workspace 2>/dev/null | tail -1 | sed "s|^|[makeademo:disk] cache-prune before |"`,
         "true",
       ].join("; "),
@@ -2632,14 +2635,10 @@ async function validateResolvedSubmittedCodeRuntime(
   } else if (input.resetWorkspace !== false) {
     // An install-reuse round after a re-sync: node_modules survived, the
     // in-tree lifecycle outputs did not. Fall back to the manifest command
-    // when no install ran in this process yet. The staging TMPDIR was
-    // pruned at the end of the install round that made reuse possible.
+    // when no install ran in this process yet. The centralized lifecycle
+    // reset below purges TMPDIR whether the preceding round passed or died.
     lifecycleInstallCommand =
       input.reusedInstallCommand ?? manifestInstallCommand;
-    await executeSubmitted(
-      input.workspace,
-      `mkdir -p ${packageManagerStagingDirectory}`,
-    );
     await reapplyBerryDiskFallbackIfArmed(lifecycleInstallCommand);
   }
 
@@ -2661,6 +2660,13 @@ async function validateResolvedSubmittedCodeRuntime(
         : { yarnVariant: input.repoProfile.yarnVariant }),
     });
     if (lifecycleCommand !== undefined) {
+      // Installs and killed earlier lifecycle passes leave yarn xfs-* scratch
+      // in the persistent /root TMPDIR. Begin every lifecycle execution from
+      // an empty staging directory so repair rounds do not compound disk use.
+      await executeSubmitted(
+        input.workspace,
+        packageManagerStagingResetCommand,
+      );
       const { evidenceLogPath: lifecycleEvidenceLogPath, result: lifecycle } =
         await executeGuardedSubmittedCommand(
           input.workspace,
@@ -4198,6 +4204,8 @@ const dependencyInstallTimeoutMs = 20 * 60_000;
 // debris behind where nothing reclaims it (2026-08-08). Staging under the
 // harness's own pruned path puts that churn on the same lever as the caches.
 const packageManagerStagingDirectory = "/root/.makeademo-staging";
+
+const packageManagerStagingResetCommand = `rm -rf -- ${packageManagerStagingDirectory} && mkdir -p ${packageManagerStagingDirectory}`;
 
 const packageManagerCachePruneCommand = `rm -rf /root/.yarn/berry/cache /root/.npm/_cacache /root/.local/share/pnpm/store ${packageManagerStagingDirectory} 2>/dev/null`;
 

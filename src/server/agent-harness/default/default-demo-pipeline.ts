@@ -194,6 +194,7 @@ export async function runDefaultDemoPipeline(
       options.runHarnessPipeline ?? runAgentHarnessPipeline
     )(
       {
+        archiveSizeBytes: repoSnapshot.sourceArchive.sizeBytes,
         ...(repoSnapshot.commitSha === undefined
           ? {}
           : { commitSha: repoSnapshot.commitSha }),

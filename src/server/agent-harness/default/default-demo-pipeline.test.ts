@@ -42,6 +42,7 @@ describe("runDefaultDemoPipeline", () => {
       commitSha: "abc123def456",
       path: join(outputRoot, "screened-repo.tar.gz"),
       sha256: "archive-sha256",
+      sizeBytes: 2,
     };
     const installationTokenProvider = {
       async createInstallationToken() {
@@ -101,6 +102,7 @@ describe("runDefaultDemoPipeline", () => {
       commitSha: "abc123def456",
       path: join(outputRoot, "screened-repo.tar.gz"),
       sha256: "archive-sha256",
+      sizeBytes: 2,
     };
 
     await expect(
@@ -317,6 +319,7 @@ describe("runDefaultDemoPipeline", () => {
               commitSha: "abc123def456",
               path: join(outputRoot, "screened-repo.tar.gz"),
               sha256: "screened-repo-sha256",
+              sizeBytes: 134_113_964,
             },
           };
         },
@@ -345,6 +348,7 @@ describe("runDefaultDemoPipeline", () => {
             ],
             version: "2026-07-15",
           });
+          expect(input.archiveSizeBytes).toBe(134_113_964);
           expect(input.demoBrief.preferredAppDir).toBe("apps/calendar");
           await dependencies.artifactStore?.writeJson(
             "/workspace/.makeademo/pipeline-run-manifest.json",
@@ -621,6 +625,7 @@ describe("runDefaultDemoPipeline", () => {
                 commitSha: "abc123def456",
                 path: join(outputRoot, "screened-repo.tar.gz"),
                 sha256: "screened-repo-sha256",
+                sizeBytes: 2,
               },
             };
           },
@@ -696,6 +701,7 @@ function syntheticSuccessOptions(config: {
           commitSha: "abc123def456",
           path: join(outputRoot, "screened-repo.tar.gz"),
           sha256: "screened-repo-sha256",
+          sizeBytes: 2,
         },
       };
     },

@@ -34,6 +34,7 @@ type PackageRecord = {
 };
 
 export type RepoProfileInput = {
+  archiveSizeBytes?: number;
   commitSha?: string;
   files: RepoProfileFile[];
   quarantinedEnvironmentKeys?: string[];
@@ -130,6 +131,10 @@ export function profileRepo(input: RepoProfileInput): RepoProfile {
   const yarnVariant = readYarnVariant(primaryPackage?.json, paths);
 
   return {
+    ...(Number.isFinite(input.archiveSizeBytes) &&
+    (input.archiveSizeBytes ?? -1) >= 0
+      ? { archiveSizeBytes: input.archiveSizeBytes }
+      : {}),
     ...(yarnVariant === undefined ? {} : { yarnVariant }),
     authHints: Object.keys(dependencies).filter((name) =>
       authPackagePattern.test(name),

@@ -789,6 +789,7 @@ describe("readGithubRepoSnapshot", () => {
       commitSha: "abc123def456",
       path: join(runDirectory, "screened-repo.tar.gz"),
       sha256: createHash("sha256").update(archiveContents).digest("hex"),
+      sizeBytes: Buffer.byteLength(archiveContents),
     });
     await expect(readFile(snapshot.sourceArchive.path, "utf8")).resolves.toBe(
       archiveContents,

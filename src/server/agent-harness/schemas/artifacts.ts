@@ -97,6 +97,8 @@ export type RequiredService = {
 
 export type RepoProfile = {
   repoUrl: string;
+  /** Byte size of the screened, compressed source archive used for execution. */
+  archiveSizeBytes?: number;
   commitSha?: string;
   rootDir: string;
   packageManager: PackageManager;

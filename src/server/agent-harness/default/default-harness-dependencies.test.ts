@@ -52,6 +52,31 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(models).toEqual(["openai/gpt-5"]);
   });
 
+  it("selects the heavyweight submitted-code class for Twenty's screened profile", async () => {
+    let submittedCodeSandboxClass: string | undefined;
+    const workspace = createFakeAgentHarnessWorkspace();
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+      workspaceProvider: {
+        async create(input?: { submittedCodeSandboxClass?: string }) {
+          submittedCodeSandboxClass = input?.submittedCodeSandboxClass;
+          return { async destroy() {}, id: "workspace", workspace };
+        },
+      },
+    });
+    const twentyProfile: RepoProfile & { archiveSizeBytes: number } = {
+      ...repoProfile(),
+      archiveSizeBytes: 134_113_964,
+    };
+
+    await harness.dependencies.createWorkspace({ repoProfile: twentyProfile });
+
+    expect(submittedCodeSandboxClass).toBe("heavyweight");
+  });
+
   it("feeds agents a bounded, redacted excerpt of a failed command's output", async () => {
     const prompts: string[] = [];
     let attempts = 0;
@@ -5028,6 +5053,19 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
     expect(
       stagingIndexes.some(
+        (index) =>
+          index > (syncIndexes[1] ?? -1) && index < (rebuildIndexes[1] ?? -1),
+      ),
+    ).toBe(true);
+    const stagingPurgeIndexes = commands.flatMap((command, index) =>
+      command.includes(
+        "rm -rf -- /root/.makeademo-staging && mkdir -p /root/.makeademo-staging",
+      )
+        ? [index]
+        : [],
+    );
+    expect(
+      stagingPurgeIndexes.some(
         (index) =>
           index > (syncIndexes[1] ?? -1) && index < (rebuildIndexes[1] ?? -1),
       ),
@@ -10951,6 +10989,7 @@ function repoSourceArchive(): Promise<RepoSourceArchive> {
       commitSha: "abc123def456",
       path,
       sha256: createHash("sha256").update(contents).digest("hex"),
+      sizeBytes: Buffer.byteLength(contents),
     };
   })();
   return testRepoSourceArchive;

@@ -21,6 +21,8 @@ export type RepoSourceArchive = {
   commitSha: string;
   path: string;
   sha256: string;
+  /** Exact compressed archive size used for pre-sandbox resource selection. */
+  sizeBytes: number;
 };
 
 export type RepoSnapshot = {
@@ -224,12 +226,14 @@ export async function readGithubRepoSnapshot(
       commitSha,
       path: archivePath,
       sha256: await sha256File(archivePath),
+      sizeBytes: (await stat(archivePath)).size,
     };
     await input.log("repo.archive.succeeded", {
       commitSha,
       path: archivePath,
       quarantinedFileCount: quarantine.manifest.entries.length,
       sha256: sourceArchive.sha256,
+      sizeBytes: sourceArchive.sizeBytes,
     });
     snapshotComplete = true;
     return {

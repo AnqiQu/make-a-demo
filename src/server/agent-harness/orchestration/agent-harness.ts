@@ -70,6 +70,7 @@ import {
 } from "./preparation-fallback";
 
 export type AgentHarnessPipelineInput = {
+  archiveSizeBytes?: number;
   commitSha?: string;
   demoBrief: {
     demoLengthSeconds?: number;
@@ -400,6 +401,9 @@ export async function runAgentHarnessPipeline(
       dependencies,
       artifactPaths.repoProfile,
       profileRepo({
+        ...(input.archiveSizeBytes === undefined
+          ? {}
+          : { archiveSizeBytes: input.archiveSizeBytes }),
         ...optionalString("commitSha", input.commitSha),
         files: input.files,
         ...(input.secretQuarantineManifest === undefined

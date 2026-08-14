@@ -309,6 +309,20 @@ export type AgentHarnessWorkspaceHandle = {
   workspace: AgentHarnessWorkspace;
 };
 
+/** Resource class chosen before submitted code starts running. */
+export type SubmittedCodeSandboxClass = "heavyweight" | "standard";
+
+/**
+ * Creation policy for a paired agent/submitted-code workspace. Providers must
+ * apply the selected class to the submitted-code sandbox without weakening its
+ * network isolation or lifecycle cleanup guarantees.
+ */
+export type AgentHarnessWorkspaceCreateInput = {
+  submittedCodeSandboxClass: SubmittedCodeSandboxClass;
+};
+
 export interface AgentHarnessWorkspaceProvider {
-  create(): Promise<AgentHarnessWorkspaceHandle>;
+  create(
+    input?: AgentHarnessWorkspaceCreateInput,
+  ): Promise<AgentHarnessWorkspaceHandle>;
 }

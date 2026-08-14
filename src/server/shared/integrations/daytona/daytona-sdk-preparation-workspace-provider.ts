@@ -11,6 +11,7 @@ import type {
   AgentHarnessSubmittedCodeAppStatus,
   AgentHarnessWorkspace,
   AgentHarnessWorkspaceCommandResult,
+  AgentHarnessWorkspaceCreateInput,
   AgentHarnessWorkspaceDownloadFile,
   AgentHarnessWorkspaceExecuteOptions,
   AgentHarnessWorkspaceHandle,
@@ -167,6 +168,18 @@ const defaultSandboxDiskGB = 3;
  * headroom must come from cache pruning, not disk.
  */
 const submittedCodeSandboxDiskGB = 10;
+// Twenty reached the measured 8GiB cgroup ceiling in both install and build.
+// 16GiB is the next bounded class with meaningful headroom; 4 CPUs keeps its
+// heavyweight builds moving while the standard class retains Daytona's CPU
+// and memory defaults. Both classes stay at the measured 10GB org disk cap.
+const submittedCodeSandboxResources = {
+  heavyweight: {
+    cpu: 4,
+    disk: submittedCodeSandboxDiskGB,
+    memory: 16,
+  },
+  standard: { disk: submittedCodeSandboxDiskGB },
+} as const;
 const defaultCommandTimeoutMs = 10 * 60_000;
 const defaultLogWriteTimeoutMs = 5_000;
 const defaultPtyConnectionTimeoutMs = 30_000;
@@ -292,7 +305,9 @@ export class DaytonaSdkPreparationWorkspaceProvider
           }));
   }
 
-  async create(): Promise<AgentHarnessWorkspaceHandle> {
+  async create(
+    input?: AgentHarnessWorkspaceCreateInput,
+  ): Promise<AgentHarnessWorkspaceHandle> {
     const createOptions = { timeout: this.sandboxCreateTimeoutSeconds };
     const sandbox = await this.controlPlane.run("agent-sandbox.create", () =>
       this.client.create(
@@ -325,10 +340,13 @@ export class DaytonaSdkPreparationWorkspaceProvider
                   {
                     autoStopInterval: 0,
                     autoDeleteInterval: 0,
-                    disk: submittedCodeSandboxDiskGB,
                     ephemeral: true,
                     linkedSandbox: id,
                     networkBlockAll: true,
+                    resources:
+                      submittedCodeSandboxResources[
+                        input?.submittedCodeSandboxClass ?? "standard"
+                      ],
                     snapshot: this.submittedCodeSnapshot,
                   },
                   createOptions,
