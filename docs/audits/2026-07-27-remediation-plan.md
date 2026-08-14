@@ -7237,6 +7237,14 @@ twenty's attempt-6 evidence produces a summary whose
 first line names the Killed migration, and ghostfolio's
 attempt-1 seed failure headlines its real error.
 
+Landed: provisioned-service migration and seed reports
+now headline the last causal `Killed`, `fatal:`, or
+tool-authored nonzero-exit line ahead of warning noise.
+Killed commands also carry bounded
+`envUsed.NODE_OPTIONS --max-old-space-size` and
+narrower-target guidance while retaining their existing
+repair classifications.
+
 ### Watchlist (no fix scheduled; re-check next matrix)
 
 - directus under a working stub: the "owner not set"
