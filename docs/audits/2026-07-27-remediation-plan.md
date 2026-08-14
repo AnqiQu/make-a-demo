@@ -7531,6 +7531,14 @@ probe 502 on /settings/data-model/+) classifies as a
 serve/backend failure naming the route, steering
 repair at data delivery rather than the build.
 
+Landed: readiness now classifies an entry-route 5xx
+from a still-running managed app as `app server error`
+and headlines the probed route and status. A 502 from
+a source-backed Vite runtime also identifies the
+likely proxy-to-absent-backend shape and steers repair
+at backend or data delivery, while exited processes
+remain runtime failures.
+
 ### N145 (High, bugfix) — every failure summary headlines its causal line, in clean text, once
 
 Apply the N130/N140 causal-headline rule to the
