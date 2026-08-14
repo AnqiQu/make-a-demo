@@ -21,6 +21,9 @@ export function isFeatureGroundable(
 ): boolean {
   const authEvidenceAllowed =
     input.allowedAuthWallFeatureIds?.has(featureId) === true;
+  const isUsableInteraction = (
+    action: ActionCatalog["actions"][number],
+  ): boolean => authEvidenceAllowed || !isAuthDegradedClick(action);
   const actions = input.actionCatalog.actions.filter(
     (action) =>
       (action.featureIds ?? []).includes(featureId) &&
@@ -30,14 +33,10 @@ export function isFeatureGroundable(
   if (!hasAssert) return false;
   const exercised = actions.filter((action) => action.exercised === true);
   if (exercised.length > 0) {
-    return exercised.some(
-      (action) => authEvidenceAllowed || !isAuthDegradedClick(action),
-    );
+    return exercised.some(isUsableInteraction);
   }
   return actions.some(
-    (action) =>
-      action.kind !== "assert" &&
-      (authEvidenceAllowed || !isAuthDegradedClick(action)),
+    (action) => action.kind !== "assert" && isUsableInteraction(action),
   );
 }
 

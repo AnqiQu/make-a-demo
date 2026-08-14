@@ -30,7 +30,7 @@ import type { PipelineEventLogger } from "../../shared/logging/pipeline-event-lo
 import { withCpuLivenessHeartbeat } from "../../shared/shell/cpu-liveness";
 import { shellQuote } from "../../shared/shell/shell-quote";
 import { elideMiddle } from "../../shared/text/elide-middle";
-import { stripAnsi } from "../../shared/text/strip-ansi";
+import { stripAnsi, stripAnsiFileProgram } from "../../shared/text/strip-ansi";
 import {
   hasAuthWallRouteShape,
   isAuthDegradedClick,
@@ -3809,24 +3809,6 @@ function withDiskMarkers(
 }
 
 const failureEvidenceTailBytes = 4_096;
-const remoteAnsiStripScript = String.raw`
-const fs = require("node:fs");
-const ESC = String.fromCharCode(27);
-const BEL = String.fromCharCode(7);
-const osc = new RegExp(ESC + "\\][^" + BEL + ESC + "]*(?:" + BEL + "|" + ESC + "\\\\)?", "g");
-const csi = new RegExp(ESC + "\\[[0-9;?]*[ -/]*[@-~]", "g");
-const two = new RegExp(ESC + "[@-Z\\\\-_]", "g");
-const controls = new RegExp("[" + ESC + BEL + "]", "g");
-const value = fs.readFileSync(process.argv[1], "utf8")
-  .replace(osc, "")
-  .replace(csi, "")
-  .replace(two, "")
-  .replace(controls, "")
-  .replaceAll("\r\n", "\n")
-  .replaceAll("\r", "\n");
-process.stdout.write(value);
-`.trim();
-
 /**
  * Reads the bounded tail of a command's teed evidence file — the durable
  * copy of the output that the PTY stream may have dropped. ANSI is removed
@@ -3842,7 +3824,7 @@ async function readCommandEvidenceTail(
   try {
     const result = await executeSubmitted(
       workspace,
-      `node -e ${shellQuote(remoteAnsiStripScript)} ${shellQuote(evidenceLogPath)} 2>/dev/null | tail -c ${failureEvidenceTailBytes}`,
+      `node -e ${shellQuote(stripAnsiFileProgram)} ${shellQuote(evidenceLogPath)} 2>/dev/null | tail -c ${failureEvidenceTailBytes}`,
     );
     return result.exitCode === 0 ? result.stdout : "";
   } catch {
@@ -3922,7 +3904,6 @@ function readCommandFailureEvidence(input: {
         !/^\[makeademo:timeout\]/.test(line) && /\bKilled\b/i.test(line),
     )
     .at(-1);
-  const fatalLine = lastMatching(/\bfatal:/i);
   const moduleNotFoundLine = lastMatching(/\bERR_MODULE_NOT_FOUND\b/);
   const nonzeroToolExitLine = lastMatching(
     /\bcommand (?:failed|exited) with (?:exit )?code [1-9]\d*|\bexited with status [1-9]\d*|^\d+\s+verbose\s+(?:exit|code)\s+[1-9]\d*$/i,
@@ -3937,7 +3918,6 @@ function readCommandFailureEvidence(input: {
     killedLine ??
     readLastErrorCauseLine(causeText) ??
     moduleNotFoundLine ??
-    fatalLine ??
     nonzeroToolExitLine ??
     commandEndLine ??
     lines.at(-1) ??

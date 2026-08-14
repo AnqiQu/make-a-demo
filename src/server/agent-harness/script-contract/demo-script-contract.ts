@@ -759,15 +759,14 @@ function assertActionMatchesCatalog(
       `Browser action ${action.id} targets ${action.path} but its observed ActionCatalog route is ${sourceAction.route}`,
     );
   }
-  if (action.type === "click") {
-    if (
-      action.navigationDestination !== undefined &&
-      action.navigationDestination !== sourceAction.navigationDestination
-    ) {
-      throw new Error(
-        `Browser action ${action.id} navigationDestination does not match its ActionCatalog evidence`,
-      );
-    }
+  if (
+    action.type === "click" &&
+    action.navigationDestination !== undefined &&
+    action.navigationDestination !== sourceAction.navigationDestination
+  ) {
+    throw new Error(
+      `Browser action ${action.id} navigationDestination does not match its ActionCatalog evidence`,
+    );
   }
   // Catalog agreement is no defense: when both carry a placeholder the
   // capture would navigate it verbatim into a guaranteed 404 (outline,

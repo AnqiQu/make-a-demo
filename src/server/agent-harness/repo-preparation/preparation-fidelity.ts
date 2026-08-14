@@ -67,16 +67,6 @@ export type FidelityCandidate = {
   path?: string;
 };
 
-/**
- * Verifies that Repo Preparation adapted the screened product rather than
- * replacing it with a newly authored demo application. During dependency
- * repair, executable source must remain unchanged from the accepted baseline.
- * Auth and integration edits must conditionally use a source-backed demo gate.
- * Presentation files accept only external-asset localization or a demo-gated
- * wrap that re-introduces existing markup without adding new presentation.
- */
-type FidelityViolation = FidelityCandidate;
-
 const repairHints = {
   adaptOriginal:
     "Adapt the original application; do not create replacement servers, pages, styles, or commands.",
@@ -137,7 +127,10 @@ export function validatePreparationFidelity(input: {
  * returned candidate is a proposed veto, and callers with an adjudication
  * seam may have an agent judge confirm or overturn each one before the
  * verdict becomes a report. Candidates carry the evidence-bearing file path
- * whenever the violation is file-scoped.
+ * whenever the violation is file-scoped. Dependency repair must preserve
+ * executable source; auth and integration edits require a source-backed demo
+ * gate; presentation edits may only localize assets or restore existing UI
+ * behind such a gate.
  */
 export function readPreparationFidelityCandidates(input: {
   dependencyRepair?: boolean;
@@ -147,7 +140,7 @@ export function readPreparationFidelityCandidates(input: {
   repoSourceFiles: ReadonlyMap<string, string | undefined>;
   workspaceDiff: PreparationWorkspaceDiff;
 }): FidelityCandidate[] {
-  const violations: FidelityViolation[] = [];
+  const violations: FidelityCandidate[] = [];
   const hasStubDeliveryMechanism =
     input.preparationManifest.mocksAndFixturesAdded.length > 0 ||
     input.preparationManifest.localDemoModeChanges.length > 0 ||
@@ -635,7 +628,7 @@ function readGatedAdaptationViolation(input: {
   originalSource: string;
   patch: PatchSection;
   path: string;
-}): FidelityViolation | undefined {
+}): FidelityCandidate | undefined {
   if (input.addsPresentation) {
     return {
       hint: repairHints.preserveUi,
@@ -1201,7 +1194,7 @@ function readNarrowedBuildScope(
   appDir: string,
   filePatches: ReadonlyMap<string, PatchSection>,
   repoSourceFiles: ReadonlyMap<string, string | undefined>,
-): FidelityViolation | undefined {
+): FidelityCandidate | undefined {
   const normalizedAppDir = appDir.replace(/^\.\/?/, "").replace(/\/$/, "");
   const packagePath =
     normalizedAppDir === ""
