@@ -59,12 +59,14 @@ strict digraph "dependency-cruiser output"{
     "src/server/agent-harness/default/default-demo-pipeline.test.ts" -> "src/server/agent-harness/schemas/artifacts.ts"
     "src/server/agent-harness/default/default-demo-pipeline.test.ts" -> "src/server/agent-harness/default/default-demo-pipeline.ts"
     subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/agent-harness" {label="agent-harness" subgraph "cluster_src/server/agent-harness/default" {label="default" "src/server/agent-harness/default/default-demo-pipeline.ts" [label=<default-demo-pipeline.ts> tooltip="default-demo-pipeline.ts" URL="src/server/agent-harness/default/default-demo-pipeline.ts" fillcolor="#ddfeff"] } } } }
+    "src/server/agent-harness/default/default-demo-pipeline.ts" -> "src/server/pipeline/06-footage-capture/capture-runtime-protocol.ts"
     "src/server/agent-harness/default/default-demo-pipeline.ts" -> "src/server/pipeline/06-footage-capture/capture-scenes.ts"
     "src/server/agent-harness/default/default-demo-pipeline.ts" -> "src/server/pipeline/06-footage-capture/demo-script.schema.ts"
     "src/server/agent-harness/default/default-demo-pipeline.ts" -> "src/server/pipeline/07-compositing/composite-video.ts"
     "src/server/agent-harness/default/default-demo-pipeline.ts" -> "src/server/shared/integrations/github/github-app.ts"
     "src/server/agent-harness/default/default-demo-pipeline.ts" -> "src/server/shared/logging/pipeline-event-logger.ts"
     "src/server/agent-harness/default/default-demo-pipeline.ts" -> "src/server/agent-harness/orchestration/agent-harness.ts"
+    "src/server/agent-harness/default/default-demo-pipeline.ts" -> "src/server/agent-harness/schemas/artifacts.ts"
     "src/server/agent-harness/default/default-demo-pipeline.ts" -> "src/server/agent-harness/default/default-harness-dependencies.ts"
     "src/server/agent-harness/default/default-demo-pipeline.ts" -> "src/server/agent-harness/default/github-repo-url.ts"
     "src/server/agent-harness/default/default-demo-pipeline.ts" -> "src/server/agent-harness/default/local-json-artifact-store.ts"
@@ -89,6 +91,7 @@ strict digraph "dependency-cruiser output"{
     "src/server/agent-harness/default/default-harness-dependencies.ts" -> "src/server/shared/shell/shell-quote.ts"
     "src/server/agent-harness/default/default-harness-dependencies.ts" -> "src/server/shared/text/elide-middle.ts"
     "src/server/agent-harness/default/default-harness-dependencies.ts" -> "src/server/shared/text/strip-ansi.ts"
+    "src/server/agent-harness/default/default-harness-dependencies.ts" -> "src/server/agent-harness/app-explorer/stderr-error-signal.ts"
     "src/server/agent-harness/default/default-harness-dependencies.ts" -> "src/server/agent-harness/app-explorer/submitted-app-explorer.ts"
     "src/server/agent-harness/default/default-harness-dependencies.ts" -> "src/server/agent-harness/daytona/submitted-code-artifact-archive.ts"
     "src/server/agent-harness/default/default-harness-dependencies.ts" -> "src/server/agent-harness/daytona/submitted-code-external-resource-cache.ts"
@@ -384,6 +387,7 @@ strict digraph "dependency-cruiser output"{
     "src/server/pipeline/06-footage-capture/demo-script.schema.ts" -> "src/server/pipeline/06-footage-capture/browser-action-plan.ts"
     subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/pipeline" {label="pipeline" subgraph "cluster_src/server/pipeline/06-footage-capture" {label="06-footage-capture" "src/server/pipeline/06-footage-capture/playwright-scene-recorder.test.ts" [label=<playwright-scene-recorder.test.ts> tooltip="playwright-scene-recorder.test.ts" URL="src/server/pipeline/06-footage-capture/playwright-scene-recorder.test.ts" fillcolor="#ddfeff"] } } } }
     "src/server/pipeline/06-footage-capture/playwright-scene-recorder.test.ts" -> "src/server/agent-harness/daytona/workspace.test-helpers.ts"
+    "src/server/pipeline/06-footage-capture/playwright-scene-recorder.test.ts" -> "src/server/pipeline/06-footage-capture/capture-runtime-protocol.ts"
     "src/server/pipeline/06-footage-capture/playwright-scene-recorder.test.ts" -> "src/server/pipeline/06-footage-capture/playwright-scene-recorder.ts"
     subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/pipeline" {label="pipeline" subgraph "cluster_src/server/pipeline/06-footage-capture" {label="06-footage-capture" "src/server/pipeline/06-footage-capture/playwright-scene-recorder.ts" [label=<playwright-scene-recorder.ts> tooltip="playwright-scene-recorder.ts" URL="src/server/pipeline/06-footage-capture/playwright-scene-recorder.ts" fillcolor="#ddfeff"] } } } }
     "src/server/pipeline/06-footage-capture/playwright-scene-recorder.ts" -> "src/server/agent-harness/daytona/submitted-code-artifact-archive.ts"
