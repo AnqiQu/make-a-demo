@@ -7,6 +7,7 @@ import {
   readFile,
   rm,
   stat,
+  truncate,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -423,6 +424,88 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         },
       ],
     });
+  });
+
+  it("extends the upload attempt timeout to cover a large archive payload", async () => {
+    // twenty's 294MB screened archive could not finish inside the default
+    // 600s per-attempt bound, so the envelope abandoned two live transfers
+    // as hangs and the N133 cap ended the run (2026-08-13T23-23 matrix).
+    // The bound must scale with the payload it polices.
+    const calls: unknown[] = [];
+    const runOptions: Array<{ operation: string; options: unknown }> = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls),
+      controlPlane: {
+        async run(operation, attempt, options) {
+          runOptions.push({ operation, options });
+          return attempt();
+        },
+      },
+    });
+    const handle = await provider.create();
+    const localDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-large-upload-"),
+    );
+    try {
+      const largePath = join(localDirectory, "screened-repo.tar.gz");
+      const largeBytes = 300 * 1024 * 1024;
+      await writeFile(largePath, "");
+      await truncate(largePath, largeBytes);
+
+      await handle.workspace.uploadFiles([
+        {
+          destinationPath: "/workspace/.makeademo/screened-repo.tar.gz",
+          sourcePath: largePath,
+        },
+      ]);
+
+      const upload = runOptions.find(({ operation }) => {
+        return operation === "fs.upload";
+      });
+      expect(upload?.options).toMatchObject({
+        // 300MB at the 256KiB/s worst-case floor plus fixed headroom.
+        attemptTimeoutMs: (largeBytes / (256 * 1024)) * 1000 + 60_000,
+      });
+    } finally {
+      await rm(localDirectory, { force: true, recursive: true });
+    }
+  });
+
+  it("keeps the default upload attempt timeout for small payloads", async () => {
+    const calls: unknown[] = [];
+    const runOptions: Array<{ operation: string; options: unknown }> = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeClient(calls),
+      controlPlane: {
+        async run(operation, attempt, options) {
+          runOptions.push({ operation, options });
+          return attempt();
+        },
+      },
+    });
+    const handle = await provider.create();
+    const localDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-small-upload-"),
+    );
+    try {
+      const smallPath = join(localDirectory, "script.ts");
+      await writeFile(smallPath, "export const scene = 1;\n");
+
+      await handle.workspace.uploadFiles([
+        {
+          destinationPath: "/workspace/.makeademo/capture/script.ts",
+          sourcePath: smallPath,
+        },
+      ]);
+
+      const upload = runOptions.find(({ operation }) => {
+        return operation === "fs.upload";
+      });
+      expect(upload).toBeDefined();
+      expect(upload?.options).not.toHaveProperty("attemptTimeoutMs");
+    } finally {
+      await rm(localDirectory, { force: true, recursive: true });
+    }
   });
 
   it("uploads workspace artifacts to the Daytona workspace", async () => {

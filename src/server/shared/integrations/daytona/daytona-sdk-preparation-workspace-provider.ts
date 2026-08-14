@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, posix } from "node:path";
 
@@ -34,6 +34,7 @@ import {
   type DaytonaControlPlaneEnvelope,
   classifyDaytonaControlPlaneError,
   createDaytonaControlPlaneEnvelope,
+  defaultDaytonaAttemptTimeoutMs,
   formatErrorDiagnostic,
 } from "./daytona-control-plane";
 
@@ -1011,11 +1012,15 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
    */
   private runTransferThroughEnvelope<T>(input: {
     attempt: () => Promise<T>;
+    attemptTimeoutMs?: number;
     onRetry?: (error: unknown) => Promise<void> | void;
     operation: string;
     sandboxId: string;
   }): Promise<T> {
     return this.controlPlane.run(input.operation, input.attempt, {
+      ...(input.attemptTimeoutMs === undefined
+        ? {}
+        : { attemptTimeoutMs: input.attemptTimeoutMs }),
       ladderMs: this.artifactTransferBackoffMs,
       ...(input.onRetry === undefined ? {} : { onRetry: input.onRetry }),
       sandboxId: input.sandboxId,
@@ -1210,15 +1215,20 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
       destination: file.destinationPath,
       source: file.sourcePath,
     }));
+    const attemptTimeoutMs = await readUploadAttemptTimeoutMs(
+      files.map((file) => file.sourcePath),
+    );
     const submittedCodeSandbox = this.submittedCodeSandbox;
     await this.runTransferThroughEnvelope({
       attempt: () => this.sandbox.fs.uploadFiles(uploadedFiles),
+      ...(attemptTimeoutMs === undefined ? {} : { attemptTimeoutMs }),
       operation: "fs.upload",
       sandboxId: this.agentSandboxId,
     });
     if (submittedCodeSandbox !== undefined) {
       await this.runTransferThroughEnvelope({
         attempt: () => submittedCodeSandbox.fs.uploadFiles(uploadedFiles),
+        ...(attemptTimeoutMs === undefined ? {} : { attemptTimeoutMs }),
         operation: "fs.upload",
         sandboxId:
           this.submittedCodeSandboxId ?? "unknown-submitted-code-sandbox",
@@ -1636,6 +1646,33 @@ class ManagedPty {
   waitForConnection(): Promise<void> {
     return this.pty.waitForConnection();
   }
+}
+
+// The envelope's per-attempt bound polices hangs, but a bulk transfer is a
+// legitimately slow call: twenty's 294MB archive could not finish inside the
+// default 600s bound on a contended uplink, so the envelope abandoned two
+// live transfers as hangs (2026-08-13T23-23 matrix). Above the default the
+// bound scales with the payload at a 256KiB/s worst-case floor plus fixed
+// headroom; a payload the default already covers keeps the default.
+const uploadWorstCaseBytesPerSecond = 256 * 1024;
+const uploadAttemptHeadroomMs = 60_000;
+
+async function readUploadAttemptTimeoutMs(
+  sourcePaths: string[],
+): Promise<number | undefined> {
+  let totalBytes = 0;
+  for (const sourcePath of sourcePaths) {
+    // Best-effort sizing: an unreadable source keeps the default bound and
+    // lets the upload itself report the real failure.
+    totalBytes += await stat(sourcePath).then(
+      (stats) => stats.size,
+      () => 0,
+    );
+  }
+  const transferMs =
+    Math.ceil(totalBytes / uploadWorstCaseBytesPerSecond) * 1000 +
+    uploadAttemptHeadroomMs;
+  return transferMs > defaultDaytonaAttemptTimeoutMs ? transferMs : undefined;
 }
 
 function withTimeout<T>(

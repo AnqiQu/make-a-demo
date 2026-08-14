@@ -139,8 +139,9 @@ const defaultConflictPollLimit = 24;
 // whole batch wedges behind one awaited promise (ghostfolio's
 // sandbox.delete hung ~40 minutes until the kernel reaped the socket,
 // 2026-08-11). Ten minutes polices hangs without ever racing a
-// legitimate operation.
-const defaultAttemptTimeoutMs = 10 * 60_000;
+// legitimate operation. Exported so callers whose payload provably needs
+// longer (bulk uploads) can size their override against the same floor.
+export const defaultDaytonaAttemptTimeoutMs = 10 * 60_000;
 const attemptTimeoutErrorName = "DaytonaControlPlaneAttemptTimeoutError";
 const defaultHungAttemptLimit = 2;
 
@@ -248,7 +249,7 @@ export function createDaytonaControlPlaneEnvelope(envelopeOptions: {
       const ladderMs = options.ladderMs ?? controlLadderMs;
       const classify = options.classify ?? classifyDaytonaControlPlaneError;
       const attemptTimeoutMs =
-        options.attemptTimeoutMs ?? defaultAttemptTimeoutMs;
+        options.attemptTimeoutMs ?? defaultDaytonaAttemptTimeoutMs;
       const conflictPollLimit =
         options.conflictPollLimit ?? defaultConflictPollLimit;
       const hungAttemptLimit =
