@@ -2582,13 +2582,13 @@ async function validateResolvedSubmittedCodeRuntime(
               input.workspace,
               installEvidenceLogPath,
             );
-      const installExcerpt = legibleFailureExcerpt({
+      const installFailureEvidence = readCommandFailureEvidence({
         ...result,
         fileTail: installFileTail,
       });
       const diskPressure = readDiskPressureEvidence(
         `${result.stderr}\n${result.stdout}\n${installFileTail}`,
-        installExcerpt,
+        installFailureEvidence.excerpt,
       );
       const installHints = [
         ...(berryDiskFallbackActive ? [berryDiskFallbackRepairHint] : []),
@@ -2601,7 +2601,10 @@ async function validateResolvedSubmittedCodeRuntime(
         classification: "install failure",
         exitCode: result.exitCode,
         logsSummary: [
-          `Submitted-code dependency install failed: ${installExcerpt}`,
+          formatCommandFailureSummary(
+            "Submitted-code dependency install failed",
+            installFailureEvidence,
+          ),
           ...diskPressure.markerLines,
         ].join("\n"),
         manifest,
@@ -2725,14 +2728,16 @@ async function validateResolvedSubmittedCodeRuntime(
             "\n",
           ),
         );
-        const excerpt = legibleFailureExcerpt({
+        const lifecycleFailureEvidence = readCommandFailureEvidence({
+          additionalEvidence: [...buildLogEvidence, ...managerLogEvidence],
+          exitCode: lifecycle.exitCode,
           fileTail: lifecycleFileTail,
           stderr: lifecycle.stderr,
           stdout: lifecycle.stdout,
         });
         const lifecycleDiskPressure = readDiskPressureEvidence(
           lifecycleOutput,
-          excerpt,
+          lifecycleFailureEvidence.excerpt,
         );
         // Exit 124 is the deadline-evidence conversion of a timeout kill:
         // the work in the tail completed and the hang began after its last
@@ -2753,6 +2758,22 @@ async function validateResolvedSubmittedCodeRuntime(
         )
           ? `Network-closed lifecycle scripts were killed after 5 minutes of silence${heartbeatSpoke ? " with no CPU progress" : ""}`
           : "Network-closed lifecycle scripts were killed at their overall deadline";
+        const outputContradictsSuccessfulCompletion =
+          lifecycleFailureEvidence.killed ||
+          lifecycleFailureEvidence.nonzeroToolExit;
+        const lifecycleSummary = timedOut
+          ? outputContradictsSuccessfulCompletion
+            ? [
+                `Network-closed lifecycle failure cause: ${lifecycleFailureEvidence.causeLine}`,
+                `${timeoutSummary} (exit 124). The output records a kill or nonzero tool exit before the deadline, so no completed-success inference is safe.`,
+              ]
+            : [
+                `${timeoutSummary} (exit 124): ${lifecycleFailureEvidence.causeLine}`,
+                "Everything in the output below completed successfully — the hang began after its last line; repair the step that would have run next, not the completed work.",
+              ]
+          : [
+              `Network-closed lifecycle failure cause: ${lifecycleFailureEvidence.causeLine}`,
+            ];
         const lifecycleHints = [
           ...(downloadFailure
             ? [
@@ -2768,11 +2789,18 @@ async function validateResolvedSubmittedCodeRuntime(
           classification: timedOut ? "lifecycle timeout" : "install failure",
           exitCode: lifecycle.exitCode,
           logsSummary: [
-            timedOut
-              ? `${timeoutSummary} (exit 124). Everything in the output below completed successfully — the hang began after its last line; repair the step that would have run next, not the completed work: ${excerpt}`
-              : `Network-closed lifecycle scripts failed after the dependency install: ${excerpt}`,
-            ...buildLogEvidence,
-            ...managerLogEvidence,
+            ...lifecycleSummary,
+            ...(lifecycleFailureEvidence.excerpt.length === 0
+              ? []
+              : [`Command output:\n${lifecycleFailureEvidence.excerpt}`]),
+            ...[...buildLogEvidence, ...managerLogEvidence]
+              .map((evidence) =>
+                removePromotedCauseLine(
+                  evidence,
+                  lifecycleFailureEvidence.causeLine,
+                ),
+              )
+              .filter((evidence) => evidence.length > 0),
             ...lifecycleDiskPressure.markerLines,
             // Proves the record saw the command end: output that merely
             // stops (killed child, dropped stream) has no such trailer.
@@ -2907,7 +2935,7 @@ async function validateResolvedSubmittedCodeRuntime(
           input.workspace,
           evidenceLogPath,
         );
-        const failureEvidence = readServiceCommandFailureEvidence({
+        const failureEvidence = readCommandFailureEvidence({
           exitCode: result.exitCode,
           fileTail,
           stderr: result.stderr,
@@ -2973,14 +3001,15 @@ async function validateResolvedSubmittedCodeRuntime(
           workspacePackages: input.repoProfile.workspacePackages,
         },
       );
-      const buildExcerpt = legibleFailureExcerpt({
+      const buildFailureEvidence = readCommandFailureEvidence({
+        exitCode: buildResult.exitCode,
         fileTail: buildFileTail,
         stderr: buildResult.stderr,
         stdout: buildResult.stdout,
       });
       const buildDiskPressure = readDiskPressureEvidence(
         `${buildResult.stderr}\n${buildResult.stdout}\n${buildFileTail}`,
-        buildExcerpt,
+        buildFailureEvidence.excerpt,
       );
       const buildHints = [
         ...(buildDiskPressure.exhausted
@@ -2997,9 +3026,12 @@ async function validateResolvedSubmittedCodeRuntime(
             : "build failure",
         exitCode: buildResult.exitCode,
         logsSummary: [
-          blockedBuildAttempts.length > 0
-            ? `Submitted-code build requested ${blockedBuildAttempts.length} uncached external resource(s): ${buildExcerpt}`
-            : `Submitted-code build failed: ${buildExcerpt}`,
+          formatCommandFailureSummary(
+            blockedBuildAttempts.length > 0
+              ? `Submitted-code build requested ${blockedBuildAttempts.length} uncached external resource(s)`
+              : "Submitted-code build failed",
+            buildFailureEvidence,
+          ),
           ...buildDiskPressure.markerLines,
         ].join("\n"),
         manifest,
@@ -3771,12 +3803,31 @@ function withDiskMarkers(
 }
 
 const failureEvidenceTailBytes = 4_096;
+const remoteAnsiStripScript = String.raw`
+const fs = require("node:fs");
+const ESC = String.fromCharCode(27);
+const BEL = String.fromCharCode(7);
+const osc = new RegExp(ESC + "\\][^" + BEL + ESC + "]*(?:" + BEL + "|" + ESC + "\\\\)?", "g");
+const csi = new RegExp(ESC + "\\[[0-9;?]*[ -/]*[@-~]", "g");
+const two = new RegExp(ESC + "[@-Z\\\\-_]", "g");
+const controls = new RegExp("[" + ESC + BEL + "]", "g");
+const value = fs.readFileSync(process.argv[1], "utf8")
+  .replace(osc, "")
+  .replace(csi, "")
+  .replace(two, "")
+  .replace(controls, "")
+  .replaceAll("\r\n", "\n")
+  .replaceAll("\r", "\n");
+process.stdout.write(value);
+`.trim();
 
 /**
  * Reads the bounded tail of a command's teed evidence file — the durable
- * copy of the output that the PTY stream may have dropped. Best-effort by
- * design: a missing or unreadable file yields the empty string so callers
- * fall back to the streamed output.
+ * copy of the output that the PTY stream may have dropped. ANSI is removed
+ * before the byte tail is taken, so a cut can never turn the suffix of an
+ * escape sequence into fake prose. Best-effort by design: a missing or
+ * unreadable file yields the empty string so callers fall back to the
+ * streamed output.
  */
 async function readCommandEvidenceTail(
   workspace: AgentHarnessWorkspace,
@@ -3785,7 +3836,7 @@ async function readCommandEvidenceTail(
   try {
     const result = await executeSubmitted(
       workspace,
-      `tail -c ${failureEvidenceTailBytes} ${shellQuote(evidenceLogPath)} 2>/dev/null`,
+      `node -e ${shellQuote(remoteAnsiStripScript)} ${shellQuote(evidenceLogPath)} 2>/dev/null | tail -c ${failureEvidenceTailBytes}`,
     );
     return result.exitCode === 0 ? result.stdout : "";
   } catch {
@@ -3814,28 +3865,41 @@ function legibleFailureExcerpt(input: {
         : input.stdout;
   // Liveness beats (CPU sampler and agent-liveness plugin) are watchdog
   // transport, never evidence — sampler output would dilute the bounded tail.
-  const cleaned = stripAnsi(source)
-    .split("\n")
-    .filter((line) => !/^\[makeademo:(?:agent-)?alive\]/.test(line.trim()))
-    .join("\n")
-    .trim();
+  const cleaned = collapseRepeatedErrorBlocks(
+    stripAnsi(source)
+      .split("\n")
+      .filter((line) => !/^\[makeademo:(?:agent-)?alive\]/.test(line.trim()))
+      .join("\n"),
+  ).trim();
   if (cleaned.length <= failureEvidenceTailBytes) {
     return cleaned;
   }
   return `[earlier output elided]\n${cleaned.slice(-failureEvidenceTailBytes)}`;
 }
 
-function readServiceCommandFailureEvidence(input: {
+function readCommandFailureEvidence(input: {
+  additionalEvidence?: string[];
   exitCode: number;
   fileTail?: string;
   stderr: string;
   stdout: string;
-}): { causeLine: string; excerpt: string; killed: boolean } {
-  const excerpt = legibleFailureExcerpt(input);
-  const combined = stripAnsi(
-    [input.stdout, input.stderr, input.fileTail ?? ""]
-      .filter((source) => source.trim().length > 0)
-      .join("\n"),
+}): {
+  causeLine: string;
+  excerpt: string;
+  killed: boolean;
+  nonzeroToolExit: boolean;
+} {
+  const combined = collapseRepeatedErrorBlocks(
+    stripAnsi(
+      [
+        input.stdout,
+        input.stderr,
+        input.fileTail ?? "",
+        ...(input.additionalEvidence ?? []),
+      ]
+        .filter((source) => source.trim().length > 0)
+        .join("\n"),
+    ),
   );
   const lines = combined
     .split("\n")
@@ -3846,24 +3910,155 @@ function readServiceCommandFailureEvidence(input: {
     );
   const lastMatching = (pattern: RegExp) =>
     lines.filter((line) => pattern.test(line)).at(-1);
-  const killedLine = lastMatching(/\bKilled\b/i);
+  const killedLine = lines
+    .filter(
+      (line) =>
+        !/^\[makeademo:timeout\]/.test(line) && /\bKilled\b/i.test(line),
+    )
+    .at(-1);
   const fatalLine = lastMatching(/\bfatal:/i);
-  const nonzeroExitLine = lastMatching(
-    /\bcommand failed with exit code [1-9]\d*|\bexit(?:ed)? with (?:exit )?code [1-9]\d*/i,
+  const moduleNotFoundLine = lastMatching(/\bERR_MODULE_NOT_FOUND\b/);
+  const nonzeroToolExitLine = lastMatching(
+    /\bcommand (?:failed|exited) with (?:exit )?code [1-9]\d*|\bexited with status [1-9]\d*|^\d+\s+verbose\s+(?:exit|code)\s+[1-9]\d*$/i,
   );
   const commandEndLine = lastMatching(
     /\[makeademo:command-end\]\s+exit=[1-9]\d*/i,
   );
+  const causeText = lines
+    .filter((line) => !/^\[same error block repeated \d+ times;/.test(line))
+    .join("\n");
   const causeLine =
     killedLine ??
+    readLastErrorCauseLine(causeText) ??
+    moduleNotFoundLine ??
     fatalLine ??
-    nonzeroExitLine ??
-    readLastErrorCauseLine(combined) ??
-    readLastErrorCauseLine(excerpt) ??
+    nonzeroToolExitLine ??
     commandEndLine ??
     lines.at(-1) ??
     `command exited with code ${input.exitCode}`;
-  return { causeLine, excerpt, killed: killedLine !== undefined };
+  const excerpt = removePromotedCauseLine(
+    legibleFailureExcerpt(input),
+    causeLine,
+  );
+  return {
+    causeLine,
+    excerpt,
+    killed: killedLine !== undefined,
+    nonzeroToolExit: nonzeroToolExitLine !== undefined,
+  };
+}
+
+function removePromotedCauseLine(excerpt: string, causeLine: string): string {
+  const lines = excerpt.split("\n");
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (lines[index]?.trim() !== causeLine) continue;
+    lines.splice(index, 1);
+    break;
+  }
+  return lines.join("\n").trim();
+}
+
+function formatCommandFailureSummary(
+  label: string,
+  evidence: Pick<
+    ReturnType<typeof readCommandFailureEvidence>,
+    "causeLine" | "excerpt"
+  >,
+): string {
+  return `${label}: ${evidence.causeLine}${evidence.excerpt.length === 0 ? "" : `\nCommand output:\n${evidence.excerpt}`}`;
+}
+
+function collapseRepeatedErrorBlocks(value: string): string {
+  const lines = value
+    .replace(/(\S)(?=AggregateError(?:\s+\[[A-Z0-9_]+\])?:)/g, "$1\n")
+    .split("\n");
+  const collapsed: string[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    const anchor = lines[index]?.trim() ?? "";
+    if (!isRepeatedErrorBlockAnchor(anchor)) {
+      collapsed.push(lines[index] ?? "");
+      index += 1;
+      continue;
+    }
+    const nextAnchor = findNextMatchingLine(lines, index + 1, anchor);
+    if (nextAnchor === -1) {
+      collapsed.push(lines[index] ?? "");
+      index += 1;
+      continue;
+    }
+    const block = trimTrailingBlankLines(lines.slice(index, nextAnchor));
+    let cursor = nextAnchor;
+    let occurrences = 1;
+    while (cursor < lines.length) {
+      const blockEnd = findRepeatedErrorBlockEnd(lines, cursor, anchor);
+      const candidate = trimTrailingBlankLines(lines.slice(cursor, blockEnd));
+      if (!sameLines(block, candidate)) break;
+      occurrences += 1;
+      cursor = blockEnd;
+      if ((lines[cursor]?.trim() ?? "") !== anchor) break;
+    }
+    if (occurrences === 1) {
+      collapsed.push(lines[index] ?? "");
+      index += 1;
+      continue;
+    }
+    collapsed.push(
+      ...block,
+      `[same error block repeated ${occurrences} times; duplicate copies collapsed]`,
+    );
+    index = cursor;
+  }
+  return collapsed.join("\n");
+}
+
+function isRepeatedErrorBlockAnchor(line: string): boolean {
+  return /^(?:AggregateError(?:\s+\[[A-Z0-9_]+\])?:|(?:[A-Za-z][\w.]*Error)(?:\s+\[[A-Z0-9_]+\])?:|.*\bRequestError\b)/.test(
+    line,
+  );
+}
+
+function findNextMatchingLine(
+  lines: string[],
+  start: number,
+  expected: string,
+): number {
+  for (let index = start; index < lines.length; index += 1) {
+    if (lines[index]?.trim() === expected) return index;
+  }
+  return -1;
+}
+
+function findRepeatedErrorBlockEnd(
+  lines: string[],
+  start: number,
+  anchor: string,
+): number {
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index]?.trim() ?? "";
+    if (
+      line === anchor ||
+      /\bKilled\b|^\[makeademo:|^(?:Package-manager|Referenced build) log\b/.test(
+        line,
+      )
+    ) {
+      return index;
+    }
+  }
+  return lines.length;
+}
+
+function trimTrailingBlankLines(lines: string[]): string[] {
+  let end = lines.length;
+  while (end > 0 && lines[end - 1]?.trim().length === 0) end -= 1;
+  return lines.slice(0, end);
+}
+
+function sameLines(left: string[], right: string[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((line, index) => line === right[index])
+  );
 }
 
 const diskExhaustionPattern =

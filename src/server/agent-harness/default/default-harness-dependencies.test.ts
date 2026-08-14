@@ -6551,6 +6551,61 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(report.logsSummary).toContain("gyp info ok");
   });
 
+  it("headlines Twenty's killed lifecycle and collapses its repeated network stacks", async () => {
+    const networkErrorBlock = [
+      "AggregateError [ECONNREFUSED]:",
+      "    at internalConnectMultiple (node:net:1339:18)",
+      "    at afterConnectMultiple (node:net:1942:7)",
+      "➤ YN0001: │ RequestError",
+      "    at ClientRequest.<anonymous> (/workspace/repo/.yarn/releases/yarn-4.13.0.cjs:146:14258)",
+      "    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)",
+    ].join("\n");
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("yarn rebuild")) {
+          return {
+            exitCode: 124,
+            stderr: "",
+            stdout: [
+              Array.from({ length: 6 }, () => networkErrorBlock).join("\n"),
+              "bash: line 3: 1726 Killed sh -lc 'cd /workspace/repo && yarn rebuild'",
+              "18 verbose exit 1",
+              "19 verbose code 1",
+              "[makeademo:timeout] Daytona command did not finish within 1200000ms. The command was killed at its deadline; output above is partial.",
+            ].join("\n"),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "yarn install --immutable",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report.failureClassification).toBe("lifecycle timeout");
+    const headline = report.logsSummary.split("\n", 1)[0] ?? "";
+    expect(headline).toContain("Killed");
+    expect(headline).toContain("yarn rebuild");
+    expect(report.logsSummary).not.toContain(
+      "Everything in the output below completed successfully",
+    );
+    expect(report.logsSummary).toContain("same error block repeated 6 times");
+    expect(report.logsSummary.match(/RequestError/g)).toHaveLength(1);
+  });
+
   it("derives unbuilt-workspace hints from the teed build evidence, not only the stream", async () => {
     // Twenty (2026-08-09): the EvalError naming twenty-ui/dist survived
     // only in the teed evidence file — the PTY stream dropped it — so the
@@ -6790,21 +6845,26 @@ describe("createDefaultAgentHarnessDependencies", () => {
       repoSourceArchive: await repoSourceArchive(),
     });
 
-    await expect(
-      harness.dependencies.validatePreparation({
-        preparationManifest: {
-          ...preparationManifest(),
-          installCommandUsed: "yarn install --immutable",
-        },
-        repoProfile: repoProfile(),
-        runPlan: runPlan(),
-        workspace,
-      }),
-    ).resolves.toMatchObject({
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        installCommandUsed: "yarn install --immutable",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
       attemptedCommand: "yarn install --immutable --mode=skip-build",
       failureClassification: "install failure",
       status: "failed",
     });
+    const headline = report.logsSummary.split("\n", 1)[0] ?? "";
+    expect(headline).toContain("Usage Error: Invalid value for --mode");
+    expect(
+      report.logsSummary.match(/Usage Error: Invalid value for --mode/g),
+    ).toHaveLength(1);
   });
 
   it("steers a lifecycle download failure at removing the download", async () => {
@@ -7364,7 +7424,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
           return {
             exitCode: 1,
             stderr: [
-              "vite.config.ts (16:41) [UNRESOLVED_IMPORT] Could not resolve 'twenty-shared/vite' in vite.config.ts",
+              "\u001b[38;5;249mvite.config.ts (16:41) [UNRESOLVED_IMPORT] Could not resolve 'twenty-shared/vite' in vite.config.ts\u001b[0m",
               "Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/workspace/repo/node_modules/twenty-shared/dist/vite.mjs' imported from /workspace/repo/packages/twenty-front/vite.config.ts",
             ].join("\n"),
             stdout: "",
@@ -7397,6 +7457,11 @@ describe("createDefaultAgentHarnessDependencies", () => {
       failureClassification: "build failure",
       status: "failed",
     });
+    const headline = report.logsSummary.split("\n", 1)[0] ?? "";
+    expect(headline).toContain("ERR_MODULE_NOT_FOUND");
+    expect(headline).toContain("twenty-shared/dist/vite.mjs");
+    expect(headline).not.toContain("vite.config.ts (16:41)");
+    expect(report.logsSummary).not.toContain("\u001b");
     const hints = report.suggestedRepairHints.join("\n");
     expect(hints).toContain("twenty-shared");
     expect(hints).toContain("workspace package");
