@@ -2130,6 +2130,17 @@ function createExplorationValidationReport(input: {
     groundingFailure === undefined || missingModule !== undefined
       ? undefined
       : input.failedScriptResponses?.[0];
+  // N139 (ghostfolio, 2026-08-14): a localized document base composed with
+  // the prepared serve path, requesting every stylesheet and Angular chunk
+  // below /en/en/. Those same-origin 404s leave a blank document and are
+  // serve/base-path evidence, not an empty data state.
+  const failedAsset404Storm =
+    groundingFailure === undefined || missingModule !== undefined
+      ? undefined
+      : readSameOriginAsset404Storm(
+          input.appMap.baseUrl,
+          input.appMap.consoleErrors,
+        );
   const failure =
     missingModule !== undefined
       ? {
@@ -2141,7 +2152,12 @@ function createExplorationValidationReport(input: {
             classification: "app server error",
             message: `App server error: the app's own script ${failedScriptResponse.url} answered HTTP ${failedScriptResponse.status}, so routes rendered the server's error output instead of the app. Fix the module compile/serve failure in the prepared runtime; the page content is a symptom, not the app state.`,
           }
-        : groundingFailure;
+        : failedAsset404Storm !== undefined
+          ? {
+              classification: "app server error",
+              message: `App server error: ${failedAsset404Storm.paths.length} of the document's own stylesheet/script assets returned HTTP 404 under ${failedAsset404Storm.pathPrefix} (${failedAsset404Storm.paths.slice(0, 3).join(", ")}). Fix the document base and prepared serve/base-path configuration so entry assets resolve from the app origin; the blank page is a delivery symptom, not an empty app state.`,
+            }
+          : groundingFailure;
   const actionableConsoleErrors = input.appMap.consoleErrors.filter(
     isActionableBrowserConsoleError,
   );
@@ -2874,6 +2890,41 @@ function readFailedAppScriptResponses(
       return false;
     }
   });
+}
+
+function readSameOriginAsset404Storm(
+  baseUrl: string,
+  consoleErrors: string[],
+): { pathPrefix: string; paths: string[] } | undefined {
+  const appOrigin = new URL(baseUrl).origin;
+  const paths = unique(
+    consoleErrors.flatMap((error) =>
+      [...error.matchAll(/failed resource\s+(\S+)\s+\(HTTP 404\)/gi)].flatMap(
+        (match) => {
+          try {
+            const resource = new URL(match[1] ?? "");
+            return resource.origin === appOrigin &&
+              /\.(?:css|js|mjs)$/i.test(resource.pathname)
+              ? [resource.pathname]
+              : [];
+          } catch {
+            return [];
+          }
+        },
+      ),
+    ),
+  );
+  if (paths.length < 2) return undefined;
+  return { pathPrefix: readCommonAssetPathPrefix(paths), paths };
+}
+
+function readCommonAssetPathPrefix(paths: string[]): string {
+  let common = paths[0] ?? "/";
+  while (common.length > 1 && paths.some((path) => !path.startsWith(common))) {
+    common = common.slice(0, -1);
+  }
+  const directoryEnd = common.lastIndexOf("/");
+  return directoryEnd <= 0 ? "/" : common.slice(0, directoryEnd + 1);
 }
 
 function isActionableBrowserConsoleError(error: string): boolean {

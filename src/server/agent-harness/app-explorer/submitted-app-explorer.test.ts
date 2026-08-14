@@ -336,6 +336,33 @@ describe("exploreSubmittedApp", () => {
     expect(result.validationReport.logsSummary).toContain("500");
   });
 
+  it("classifies Ghostfolio's same-origin asset 404 storm as an app server error", async () => {
+    // ghostfolio, 2026-08-14T03-07 matrix round 5: the localized document
+    // base composed with the serve path, so every stylesheet/entry chunk was
+    // requested below /en/en/ and 404'd before Angular could render.
+    const { result } = await exploreObservation({
+      consoleErrors: [
+        `${baseUrl}/en/portfolio: failed resource ${baseUrl}/en/en/styles.css (HTTP 404)`,
+        `${baseUrl}/en/portfolio: failed resource ${baseUrl}/en/en/chunk-KMIIHQKY.js (HTTP 404)`,
+        `${baseUrl}/en/portfolio: failed resource ${baseUrl}/en/en/main.js (HTTP 404)`,
+      ],
+      routes: [
+        observedRoute({
+          path: "/en/portfolio",
+          requestedPath: "/en/portfolio",
+          title: "Ghostfolio",
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "app server error",
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain("/en/en/");
+    expect(result.validationReport.logsSummary).toContain("HTTP 404");
+  });
+
   it("keeps the empty-state reading when the failing script belongs to another origin", async () => {
     const { result } = await exploreObservation({
       failedScriptResponses: [
@@ -361,6 +388,10 @@ describe("exploreSubmittedApp", () => {
       requestedFeature: "invoicing",
     });
     const { result } = await exploreObservation({
+      consoleErrors: [
+        `${baseUrl}/en/invoices: failed resource ${baseUrl}/optional/styles.css (HTTP 404)`,
+        `${baseUrl}/en/invoices: failed resource ${baseUrl}/optional/widget.js (HTTP 404)`,
+      ],
       failedScriptResponses: [
         { status: 500, url: `${baseUrl}/optional-widget.js` },
       ],
