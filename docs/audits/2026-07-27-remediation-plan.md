@@ -7742,6 +7742,18 @@ past sandbox creation; twenty's run logs the
 heavyweight snapshot name, or the explicit fallback
 warning when the variable is unset.
 
+Landed: snapshot-based creation carries no `resources`
+override; the provider resolves the submitted-code
+snapshot by class, reading
+MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT_HEAVYWEIGHT
+for heavyweight runs and falling back to the standard
+snapshot with a
+`daytona.submitted-code-sandbox.heavyweight-fallback`
+warning when unset. Class selection and threading are
+unchanged. The heavyweight snapshot itself remains an
+owner prerequisite (build a 4-CPU/16GiB variant; the
+10GB disk cap is a measured org maximum).
+
 ### Rerun
 
 Any run at all is the gate: five entries past sandbox
