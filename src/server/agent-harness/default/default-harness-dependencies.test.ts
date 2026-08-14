@@ -5219,7 +5219,10 @@ describe("createDefaultAgentHarnessDependencies", () => {
         if (command.includes("prisma migrate deploy")) {
           return {
             exitCode: 1,
-            stderr: "P3018: migration 0002_add_bookings failed",
+            stderr: [
+              'npm warn Unknown env config "nodedir".',
+              "fatal: P3018: migration 0002_add_bookings failed",
+            ].join("\n"),
             stdout: "",
           };
         }
@@ -5257,9 +5260,66 @@ describe("createDefaultAgentHarnessDependencies", () => {
       logsSummary: expect.stringContaining("0002_add_bookings"),
       status: "failed",
     });
+    expect(report.logsSummary.split("\n", 1)[0]).toContain("fatal: P3018");
+    expect(report.logsSummary.split("\n", 1)[0]).not.toContain("npm warn");
     // The reseed contract: the command must work from an empty database on
     // every round, and the hint owes the agent that constraint.
     expect(report.suggestedRepairHints.join(" ")).toContain("empty");
+  });
+
+  it("headlines a killed provisioned-service migration and carries bounded-memory guidance", async () => {
+    // twenty, 2026-08-14T03-07 matrix round 6: npm config warnings headed
+    // the report while the durable tail ended with the kernel's literal
+    // Killed line, hiding the OOM-shaped cause from repair.
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("yarn database:migrate")) {
+          return {
+            exitCode: 137,
+            stderr: "",
+            stdout: [
+              'npm warn Unknown env config "globalconfig".',
+              "bash: line 3: 4120 Killed yarn database:migrate",
+            ].join("\n"),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        dataStrategy: [
+          {
+            detail: "harness Postgres on loopback with workspace migrations",
+            migrationCommand: "yarn database:migrate",
+            rung: "provisioned-service",
+            service: "postgres",
+          },
+        ],
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report.failureClassification).toBe("service migration failure");
+    expect(report.logsSummary.split("\n", 1)[0]).toContain("migration");
+    expect(report.logsSummary.split("\n", 1)[0]).toContain("Killed");
+    expect(report.logsSummary.split("\n", 1)[0]).not.toContain("npm warn");
+    const hints = report.suggestedRepairHints.join(" ");
+    expect(hints).toContain("NODE_OPTIONS");
+    expect(hints).toContain("--max-old-space-size");
+    expect(hints).toContain("envUsed");
+    expect(hints).toContain("narrower");
   });
 
   it("classifies a failed seed command as a service seed failure", async () => {
@@ -5305,6 +5365,61 @@ describe("createDefaultAgentHarnessDependencies", () => {
       logsSummary: expect.stringContaining("Unique constraint failed"),
       status: "failed",
     });
+  });
+
+  it("headlines a seed command's trailing nonzero error instead of npm warning noise", async () => {
+    // ghostfolio, 2026-08-14T03-07 matrix round 1: npm config noise headed
+    // the report even though Prisma ended with a command-specific nonzero
+    // error before the harness's generic command-end beacon.
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("prisma db seed")) {
+          return {
+            exitCode: 1,
+            stderr: "",
+            stdout: [
+              'npm warn Unknown env config "nodedir".',
+              "Unknown argument `platform`. Did you mean `platformId`?",
+              "Error: Command failed with exit code 1: node /workspace/repo/prisma/seed.mts",
+              "[makeademo:command-end] exit=1",
+            ].join("\n"),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        dataStrategy: [
+          {
+            detail: "harness Postgres on loopback with prisma seed",
+            rung: "provisioned-service",
+            seedCommand: "npx prisma db seed",
+            service: "postgres",
+          },
+        ],
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report.failureClassification).toBe("service seed failure");
+    const headline = report.logsSummary.split("\n", 1)[0];
+    expect(headline).toContain(
+      "Error: Command failed with exit code 1: node /workspace/repo/prisma/seed.mts",
+    );
+    expect(headline).not.toContain("npm warn");
+    expect(headline).not.toContain("[makeademo:command-end]");
   });
 
   it("brackets the heavy submitted-code commands with disk usage markers", async () => {

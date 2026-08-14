@@ -31,6 +31,7 @@ import { withCpuLivenessHeartbeat } from "../../shared/shell/cpu-liveness";
 import { shellQuote } from "../../shared/shell/shell-quote";
 import { elideMiddle } from "../../shared/text/elide-middle";
 import { stripAnsi } from "../../shared/text/strip-ansi";
+import { readLastErrorCauseLine } from "../app-explorer/stderr-error-signal";
 import {
   type SubmittedAppExplorationResult,
   exploreSubmittedApp,
@@ -2891,19 +2892,36 @@ async function validateResolvedSubmittedCodeRuntime(
           input.workspace,
           evidenceLogPath,
         );
+        const failureEvidence = readServiceCommandFailureEvidence({
+          exitCode: result.exitCode,
+          fileTail,
+          stderr: result.stderr,
+          stdout: result.stdout,
+        });
         return failedPreparationValidation({
           attemptedCommand: step.command,
           classification: step.classification,
           exitCode: result.exitCode,
-          logsSummary: `The declared ${plan.service} ${step.kind} command failed against the freshly provisioned service: ${legibleFailureExcerpt(
-            { fileTail, stderr: result.stderr, stdout: result.stdout },
-          )}`,
+          logsSummary: `${
+            failureEvidence.killed
+              ? `The declared ${plan.service} ${step.kind} command was Killed against the freshly provisioned service`
+              : `The declared ${plan.service} ${step.kind} command failed against the freshly provisioned service`
+          }: ${failureEvidence.causeLine}${
+            failureEvidence.excerpt.length === 0
+              ? ""
+              : `\nCommand output:\n${failureEvidence.excerpt}`
+          }`,
           manifest,
           stage,
           stderr: result.stderr,
           stdout: result.stdout,
           suggestedRepairHints: [
             `Every validation round reprovisions ${plan.service} from an empty state and re-runs the declared commands, so the ${step.kind} command must succeed from an empty database with no manual steps. Repair the command or the files it runs; the service answers exactly at ${sandboxServiceConnectionUrls[plan.service]}.`,
+            ...(failureEvidence.killed
+              ? [
+                  "The command was killed at the sandbox's roughly 8 GB memory ceiling. Set a bounded Node heap through envUsed.NODE_OPTIONS (for example --max-old-space-size=6144, leaving headroom for native processes), and prefer a narrower migration or seed target with bounded worker concurrency; envUsed applies to every guarded runtime command.",
+                ]
+              : []),
           ],
         });
       }
@@ -3689,6 +3707,47 @@ function legibleFailureExcerpt(input: {
     return cleaned;
   }
   return `[earlier output elided]\n${cleaned.slice(-failureEvidenceTailBytes)}`;
+}
+
+function readServiceCommandFailureEvidence(input: {
+  exitCode: number;
+  fileTail?: string;
+  stderr: string;
+  stdout: string;
+}): { causeLine: string; excerpt: string; killed: boolean } {
+  const excerpt = legibleFailureExcerpt(input);
+  const combined = stripAnsi(
+    [input.stdout, input.stderr, input.fileTail ?? ""]
+      .filter((source) => source.trim().length > 0)
+      .join("\n"),
+  );
+  const lines = combined
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(
+      (line) =>
+        line.length > 0 && !/^\[makeademo:(?:agent-)?alive\]/.test(line),
+    );
+  const lastMatching = (pattern: RegExp) =>
+    lines.filter((line) => pattern.test(line)).at(-1);
+  const killedLine = lastMatching(/\bKilled\b/i);
+  const fatalLine = lastMatching(/\bfatal:/i);
+  const nonzeroExitLine = lastMatching(
+    /\bcommand failed with exit code [1-9]\d*|\bexit(?:ed)? with (?:exit )?code [1-9]\d*/i,
+  );
+  const commandEndLine = lastMatching(
+    /\[makeademo:command-end\]\s+exit=[1-9]\d*/i,
+  );
+  const causeLine =
+    killedLine ??
+    fatalLine ??
+    nonzeroExitLine ??
+    readLastErrorCauseLine(combined) ??
+    readLastErrorCauseLine(excerpt) ??
+    commandEndLine ??
+    lines.at(-1) ??
+    `command exited with code ${input.exitCode}`;
+  return { causeLine, excerpt, killed: killedLine !== undefined };
 }
 
 const diskExhaustionPattern =
