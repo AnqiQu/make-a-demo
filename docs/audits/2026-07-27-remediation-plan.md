@@ -7272,3 +7272,286 @@ memory headline on round one; directus spends its
 budget on stub coverage and the modal instead of
 delivery; ghostfolio's serve-path fix gets named on
 round one; homer stays green.
+
+## Addendum (2026-08-14, wave-9 — ghostfolio's first video; N139 validated on its first exercise; a rule contradiction, a word-only stub, and a sandbox twenty outgrew: N141–N146)
+
+The 2026-08-14T05-59 batch: TWO passes. homer green
+again (655s), and ghostfolio produced its FIRST final
+video (2,855s) — N139 fired on round 3 exactly as
+specified ("App server error: 13 of the document's own
+stylesheet/script assets returned HTTP 404 under…"),
+round 4 fixed the serve path, and capture plus
+compositing ran clean. The batch machinery held
+end-to-end for the third consecutive run: no infra
+casualties, all five entries ran their full course.
+The three failures are each a different lesson: calcom
+died in a contradiction between the new N137 static
+rule and the catalog-conformance rule (the remedy the
+first prescribes, the second forbids); directus
+regressed onto a repair path that declared stubs in
+words while shipping none, and fidelity took it at its
+word; twenty never even reached last wave's migration
+wall — it hit the sandbox's 8GiB memory ceiling and
+10GiB disk during install and build, with every causal
+line hidden by summarizer defects.
+
+Wave-8 item scorecard: N139 VALIDATED (ghostfolio
+passed). N137's static rule fired correctly on calcom
+but its prescribed remedy is unsatisfiable (new
+finding, → N141); its take-repair path was never
+reached. N138 and N140 were not exercised — directus
+failed before exploration, twenty before any service
+command.
+
+### Diagnoses (2026-08-14T05-59)
+
+homer — passed, 655s (slower than wave-8's 306s, same
+shape: three groundable features, clean capture).
+
+ghostfolio — passed, 2,855s. Rounds 1–2 were dev-server
+connect failures during compile, round 3 fired the new
+N139 serve-failure classification naming the doubled
+locale prefix, round 4 repaired the serve
+configuration and every feature grounded, rounds 4–5
+passed. First ghostfolio final video.
+
+calcom — deepest run yet, killed by two rules that
+contradict each other. Preflight passed (three
+"requested feature not observable" rounds, then
+green). But exploration's session degraded: the
+catalog records that clicking "Apps" and "New" on
+/availability landed on /auth/login (the explorer's
+own login attempt also failed — clicking Continue
+before hydration self-submitted the form as a native
+GET, leaving csrfToken and empty email/password in the
+URL). Flow planning nonetheless grounded
+weekly-availability-event-duration on
+click-interaction-3-2 — a click whose only observed
+outcome is the auth wall — and coverage enforcement
+then REQUIRED the script to contain it. Static
+validation attempt 3: the N137 rule fired (goto after
+a navigation-starting click) and suggested "an
+assert-url action compiled to waitForURL". The repair
+obeyed, adding assert-url confirm-new-navigation.
+Attempt 4: the kind-conformance rule rejected it —
+compatibleCatalogKinds("assert-url") is ["assert"],
+and the only catalog entry carrying the observed
+destination is the click itself (kind "click"); an
+assert-url also requires action.path to equal its
+source entry's route. The prescribed remedy is
+structurally unexpressible; three script-repairs
+ping-ponged between the two rules and exhausted the
+budget without a take ever running (→ N141, N142).
+
+directus — a nondeterministic repair path regressed
+below wave-8's high-water mark. This round's
+preparation abandoned stub delivery entirely: envUsed
+carries only NODE_ENV (no VITE_MAKEADEMO_DEMO gate),
+mocksAndFixturesAdded and localDemoModeChanges are
+empty, all three dataStrategy rungs are
+"declared-stub" whose own detail text admits "no
+…-backed local fixture adapter was added", and
+knownLimitations states data-backed routes require a
+separately configured Directus API. Fidelity PASSED
+this word-only manifest six times ("Prepared runtime
+preserves the screened product application") — the
+N122(2) enforcement checks that a legal rung is
+declared, not that anything backs it. Rounds 1–5 were
+spent untangling self-inflicted Vite config and module
+errors (@directus/extensions unbuilt under the
+filtered install; the predev build of 19 workspace
+packages blew the readiness budget as round 5's
+"listen failure"). Round 6: the app finally bound, and
+the readiness curl of the first featureInventory
+entryPath /settings/data-model/+ was proxied by the
+Vite dev server to the absent API at 127.0.0.1:8055 —
+HTTP 502, classified "build failure" (the app had
+built and bound). Budget exhausted; N136/N138 never
+ran because the failure precedes exploration
+(→ N143, N144).
+
+twenty — never reached the migration wall; died
+shallower, against the sandbox itself, with every
+causal line buried. Attempts 1 and 4: build failure —
+the real cause is ERR_MODULE_NOT_FOUND for
+/workspace/repo/node_modules/twenty-shared/dist/vite.mjs
+(twenty-front's vite.config.ts imports a workspace
+dependency nobody built), but the summary headlined an
+ANSI-mangled code-frame fragment (";5;249meta_url =
+…") — the excerpt slicer cut mid-escape-sequence and
+never surfaced the causal line. Attempts 2 and 5:
+network-closed lifecycle deadline (exit 124); the
+excerpt is six IDENTICAL yarn RequestError/ECONNREFUSED
+stacks (yarn reaching for the registry inside the
+network-closed phase — the cache/lockfile was never
+reconciled while the network was open), and buried
+mid-excerpt sits the actual kill: "1726 Killed — yarn
+rebuild" (OOM again), followed by a failed npm exec
+vite build; the canned "Everything in the output below
+completed successfully" framing is factually false for
+this window. Attempt 3: ENOSPC — yarn's cache copy
+died on the 10GiB disk (the [makeademo:disk] marker
+shows 69% used AFTER failure cleanup; the peak hit
+100%), and [makeademo:mem] peak-bytes reads within
+kilobytes of exactly 8GiB in BOTH the deps and build
+phases — the cgroup ceiling is being slammed, not
+approached. Verdict: twenty does not fit the current
+sandbox class, and the evidence layer hid it
+(→ N145, N146).
+
+### New items
+
+### N141 (High, bugfix) — a static rule must not prescribe a remedy another rule forbids
+
+Make the goto-after-click settle requirement
+satisfiable. Either (a) permit an assert-url to ground
+on a click catalog entry when the click's observed
+navigation destination equals the assert-url path
+(extend compatibleCatalogKinds/route agreement for
+exactly this pairing), or (b) compile the settle into
+the click itself — a click with observed client-side
+navigation emits waitForURL(destination) in the
+capture runtime, and the static rule stops firing on a
+click that self-settles. Prefer (b) if capture-side
+compilation is tractable: it removes the repair
+round-trip entirely. Acceptance: calcom's exact
+attempt-3 script shape (click-interaction-3-2 followed
+by goto) either validates after one repair that the
+conformance rule accepts, or never fires the rule
+because the click self-settles.
+
+### N142 (High, bugfix) — a click observed to land on an auth wall grounds nothing
+
+Extend N135's groundability to interactions: a catalog
+click whose observed navigation destination matches
+the auth-wall route shape (/auth/login, /login,
+/signin equivalents — the same predicate N135 applies
+to routes) is auth-degraded evidence. Flow planning
+must not reference it in a feature's
+referencedActionIds, a feature left with no groundable
+interaction drops (droppedFeatures, N135's count rule
+then selects from the remainder), and coverage
+enforcement therefore never forces a doomed click into
+the script. Acceptance: calcom's wave-9 catalog
+(click-interaction-3-2, expectedResult "/auth/login
+became visible") produces a FlowSpec that does not
+reference that click, and
+weekly-availability-event-duration is either grounded
+on other evidence or dropped with the reason recorded.
+
+### N143 (High, bugfix) — a stub declared in words must show its mechanism
+
+Fidelity must reject a dataStrategy rung whose claim
+has no backing in the same manifest. A client-stub or
+declared-stub rung requires delivery evidence: a
+non-empty mocksAndFixturesAdded or
+localDemoModeChanges entry, or a delivery gate in
+envUsed (the N136 contract); a declared-stub rung
+whose own detail text describes the absence of a
+mechanism ("no fixture adapter was added") fails with
+a message naming the rung, the service, and the
+missing mechanism. This is a deterministic structural
+check at the manifest validation seam — it costs no
+agent round. Acceptance: directus's wave-9 manifest
+(three declared-stub rungs, empty
+mocksAndFixturesAdded, no env gate) fails fidelity on
+round 1 with the stub-without-mechanism message
+instead of passing six times.
+
+### N144 (Medium, bugfix) — a 5xx from a bound app is a serve failure at the readiness seam too
+
+Extend the N128/N139 family to the readiness probe:
+when the app command is alive and the readiness curl
+of the entry route returns 5xx, classify as a
+serve/backend failure that names the probed route and
+the status — never "build failure" (the app built) or
+"listen failure" (it bound). When the runtime is a dev
+server known to proxy unmatched routes, say so: the
+directus shape is a 502 minted by the Vite proxy for a
+route whose backend does not exist. Acceptance:
+directus's wave-9 attempt-6 evidence (app running,
+probe 502 on /settings/data-model/+) classifies as a
+serve/backend failure naming the route, steering
+repair at data delivery rather than the build.
+
+### N145 (High, bugfix) — every failure summary headlines its causal line, in clean text, once
+
+Apply the N130/N140 causal-headline rule to the
+remaining summarizers — lifecycle-timeout and
+submitted-code build/install — and fix the excerpt
+hygiene defects wave-9 exposed: (1) strip ANSI escape
+sequences before any slicing (attempts 1/4 headlined
+";5;249meta_url…", a fragment of an escape code); (2)
+headline the trailing causal line — Killed, fatal:,
+ERR_MODULE_NOT_FOUND, nonzero tool exit — when the
+killed window contains one, and drop the "Everything
+in the output below completed successfully" framing
+whenever the window contains a kill or nonzero exit
+(twenty's attempt-5 buried "1726 Killed — yarn
+rebuild" beneath that exact false claim); (3) collapse
+repeated identical error blocks (six copies of the
+same yarn RequestError stack crowded out the kill
+line) to one instance with a repeat count. Acceptance:
+twenty's attempt-1 evidence summarizes with
+ERR_MODULE_NOT_FOUND naming twenty-shared/dist/vite.mjs
+on its first line; attempt-5 summarizes with the
+Killed yarn rebuild line first and the ECONNREFUSED
+storm deduplicated with its count.
+
+### N146 (High, infra) — right-size the sandbox for repos that measure it
+
+twenty slammed the 8GiB memory ceiling in both the
+deps and build phases and filled the 10GiB disk
+mid-install; no summarizer fix makes it fit. Two
+parts: (1) a larger sandbox class for heavyweight
+repos, selected deterministically from the repo
+profile the harness already computes (archive size,
+workspace count) before the first lifecycle run — the
+Daytona quota can absorb fewer, larger sandboxes for
+flagged entries; (2) purge the harness staging
+directory (the TMPDIR the sandbox points at
+/root/.makeademo-staging — yarn's xfs-* temp dirs land
+there and survive killed attempts) between lifecycle
+attempts, so six repair rounds do not compound the
+disk debt. Acceptance: twenty's install and build
+complete without ENOSPC or an OOM kill, or fail with a
+summary whose first line names the resource that
+remains short.
+
+### Watchlist (no fix scheduled; re-check next matrix)
+
+- Script-repair has no ping-pong breaker: two static
+  rules alternated for three rounds without the loop
+  noticing (N125 built one for the validation loop).
+  N141/N142 remove this instance; if a new rule pair
+  recurs, the breaker generalizes.
+- calcom exploration login robustness: the explorer
+  clicked Continue before hydration and the form
+  self-submitted as a native GET. Filling credentials
+  and awaiting hydration/network-idle before submit
+  would keep the session evidence clean at the source.
+- twenty unbuilt-workspace-dependency hint: N145 makes
+  the causal line visible; if repair still cannot act
+  on it, a targeted hint naming the package to build
+  first earns an item.
+- Carried from wave-8, still unobserved (failures now
+  occur earlier): the directus "owner not set"
+  onboarding modal and /admin/settings/data-model/+
+  route coverage; dry-run/take parity.
+- twenty lockfile reconciliation under berry recurred
+  (registry fetches inside the network-closed phase) —
+  N145's evidence fix plus N146's headroom should
+  expose whether reconciliation itself still fails.
+
+### Rerun
+
+All five entries after N141–N146 land. Expected: homer
+and ghostfolio stay green; calcom produces a statically
+valid script (no rule contradiction) and finally
+exercises N137's take-repair path if a race recurs;
+directus bounces the word-only stub at fidelity round 1
+and re-treads the wave-8 stub arc into N138's
+partial-coverage classification; twenty clears install
+and build inside the larger class — or fails with the
+resource or the unbuilt dependency named on line one —
+and meets last wave's migration wall with N140 armed.
