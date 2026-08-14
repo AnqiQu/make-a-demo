@@ -336,6 +336,34 @@ describe("runPipelineMatrix", () => {
     expect(detail).toContain("[makeademo:command-end] exit=124");
     expect(detail.length).toBeLessThan(400);
   });
+
+  it("carries a clone failure's trailing fatal line into the report detail", async () => {
+    // calcom and ghostfolio (2026-08-13T23-23): the report row ended at
+    // "exit 128: Cloning into ..." while git's fatal: line — the actual
+    // cause — sat at the end of the message, lost to truncation.
+    const results = await runPipelineMatrix(
+      resolveMatrixEntries(
+        [{ name: "calcom", repoUrl: "https://github.com/example/calcom" }],
+        {},
+      ),
+      {
+        log: () => {},
+        runPipeline: async () => {
+          throw new Error(
+            [
+              "git clone --depth 1 --no-tags https://github.com/example/calcom /tmp/repo-snapshot failed with exit 128: Cloning into '/tmp/repo-snapshot'...",
+              "error: RPC failed; curl 18 transfer closed with outstanding read data remaining",
+              "fatal: fetch-pack: invalid index-pack output",
+            ].join("\n"),
+          );
+        },
+      },
+    );
+
+    const detail = results[0]?.detail ?? "";
+    expect(detail).toContain("failed with exit 128");
+    expect(detail).toContain("fatal: fetch-pack: invalid index-pack output");
+  });
 });
 
 describe("renderMatrixReport", () => {

@@ -141,6 +141,55 @@ describe("readGithubRepoSnapshot", () => {
     ).toContain('provider = "postgresql"');
   });
 
+  it("logs a failed clone with the full git stderr before rethrowing", async () => {
+    // calcom and ghostfolio's clones died mid-transfer with exit 128
+    // (2026-08-13T23-23) and the fatal: line never reached any log — the
+    // report row truncated it and nothing durable recorded it.
+    const runDirectory = join(
+      tmpdir(),
+      `makeademo-clone-failure-${crypto.randomUUID()}`,
+    );
+    await mkdir(runDirectory, { recursive: true });
+    const events: Array<{ event: string; fields: Record<string, unknown> }> =
+      [];
+    const cloneFailure = new Error(
+      [
+        "git clone --depth 1 --no-tags https://github.com/acme/big-app failed with exit 128:",
+        "Cloning into '/tmp/repo-snapshot'...",
+        "error: RPC failed; curl 18 transfer closed with outstanding read data remaining",
+        "fatal: fetch-pack: invalid index-pack output",
+      ].join("\n"),
+    );
+
+    await expect(
+      readGithubRepoSnapshot(
+        {
+          log: async (event, fields = {}) => {
+            events.push({ event, fields });
+          },
+          repoUrl: "https://github.com/acme/big-app",
+          runDirectory,
+        },
+        {
+          git: {
+            async archiveRevision() {},
+            async clone() {
+              throw cloneFailure;
+            },
+            async readHead() {
+              return "abc123def456";
+            },
+          },
+        },
+      ),
+    ).rejects.toThrow(cloneFailure);
+
+    const failure = events.find(({ event }) => event === "repo.clone.failed");
+    expect(String(failure?.fields.error)).toContain(
+      "fatal: fetch-pack: invalid index-pack output",
+    );
+  });
+
   it("kills a repository clone that hangs past its timeout", async () => {
     const server = createServer(() => {
       // Accept the connection and never respond, so the clone hangs.

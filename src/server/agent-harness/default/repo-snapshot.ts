@@ -186,11 +186,21 @@ export async function readGithubRepoSnapshot(
   await input.log("repo.clone.started", { checkoutPath });
   let snapshotComplete = false;
   try {
-    await git.clone({
-      checkoutPath,
-      ...(credential === undefined ? {} : { credential }),
-      repoUrl: input.repoUrl,
-    });
+    try {
+      await git.clone({
+        checkoutPath,
+        ...(credential === undefined ? {} : { credential }),
+        repoUrl: input.repoUrl,
+      });
+    } catch (error) {
+      // The report row truncates to one line; the durable log must carry
+      // git's whole stderr, whose trailing fatal: line names the real cause
+      // (calcom and ghostfolio's mid-transfer exit-128s, 2026-08-13T23-23).
+      await input.log("repo.clone.failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
     const commitSha = readCommitSha(await git.readHead(checkoutPath));
     await input.log("repo.clone.succeeded", { commitSha });
     const repoFiles = await readRepoFiles(

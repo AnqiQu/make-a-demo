@@ -246,7 +246,10 @@ const failureDetailHeadChars = 240;
  * last `[makeademo:…]` marker line rides along: markers are the recorded
  * facts (exit codes, timeouts, peaks) that diagnosis actually needs
  * (ghost's report row was mid-word compiler garbage while the exit=124
- * trailer sat at the end, 2026-08-09).
+ * trailer sat at the end, 2026-08-09). Without a marker, git's last
+ * `fatal:`/`error:` line rides along instead: a clone failure's first line
+ * is "Cloning into …" while the trailing fatal: line names the real cause
+ * (calcom and ghostfolio's mid-transfer exit-128s, 2026-08-13T23-23).
  */
 function readFailureDetail(message: string): string {
   const firstLine = message.split("\n", 1)[0] ?? message;
@@ -254,13 +257,18 @@ function readFailureDetail(message: string): string {
     firstLine.length > failureDetailHeadChars
       ? `${firstLine.slice(0, failureDetailHeadChars)}…`
       : firstLine;
-  const marker = message
-    .split("\n")
+  const lines = message.split("\n");
+  const marker = lines
     .filter((line) => line.trim().startsWith("[makeademo:"))
     .at(-1)
     ?.trim();
-  if (marker !== undefined && !head.includes(marker)) {
-    return `${head} … ${marker}`;
+  const fatalLine = lines
+    .filter((line) => /^(?:fatal|error):/.test(line.trim()))
+    .at(-1)
+    ?.trim();
+  const rideAlong = marker ?? fatalLine;
+  if (rideAlong !== undefined && !head.includes(rideAlong)) {
+    return `${head} … ${rideAlong}`;
   }
   if (!/:\s*$/.test(head)) {
     return head;
