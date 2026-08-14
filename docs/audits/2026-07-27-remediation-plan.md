@@ -7594,6 +7594,15 @@ complete without ENOSPC or an OOM kill, or fail with a
 summary whose first line names the resource that
 remains short.
 
+Landed: the screened archive's exact byte size now
+reaches RepoProfile before workspace creation, where a
+deterministic 128,000,000-byte or 64-workspace boundary
+selects a 4-CPU/16GiB heavyweight submitted-code class.
+Daytona sizing uses its real nested resources channel,
+keeps both classes at the measured 10GB disk cap, and
+every offline lifecycle starts after the persistent
+package-manager staging directory is purged.
+
 ### Rules audit (2026-08-14, requested alongside wave-9)
 
 A pass over the standing rule surfaces (script
