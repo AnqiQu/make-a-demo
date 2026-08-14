@@ -30,6 +30,7 @@ import {
   readSandboxCapacityEvidence,
   sandboxCapacityProbeCommand,
 } from "../tools/sandbox-capacity";
+import { isAuthDegradedClick, isAuthWallRoute } from "./auth-wall";
 import { readStderrErrorSignal } from "./stderr-error-signal";
 
 /**
@@ -793,7 +794,7 @@ function createExplorationArtifacts(input: {
   const distinctContentByRoute = readRouteDistinctContent(observedRoutes);
   const errorState = readErrorStateRoutes({
     authWallRoutePaths: new Set(
-      observedRoutes.filter(isAuthWall).map((route) => route.path),
+      observedRoutes.filter(isAuthWallRoute).map((route) => route.path),
     ),
     distinctContentByRoute,
     pageErrors: input.observation.pageErrors,
@@ -835,7 +836,7 @@ function createExplorationArtifacts(input: {
       text: route.text,
       title: route.title,
     });
-    if (isAuthWall(route)) {
+    if (isAuthWallRoute(route)) {
       loginOrAuthWalls.push(route.path);
     }
     if ((route.emptyDataTables?.length ?? 0) > 0) {
@@ -903,6 +904,7 @@ function createExplorationArtifacts(input: {
     populatedTableRoutes,
     stuckLoadingRoutes,
     unreachableRoutes: input.observation.unreachableRoutes ?? [],
+    requestedFeatures: input.requestedFeatures,
   });
 
   return {
@@ -1313,7 +1315,9 @@ function createActions(
         featureInventory,
         explicitAuthenticationFeatureIds,
       );
-    const floorFeatureIds = isAuthWall(route) ? [] : (route.featureIds ?? []);
+    const floorFeatureIds = isAuthWallRoute(route)
+      ? []
+      : (route.featureIds ?? []);
     const recordAssert = (evidenceText: string, featureIds: string[]) => {
       assertRecords.push({ evidenceText, featureIds, floorFeatureIds });
       return featureIds;
@@ -1695,7 +1699,7 @@ function matchActionFeatureIds(
   explicitAuthenticationFeatureIds: ReadonlySet<string>,
 ): string[] {
   const routeFeatureIds = route.featureIds ?? [];
-  if (isAuthWall(route)) {
+  if (isAuthWallRoute(route)) {
     return featureInventory
       .filter(
         (feature) =>
@@ -1832,6 +1836,41 @@ function readAuthWallFeatureIds(
   );
 }
 
+function readAuthDegradedActionsByFeatureId(
+  actionCatalog: ActionCatalog,
+  explicitAuthenticationFeatureIds: ReadonlySet<string>,
+): Map<string, CatalogAction[]> {
+  const actionsByFeatureId = new Map<string, CatalogAction[]>();
+  for (const action of actionCatalog.actions) {
+    if (!isAuthDegradedClick(action)) continue;
+    for (const featureId of action.featureIds ?? []) {
+      if (explicitAuthenticationFeatureIds.has(featureId)) continue;
+      actionsByFeatureId.set(featureId, [
+        ...(actionsByFeatureId.get(featureId) ?? []),
+        action,
+      ]);
+    }
+  }
+  return actionsByFeatureId;
+}
+
+function readRequestedFeatureIds(
+  featureInventory: readonly PreparedDemoFeature[],
+  requestedFeatures: readonly string[],
+): Set<string> {
+  const requested = new Set(requestedFeatures.map(normalizeRequestedFeature));
+  return new Set(
+    featureInventory
+      .filter(
+        (feature) =>
+          feature.requestedFeature !== undefined ||
+          requested.has(normalizeRequestedFeature(feature.label)) ||
+          requested.has(normalizeRequestedFeature(feature.id)),
+      )
+      .map(({ id }) => id),
+  );
+}
+
 /**
  * Grounds every prepared feature into one structured verdict (N106). This is
  * the single grounding computation: the failure classifier and its steering
@@ -1846,6 +1885,7 @@ function readAuthWallFeatureIds(
 function readFeatureVerdicts(input: {
   actionCatalog: ActionCatalog;
   actionsByFeatureId: ReadonlyMap<string, CatalogAction[]>;
+  authDegradedActionsByFeatureId: ReadonlyMap<string, CatalogAction[]>;
   authWallFeatureIds: ReadonlySet<string>;
   contentRoutePaths: ReadonlySet<string>;
   declaredProofResults: ReadonlyMap<string, DeclaredProofResult>;
@@ -1857,6 +1897,7 @@ function readFeatureVerdicts(input: {
   errorEvidenceByRoute: ReadonlyMap<string, string[]>;
   featureInventory: PreparedDemoFeature[];
   populatedTableRoutes: ReadonlySet<string>;
+  requestedFeatureIds: ReadonlySet<string>;
   stuckLoadingRoutes: ReadonlySet<string>;
   unreachableRoutes: UnreachableRoute[];
 }): FeatureVerdict[] {
@@ -1919,9 +1960,30 @@ function readFeatureVerdicts(input: {
       );
     }
     const tagged = input.actionsByFeatureId.get(feature.id) ?? [];
-    const exercisedActions = tagged.filter(
-      (action) => action.exercised === true,
+    const authDegradedActions =
+      input.authDegradedActionsByFeatureId.get(feature.id) ?? [];
+    const authDegradedActionIds = new Set(
+      authDegradedActions.map(({ id }) => id),
     );
+    const exercisedActions = tagged.filter(
+      (action) =>
+        action.exercised === true && !authDegradedActionIds.has(action.id),
+    );
+    if (
+      input.requestedFeatureIds.has(feature.id) &&
+      authDegradedActions.some((action) => action.exercised === true) &&
+      exercisedActions.length === 0
+    ) {
+      const destinations = authDegradedActions.map(
+        (action) => `${action.id} → ${action.navigationDestination}`,
+      );
+      return failed(
+        feature,
+        "auth-wall",
+        `auth-degraded browser interaction${destinations.length === 1 ? "" : "s"}: ${destinations.join(", ")}`,
+        authDegradedActions.map(({ id }) => id),
+      );
+    }
     const matchingAsserts = tagged.filter(
       (action) =>
         action.kind === "assert" &&
@@ -2101,6 +2163,7 @@ function createExplorationValidationReport(input: {
   featureInventory: PreparedDemoFeature[];
   networkAttempts: NetworkAttempt[];
   populatedTableRoutes?: ReadonlySet<string>;
+  requestedFeatures: string[];
   stuckLoadingRoutes?: ReadonlySet<string>;
   unreachableRoutes: UnreachableRoute[];
 }): ValidationReport {
@@ -2112,6 +2175,10 @@ function createExplorationValidationReport(input: {
   const featureVerdicts = readFeatureVerdicts({
     actionCatalog: input.actionCatalog,
     actionsByFeatureId,
+    authDegradedActionsByFeatureId: readAuthDegradedActionsByFeatureId(
+      input.actionCatalog,
+      input.explicitAuthenticationFeatureIds,
+    ),
     declaredProofResults: input.declaredProofResults ?? new Map(),
     authWallFeatureIds: readAuthWallFeatureIds(
       input.appMap,
@@ -2124,6 +2191,10 @@ function createExplorationValidationReport(input: {
     errorEvidenceByRoute: input.errorEvidenceByRoute ?? new Map(),
     featureInventory: input.featureInventory,
     populatedTableRoutes: input.populatedTableRoutes ?? new Set(),
+    requestedFeatureIds: readRequestedFeatureIds(
+      input.featureInventory,
+      input.requestedFeatures,
+    ),
     stuckLoadingRoutes: input.stuckLoadingRoutes ?? new Set(),
     unreachableRoutes: input.unreachableRoutes,
   });
@@ -2374,10 +2445,18 @@ function readExplorationFailure(input: {
     const blockedFeatures = authBarrierFeatures.map(
       (feature) => feature.requestedFeature ?? feature.label,
     );
+    const interactionEvidence = authBarrierFeatures
+      .map((feature) => {
+        const detail = verdictByFeatureId.get(feature.id)?.detail;
+        return detail?.startsWith("auth-degraded")
+          ? `${feature.id}: ${detail}`
+          : undefined;
+      })
+      .filter((detail) => detail !== undefined);
     return {
       classification: "feature auth barrier",
       failingFeatureIds: authBarrierFeatures.map(({ id }) => id),
-      message: `Prepared feature routes redirected to authentication for: ${blockedFeatures.join(", ")}. Seed an authenticated demo session through the repo's demo gate so these routes render signed in, or reselect featureInventory entries onto routes outside authentication.`,
+      message: `Prepared feature routes or interactions reached authentication for: ${blockedFeatures.join(", ")}.${interactionEvidence.length === 0 ? "" : ` Auth-degraded evidence: ${interactionEvidence.join("; ")}.`} Seed an authenticated demo session through the repo's demo gate so these routes render signed in, or reselect featureInventory entries onto routes outside authentication.`,
     };
   }
   // Routes that serve their document shell but yield only structural actions
@@ -2990,46 +3069,6 @@ function readObservedNetworkAttempts(
         ...(attempt.url === undefined ? {} : { url: attempt.url }),
       }),
     ),
-  );
-}
-
-function isAuthWall(route: {
-  buttons: string[];
-  forms?: string[];
-  headings: string[];
-  inputs: string[];
-  links?: Array<{ name: string }>;
-  path?: string;
-  requestedPath?: string;
-  title?: string;
-}): boolean {
-  const actionLabels = [
-    ...route.buttons,
-    ...(route.links ?? []).map(({ name }) => name),
-  ];
-  const hasPassword = route.inputs.some((input) => /password/i.test(input));
-  const hasIdentity = route.inputs.some((input) =>
-    /email|username|user name/i.test(input),
-  );
-  const hasIdentityProviderAction = actionLabels.some((button) =>
-    /\b(?:continue|log in|sign in)\s+(?:with\s+)?(?:apple|facebook|github|google|linkedin|microsoft|sso)\b/i.test(
-      button,
-    ),
-  );
-  const hasAuthPath =
-    /(?:^|[/#?_-])(?:auth|log-?in|oauth|sign-?in|sign-?up|sso)(?:[/#?&=_-]|$)/i.test(
-      route.path ?? "",
-    );
-  const redirected =
-    route.requestedPath !== undefined && route.requestedPath !== route.path;
-  // A password + identity pair is a login form regardless of copy; an
-  // auth-looking path alone is not — marketing pages reuse those slugs, so
-  // the path must be corroborated by a credential input or provider button.
-  return (
-    (hasPassword && hasIdentity) ||
-    (hasAuthPath &&
-      (hasPassword || hasIdentity || hasIdentityProviderAction)) ||
-    (redirected && hasIdentityProviderAction)
   );
 }
 

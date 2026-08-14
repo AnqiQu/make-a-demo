@@ -1913,6 +1913,44 @@ describe("exploreSubmittedApp", () => {
     );
   });
 
+  it("routes a requested feature whose only interaction lands on auth back to preparation", async () => {
+    const feature = preparedFeature({
+      description: "Show weekly availability and event duration.",
+      entryPaths: ["/availability"],
+      id: "weekly-availability",
+      label: "Weekly availability",
+      requestedFeature: "weekly availability",
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [feature],
+      requestedFeatures: ["weekly availability"],
+      routes: [
+        observedRoute({
+          featureIds: [feature.id],
+          headings: ["Weekly availability"],
+          interactions: [
+            {
+              kind: "click",
+              locator: { name: "New", strategy: "role", value: "button" },
+              name: "New",
+              navigationDestination: "/auth/login",
+              outcome: "The next surface opened",
+            },
+          ],
+          path: "/availability",
+          text: ["Event duration 30 minutes"],
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "feature auth barrier",
+      logsSummary: expect.stringContaining("click-interaction-1-1"),
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain("/auth/login");
+  });
+
   it("recognizes an OAuth-only redirect as a protected feature auth wall", async () => {
     const invoice = preparedFeature({
       authStrategy: "bypass",

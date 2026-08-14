@@ -1343,6 +1343,70 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
   });
 
+  it("never lets Flow Planning reference an auth-degraded click", async () => {
+    const catalog = actionCatalog();
+    catalog.actions.push(
+      {
+        confidence: 0.98,
+        evidence: "Playwright exercised New and observed a redirect",
+        exercised: true,
+        expectedResult: "The next surface opened",
+        featureIds: ["dashboard"],
+        id: "new-event",
+        kind: "click",
+        navigationDestination: "/auth/login",
+        preferredLocator: {
+          name: "New",
+          strategy: "role",
+          value: "button",
+        },
+        risks: [],
+        route: "/",
+      },
+      {
+        confidence: 0.98,
+        evidence: "Playwright exercised the dashboard filter",
+        exercised: true,
+        expectedResult: "Filtered dashboard results became visible",
+        featureIds: ["dashboard"],
+        id: "filter-dashboard",
+        kind: "click",
+        preferredLocator: {
+          name: "Filter",
+          strategy: "role",
+          value: "button",
+        },
+        risks: [],
+        route: "/",
+      },
+    );
+    const invalid: FlowSpec = {
+      ...flowSpec(),
+      features: flowSpec().features.map((feature) => ({
+        ...feature,
+        referencedActionIds: ["new-event", "dashboard"],
+      })),
+    };
+    const safe: FlowSpec = {
+      ...flowSpec(),
+      features: flowSpec().features.map((feature) => ({
+        ...feature,
+        referencedActionIds: ["filter-dashboard", "dashboard"],
+      })),
+    };
+
+    const { attempts, prompts, result } = await runFlowPlanningScenario({
+      actionCatalog: catalog,
+      candidates: [invalid, safe],
+    });
+
+    expect(result).toEqual(safe);
+    expect(attempts).toBe(2);
+    expect(prompts[1]).toContain("new-event");
+    expect(prompts[1]).toContain("/auth/login");
+    expect(prompts[1]).toContain("auth-degraded");
+  });
+
   it("skips the unique-evidence rule when the catalog offers a feature nothing unique", async () => {
     // The rule must never demand the impossible: when every action tagged
     // to a feature is also referenced by its sibling features, enforcement
@@ -1828,6 +1892,63 @@ describe("createDefaultAgentHarnessDependencies", () => {
       preparationManifest: prepared,
     });
     expect(result).toEqual(groundedTwo);
+    expect(attempts).toBe(1);
+  });
+
+  it("drops an inferred feature whose only exercised interaction is auth-degraded", async () => {
+    const { catalog, groundedTwo, prepared } = ungroundableDarkModeScenario();
+    catalog.actions.push(
+      {
+        confidence: 0.95,
+        evidence: "Playwright observed the theme controls",
+        expectedResult: "Theme controls remain visible",
+        featureIds: ["dark-mode"],
+        id: "theme-visible",
+        kind: "assert",
+        preferredLocator: {
+          name: "Theme controls",
+          strategy: "role",
+          value: "heading",
+        },
+        risks: [],
+        route: "/",
+      },
+      {
+        confidence: 0.98,
+        evidence: "Playwright exercised the theme control",
+        exercised: true,
+        expectedResult: "The next surface opened",
+        featureIds: ["dark-mode"],
+        id: "change-theme",
+        kind: "click",
+        navigationDestination: "/auth/login",
+        preferredLocator: {
+          name: "Change theme",
+          strategy: "role",
+          value: "button",
+        },
+        risks: [],
+        route: "/",
+      },
+    );
+    const authDegradedDrop: FlowSpec = {
+      ...groundedTwo,
+      droppedFeatures: [
+        {
+          featureId: "dark-mode",
+          reason: "Its only exercised interaction redirects to authentication.",
+        },
+      ],
+    };
+
+    const { attempts, result } = await runFlowPlanningScenario({
+      actionCatalog: catalog,
+      candidates: [authDegradedDrop],
+      demoBrief: {},
+      preparationManifest: prepared,
+    });
+
+    expect(result).toEqual(authDegradedDrop);
     expect(attempts).toBe(1);
   });
 
@@ -7932,6 +8053,45 @@ describe("createDefaultAgentHarnessDependencies", () => {
     });
 
     expect(report.status).toBe("passed");
+  });
+
+  it("fails the capture reset when a scene route redirects to an auth wall", async () => {
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (!command.includes("curl -")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        const finalUrl = command.includes("/dashboard")
+          ? "http://127.0.0.1:3000/auth/login"
+          : "http://127.0.0.1:3000/";
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout: `\n[makeademo:probe] {"httpStatus":200,"url":"${finalUrl}"}\n`,
+        };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.resetCaptureRuntime({
+      preparationManifest: preparationManifest(),
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      scriptCandidate: sceneRouteScriptCandidate("/dashboard"),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "auth wall",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain("/dashboard");
+    expect(report.logsSummary).toContain("/auth/login");
   });
 
   it("starts and stops the submitted app through the workspace managed-process seam", async () => {

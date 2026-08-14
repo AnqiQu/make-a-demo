@@ -1,28 +1,43 @@
+import { isAuthDegradedClick } from "../app-explorer/auth-wall";
 import type { ActionCatalog } from "../schemas/artifacts";
 
 /**
  * The one groundability rule Flow Planning and its validator must share: a
- * prepared feature is groundable when the ActionCatalog tags at least one
- * visible assertion for it on a route the FlowSpec may select (login/auth
- * wall routes are excluded — authentication happens off camera). Every other
- * per-feature FlowSpec rule is satisfiability-guarded, so assert
- * availability is the only demand that can make a feature impossible to
- * plan. Feature selection must count features with this predicate — never
- * with raw inventory length — or the planner can be ordered to select a
- * feature no valid FlowSpec may contain (homer, 2026-08-13 matrix).
+ * prepared feature is groundable when the ActionCatalog tags a visible
+ * assertion and a usable interaction for it on selectable routes. A feature
+ * with exercised interactions is behavioral, so at least one exercised
+ * interaction must remain after auth-degraded clicks are removed; genuinely
+ * read-only features may use their observed navigation. Feature selection
+ * must count this predicate — never raw inventory length — or the planner can
+ * be ordered to select a feature no valid FlowSpec may contain.
  */
 export function isFeatureGroundable(
   featureId: string,
   input: {
     actionCatalog: ActionCatalog;
+    allowedAuthWallFeatureIds?: ReadonlySet<string>;
     authWallRoutes: ReadonlySet<string>;
   },
 ): boolean {
-  return input.actionCatalog.actions.some(
+  const authEvidenceAllowed =
+    input.allowedAuthWallFeatureIds?.has(featureId) === true;
+  const actions = input.actionCatalog.actions.filter(
     (action) =>
-      action.kind === "assert" &&
       (action.featureIds ?? []).includes(featureId) &&
-      !input.authWallRoutes.has(action.route),
+      (authEvidenceAllowed || !input.authWallRoutes.has(action.route)),
+  );
+  const hasAssert = actions.some((action) => action.kind === "assert");
+  if (!hasAssert) return false;
+  const exercised = actions.filter((action) => action.exercised === true);
+  if (exercised.length > 0) {
+    return exercised.some(
+      (action) => authEvidenceAllowed || !isAuthDegradedClick(action),
+    );
+  }
+  return actions.some(
+    (action) =>
+      action.kind !== "assert" &&
+      (authEvidenceAllowed || !isAuthDegradedClick(action)),
   );
 }
 
@@ -35,6 +50,7 @@ export function readGroundableFeatureIds(
   featureIds: readonly string[],
   input: {
     actionCatalog: ActionCatalog;
+    allowedAuthWallFeatureIds?: ReadonlySet<string>;
     authWallRoutes: ReadonlySet<string>;
   },
 ): string[] {

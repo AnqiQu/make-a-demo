@@ -31,6 +31,10 @@ import { withCpuLivenessHeartbeat } from "../../shared/shell/cpu-liveness";
 import { shellQuote } from "../../shared/shell/shell-quote";
 import { elideMiddle } from "../../shared/text/elide-middle";
 import { stripAnsi } from "../../shared/text/strip-ansi";
+import {
+  hasAuthWallRouteShape,
+  isAuthDegradedClick,
+} from "../app-explorer/auth-wall";
 import { readLastErrorCauseLine } from "../app-explorer/stderr-error-signal";
 import {
   type SubmittedAppExplorationResult,
@@ -1073,6 +1077,16 @@ export async function createDefaultAgentHarnessDependencies(
         ),
         {
           actionCatalog,
+          allowedAuthWallFeatureIds: new Set(
+            preparationManifest.productContext.featureInventory
+              .filter((feature) =>
+                isExplicitAuthenticationFeature(
+                  feature,
+                  demoBrief.keyProductFeatures ?? [],
+                ),
+              )
+              .map(({ id }) => id),
+          ),
           authWallRoutes: new Set(appMap.loginOrAuthWalls),
         },
       );
@@ -3332,21 +3346,56 @@ async function confirmCaptureSceneRoutesServe(input: {
   workspace: AgentHarnessWorkspace;
 }): Promise<ValidationReport> {
   const failures: { classification: string; detail: string }[] = [];
+  const normalizedPath = (url: URL) => {
+    const pathname = url.pathname.replace(/\/+$/, "") || "/";
+    return `${pathname}${url.search}`;
+  };
+  const readUrl = (value: string | undefined): URL | undefined => {
+    if (value === undefined) return undefined;
+    try {
+      return new URL(value);
+    } catch {
+      return undefined;
+    }
+  };
   for (const route of input.sceneRoutes) {
     const probe = await probeSubmittedCodeRuntime(
       input.workspace,
       new URL(route, input.baseUrl).toString(),
       0,
     );
-    if (probe.runtimeProbe.attempts.at(-1)?.outcome === "responded") {
+    const requestedUrl = new URL(route, input.baseUrl);
+    const finalUrl = readUrl(probe.runtimeProbe.finalUrl);
+    const redirected =
+      finalUrl !== undefined &&
+      (finalUrl.origin !== requestedUrl.origin ||
+        normalizedPath(finalUrl) !== normalizedPath(requestedUrl));
+    const redirectedToAuth =
+      finalUrl !== undefined &&
+      !hasAuthWallRouteShape(
+        `${requestedUrl.pathname}${requestedUrl.search}${requestedUrl.hash}`,
+      ) &&
+      hasAuthWallRouteShape(
+        `${finalUrl.pathname}${finalUrl.search}${finalUrl.hash}`,
+      );
+    if (
+      probe.runtimeProbe.attempts.at(-1)?.outcome === "responded" &&
+      !redirected
+    ) {
       continue;
     }
     failures.push({
-      classification: classifyPreparationRuntimeFailure(probe.runtimeProbe, ""),
+      classification: redirectedToAuth
+        ? "auth wall"
+        : redirected
+          ? "app route not discoverable"
+          : classifyPreparationRuntimeFailure(probe.runtimeProbe, ""),
       detail:
-        probe.runtimeProbe.httpStatus === undefined
-          ? route
-          : `${route} (HTTP ${probe.runtimeProbe.httpStatus})`,
+        redirected && finalUrl !== undefined
+          ? `${route} redirected to ${normalizedPath(finalUrl)}${probe.runtimeProbe.httpStatus === undefined ? "" : ` (HTTP ${probe.runtimeProbe.httpStatus})`}`
+          : probe.runtimeProbe.httpStatus === undefined
+            ? route
+            : `${route} (HTTP ${probe.runtimeProbe.httpStatus})`,
     });
   }
   if (failures.length === 0) {
@@ -3360,6 +3409,11 @@ async function confirmCaptureSceneRoutesServe(input: {
     suggestedRepairHints: [
       ...input.passedReport.suggestedRepairHints,
       "A route the Demo Script navigates stopped serving on the freshly reset app. Make every scene route render on a cold start; do not depend on state a prior validation pass warmed.",
+      ...(failures.some(({ classification }) => classification === "auth wall")
+        ? [
+            "A capture scene route redirected to authentication after reset. Repair the demo-gated identity/session seam so the requested product route remains signed in on a cold start.",
+          ]
+        : []),
     ],
   };
 }
@@ -4159,16 +4213,30 @@ function assertFlowSpecGrounded(input: {
     ]),
   );
   const requestedFeatures = input.demoBrief.keyProductFeatures ?? [];
+  const explicitAuthenticationFeatureIds = new Set(
+    input.preparationManifest.productContext.featureInventory
+      .filter((feature) =>
+        isExplicitAuthenticationFeature(feature, requestedFeatures),
+      )
+      .map(({ id }) => id),
+  );
   const inventoryIds =
     input.preparationManifest.productContext.featureInventory.map(
       (feature) => feature.id,
     );
   const groundableFeatureIds = readGroundableFeatureIds(inventoryIds, {
     actionCatalog: input.actionCatalog,
+    allowedAuthWallFeatureIds: explicitAuthenticationFeatureIds,
     authWallRoutes,
   });
   const groundableSet = new Set(groundableFeatureIds);
   const expectedFeatureCount = Math.min(3, groundableFeatureIds.length);
+  const isAuthDegradedForFeature = (
+    featureId: string,
+    action: ActionCatalog["actions"][number],
+  ) =>
+    !explicitAuthenticationFeatureIds.has(featureId) &&
+    isAuthDegradedClick(action);
   const distinctContentByRoute = readRouteDistinctContent(
     input.appMap.discoveredRoutes,
   );
@@ -4298,12 +4366,24 @@ function assertFlowSpecGrounded(input: {
           `FlowSpec action ${actionId} is not grounded for feature ${feature.featureId}. ${taggedActionSummary(feature.featureId)}`,
         );
       }
+      if (isAuthDegradedForFeature(feature.featureId, action)) {
+        throw new Error(
+          `FlowSpec feature ${feature.featureId} references auth-degraded click ${action.id}, whose observed navigation destination is ${action.navigationDestination}; remove it because an interaction that lands on authentication cannot ground product behavior`,
+        );
+      }
       selectedActions.push(action);
       selectedActionKinds.add(action.kind);
     }
     const exercisedActions = input.actionCatalog.actions.filter(
       (action) =>
         action.exercised === true &&
+        !isAuthDegradedForFeature(feature.featureId, action) &&
+        action.featureIds?.includes(feature.featureId),
+    );
+    const authDegradedExercisedActions = input.actionCatalog.actions.filter(
+      (action) =>
+        action.exercised === true &&
+        isAuthDegradedForFeature(feature.featureId, action) &&
         action.featureIds?.includes(feature.featureId),
     );
     if (!selectedActionKinds.has("assert")) {
@@ -4377,6 +4457,15 @@ function assertFlowSpecGrounded(input: {
             .join(", ")}`,
         );
       }
+    } else if (authDegradedExercisedActions.length > 0) {
+      violations.push(
+        `FlowSpec feature ${feature.featureId} has only auth-degraded browser interactions: ${authDegradedExercisedActions
+          .slice(0, 3)
+          .map((action) => `${action.id} → ${action.navigationDestination}`)
+          .join(
+            ", ",
+          )}. These clicks ground nothing; repair a requested feature's demo session or record an inferred feature in droppedFeatures.`,
+      );
     } else {
       // Without a browser-exercised interaction every tagged interaction is
       // speculative, so the feature must at least anchor on a navigate — the
@@ -4435,6 +4524,7 @@ function assertFlowSpecGrounded(input: {
     const uniqueCandidates = input.actionCatalog.actions.filter(
       (action) =>
         action.featureIds?.includes(feature.featureId) &&
+        !isAuthDegradedForFeature(feature.featureId, action) &&
         !otherFeatureReferences.has(action.id),
     );
     if (uniqueCandidates.length > 0) {
@@ -5806,11 +5896,11 @@ function createFlowPlanningPrompt(artifactError?: string): string {
     instructions: [
       "Plan one feature-scoped flow entry for every maker-requested feature using PreparationManifest productContext, AppMap, and ActionCatalog evidence.",
       "When the maker supplied requested features, include exactly that normalized set with no omissions or extra feature entries. Duration is a pacing target and never permission to drop a feature.",
-      "When the maker supplied no features, select exactly min(3, groundable feature count) source-backed features with the strongest browser evidence. A feature is groundable only when the ActionCatalog tags a visible assertion for it on a route outside login/auth walls.",
+      "When the maker supplied no features, select exactly min(3, groundable feature count) source-backed features with the strongest browser evidence. A feature is groundable only when the ActionCatalog tags a visible assertion plus a usable interaction for it outside login/auth walls; a click whose navigationDestination has an auth-wall route shape is auth-degraded and unusable.",
       "Record every ungroundable inventory feature in droppedFeatures with the reason it cannot be demonstrated. Never select an ungroundable feature and never drop a groundable one.",
       "Each feature must use its prepared featureId and only ActionCatalog actions tagged with that featureId.",
       "Preserve each selected feature's prepared display label so backend-owned feature introduction cards remain source-grounded.",
-      "For each feature, select a browser-exercised ActionCatalog interaction (exercised=true) and a visible assertion. Navigation does not replace an available exercised interaction. Only when no exercised action exists for a genuinely read-only feature may you use navigation plus a unique visible assertion. At least one selected action must not be reused by another feature.",
+      "For each feature, select a non-auth-degraded browser-exercised ActionCatalog interaction (exercised=true) and a visible assertion. A maker-requested authentication feature is the sole exception for auth-destination evidence. Navigation does not replace an available exercised interaction. Only when no exercised action exists for a genuinely read-only feature may you use navigation plus a unique visible assertion. At least one selected action must not be reused by another feature.",
       "Read /workspace/.makeademo/flow-spec-contract.json and satisfy every required field, property type, and invariant it defines.",
       "Write a valid FlowSpec JSON object to /workspace/.makeademo/flow-spec.json.",
       "Do not invent alternate field names or object-shaped steps. Every steps entry and every repairConstraints entry must be a string.",
