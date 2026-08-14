@@ -60,6 +60,8 @@ export function readDependencyRepairDelta(
  * file's diff section.
  */
 export type FidelityCandidate = {
+  /** Structural manifest contradictions bypass heuristic adjudication. */
+  deterministic?: true;
   hint: string;
   message: string;
   path?: string;
@@ -146,6 +148,27 @@ export function readPreparationFidelityCandidates(input: {
   workspaceDiff: PreparationWorkspaceDiff;
 }): FidelityCandidate[] {
   const violations: FidelityViolation[] = [];
+  const hasStubDeliveryMechanism =
+    input.preparationManifest.mocksAndFixturesAdded.length > 0 ||
+    input.preparationManifest.localDemoModeChanges.length > 0 ||
+    readConfiguredDemoFlags(input.preparationManifest).length > 0;
+  for (const declaration of input.preparationManifest.dataStrategy ?? []) {
+    if (
+      declaration.rung !== "client-stub" &&
+      declaration.rung !== "declared-stub"
+    ) {
+      continue;
+    }
+    const detailDeclaresAbsence =
+      declaration.rung === "declared-stub" &&
+      declaresMissingStubMechanism(declaration.detail);
+    if (hasStubDeliveryMechanism && !detailDeclaresAbsence) continue;
+    violations.push({
+      deterministic: true,
+      hint: repairHints.truthfulManifest,
+      message: `Data strategy rung ${declaration.rung} for service ${declaration.service} is missing a delivery mechanism in this manifest${detailDeclaresAbsence ? `; its own detail explicitly says the mechanism is absent (${JSON.stringify(declaration.detail)})` : ""}. Record a concrete mocksAndFixturesAdded or localDemoModeChanges entry, or an active MakeADemo delivery gate in envUsed, and make the declaration describe that mechanism.`,
+    });
+  }
   // A manifest may only claim prepared content the workspace carries:
   // give-up repairs after agent stalls wrote fixture claims onto empty
   // diffs (excalidraw, ghostfolio 2026-08-07), and the hollow prep passed
@@ -870,18 +893,30 @@ interface DemoGateEvidence {
  */
 const gateTokenPattern = /makeademo_demo/i;
 
+function readConfiguredDemoFlags(
+  preparationManifest: PreparationManifest,
+): string[] {
+  return Object.entries(preparationManifest.envUsed)
+    .filter(
+      ([key, value]) =>
+        /(?:^|_)MAKEADEMO_DEMO$/i.test(key) && /^(?:1|true)$/i.test(value),
+    )
+    .map(([key]) => key);
+}
+
+function declaresMissingStubMechanism(detail: string): boolean {
+  return /\b(?:no|without(?:\s+an?)?)\s+(?:(?:local|demo|fixture[- ]backed)\s+)?(?:fixture(?:\s+adapter)?|mock|stub|adapter|delivery\s+mechanism)\b[^.!;\n]{0,50}\b(?:added|created|implemented|provided|wired)\b/i.test(
+    detail,
+  );
+}
+
 function readDemoGateEvidence(
   preparationManifest: PreparationManifest,
   repoSourceFiles: ReadonlyMap<string, string | undefined>,
   workspaceDiff: PreparationWorkspaceDiff,
   filePatches: ReadonlyMap<string, PatchSection>,
 ): DemoGateEvidence {
-  const configuredFlags = Object.entries(preparationManifest.envUsed)
-    .filter(
-      ([key, value]) =>
-        /(?:^|_)MAKEADEMO_DEMO$/i.test(key) && /^(?:1|true)$/i.test(value),
-    )
-    .map(([key]) => key);
+  const configuredFlags = readConfiguredDemoFlags(preparationManifest);
   if (configuredFlags.length === 0) {
     return { flags: [], identifiers: [] };
   }

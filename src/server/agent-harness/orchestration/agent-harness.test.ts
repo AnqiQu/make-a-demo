@@ -2246,6 +2246,109 @@ describe("runAgentHarnessPipeline", () => {
     });
   });
 
+  it("fails a word-only stub structurally without invoking fidelity adjudication", async () => {
+    let adjudications = 0;
+    let repairs = 0;
+    const wordOnlyManifest = {
+      ...preparationManifest(),
+      dataStrategy: [
+        {
+          detail: "No fixture adapter was added for this API.",
+          rung: "declared-stub" as const,
+          service: "directus-api",
+        },
+      ],
+      envUsed: { NODE_ENV: "development" },
+      localDemoModeChanges: [],
+      mocksAndFixturesAdded: [],
+    };
+    const deliveredManifest = {
+      ...wordOnlyManifest,
+      dataStrategy: [
+        {
+          detail: "The existing API client returns deterministic fixtures.",
+          rung: "client-stub" as const,
+          service: "directus-api",
+        },
+      ],
+      mocksAndFixturesAdded: [
+        "src/demo-fixtures.json supplies deterministic API rows.",
+      ],
+    };
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_structural_stub_fidelity" }),
+      stubPipelineDependencies({
+        async adjudicateFidelityCandidates({ candidates }) {
+          adjudications += 1;
+          return candidates.map((_, candidateIndex) => ({
+            candidateIndex,
+            quotedEvidence: [],
+            verdict: "overturn" as const,
+          }));
+        },
+        async capturePreparationWorkspaceDiff() {
+          return {
+            changedFileSha256: {
+              "src/demo-fixtures.json": `sha256:${"d".repeat(64)}` as const,
+            },
+            changedPaths: ["/workspace/repo/src/demo-fixtures.json"],
+            patch: [
+              "diff --git a/src/demo-fixtures.json b/src/demo-fixtures.json",
+              "new file mode 100644",
+              '+{"projects":[{"id":"demo"}]}',
+            ].join("\n"),
+            patchSha256: `sha256:${"d".repeat(64)}` as const,
+            sourceCommitSha: "abc123def456",
+          };
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: wordOnlyManifest };
+        },
+        async repairPreparation() {
+          repairs += 1;
+          return { manifest: deliveredManifest };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    expect(repairs).toBe(1);
+    expect(adjudications).toBe(0);
+    expect(result.validationReports).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          failureClassification: "product fidelity violation",
+          logsSummary: expect.stringContaining("directus-api"),
+          stage: "preparation-fidelity",
+          status: "failed",
+        }),
+      ]),
+    );
+  });
+
   it("keeps the veto and reports unadjudicated when the judge fails", async () => {
     let diffAttempts = 0;
     const result = await runAgentHarnessPipeline(

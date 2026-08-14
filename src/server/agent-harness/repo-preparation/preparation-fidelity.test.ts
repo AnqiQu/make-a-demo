@@ -10,6 +10,118 @@ import {
 const routePath = "apps/dashboard/src/app/tracker/page.tsx";
 
 describe("validatePreparationFidelity", () => {
+  it("rejects word-only client and declared stubs without a delivery mechanism", () => {
+    const report = validateDiff({
+      manifestOverrides: {
+        dataStrategy: [
+          {
+            detail: "No fixture adapter was added for the API.",
+            rung: "declared-stub",
+            service: "directus-api",
+          },
+          {
+            detail: "The client will use generated data.",
+            rung: "declared-stub",
+            service: "directus-schema",
+          },
+          {
+            detail: "The SDK is stubbed for the demo.",
+            rung: "client-stub",
+            service: "directus-sdk",
+          },
+        ],
+        envUsed: { NODE_ENV: "development" },
+        localDemoModeChanges: [],
+        mocksAndFixturesAdded: [],
+      },
+      modifiedFiles: ["package.json"],
+      patch: 'diff --git a/package.json b/package.json\n+  "private": true',
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "product fidelity violation",
+      status: "failed",
+    });
+    expect(report.logsSummary).toContain("declared-stub");
+    expect(report.logsSummary).toContain("directus-api");
+    expect(report.logsSummary).toContain("directus-schema");
+    expect(report.logsSummary).toContain("client-stub");
+    expect(report.logsSummary).toContain("directus-sdk");
+    expect(report.logsSummary).toContain("delivery mechanism");
+  });
+
+  it("accepts each manifest-level stub delivery mechanism", () => {
+    const baseStrategy = [
+      {
+        detail: "The API client returns deterministic project fixtures.",
+        rung: "client-stub" as const,
+        service: "directus-api",
+      },
+    ];
+    const mechanisms: Array<Partial<PreparationManifest>> = [
+      {
+        mocksAndFixturesAdded: [
+          "src/demo/directus-fixtures.ts supplies project rows.",
+        ],
+      },
+      {
+        localDemoModeChanges: [
+          "The existing Directus client selects fixture data in demo mode.",
+        ],
+      },
+      { envUsed: { VITE_MAKEADEMO_DEMO: "true" } },
+    ];
+
+    for (const mechanism of mechanisms) {
+      const candidates = readPreparationFidelityCandidates({
+        preparationManifest: manifest({
+          dataStrategy: baseStrategy,
+          ...mechanism,
+        }),
+        repoSourceFiles: new Map([[routePath, "export default 1;"]]),
+        workspaceDiff: workspaceDiff(
+          [routePath],
+          `diff --git a/${routePath} b/${routePath}`,
+        ),
+      });
+
+      expect(
+        candidates.filter((candidate) => candidate.deterministic === true),
+      ).toEqual([]);
+    }
+  });
+
+  it("rejects a declared stub whose own detail says its adapter is absent", () => {
+    const candidates = readPreparationFidelityCandidates({
+      preparationManifest: manifest({
+        dataStrategy: [
+          {
+            detail: "No fixture adapter was added for the Directus SDK.",
+            rung: "declared-stub",
+            service: "directus-sdk",
+          },
+        ],
+        envUsed: { VITE_MAKEADEMO_DEMO: "true" },
+      }),
+      repoSourceFiles: new Map([[routePath, "export default 1;"]]),
+      workspaceDiff: workspaceDiff(
+        [routePath],
+        `diff --git a/${routePath} b/${routePath}`,
+      ),
+    });
+
+    expect(candidates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          deterministic: true,
+          message: expect.stringMatching(
+            /declared-stub.*directus-sdk.*explicitly says the mechanism is absent/i,
+          ),
+        }),
+      ]),
+    );
+  });
+
   it("fails a manifest claiming fixtures the empty workspace contains no trace of", () => {
     // Give-up repairs after agent stalls (excalidraw, ghostfolio 2026-08-07)
     // wrote manifests claiming prepared fixtures onto empty workspace diffs;

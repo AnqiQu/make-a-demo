@@ -1739,6 +1739,14 @@ async function ensureValidPreparation(input: {
           workspaceDiff,
         });
         const adjudicate = input.dependencies.adjudicateFidelityCandidates;
+        const deterministicCandidates = candidates.filter(
+          (candidate) => candidate.deterministic === true,
+        );
+        if (deterministicCandidates.length > 0) {
+          return createPreparationFidelityReport({
+            candidates: deterministicCandidates,
+          });
+        }
         if (candidates.length === 0 || adjudicate === undefined) {
           return createPreparationFidelityReport({ candidates });
         }
