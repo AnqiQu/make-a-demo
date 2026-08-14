@@ -2178,6 +2178,13 @@ async function createDaytonaWorkspaceProvider(input: {
           submittedCodeSnapshot:
             input.env.MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT,
         }),
+    ...(input.env.MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT_HEAVYWEIGHT ===
+    undefined
+      ? {}
+      : {
+          submittedCodeSnapshotHeavyweight:
+            input.env.MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT_HEAVYWEIGHT,
+        }),
   });
 }
 

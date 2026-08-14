@@ -313,9 +313,13 @@ export type AgentHarnessWorkspaceHandle = {
 export type SubmittedCodeSandboxClass = "heavyweight" | "standard";
 
 /**
- * Creation policy for a paired agent/submitted-code workspace. Providers must
- * apply the selected class to the submitted-code sandbox without weakening its
- * network isolation or lifecycle cleanup guarantees.
+ * Creation policy for a paired agent/submitted-code workspace. Providers
+ * realize the selected class by choosing WHICH snapshot backs the
+ * submitted-code sandbox (a snapshot-created sandbox inherits the snapshot's
+ * resource spec; resource overrides are rejected — N147), never by weakening
+ * its network isolation or lifecycle cleanup guarantees. A provider without a
+ * heavyweight variant configured must still create the workspace on its
+ * standard class rather than fail.
  */
 export type AgentHarnessWorkspaceCreateInput = {
   submittedCodeSandboxClass: SubmittedCodeSandboxClass;

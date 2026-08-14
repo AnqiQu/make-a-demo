@@ -18,6 +18,7 @@ import type {
   AgentHarnessWorkspaceLogEntry,
   AgentHarnessWorkspaceProvider,
   AgentHarnessWorkspaceUploadFile,
+  SubmittedCodeSandboxClass,
 } from "../../../agent-harness/daytona/workspace.interface";
 import {
   AgentHarnessArtifactTransferError,
@@ -156,30 +157,22 @@ export type DaytonaSdkPreparationWorkspaceProviderOptions = {
   secrets?: Record<string, string>;
   snapshot?: string;
   submittedCodeSnapshot?: string;
+  /**
+   * Snapshot for heavyweight-class submitted-code sandboxes (N147). Sandboxes
+   * created from a snapshot inherit its resource spec — Daytona rejects a
+   * `resources` override on snapshot creation — so capacity classes are
+   * snapshot variants. Unset, heavyweight requests fall back to
+   * `submittedCodeSnapshot` with a logged warning.
+   */
+  submittedCodeSnapshotHeavyweight?: string;
 };
 
 const defaultSandboxDiskGB = 3;
-/**
- * The submitted-code sandbox holds the repo, its dependency tree, the
- * package-manager cache, and build outputs — twenty alone installs 3.14GiB
- * of packages and filled its disk twice (ENOSPC, 2026-08-07/08). 10GB is
- * the Daytona org's per-sandbox maximum (a 20GB request is rejected with
- * "exceeds maximum allowed per sandbox", measured 2026-08-08); further
- * headroom must come from cache pruning, not disk.
- */
-const submittedCodeSandboxDiskGB = 10;
-// Twenty reached the measured 8GiB cgroup ceiling in both install and build.
-// 16GiB is the next bounded class with meaningful headroom; 4 CPUs keeps its
-// heavyweight builds moving while the standard class retains Daytona's CPU
-// and memory defaults. Both classes stay at the measured 10GB org disk cap.
-const submittedCodeSandboxResources = {
-  heavyweight: {
-    cpu: 4,
-    disk: submittedCodeSandboxDiskGB,
-    memory: 16,
-  },
-  standard: { disk: submittedCodeSandboxDiskGB },
-} as const;
+// Submitted-code sandbox sizing lives in the snapshot definitions, not here:
+// a snapshot-created sandbox inherits the snapshot's cpu/memory/disk spec.
+// When building those snapshots, note 10GB is the Daytona org's per-sandbox
+// disk maximum (a 20GB request is rejected with "exceeds maximum allowed per
+// sandbox", measured 2026-08-08); disk headroom must come from cache pruning.
 const defaultCommandTimeoutMs = 10 * 60_000;
 const defaultLogWriteTimeoutMs = 5_000;
 const defaultPtyConnectionTimeoutMs = 30_000;
@@ -275,6 +268,11 @@ export class DaytonaSdkPreparationWorkspaceProvider
   private readonly secrets: Record<string, string> | undefined;
   private readonly snapshot: string | undefined;
   private readonly submittedCodeSnapshot: string | undefined;
+  private readonly submittedCodeSnapshotHeavyweight: string | undefined;
+  private readonly providerLogger: Pick<
+    PipelineEventLogger,
+    "error" | "info" | "warn"
+  >;
 
   constructor(options: DaytonaSdkPreparationWorkspaceProviderOptions = {}) {
     this.client =
@@ -288,6 +286,8 @@ export class DaytonaSdkPreparationWorkspaceProvider
     this.secrets = options.secrets;
     this.snapshot = options.snapshot;
     this.submittedCodeSnapshot = options.submittedCodeSnapshot;
+    this.submittedCodeSnapshotHeavyweight =
+      options.submittedCodeSnapshotHeavyweight;
     this.diskGB = options.diskGB ?? defaultSandboxDiskGB;
     this.logWriteTimeoutMs =
       options.logWriteTimeoutMs ?? defaultLogWriteTimeoutMs;
@@ -296,6 +296,12 @@ export class DaytonaSdkPreparationWorkspaceProvider
     this.sandboxCreateTimeoutSeconds =
       options.sandboxCreateTimeoutSeconds ?? defaultSandboxCreateTimeoutSeconds;
     this.sandboxLogSinks = options.sandboxLogSinks ?? [];
+    this.providerLogger =
+      options.controlPlaneLogger ??
+      createPipelineEventLogger({
+        base: { component: "daytona-control-plane" },
+        sinks: this.sandboxLogSinks,
+      });
     this.controlPlane =
       options.controlPlane ??
       (options.controlPlaneLogger === undefined
@@ -328,10 +334,13 @@ export class DaytonaSdkPreparationWorkspaceProvider
       throw new Error("Daytona did not return a sandbox id.");
     }
 
+    const submittedCodeSnapshot = await this.resolveSubmittedCodeSnapshot(
+      input?.submittedCodeSandboxClass ?? "standard",
+    );
     let submittedCodeSandbox: DaytonaSdkSandbox | undefined;
     try {
       submittedCodeSandbox =
-        this.submittedCodeSnapshot === undefined
+        submittedCodeSnapshot === undefined
           ? undefined
           : await this.controlPlane.run(
               "submitted-code-sandbox.create",
@@ -343,11 +352,7 @@ export class DaytonaSdkPreparationWorkspaceProvider
                     ephemeral: true,
                     linkedSandbox: id,
                     networkBlockAll: true,
-                    resources:
-                      submittedCodeSandboxResources[
-                        input?.submittedCodeSandboxClass ?? "standard"
-                      ],
-                    snapshot: this.submittedCodeSnapshot,
+                    snapshot: submittedCodeSnapshot,
                   },
                   createOptions,
                 ),
@@ -372,6 +377,35 @@ export class DaytonaSdkPreparationWorkspaceProvider
       sandbox,
       ...(submittedCodeSandbox === undefined ? {} : { submittedCodeSandbox }),
     });
+  }
+
+  /**
+   * A snapshot-created sandbox inherits the snapshot's resource spec (Daytona
+   * rejects a `resources` override outright — wave-10, 2026-08-14), so the
+   * capacity class picks WHICH snapshot to create from. A heavyweight request
+   * without a configured heavyweight snapshot falls back to the standard one
+   * with a logged warning: an under-sized sandbox that fails with evidence
+   * beats a batch that cannot launch.
+   */
+  private async resolveSubmittedCodeSnapshot(
+    submittedCodeSandboxClass: SubmittedCodeSandboxClass,
+  ): Promise<string | undefined> {
+    if (
+      submittedCodeSandboxClass !== "heavyweight" ||
+      this.submittedCodeSnapshot === undefined
+    ) {
+      return this.submittedCodeSnapshot;
+    }
+    if (this.submittedCodeSnapshotHeavyweight !== undefined) {
+      return this.submittedCodeSnapshotHeavyweight;
+    }
+    await this.providerLogger.warn({
+      event: "daytona.submitted-code-sandbox.heavyweight-fallback",
+      message:
+        "Heavyweight submitted-code sandbox requested but no heavyweight snapshot is configured (MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT_HEAVYWEIGHT); creating from the standard snapshot.",
+      snapshot: this.submittedCodeSnapshot,
+    });
+    return this.submittedCodeSnapshot;
   }
 
   private async deleteSandboxBestEffort(

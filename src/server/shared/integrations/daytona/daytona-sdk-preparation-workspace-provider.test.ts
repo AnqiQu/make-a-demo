@@ -1637,18 +1637,22 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
           ephemeral: true,
           linkedSandbox: "parent_sandbox",
           networkBlockAll: true,
-          resources: { disk: 10 },
           snapshot: "makeademo-submitted-code-browser",
         },
       },
     ]);
   });
 
-  it("doubles CPU and memory for a heavyweight submitted-code sandbox", async () => {
+  it("creates a heavyweight submitted-code sandbox from the heavyweight snapshot", async () => {
+    // Daytona rejects a `resources` override on snapshot creation ("Cannot
+    // specify Sandbox resources when using a snapshot", 2026-08-14 wave-10):
+    // capacity classes are snapshot variants, never creation-time resources.
     const calls: unknown[] = [];
     const provider = new DaytonaSdkPreparationWorkspaceProvider({
       client: fakeLinkedClient(calls),
       submittedCodeSnapshot: "makeademo-submitted-code-browser",
+      submittedCodeSnapshotHeavyweight:
+        "makeademo-submitted-code-browser-mem16",
     });
 
     await provider.create({ submittedCodeSandboxClass: "heavyweight" });
@@ -1660,10 +1664,38 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
         ephemeral: true,
         linkedSandbox: "parent_sandbox",
         networkBlockAll: true,
-        resources: { cpu: 4, disk: 10, memory: 16 },
-        snapshot: "makeademo-submitted-code-browser",
+        snapshot: "makeademo-submitted-code-browser-mem16",
       },
     });
+  });
+
+  it("falls back to the standard snapshot with a warning when no heavyweight snapshot is configured", async () => {
+    // A missing capacity upgrade must never block the batch: the entry runs
+    // under-sized and fails with resource evidence instead of never launching.
+    const lines: string[] = [];
+    const calls: unknown[] = [];
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      client: fakeLinkedClient(calls),
+      sandboxLogSinks: [{ write: (line) => void lines.push(line) }],
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+
+    await provider.create({ submittedCodeSandboxClass: "heavyweight" });
+
+    expect(calls[1]).toEqual(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          snapshot: "makeademo-submitted-code-browser",
+        }),
+      }),
+    );
+    expect(
+      lines.some((line) =>
+        line.includes(
+          '"event":"daytona.submitted-code-sandbox.heavyweight-fallback"',
+        ),
+      ),
+    ).toBe(true);
   });
 
   it("continues when org policy rejects submitted-code network overrides", async () => {
@@ -1972,7 +2004,6 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
           ephemeral: true,
           linkedSandbox: "parent_sandbox",
           networkBlockAll: true,
-          resources: { disk: 10 },
           snapshot: "makeademo-submitted-code-browser",
         },
       },
