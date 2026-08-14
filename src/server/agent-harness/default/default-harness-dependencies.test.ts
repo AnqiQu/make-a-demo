@@ -1738,6 +1738,158 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(prompts[1]).toContain("select exactly 3 grounded features");
   });
 
+  // homer, 2026-08-13T23-23 matrix: the inventory held three features but the
+  // catalog tagged dark-mode with only a navigate, so "select exactly
+  // min(3, inventory)" demanded a spec the per-feature grounding rules must
+  // reject — three byte-identical attempts, then death. Selection must count
+  // only groundable features and concede the rest.
+  const ungroundableDarkModeScenario = () => {
+    const inventoryFeature = (id: string, label: string) => ({
+      authStrategy: "none" as const,
+      description: `Show ${label}`,
+      entryPaths: ["/"],
+      fixtureNotes: [],
+      id,
+      label,
+      sourcePaths: ["src/App.tsx"],
+    });
+    const prepared: PreparationManifest = {
+      ...preparationManifest(),
+      productContext: {
+        ...preparationManifest().productContext,
+        featureInventory: [
+          inventoryFeature("dashboard", "Dashboard"),
+          inventoryFeature("reporting", "Reporting"),
+          inventoryFeature("dark-mode", "Toggle dark mode"),
+        ],
+      },
+    };
+    const catalog: ActionCatalog = {
+      ...actionCatalog(),
+      actions: [
+        ...actionCatalog().actions.filter(
+          (action) => !(action.featureIds ?? []).includes("search"),
+        ),
+        {
+          confidence: 1,
+          evidence: "Playwright loaded the theme route",
+          expectedResult: "Theme route opens",
+          featureIds: ["dark-mode"],
+          id: "open-theme",
+          kind: "navigate",
+          preferredLocator: {
+            reason: "Navigation targets an observed route, not an element.",
+            strategy: "css",
+            value: "body",
+          },
+          risks: [],
+          route: "/",
+        },
+      ],
+    };
+    const feature = (
+      featureId: string,
+      label: string,
+      referencedActionIds: string[],
+    ) => ({
+      expectedVisibleAssertions: [`${label} is visible`],
+      featureId,
+      label,
+      referencedActionIds,
+      referencedAppMapRoutePaths: ["/"],
+      requiredAppState: [],
+      selectionReason: "Strong browser-grounded product capability",
+      steps: [`Show ${label}`],
+    });
+    const groundedTwo: FlowSpec = {
+      droppedFeatures: [
+        {
+          featureId: "dark-mode",
+          reason: "ActionCatalog tags no visible assertion for the toggle.",
+        },
+      ],
+      features: [
+        feature("dashboard", "Dashboard", ["open-dashboard", "dashboard"]),
+        feature("reporting", "Reporting", ["reporting", "reporting-visible"]),
+      ],
+      id: "inferred-flow",
+      repairConstraints: [],
+      version: 2,
+    };
+    return { catalog, feature, groundedTwo, prepared };
+  };
+
+  it("selects only groundable features and records the ungroundable drop when the maker supplies no feature list", async () => {
+    const { catalog, groundedTwo, prepared } = ungroundableDarkModeScenario();
+    const { attempts, result } = await runFlowPlanningScenario({
+      actionCatalog: catalog,
+      candidates: [groundedTwo],
+      demoBrief: {},
+      preparationManifest: prepared,
+    });
+    expect(result).toEqual(groundedTwo);
+    expect(attempts).toBe(1);
+  });
+
+  it("rejects an inferred FlowSpec that selects a feature without a tagged assertion", async () => {
+    const { catalog, feature, groundedTwo, prepared } =
+      ungroundableDarkModeScenario();
+    const includesDarkMode = {
+      ...groundedTwo,
+      droppedFeatures: [],
+      features: [
+        ...groundedTwo.features,
+        feature("dark-mode", "Toggle dark mode", ["open-theme"]),
+      ],
+    };
+    const { attempts, prompts, result } = await runFlowPlanningScenario({
+      actionCatalog: catalog,
+      candidates: [includesDarkMode, groundedTwo],
+      demoBrief: {},
+      preparationManifest: prepared,
+    });
+    expect(result).toEqual(groundedTwo);
+    expect(attempts).toBe(2);
+    expect(prompts[1]).toContain("select exactly 2 grounded features");
+    expect(prompts[1]).toContain("dashboard, reporting");
+  });
+
+  it("rejects an inferred FlowSpec that omits an ungroundable feature from droppedFeatures", async () => {
+    const { catalog, groundedTwo, prepared } = ungroundableDarkModeScenario();
+    const { droppedFeatures: _omitted, ...withoutDrops } = groundedTwo;
+    const { attempts, prompts, result } = await runFlowPlanningScenario({
+      actionCatalog: catalog,
+      candidates: [withoutDrops, groundedTwo],
+      demoBrief: {},
+      preparationManifest: prepared,
+    });
+    expect(result).toEqual(groundedTwo);
+    expect(attempts).toBe(2);
+    expect(prompts[1]).toContain("droppedFeatures");
+    expect(prompts[1]).toContain("dark-mode");
+  });
+
+  it("fails Flow Planning before any agent attempt when no prepared feature is groundable", async () => {
+    const assertFreeCatalog: ActionCatalog = {
+      ...actionCatalog(),
+      actions: actionCatalog().actions.filter(
+        (action) => action.kind !== "assert",
+      ),
+    };
+    let attempts = 0;
+    await expect(
+      runFlowPlanningScenario({
+        actionCatalog: assertFreeCatalog,
+        candidates: [],
+        demoBrief: {},
+        onPrompt: () => {
+          attempts += 1;
+        },
+      }),
+    ).rejects.toThrow(/no prepared feature has a tagged visible assertion/i);
+    expect(attempts).toBe(0);
+  });
+
   it("fails Flow Planning immediately when its required artifact write is denied", async () => {
     let attempts = 0;
     const workspace = createFakeAgentHarnessWorkspace({

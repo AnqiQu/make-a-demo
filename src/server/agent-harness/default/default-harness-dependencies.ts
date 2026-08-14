@@ -51,6 +51,7 @@ import {
   type AgentHarnessWorkspaceProvider,
   isAgentHarnessInfrastructureError,
 } from "../daytona/workspace.interface";
+import { readGroundableFeatureIds } from "../flow-planning/feature-groundability";
 import { DefaultOpenCodeHarnessRunner } from "../opencode/default-opencode-harness-runner";
 import {
   type OpenCodeHarnessRunInput,
@@ -1054,6 +1055,25 @@ export async function createDefaultAgentHarnessDependencies(
         artifactPaths.flowSpecContract,
         createFlowSpecContract(),
       );
+      // No valid FlowSpec exists without at least one groundable feature —
+      // every feature must select a tagged assert — so retrying the planner
+      // against an assert-free catalog burns attempts on an impossible task.
+      // The wall is exploration/catalog quality; fail there before the first
+      // agent attempt.
+      const groundableFeatureIds = readGroundableFeatureIds(
+        preparationManifest.productContext.featureInventory.map(
+          (feature) => feature.id,
+        ),
+        {
+          actionCatalog,
+          authWallRoutes: new Set(appMap.loginOrAuthWalls),
+        },
+      );
+      if (groundableFeatureIds.length === 0) {
+        throw new Error(
+          "Flow Planning cannot start: no prepared feature has a tagged visible assertion in the ActionCatalog outside login/auth walls, so no valid FlowSpec exists. Repair App Exploration or the ActionCatalog so at least one feature carries assert evidence.",
+        );
+      }
       return await runAgentArtifactStage({
         artifactPath: artifactPaths.flowSpec,
         displayName: () => "Flow Planning",
@@ -4065,6 +4085,17 @@ function assertFlowSpecGrounded(input: {
       feature,
     ]),
   );
+  const requestedFeatures = input.demoBrief.keyProductFeatures ?? [];
+  const inventoryIds =
+    input.preparationManifest.productContext.featureInventory.map(
+      (feature) => feature.id,
+    );
+  const groundableFeatureIds = readGroundableFeatureIds(inventoryIds, {
+    actionCatalog: input.actionCatalog,
+    authWallRoutes,
+  });
+  const groundableSet = new Set(groundableFeatureIds);
+  const expectedFeatureCount = Math.min(3, groundableFeatureIds.length);
   const distinctContentByRoute = readRouteDistinctContent(
     input.appMap.discoveredRoutes,
   );
@@ -4203,8 +4234,14 @@ function assertFlowSpecGrounded(input: {
         action.featureIds?.includes(feature.featureId),
     );
     if (!selectedActionKinds.has("assert")) {
+      // An ungroundable feature has no tagged assert to select — demanding
+      // one loops the planner on an impossible instruction (homer's three
+      // byte-identical attempts, 2026-08-13). On inferred flows the
+      // actionable repair is dropping the feature, so say exactly that.
       violations.push(
-        `FlowSpec feature ${feature.featureId} must select both an interaction and visible assertion from ActionCatalog. ${taggedActionSummary(feature.featureId)}${referencedActionsSummary(feature)}`,
+        requestedFeatures.length === 0 && !groundableSet.has(feature.featureId)
+          ? `FlowSpec feature ${feature.featureId} has no tagged visible assertion in the ActionCatalog, so no valid FlowSpec may select it. Remove it from features, record it in droppedFeatures with a reason, and select exactly ${expectedFeatureCount} grounded features: ${groundableFeatureIds.join(", ")}.`
+          : `FlowSpec feature ${feature.featureId} must select both an interaction and visible assertion from ActionCatalog. ${taggedActionSummary(feature.featureId)}${referencedActionsSummary(feature)}`,
       );
     }
     // A revealed assert's text exists only after its revealing interaction
@@ -4340,8 +4377,12 @@ function assertFlowSpecGrounded(input: {
     throw new Error(violations.join("\n"));
   }
 
-  const requestedFeatures = input.demoBrief.keyProductFeatures ?? [];
   if (requestedFeatures.length > 0) {
+    if ((input.flowSpec.droppedFeatures ?? []).length > 0) {
+      throw new Error(
+        "FlowSpec droppedFeatures must be empty when the maker requested features; every requested feature must be covered",
+      );
+    }
     assertExactRequestedFeatureCoverage(
       requestedFeatures,
       input.flowSpec.features.map(
@@ -4350,13 +4391,38 @@ function assertFlowSpecGrounded(input: {
       ),
     );
   } else {
-    const expectedFeatureCount = Math.min(
-      3,
-      input.preparationManifest.productContext.featureInventory.length,
-    );
+    // Selection counts groundable features, never raw inventory length: a
+    // navigate-only feature cannot appear in any valid FlowSpec, so
+    // demanding it be selected wedges the planner on an impossible spec
+    // (homer, 2026-08-13 matrix). Ungroundable features are conceded in
+    // droppedFeatures instead so the omission stays a recorded decision.
     if (input.flowSpec.features.length !== expectedFeatureCount) {
       throw new Error(
-        `FlowSpec must select exactly ${expectedFeatureCount} grounded features when the maker supplied no feature list`,
+        `FlowSpec must select exactly ${expectedFeatureCount} grounded features when the maker supplied no feature list. Groundable features (a tagged ActionCatalog assert exists outside auth walls): ${groundableFeatureIds.join(", ")}. Record each ungroundable inventory feature in droppedFeatures instead of selecting it.`,
+      );
+    }
+    const dropped = input.flowSpec.droppedFeatures ?? [];
+    const inventorySet = new Set(inventoryIds);
+    for (const { featureId } of dropped) {
+      if (!inventorySet.has(featureId)) {
+        throw new Error(
+          `FlowSpec droppedFeatures names unknown prepared feature ${featureId}`,
+        );
+      }
+      if (groundableSet.has(featureId)) {
+        throw new Error(
+          `FlowSpec droppedFeatures must not drop groundable feature ${featureId}; droppedFeatures records only features the ActionCatalog cannot ground`,
+        );
+      }
+    }
+    const droppedIds = new Set(dropped.map(({ featureId }) => featureId));
+    const unrecordedDrops = inventoryIds.filter(
+      (featureId) =>
+        !groundableSet.has(featureId) && !droppedIds.has(featureId),
+    );
+    if (unrecordedDrops.length > 0) {
+      throw new Error(
+        `FlowSpec must record every ungroundable inventory feature in droppedFeatures with the reason it cannot be demonstrated; missing: ${unrecordedDrops.join(", ")}`,
       );
     }
     if (
@@ -5666,7 +5732,8 @@ function createFlowPlanningPrompt(artifactError?: string): string {
     instructions: [
       "Plan one feature-scoped flow entry for every maker-requested feature using PreparationManifest productContext, AppMap, and ActionCatalog evidence.",
       "When the maker supplied requested features, include exactly that normalized set with no omissions or extra feature entries. Duration is a pacing target and never permission to drop a feature.",
-      "When the maker supplied no features, select exactly min(3, productContext.featureInventory.length) source-backed features with the strongest browser evidence.",
+      "When the maker supplied no features, select exactly min(3, groundable feature count) source-backed features with the strongest browser evidence. A feature is groundable only when the ActionCatalog tags a visible assertion for it on a route outside login/auth walls.",
+      "Record every ungroundable inventory feature in droppedFeatures with the reason it cannot be demonstrated. Never select an ungroundable feature and never drop a groundable one.",
       "Each feature must use its prepared featureId and only ActionCatalog actions tagged with that featureId.",
       "Preserve each selected feature's prepared display label so backend-owned feature introduction cards remain source-grounded.",
       "For each feature, select a browser-exercised ActionCatalog interaction (exercised=true) and a visible assertion. Navigation does not replace an available exercised interaction. Only when no exercised action exists for a genuinely read-only feature may you use navigation plus a unique visible assertion. At least one selected action must not be reused by another feature.",

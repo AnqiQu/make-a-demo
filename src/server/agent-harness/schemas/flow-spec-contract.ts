@@ -21,10 +21,11 @@ export function createFlowSpecContract() {
   return {
     $schema: "https://json-schema.org/draft/2020-12/schema",
     additionalProperties: false,
-    contractVersion: "2026-07-12",
+    contractVersion: "2026-08-13",
     invariants: [
       "features must contain one entry for every maker-requested feature and no unrequested feature entries",
-      "when the maker supplied no features, select a small set from PreparationManifest.productContext.featureInventory",
+      "when the maker supplied no features, select exactly min(3, groundable feature count) from PreparationManifest.productContext.featureInventory; a feature is groundable only when ActionCatalog tags a visible assertion for it on a route outside login/auth walls",
+      "when the maker supplied no features, record every ungroundable inventory feature in droppedFeatures with the reason it cannot be demonstrated; never select an ungroundable feature, never drop a groundable one, and leave droppedFeatures empty when the maker requested features",
       "every feature must contain at least one concise observable demo step",
       "every feature route must be present in AppMap",
       "every feature action must be present in ActionCatalog and tagged with that featureId",
@@ -39,6 +40,22 @@ export function createFlowSpecContract() {
     ],
     outputPath: "/workspace/.makeademo/flow-spec.json",
     properties: {
+      droppedFeatures: {
+        items: {
+          additionalProperties: false,
+          properties: {
+            featureId: {
+              minLength: 1,
+              pattern: "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$",
+              type: "string",
+            },
+            reason: { minLength: 1, type: "string" },
+          },
+          required: ["featureId", "reason"],
+          type: "object",
+        },
+        type: "array",
+      },
       features: {
         items: {
           additionalProperties: false,

@@ -563,6 +563,13 @@ export type FlowSpecFeature = {
 };
 
 export type FlowSpec = {
+  /**
+   * Ungroundable prepared features the planner conceded instead of
+   * selecting: features the ActionCatalog tags no visible assertion for.
+   * Present only on inferred flows (the maker requested no features);
+   * maker-requested features may never be dropped.
+   */
+  droppedFeatures?: Array<{ featureId: string; reason: string }>;
   features: FlowSpecFeature[];
   id: string;
   repairConstraints: string[];
@@ -1369,7 +1376,38 @@ export function readFlowSpec(value: unknown): FlowSpec {
   if (featureIds.size !== features.length) {
     throw new Error("features featureId values must be unique");
   }
+  const droppedFeatures =
+    record.droppedFeatures === undefined
+      ? undefined
+      : readArray(record.droppedFeatures, "droppedFeatures", (value, index) => {
+          const path = `droppedFeatures[${index}]`;
+          const dropped = assertRecord(value, path);
+          const featureId = readNonEmptyString(dropped, "featureId", path);
+          if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(featureId)) {
+            throw new Error(`${path}.featureId must be a safe identifier`);
+          }
+          return {
+            featureId,
+            reason: readNonEmptyString(dropped, "reason", path),
+          };
+        });
+  if (droppedFeatures !== undefined) {
+    const droppedIds = new Set(
+      droppedFeatures.map((dropped) => dropped.featureId),
+    );
+    if (droppedIds.size !== droppedFeatures.length) {
+      throw new Error("droppedFeatures featureId values must be unique");
+    }
+    for (const droppedId of droppedIds) {
+      if (featureIds.has(droppedId)) {
+        throw new Error(
+          `droppedFeatures must not name selected feature ${droppedId}`,
+        );
+      }
+    }
+  }
   return {
+    ...(droppedFeatures === undefined ? {} : { droppedFeatures }),
     features,
     id: readNonEmptyString(record, "id"),
     repairConstraints: readStringArray(record, "repairConstraints"),
