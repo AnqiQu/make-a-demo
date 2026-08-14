@@ -489,28 +489,50 @@ export async function exploreSubmittedApp(input: {
   // refused-connection storm in the app's own stderr while a client-stub is
   // declared proves live transports, so the failure is renamed to the stub
   // engagement itself.
-  const refusedBackends = readRefusedLoopbackBackends(
+  const refusedBackendEvidence = readRefusedLoopbackBackends(
     diagnostics.stderrExcerpts.join("\n"),
   );
-  const stubNotEngaged =
+  const stubEngagementFailure =
     (input.dataStrategy ?? []).some(
       (declaration) => declaration.rung === "client-stub",
     ) &&
-    refusedBackends !== undefined &&
+    refusedBackendEvidence !== undefined &&
     featureObservabilityClassifications.has(
       artifacts.validationReport.failureClassification ?? "",
     );
-  if (stubNotEngaged) {
+  if (stubEngagementFailure && refusedBackendEvidence !== undefined) {
+    const renderedStubContent = observation.routes.some((route) =>
+      routeRenderedHeadingsOrControls(route),
+    );
+    const refusedRequests = formatRefusedBackendEvidence(
+      refusedBackendEvidence,
+    );
+    if (renderedStubContent) {
+      return {
+        ...artifacts,
+        validationReport: {
+          ...artifacts.validationReport,
+          failureClassification: "client stub partially engaged",
+          logsSummary: `Client stub partially engaged: the explored routes rendered headings or controls, proving fixtures reached the browser, but uncovered client seams still issued real backend calls that were refused (${refusedRequests}). Extend the stub across those request paths and verify every original transport is intercepted. Original failure: ${artifacts.validationReport.logsSummary}`,
+          stderrExcerpts: diagnostics.stderrExcerpts,
+          suggestedRepairHints: [
+            "The declared client-stub is active in the browser but does not cover every client transport; extend fixture interception at the uncovered auth/data seams.",
+            `Cover the refused requests and confirm they stop reaching the real backend: ${refusedRequests}.`,
+            ...artifacts.validationReport.suggestedRepairHints,
+          ],
+        },
+      };
+    }
     return {
       ...artifacts,
       validationReport: {
         ...artifacts.validationReport,
         failureClassification: "client stub not engaged",
-        logsSummary: `Client stub not engaged: dataStrategy declares client-stub fixtures, but the running app repeatedly issued real backend calls that were refused (${refusedBackends.join(", ")}). The demo gate is not active in the browser bundle, so the stub is dead code and every original transport is live. Deliver the gate through a channel the bundler exposes to client code (for Vite: a VITE_-prefixed variable in import.meta.env or an explicit define in the config) and verify the fixtures actually render. Original failure: ${artifacts.validationReport.logsSummary}`,
+        logsSummary: `Client stub not engaged: dataStrategy declares client-stub fixtures, but the running app repeatedly issued real backend calls that were refused (${refusedRequests}). The demo gate is not active in the browser bundle, so the stub is dead code and every original transport is live. Deliver the gate through a channel the bundler exposes to client code (for Vite: a VITE_-prefixed variable in import.meta.env or an explicit define in the config) and verify the fixtures actually render. Original failure: ${artifacts.validationReport.logsSummary}`,
         stderrExcerpts: diagnostics.stderrExcerpts,
         suggestedRepairHints: [
           "The declared client-stub is not intercepting requests: fix the demo gate delivery, not the feature selection. A browser-side seam cannot read plain process environment variables — bundlers only expose allowlisted values to client code.",
-          `Repair the gate so it is provably true in the browser, then confirm no request reaches the refused backend(s): ${refusedBackends.join(", ")}.`,
+          `Repair the gate so it is provably true in the browser, then confirm no request reaches the refused backend(s): ${refusedRequests}.`,
           ...artifacts.validationReport.suggestedRepairHints,
         ],
       },
@@ -545,21 +567,56 @@ const featureObservabilityClassifications = new Set([
 
 /**
  * Extracts the distinct loopback backends the app's own process repeatedly
- * failed to reach, from refused-connection lines in managed-app stderr.
+ * failed to reach and any adjacent proxy request paths from managed-app
+ * stderr.
  * Returns undefined below two refusals: a single refused connection can be a
  * benign startup probe, and the stub-not-engaged conversion must only fire
  * on the repeated storm that proves live transports.
  */
-function readRefusedLoopbackBackends(stderr: string): string[] | undefined {
+function readRefusedLoopbackBackends(
+  stderr: string,
+): { paths: string[]; targets: string[] } | undefined {
   const refusals = [
     ...stderr.matchAll(
       /ECONNREFUSED\s+((?:127\.0\.0\.1|\[?::1\]?|localhost):\d+)/g,
     ),
   ];
   if (refusals.length < 2) return undefined;
-  return [...new Set(refusals.map((match) => match[1] ?? ""))].filter(
+  const targets = [...new Set(refusals.map((match) => match[1] ?? ""))].filter(
     (target) => target.length > 0,
   );
+  const paths = [
+    ...new Set(
+      [...stderr.matchAll(/http proxy error:\s+(\S+)/gi)].map(
+        (match) => match[1] ?? "",
+      ),
+    ),
+  ].filter((path) => path.length > 0);
+  return { paths, targets };
+}
+
+function formatRefusedBackendEvidence(input: {
+  paths: string[];
+  targets: string[];
+}): string {
+  return [
+    `targets: ${input.targets.join(", ")}`,
+    ...(input.paths.length === 0
+      ? []
+      : [`request paths: ${input.paths.join(", ")}`]),
+  ].join("; ");
+}
+
+function routeRenderedHeadingsOrControls(
+  route: BrowserExplorationProtocol["routes"][number],
+): boolean {
+  return [
+    route.headings,
+    route.buttons,
+    route.inputs,
+    route.links,
+    route.primaryNavigation,
+  ].some((values) => values.length > 0);
 }
 
 async function readWorkspaceCapacityEvidence(

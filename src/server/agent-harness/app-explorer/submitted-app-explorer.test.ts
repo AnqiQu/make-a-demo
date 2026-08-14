@@ -1288,6 +1288,55 @@ describe("exploreSubmittedApp", () => {
     expect(hints).toContain("browser");
   });
 
+  it("classifies rendered Directus chrome plus refused backend paths as a partially engaged client stub", async () => {
+    // directus, 2026-08-14T03-07 matrix round 6: fixture-backed app chrome,
+    // headings, and controls rendered, while uncovered auth/server seams still
+    // reached the absent 8055 backend. That is coverage evidence, not a dead
+    // browser gate.
+    const proxyError = (path: string) =>
+      `[vite] http proxy error: ${path}\nError: connect ECONNREFUSED 127.0.0.1:8055`;
+    const { result } = await exploreObservation({
+      dataStrategy: [
+        {
+          detail: "Axios and SDK seams return in-code fixtures in demo mode.",
+          rung: "client-stub",
+          service: "postgres",
+        },
+      ],
+      featureInventory: [preparedFeature()],
+      readSubmittedCodeAppStatus: async () => ({
+        running: true,
+        stderr: [
+          proxyError("/auth?sessionOnly"),
+          proxyError("/auth/refresh"),
+          proxyError("/server/info"),
+        ].join("\n"),
+        stdout: "",
+      }),
+      routes: [
+        observedRoute({
+          buttons: ["Remind Later"],
+          featureIds: ["post-article"],
+          headings: ["Page Not Found"],
+          path: "/#/editor",
+          text: ["Directus Demo"],
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.failureClassification).toBe(
+      "client stub partially engaged",
+    );
+    expect(result.validationReport.logsSummary).toContain("127.0.0.1:8055");
+    expect(result.validationReport.logsSummary).toContain("/auth?sessionOnly");
+    expect(result.validationReport.logsSummary).toContain("/server/info");
+    expect(result.validationReport.logsSummary).not.toContain("dead code");
+    expect(result.validationReport.logsSummary).not.toContain(
+      "delivery channel",
+    );
+  });
+
   it("keeps the feature classification when refused backend calls appear without a client-stub rung", async () => {
     const { result } = await exploreObservation({
       dataStrategy: [

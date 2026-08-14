@@ -61,6 +61,17 @@ describe("RepairRouter", () => {
     expect(isDependencyRepairFailure("client stub not engaged")).toBe(false);
   });
 
+  it("routes a partially engaged client stub to preparation repair with full repo latitude", () => {
+    expect(
+      classifyRepairRoute({
+        failureClassification: "client stub partially engaged",
+      }),
+    ).toBe("repo-preparation-repair");
+    expect(isDependencyRepairFailure("client stub partially engaged")).toBe(
+      false,
+    );
+  });
+
   it("does not restrict a listen failure to dependency-metadata repairs", () => {
     expect(isDependencyRepairFailure("listen failure")).toBe(false);
     expect(isDependencyRepairFailure("install failure")).toBe(true);
