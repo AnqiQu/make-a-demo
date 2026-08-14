@@ -7506,6 +7506,15 @@ mocksAndFixturesAdded, no env gate) fails fidelity on
 round 1 with the stub-without-mechanism message
 instead of passing six times.
 
+Landed: preparation fidelity now treats an unbacked
+client-stub or declared-stub as a deterministic
+manifest contradiction. The gate accepts only
+same-manifest fixture, local-demo, or active demo-env
+delivery evidence, rejects declared absence even when
+a gate is present, names every affected rung and
+service, and bypasses agent adjudication so repair
+starts on the first round.
+
 ### N144 (Medium, bugfix) — a 5xx from a bound app is a serve failure at the readiness seam too
 
 Extend the N128/N139 family to the readiness probe:
