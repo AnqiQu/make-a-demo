@@ -89,6 +89,66 @@ describe("runDefaultDemoPipeline", () => {
     ).resolves.not.toContain("short-lived-secret");
   });
 
+  it("routes the repo snapshot read through the shared bulk-transfer limiter", async () => {
+    // A matrix batch cloning several multi-GB repos into one launch window
+    // starves the shared uplink (calcom and ghostfolio died mid-clone,
+    // 2026-08-13T23-23); the batch hands each pipeline one limiter so bulk
+    // transfers run one at a time.
+    const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-limiter-"));
+    const events: string[] = [];
+    const sourceArchive = {
+      commitSha: "abc123def456",
+      path: join(outputRoot, "screened-repo.tar.gz"),
+      sha256: "archive-sha256",
+    };
+
+    await expect(
+      runDefaultDemoPipeline(
+        {
+          demoLengthSeconds: 30,
+          importantFeatures: [],
+          repoUrl: "https://github.com/acme/serialized-clone",
+        },
+        {
+          bulkTransferLimiter: {
+            async run(task) {
+              events.push("limiter acquired");
+              try {
+                return await task();
+              } finally {
+                events.push("limiter released");
+              }
+            },
+          },
+          async createHarnessDependencies() {
+            throw new Error("dependency handoff observed");
+          },
+          outputRoot,
+          async readRepoSnapshot() {
+            events.push("snapshot read");
+            return {
+              commitSha: sourceArchive.commitSha,
+              files: [{ path: "package.json", text: "{}" }],
+              repoStats: { fileCount: 1, sizeBytes: 2 },
+              secretQuarantineManifest: {
+                entries: [],
+                version: "2026-07-15",
+              },
+              sourceArchive,
+            };
+          },
+          runId: "limited-clone",
+        },
+      ),
+    ).rejects.toThrow("dependency handoff observed");
+
+    expect(events).toEqual([
+      "limiter acquired",
+      "snapshot read",
+      "limiter released",
+    ]);
+  });
+
   it("runs the default harness, Footage Capture, and Compositing rails", async () => {
     const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-default-"));
     const calls: string[] = [];

@@ -16,6 +16,10 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import {
+  type BulkTransferLimiter,
+  createBulkTransferLimiter,
+} from "../src/server/agent-harness/default/bulk-transfer-limiter";
+import {
   type DefaultDemoPipelineInput,
   type DefaultDemoPipelineResult,
   runDefaultDemoPipeline,
@@ -158,12 +162,22 @@ export async function runPipelineMatrix(
     runPipeline?: (
       input: DefaultDemoPipelineInput,
       runId: string,
+      batch: { bulkTransferLimiter: BulkTransferLimiter },
     ) => Promise<DefaultDemoPipelineResult>;
   },
 ): Promise<MatrixEntryResult[]> {
+  // One limiter per batch: every entry's clone and archive upload share the
+  // developer uplink, and unserialized they starve each other mid-stream
+  // (calcom and ghostfolio's clones died behind twenty's 294MB upload,
+  // 2026-08-13T23-23).
+  const batch = { bulkTransferLimiter: createBulkTransferLimiter() };
   const runPipeline =
     options.runPipeline ??
-    ((input, runId) => runDefaultDemoPipeline(input, { runId }));
+    ((input: DefaultDemoPipelineInput, runId: string) =>
+      runDefaultDemoPipeline(input, {
+        bulkTransferLimiter: batch.bulkTransferLimiter,
+        runId,
+      }));
   const batchStamp = new Date().toISOString().replace(/[:.]/g, "-");
   const stagger = options.launchStagger;
   const launchOffsetsMs =
@@ -197,6 +211,7 @@ export async function runPipelineMatrix(
         const result = await runPipeline(
           entry.input,
           matrixRunId(entry.name, batchStamp),
+          batch,
         );
         options.log(`passed ${entry.name}`);
         return {

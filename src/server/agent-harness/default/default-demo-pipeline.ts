@@ -21,6 +21,7 @@ import {
   type AgentHarnessPipelineResult,
   runAgentHarnessPipeline,
 } from "../orchestration/agent-harness";
+import type { BulkTransferLimiter } from "./bulk-transfer-limiter";
 import {
   type DefaultHarnessDependencies,
   createDefaultAgentHarnessDependencies,
@@ -64,10 +65,17 @@ export type DefaultDemoPipelineResult = {
 };
 
 export type DefaultDemoPipelineOptions = {
+  /**
+   * Shared by every pipeline in a batch to run bulk transfers (the clone
+   * plus archive, and the screened-archive upload) one at a time; solo runs
+   * omit it and transfer immediately.
+   */
+  bulkTransferLimiter?: BulkTransferLimiter;
   captureScenes?: typeof captureScenesFromScript;
   compositeVideo?: typeof compositeVideoFromScript;
   createHarnessDependencies?: (input: {
     artifactStore: LocalJsonArtifactStore;
+    bulkTransferLimiter?: BulkTransferLimiter;
     env?: Record<string, string | undefined>;
     logger: PipelineEventLogger;
     outputRoot: string;
@@ -130,24 +138,26 @@ export async function runDefaultDemoPipeline(
       ? undefined
       : (options.installationTokenProvider ??
         createGitHubAppIntegrationFromEnv());
-  const repoSnapshot = await (
-    options.readRepoSnapshot ?? readGithubRepoSnapshot
-  )(
-    {
-      ...(input.githubInstallationId === undefined
-        ? {}
-        : { githubInstallationId: input.githubInstallationId }),
-      log,
-      repoUrl: input.repoUrl,
-      runDirectory,
-    },
-    {
-      ...(installationTokenProvider === undefined
-        ? {}
-        : {
-            installationTokenProvider,
-          }),
-    },
+  const bulkTransferLimiter: BulkTransferLimiter =
+    options.bulkTransferLimiter ?? { run: (task) => task() };
+  const repoSnapshot = await bulkTransferLimiter.run(() =>
+    (options.readRepoSnapshot ?? readGithubRepoSnapshot)(
+      {
+        ...(input.githubInstallationId === undefined
+          ? {}
+          : { githubInstallationId: input.githubInstallationId }),
+        log,
+        repoUrl: input.repoUrl,
+        runDirectory,
+      },
+      {
+        ...(installationTokenProvider === undefined
+          ? {}
+          : {
+              installationTokenProvider,
+            }),
+      },
+    ),
   );
   await writeRepoSnapshotSummary(runDirectory, repoSnapshot);
 
@@ -156,6 +166,9 @@ export async function runDefaultDemoPipeline(
     options.createHarnessDependencies ?? createDefaultAgentHarnessDependencies
   )({
     artifactStore,
+    ...(options.bulkTransferLimiter === undefined
+      ? {}
+      : { bulkTransferLimiter: options.bulkTransferLimiter }),
     ...(options.env === undefined ? {} : { env: options.env }),
     logger,
     outputRoot: runDirectory,

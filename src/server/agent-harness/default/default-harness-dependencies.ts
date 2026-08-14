@@ -145,6 +145,7 @@ import {
   readRuntimeNetworkAttempts,
   runtimeNetworkGuardPath,
 } from "../validation/runtime-network-guard";
+import type { BulkTransferLimiter } from "./bulk-transfer-limiter";
 import {
   type JsonSyntaxDiagnostic,
   diagnoseJsonSyntax,
@@ -165,6 +166,8 @@ export type DefaultHarnessDependenciesOptions = {
   /** Spacing before the single relaunch after a zero-output agent exit; default 30s. */
   agentLaunchRetryDelayMs?: number;
   artifactStore: NonNullable<AgentHarnessPipelineDependencies["artifactStore"]>;
+  /** Serializes the screened-archive upload with the batch's other bulk transfers. */
+  bulkTransferLimiter?: BulkTransferLimiter;
   env?: Record<string, string | undefined>;
   externalResourceFetcher?: ExternalResourceFetcher;
   logger?: PipelineEventLogger;
@@ -449,6 +452,9 @@ export async function createDefaultAgentHarnessDependencies(
   ) => {
     if (repoMaterialized) return;
     await materializeScreenedRepo({
+      ...(options.bulkTransferLimiter === undefined
+        ? {}
+        : { bulkTransferLimiter: options.bulkTransferLimiter }),
       repoProfile,
       sourceArchive: options.repoSourceArchive,
       workspace,
@@ -2157,6 +2163,7 @@ async function createDaytonaWorkspaceProvider(input: {
 }
 
 async function materializeScreenedRepo(input: {
+  bulkTransferLimiter?: BulkTransferLimiter;
   repoProfile: RepoProfile;
   sourceArchive: RepoSourceArchive | undefined;
   workspace: AgentHarnessWorkspace;
@@ -2179,12 +2186,19 @@ async function materializeScreenedRepo(input: {
     throw new Error("Screened repository archive SHA-256 is malformed.");
   }
   const remoteArchivePath = `${makeADemoDirectory}/screened-repo.tar.gz`;
-  await input.workspace.uploadFiles([
-    {
-      destinationPath: remoteArchivePath,
-      sourcePath: input.sourceArchive.path,
-    },
-  ]);
+  const sourceArchivePath = input.sourceArchive.path;
+  // The limiter holds the lock for exactly the uplink-bound upload; the
+  // sandbox-side extraction below costs the shared uplink nothing.
+  const uploadArchive = () =>
+    input.workspace.uploadFiles([
+      {
+        destinationPath: remoteArchivePath,
+        sourcePath: sourceArchivePath,
+      },
+    ]);
+  await (input.bulkTransferLimiter === undefined
+    ? uploadArchive()
+    : input.bulkTransferLimiter.run(uploadArchive));
   const result = await input.workspace.execute(
     `sh -lc ${shellQuote(
       [

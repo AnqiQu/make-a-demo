@@ -154,6 +154,35 @@ describe("runPipelineMatrix", () => {
     ]);
   });
 
+  it("hands every entry the same batch bulk-transfer limiter", async () => {
+    // Each entry's multi-GB clone and archive upload share one uplink; the
+    // batch must hand every pipeline the same limiter so those transfers
+    // serialize instead of starving each other (calcom and ghostfolio died
+    // mid-clone behind twenty's 294MB upload, 2026-08-13T23-23).
+    const limiters: unknown[] = [];
+    await runPipelineMatrix(
+      resolveMatrixEntries(
+        [
+          { name: "alpha", repoUrl: "https://github.com/example/alpha" },
+          { name: "bravo", repoUrl: "https://github.com/example/bravo" },
+        ],
+        {},
+      ),
+      {
+        log: () => {},
+        runPipeline: async (_input, _runId, batch) => {
+          limiters.push(batch.bulkTransferLimiter);
+          await batch.bulkTransferLimiter.run(async () => {});
+          return passingPipelineResult();
+        },
+      },
+    );
+
+    expect(limiters).toHaveLength(2);
+    expect(limiters[0]).toBeDefined();
+    expect(limiters[0]).toBe(limiters[1]);
+  });
+
   it("staggers runnable launches with bounded jitter when enabled", async () => {
     // Eleven sandboxes created in the same second are their own
     // control-plane herd (2026-08-09): create calls queue behind each

@@ -2817,6 +2817,78 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(repairPrompt).toContain("console-tail");
   });
 
+  it("serializes the screened-archive upload through the shared bulk-transfer limiter", async () => {
+    // The archive upload shares the batch uplink with every other entry's
+    // clone and upload (twenty's 294MB transfer starved calcom and
+    // ghostfolio's clones, 2026-08-13T23-23); the batch's limiter must hold
+    // the lock for exactly the upload, not the sandbox-side extraction.
+    const events: string[] = [];
+    const manifest = preparationManifest();
+    let manifestWritten = false;
+    const workspace = createFakeAgentHarnessWorkspace({
+      async execute(command) {
+        if (
+          command === "cat '/workspace/.makeademo/preparation-manifest.json'"
+        ) {
+          return manifestWritten
+            ? { exitCode: 0, stderr: "", stdout: JSON.stringify(manifest) }
+            : { exitCode: 1, stderr: "missing", stdout: "" };
+        }
+        if (command.includes("tar --no-same-owner")) {
+          events.push("archive extracted");
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async uploadFiles(files) {
+        if (
+          files.some(
+            ({ destinationPath }) =>
+              destinationPath === "/workspace/.makeademo/screened-repo.tar.gz",
+          )
+        ) {
+          events.push("archive uploaded");
+        }
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      bulkTransferLimiter: {
+        async run(task) {
+          events.push("limiter acquired");
+          try {
+            return await task();
+          } finally {
+            events.push("limiter released");
+          }
+        },
+      },
+      openCodeRunner: {
+        async run() {
+          manifestWritten = true;
+          return { exitCode: 0, stderr: "", stdout: "prepared" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await harness.dependencies.prepareRepo({
+      demoBrief: { keyProductFeatures: ["dashboard"] },
+      normalizedSupportingDocuments: undefined,
+      repoProfile: repoProfile(),
+      repoSourcePaths: ["package.json", "src/App.tsx"],
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(events).toEqual([
+      "limiter acquired",
+      "archive uploaded",
+      "limiter released",
+      "archive extracted",
+    ]);
+  });
+
   it("rebuilds a fidelity repair from screened source without stale manifest or session state", async () => {
     let manifestPresent = false;
     let manifestPresentAtRepairStart: boolean | undefined;
