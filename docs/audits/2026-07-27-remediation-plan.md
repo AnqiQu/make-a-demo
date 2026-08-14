@@ -7759,3 +7759,176 @@ owner prerequisite (build a 4-CPU/16GiB variant; the
 Any run at all is the gate: five entries past sandbox
 creation. The wave-9 rerun expectations then apply
 unchanged.
+
+## Addendum (2026-08-14, wave-11 — N147 unblocked the batch; homer green; the wave-9 gates all fired true; three failures are one owner TODO and two repair dead-ends: N148–N150)
+
+The 2026-08-14T21-02 batch ran full course — N147's
+launch gate is ANSWERED YES (all five entries created
+sandboxes; twenty logged the heavyweight-fallback
+warning exactly as designed). homer passed again
+(495s). The wave-9 code validated everywhere it was
+reached: N142 fired its new "feature auth barrier"
+classification on calcom with the seeded-session
+steer; N140/N145 headlines are crisp on every twenty
+failure (the causal Killed line is now literally the
+first line); N141/N143/N144 were not reached (no entry
+got past preparation into scripting, and directus
+died before declaring stubs). The four failures:
+calcom and twenty burned the 90-minute wall clock in
+preparation-repair loops (calcom's making real
+progress, twenty's unable to fix hardware), ghostfolio
+regressed onto a start-without-build runtime the
+repair was instructed not to touch, and directus
+re-hit the unbuilt-workspace-dependency wall for the
+second consecutive wave.
+
+### Diagnoses (2026-08-14T21-02)
+
+homer — passed, 495s. Third consecutive green.
+
+twenty — resource starvation, correctly evidenced,
+unfixable in software. The heavyweight fallback
+warning fired (the owner has not yet built the
+heavyweight snapshot), so all six rounds ran on the
+standard 8GiB/10GB class: migration Killed (attempts
+1, 5), yarn rebuild Killed inside the network-closed
+lifecycle (attempts 2, 6), install ENOSPC (attempts 3,
+4). Every summary headlines its causal line — N140 and
+N145 fully validated. No code item: this entry is
+BLOCKED on the owner prerequisite from N147 (build the
+4-CPU/16GiB submitted-code snapshot variant, set
+MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT_HEAVYWEIGHT).
+
+calcom — no defect; a budget shape problem. Preflight
+failed six times but the failing-feature set SHRANK
+(rounds 1–2: all three requested features
+unobservable; round 3: N142's new "feature auth
+barrier" for weekly-availability with the
+seed-a-session steer; rounds 4–6: only the booking
+feature failing). One fidelity round caught a repair
+overreach (layout.tsx/providers.tsx edits) and the
+next round backed it out — the gate worked. The run
+died at the 90-minute wall clock mid-progress: each
+round costs ~10 minutes of full re-exploration plus
+lifecycle, so six rounds cannot fit even when
+converging (→ N150; the seeded-session churn itself
+stays on the watchlist).
+
+ghostfolio — regression from wave-9's pass, and the
+rules-audit "latent handcuff" materialized. This
+round's preparation declared startCommandUsed
+"npm run start" — ghostfolio's PRODUCTION entry
+(node dist/apps/api/main) — with buildCommandUsed
+OMITTED, so nothing ever produced dist/ and the server
+exited MODULE_NOT_FOUND on every round. Four identical
+failures: the repair prompt instructs "Preserve
+backend-resolved appDir, install, build, start…
+unless the failure summary explicitly reports a
+runtime-configuration error" and the summary never
+said those words — the classification was generic
+"build failure", so the repair was forbidden from
+touching the one field that was wrong (→ N148).
+
+directus — the unbuilt-workspace-dependency wall,
+second wave running (twenty-shared in wave-9, now
+@directus/extensions): vite.config.js fails with
+'Failed to resolve entry for package
+"@directus/extensions"' because the filtered install
+brings the package but nothing builds its dist; three
+rounds of "missing dependency"/"build failure"
+classifications steered repair at manifests instead of
+at building the package. The watchlist hint-item is
+hereby promoted (→ N149). N143 went unexercised —
+this round's manifests never reached stub
+declarations.
+
+### New items
+
+### N148 (High, bugfix) — a start command that consumes missing build output is a runtime-configuration error, and the summary must say so
+
+When app start dies with MODULE_NOT_FOUND (or
+equivalent entry resolution failure) for a path under
+a build output directory (dist/, build/, .next/…),
+classify and summarize it as a runtime-configuration
+error naming both sides: "startCommandUsed runs
+<entry> but no declared build produces it — declare
+the build that emits <path>, or start the dev server
+instead." Those words matter mechanically: the repair
+prompt's preserve-backend-resolved-fields instruction
+already carries an escape hatch for summaries that
+"explicitly report a runtime-configuration error", so
+the correct fix becomes legal without weakening the
+preserve rule. Additionally, the manifest contract
+should flag the shape statically where cheap: a
+production-entry start (node <builddir>/…) with
+buildCommandUsed omitted is rejectable at manifest
+validation, before any lifecycle run. Acceptance:
+ghostfolio's wave-11 attempt-1 evidence produces a
+runtime-configuration summary naming
+dist/apps/api/main and the repair changes build/start
+on round 2 instead of failing identically four times.
+
+### N149 (High, bugfix) — name the unbuilt workspace dependency
+
+Detect the recurring shape at the readiness/build
+classification seam: an entry-resolution failure
+("Failed to resolve entry for package X",
+ERR_MODULE_NOT_FOUND under node_modules/X/dist or an
+in-repo package path) where X is a workspace package
+of the repo under preparation. Classify as "unbuilt
+workspace dependency" naming X, with a repair hint to
+run X's own build (from its package.json scripts or
+the monorepo tool) before the app lifecycle, or widen
+the install/predev filter to include it. Keep
+preparation-repair routing. Two-wave evidence:
+twenty-shared/dist/vite.mjs (wave-9),
+@directus/extensions (wave-11). Acceptance: directus's
+wave-11 attempt-1 evidence classifies as unbuilt
+workspace dependency naming @directus/extensions, and
+the hint names a build for it.
+
+### N150 (Medium, bugfix) — repair rounds re-verify only what failed
+
+Full re-exploration of every feature on every repair
+round costs ~10 minutes on calcom-class apps, so a
+converging repair loop cannot fit its budget inside
+the 90-minute wall clock. On a repair round, features
+whose evidence passed in the previous round get a
+cheap re-probe (entry route serves, evidence still
+replayable) instead of full re-exploration; full
+exploration runs only for features that failed or
+whose routes the workspace diff touched. A cheap
+re-probe that fails promotes that feature back to full
+exploration — carried-forward evidence must never mask
+a repair that broke a passing feature. Acceptance: a
+calcom-shaped run's per-round cost drops enough that
+six rounds fit the wall clock with margin; no
+carried-forward evidence survives a failing re-probe.
+
+### Watchlist (updated)
+
+- OWNER TODO (blocks twenty entirely): build the
+  heavyweight submitted-code snapshot and set
+  MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT_HEAVYWEIGHT.
+  Until then twenty runs 8GiB/10GB and dies exactly as
+  wave-11 shows.
+- calcom seeded-session robustness: N142 now names the
+  auth barrier and steers at session seeding; whether
+  the preparation can hold an authenticated session
+  across exploration remains the churn source.
+- Script-repair alternation breaker, dry-run/take
+  parity, directus owner-modal fixtures: carried,
+  still pending their trigger conditions.
+- N141/N143/N144 remain unexercised by a real run;
+  their unit gates are green.
+
+### Rerun
+
+After N148–N150 land AND the heavyweight snapshot
+exists: homer green; twenty finally meets its
+migration on 16GiB with N140's memory guidance live;
+ghostfolio repairs its runtime on round 2 and returns
+green; directus builds @directus/extensions round 1
+and re-enters the stub arc (N143/N138 finally
+exercised); calcom converges inside the clock with
+N150's cheap re-verification.
