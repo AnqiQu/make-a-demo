@@ -6836,3 +6836,228 @@ homer green as before the incident; directus reaching
 the tsdown hypothesis with N130's per-cause
 fingerprints; twenty resuming from its round-3 progress
 into the client-stub data question.
+
+## Addendum (2026-08-13, wave-7 second rerun — all five failed: the batch starved its own uplink, and two apps hit real walls the harness misread)
+
+The 2026-08-13T23-23 batch: all five entries failed,
+but unlike the 19-21 batch the platform was healthy —
+directus's 28MB archive upload succeeded on an ordinary
+retry in the same minutes twenty's was dying, and no
+envelope saw a hang outside the bulk transfers. Three
+causes explain everything. First, launch-window network
+contention of the batch's own making: five entries
+entered the launch window together, putting two
+multi-GB clones (calcom, ghostfolio) and three archive
+uploads — including twenty's 294MB uncompressed tar —
+on one developer uplink at once. The clones died
+locally at 87s and 213s with exit 128 mid-transfer
+(both repos clone fine solo, and there are no
+disk-pressure events), and twenty's upload was killed
+at exactly 600s twice — a live, slow transfer abandoned
+as a "hang" — so the N133 cap correctly ended the run
+in 25 minutes (→ N134). Second, a flow-planning rule
+contradiction on homer: the prompt ordered "select
+exactly min(3, inventory)" while the validator demanded
+evidence the catalog could not supply for dark-mode, so
+three fresh sessions produced three byte-identical
+rejected FlowSpecs (→ N135). Third, a dead demo gate on
+directus: the client stub keyed on
+`import.meta.env.MAKEADEMO_DEMO`, which Vite never
+delivers to browser code, so the stub was dead code,
+the app's real calls stormed ECONNREFUSED
+127.0.0.1:8055 through the Vite proxy, and the explorer
+misclassified the wreckage as "requested feature not
+observable" — five repair rounds aimed at the wrong
+layer (→ N136). N132's snapshot held (the services
+binaries verified clean before launch), and N133 did
+its job — but the N122(5) acceptance question is
+unanswered for the third consecutive batch: calcom and
+ghostfolio died before ever reaching Daytona.
+
+### Diagnoses (2026-08-13T23-23)
+
+calcom — local clone death, launch-window contention.
+`git clone` exited 128 at 87s, mid-transfer, while
+ghostfolio's clone and three archive uploads shared the
+uplink. The report row truncated the message at
+"Cloning into …" and nothing durable recorded git's
+trailing fatal: line (→ N134 part D). The same clone
+succeeds solo after the batch. Never reached Daytona;
+the N122(5) question was not asked.
+
+ghostfolio — same shape as calcom at 213s: exit 128
+mid-transfer during the launch window, full fatal line
+lost to truncation, clean solo clone afterward. Never
+reached Daytona.
+
+twenty — the 294MB uncompressed screened-repo.tar
+upload was abandoned at exactly 600s by the envelope's
+attempt timeout, twice in a row, and the N133 cap ended
+the run at 25 minutes. Working as designed — but the
+design conflates a hung call with a live transfer that
+is merely big: directus's 28MB upload succeeded on
+retry at the same moment, proving the control plane
+responsive. The transfer needed compression and a bound
+that scales with payload (→ N134 parts A and C), not
+more retries.
+
+homer — flow-planning wedge, zero forward progress
+after exploration. The inventory held three features
+but the ActionCatalog grounds dark-mode with only a
+navigate action (the theme toggle is an anchor
+harvested into primaryNavigation; buttons is empty),
+while the validator unconditionally demands a tagged
+interaction and a tagged visible assertion per selected
+feature. The prompt's "select exactly min(3,
+inventory)" forced dark-mode in anyway, so attempt
+after attempt — three, in three fresh sessions —
+selected the same three features and died on the same
+violation, byte-identical each time. The N131 lesson
+recurs one seam up: the hint and the validator must
+state the same contract (→ N135).
+
+directus — deepest run of any batch, then five rounds
+against a dead gate. The tsdown wall from two batches
+ago was never hit, preflight passed, and exploration
+ran — real cumulative progress (N129/N130/N131 all
+earning keep). The preparation chose the client-stub
+rung for all three services (despite the
+provisioned-service rung being available and preferred —
+watchlist) and gated the stub on
+`import.meta.env.MAKEADEMO_DEMO`. Vite only exposes
+VITE_-prefixed variables (or explicit `define` /
+`envPrefix` entries) to browser code; `process.env`
+works inside vite.config.ts, which is exactly why the
+gate looked right to the agent that wrote it. The stub
+never engaged, every real API call was refused
+(ECONNREFUSED 127.0.0.1:8055 storm through the Vite
+proxy), and the explorer classified the empty screens
+as "requested feature not observable" — so repair
+attacked feature selection and routes, never the
+delivery mechanism (→ N136).
+
+### New items
+
+### N134 (High, infra) — the batch must not starve its own uplink
+
+Four parts, one cause: bulk transfers were unbounded,
+uncompressed, invisible, and concurrent. (A) Compress:
+the screened archive is now `git archive
+--format=tar.gz` (source trees compress several-fold;
+twenty's 294MB becomes a fraction of itself), with the
+quarantine member-check reading the gzip stream.
+(B) Serialize: one in-process FIFO BulkTransferLimiter
+per matrix batch, threaded through
+DefaultDemoPipelineOptions, wraps each entry's
+clone+archive and its sandbox archive upload so the
+uplink carries one bulk transfer at a time — the
+existing 30–60s launch stagger spreads control-plane
+herds but not multi-minute transfers. (C) Size the
+bound to the payload: fs.upload computes its
+attemptTimeoutMs from the actual payload bytes (256KiB/s
+worst-case floor plus headroom) whenever that exceeds
+the 600s default, so a live large transfer is never
+abandoned as a hang while true hangs keep the tight
+bound. (D) See the failure: readGithubRepoSnapshot logs
+`repo.clone.failed` with git's full stderr before
+rethrowing, and the matrix report detail rides along
+the message's last `fatal:`/`error:` line the way it
+already rides `[makeademo:]` markers.
+
+Landed (this session): all four parts with tests at
+each seam — a real-git gzip test plus gunzipped
+quarantine assertions, limiter FIFO/failure-release
+unit tests plus seam tests proving the snapshot read
+and the archive upload run inside the batch's one
+limiter, a sparse-300MB upload test proving the scaled
+attempt bound (and a small-payload test proving the
+default is untouched), and clone-failure tests at both
+the snapshot log and the report row.
+
+### N135 (High, bugfix) — flow planning may only demand what the catalog can ground
+
+The prompt and validator now share one groundability
+predicate: a feature is groundable when the
+ActionCatalog tags a visible assertion for it on a
+route outside login/auth walls — the only per-feature
+demand the validator enforces unconditionally (every
+other FlowSpec rule is satisfiability-guarded).
+Inferred flows must select exactly min(3, groundable
+count) — at least one, three when possible — and record
+each ungroundable inventory feature in a new
+droppedFeatures field with a reason, so the concession
+is auditable instead of silent. Zero groundable
+features fails fast before any agent attempt, routed at
+exploration/catalog quality ("repair App Exploration or
+the ActionCatalog"), because no valid FlowSpec exists
+and every attempt would be wasted. Maker-requested
+features are untouched: an explicit request that cannot
+be grounded must still fail loudly, never be silently
+dropped. Validator messages name the groundable set and
+the required count, so a wrong attempt's retry prompt
+states the exact contract (the N131 lesson applied to
+this seam). Contract version 2026-08-13.
+
+Landed (this session): shared predicate module, schema
++ contract + validator + prompt updated together, with
+tests for the grounded-two acceptance, the
+three-feature rejection naming the count rule, the
+missing-droppedFeatures rejection, and the
+zero-groundable fast fail with zero attempts.
+
+### N136 (High, bugfix) — a refused-loopback storm under a declared client stub is a delivery failure, not a feature failure
+
+The explorer now converts a feature-observability
+classification into "client stub not engaged" when the
+run declared a client-stub rung and stderr shows
+repeated ECONNREFUSED against loopback backends — the
+signature of a stub that never engaged in the browser
+bundle. The new classification routes to preparation
+repair with full repo latitude (the gate is app
+source), and its summary and hints name the delivery
+contract: bundlers only expose allowlisted values to
+browser code — for Vite, a VITE_-prefixed
+import.meta.env variable or an explicit define. The
+data-fixture playbook gains the same contract as step
+7, so preparation stops writing gates the bundler
+strips. Single refusals and provisioned-service runs
+are never converted: a provisioned backend refusing
+connections is a service problem, and one refusal is
+noise.
+
+Landed (this session): stderr conversion with positive
+and both negative tests (provisioned-service rung and
+single-refusal), repair routing test, and the playbook
+step.
+
+### Watchlist (no fix scheduled; re-check next matrix)
+
+- N122(5) remains unanswered after three batches:
+  calcom and ghostfolio have still never executed
+  against real provisioned services. The rerun is the
+  question.
+- directus chose the client-stub rung for all three
+  services despite the provisioned-service rung being
+  available and preferred — if it recurs with N136's
+  contract in place, the rung-steering prompts (N122(3))
+  need revisiting.
+- Carried: ghostfolio's retreat path has no build
+  channel (root-level dist/ MODULE_NOT_FOUND gets no
+  hint); twenty's client stub injected no data when
+  reached; twenty's ENOSPC in /root/.makeademo-staging
+  under repeated repair rounds.
+
+### Rerun
+
+All five entries. Expected trajectory: the clones and
+uploads serialize through the batch limiter with
+compressed archives — calcom and ghostfolio finally
+reach Daytona and ask the N122(5) question; twenty's
+archive upload fits comfortably inside one sized
+attempt; homer plans two grounded features with
+dark-mode recorded in droppedFeatures and proceeds to
+capture; directus either engages the stub through a
+bundler-visible gate or is steered to the
+provisioned-service rung, and any dead gate that slips
+through is named "client stub not engaged" on round
+one instead of round five.
