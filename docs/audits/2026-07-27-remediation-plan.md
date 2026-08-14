@@ -7404,40 +7404,69 @@ sandbox class, and the evidence layer hid it
 ### N141 (High, bugfix) — a static rule must not prescribe a remedy another rule forbids
 
 Make the goto-after-click settle requirement
-satisfiable. Either (a) permit an assert-url to ground
-on a click catalog entry when the click's observed
-navigation destination equals the assert-url path
-(extend compatibleCatalogKinds/route agreement for
-exactly this pairing), or (b) compile the settle into
-the click itself — a click with observed client-side
-navigation emits waitForURL(destination) in the
-capture runtime, and the static rule stops firing on a
-click that self-settles. Prefer (b) if capture-side
-compilation is tractable: it removes the repair
-round-trip entirely. Acceptance: calcom's exact
-attempt-3 script shape (click-interaction-3-2 followed
-by goto) either validates after one repair that the
-conformance rule accepts, or never fires the rule
-because the click self-settles.
+satisfiable. A rules audit (2026-08-14) showed the
+originally sketched option (a) — widening
+compatibleCatalogKinds so assert-url may ground on the
+click — is insufficient: a click-grounded assert-url
+is independently rejected by the route-agreement rule
+(action.path must equal the click's ORIGIN route, not
+its destination) and by all three feature-selection
+rules (referencedAppMapRoutePaths, referencedActionIds,
+featureIds), so the settle would still be illegal on
+four grounds. Implement (b): compile the settle into
+the click itself — a click whose catalog evidence
+records client-side navigation emits
+waitForURL(destination) in the capture compiler, and
+the static goto-after-click rule is removed (the racy
+shape can no longer be authored). Two hygiene
+requirements: the navigation evidence must become a
+structured catalog field written at evidence ingestion
+(the current clickStartedClientNavigation predicate
+regex-matches the prose expectedResult — the
+wording-lottery fragility N102–N111 documented), and
+the compiler must key off that field, not prose.
+Acceptance: calcom's exact attempt-3 script shape
+(click-interaction-3-2 followed by goto) compiles with
+a settle between click and goto and validates
+statically with no repair round.
 
 ### N142 (High, bugfix) — a click observed to land on an auth wall grounds nothing
 
 Extend N135's groundability to interactions: a catalog
 click whose observed navigation destination matches
-the auth-wall route shape (/auth/login, /login,
-/signin equivalents — the same predicate N135 applies
-to routes) is auth-degraded evidence. Flow planning
-must not reference it in a feature's
-referencedActionIds, a feature left with no groundable
-interaction drops (droppedFeatures, N135's count rule
-then selects from the remainder), and coverage
-enforcement therefore never forces a doomed click into
-the script. Acceptance: calcom's wave-9 catalog
+the auth-wall route shape (the SAME predicate N135
+applies to routes — one shared definition, not a
+second list) is auth-degraded evidence, and flow
+planning must never reference it in a feature's
+referencedActionIds. What happens to the feature then
+splits on provenance — a rules audit (2026-08-14)
+caught that unconditional dropping contradicts two
+standing rules ("Preserve every selected
+productContext feature, including every requested
+feature" in the repair prompt, and the "requested
+feature not observable" preflight gate):
+
+- INFERRED feature: drop it (droppedFeatures, N135's
+  count rule selects from the remainder).
+- REQUESTED feature: dropping is forbidden — fail the
+  exploration round with the EXISTING "feature auth
+  barrier" classification (already routed to
+  repo-preparation-repair, which owns the
+  authentication/session seam), naming the
+  auth-degraded clicks and their destinations, so the
+  repair fixes the seeded session instead of flow
+  planning silently shipping a demo missing a feature
+  the user asked for.
+
+Acceptance: calcom's wave-9 catalog
 (click-interaction-3-2, expectedResult "/auth/login
-became visible") produces a FlowSpec that does not
-reference that click, and
-weekly-availability-event-duration is either grounded
-on other evidence or dropped with the reason recorded.
+became visible", backing the REQUESTED
+weekly-availability feature) produces either a
+FlowSpec grounded on non-degraded evidence for that
+feature, or a "feature auth barrier" preparation
+failure naming the click — never a FlowSpec
+referencing the auth-degraded click and never a silent
+drop of a requested feature.
 
 ### N143 (High, bugfix) — a stub declared in words must show its mechanism
 
@@ -7518,13 +7547,58 @@ complete without ENOSPC or an OOM kill, or fail with a
 summary whose first line names the resource that
 remains short.
 
+### Rules audit (2026-08-14, requested alongside wave-9)
+
+A pass over the standing rule surfaces (script
+contract, repair router, repair-prompt restrictions,
+readiness/reset gates, hint texts) looking for
+N141-class contradictions — a rule prescribing what
+another rule forbids. Findings beyond N141 itself:
+
+- N142's first draft contradicted the
+  preserve-requested-features rules; amended above
+  (requested → "feature auth barrier" repair, inferred
+  → drop).
+- The capture reset gate is redirect-blind: the reset
+  probe follows up to 5 redirects and only checks
+  "responded", so a goto route that 302s to a login
+  page passes with a 200 and gets filmed. The probe
+  already records finalUrl (url_effective); comparing
+  it against the requested route / auth-wall shape is
+  cheap. Fold into N142's implementation or take as
+  its own small item — without it, N142 blocks
+  auth-degraded CLICKS while the reset gate still
+  admits auth-redirected GOTOS.
+- Verified consistent (no action): N140's
+  envUsed.NODE_OPTIONS hint — guardedRuntimeEnv
+  preserves the manifest value and appends its own
+  flags, so the hinted channel is honored (no N131
+  recurrence). The N137 message's "compiled to
+  waitForURL" wording is imprecise (assert-url
+  compiles to expect(page).toHaveURL, which polls) but
+  functionally settles; the message dies with N141(b).
+- Latent handcuff, watch only: "missing
+  dependency"/"install failure" classifications
+  restrict repair to dependency-metadata edits AND the
+  prompt says to preserve backend-resolved install
+  fields — when the classification is wrong (directus
+  round 1: a vite.config import of an UNBUILT
+  workspace package classified "missing dependency"),
+  the restriction can forbid the actual fix. N144/N145
+  reduce the misclassification side; if a round ends
+  where no legal edit could fix the reported failure,
+  the classification→restriction pairing earns an
+  item.
+
 ### Watchlist (no fix scheduled; re-check next matrix)
 
 - Script-repair has no ping-pong breaker: two static
   rules alternated for three rounds without the loop
-  noticing (N125 built one for the validation loop).
-  N141/N142 remove this instance; if a new rule pair
-  recurs, the breaker generalizes.
+  noticing (the N125 breaker fingerprints REPEATED
+  failures; alternation produces distinct fingerprints
+  each round). N141/N142 remove this instance; if a
+  new rule pair recurs, the breaker generalizes to
+  alternating pairs.
 - calcom exploration login robustness: the explorer
   clicked Continue before hydration and the form
   self-submitted as a native GET. Filling credentials
