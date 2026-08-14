@@ -29,6 +29,7 @@ export const makeADemoArtifactPaths = {
   fidelityAdjudication: `${makeADemoDirectory}/fidelity-adjudication.json`,
   flowSpec: `${makeADemoDirectory}/flow-spec.json`,
   flowSpecContract: `${makeADemoDirectory}/flow-spec-contract.json`,
+  footageCaptureValidation: `${makeADemoDirectory}/footage-capture-validation-report.json`,
   pipelineRunManifest: `${makeADemoDirectory}/pipeline-run-manifest.json`,
   preparationFallback: `${makeADemoDirectory}/preparation-fallback.json`,
   preparationFidelity: `${makeADemoDirectory}/preparation-fidelity-validation-report.json`,

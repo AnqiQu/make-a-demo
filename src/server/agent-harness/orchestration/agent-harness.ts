@@ -270,6 +270,22 @@ export type AgentHarnessPipelineResult = {
 };
 
 export type AgentHarnessPipelineOptions = {
+  /**
+   * Films the statically and dynamically accepted Demo Script from the fresh
+   * capture runtime. A failed browser action returns the same typed
+   * ValidationReport shape as Capture Path Validation so the orchestrator can
+   * spend the bounded Script Repair lane, re-run every gate, and retake.
+   */
+  captureAcceptedScript?(input: {
+    captureRuntimeReset: {
+      artifactPath: string;
+      stage: "capture-runtime-reset";
+      status: "passed";
+    };
+    preparationManifest: PreparationManifest;
+    scriptCandidate: ScriptCandidate;
+    workspace: AgentHarnessWorkspace;
+  }): Promise<ValidationReport>;
   destroyWorkspaceOnCompletion?: boolean;
   /** Wall-clock budget for the whole job; default 90 minutes. */
   jobDeadlineMs?: number;
@@ -842,7 +858,87 @@ export async function runAgentHarnessPipeline(
           captureRepairAttempts,
         );
         if (capturePathValidation.status === "passed") {
-          break;
+          const resetValidation = await runValidationStage(
+            "capture-runtime-reset",
+            dependencies,
+            artifactPaths.captureRuntimeReset,
+            validationReports,
+            stageStatuses,
+            stageTimings,
+            () =>
+              dependencies.resetCaptureRuntime({
+                preparationManifest,
+                repoProfile,
+                runPlan,
+                scriptCandidate,
+                workspace: requireWorkspace(workspace),
+              }),
+            validationAttemptCounts,
+          );
+          assertValidationPassed(resetValidation);
+          const captureAcceptedScript = options.captureAcceptedScript;
+          if (captureAcceptedScript === undefined) {
+            break;
+          }
+
+          assertJobWithinDeadline();
+          const footageRepairAttempts =
+            scriptRepairAttemptsByPhase["footage-capture"] ?? 0;
+          const footageCaptureValidation = await runValidationStage(
+            "footage-capture",
+            dependencies,
+            artifactPaths.footageCaptureValidation,
+            validationReports,
+            stageStatuses,
+            stageTimings,
+            () =>
+              captureAcceptedScript({
+                captureRuntimeReset: {
+                  artifactPath: artifactPaths.captureRuntimeReset,
+                  stage: "capture-runtime-reset",
+                  status: "passed",
+                },
+                preparationManifest,
+                scriptCandidate,
+                workspace: requireWorkspace(workspace),
+              }),
+            validationAttemptCounts,
+            footageRepairAttempts,
+          );
+          if (footageCaptureValidation.status === "passed") {
+            break;
+          }
+          if (
+            classifyRepairRoute(footageCaptureValidation) ===
+            "repo-preparation-repair"
+          ) {
+            await revalidatePreparation(footageCaptureValidation);
+            continue pipelineAttempt;
+          }
+
+          scriptCandidate = await repairScriptCandidate({
+            actionCatalog,
+            appMap,
+            dependencies,
+            failureReport: footageCaptureValidation,
+            flowSpec,
+            preparationManifest,
+            repoProfile,
+            scriptCandidate,
+            scriptRepairAttempts: footageRepairAttempts,
+            scriptRepairLimit,
+            stageStatuses,
+            stageTimings,
+            workspace: requireWorkspace(workspace),
+          });
+          scriptRepairAttemptsByPhase["footage-capture"] =
+            footageRepairAttempts + 1;
+          await writeArtifact(
+            dependencies,
+            artifactPaths.scriptCandidate,
+            scriptCandidate,
+          );
+          continue;
         }
 
         if (
@@ -1014,24 +1110,6 @@ export async function runAgentHarnessPipeline(
         );
       }
 
-      const resetValidation = await runValidationStage(
-        "capture-runtime-reset",
-        dependencies,
-        artifactPaths.captureRuntimeReset,
-        validationReports,
-        stageStatuses,
-        stageTimings,
-        () =>
-          dependencies.resetCaptureRuntime({
-            preparationManifest,
-            repoProfile,
-            runPlan,
-            scriptCandidate,
-            workspace: requireWorkspace(workspace),
-          }),
-        validationAttemptCounts,
-      );
-      assertValidationPassed(resetValidation);
       break;
     }
 

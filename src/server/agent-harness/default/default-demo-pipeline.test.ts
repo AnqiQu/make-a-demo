@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentHarnessWorkspaceHandle } from "../daytona/workspace.interface";
 import { createFakeAgentHarnessWorkspace } from "../daytona/workspace.test-helpers";
+import type { AgentHarnessPipelineResult } from "../orchestration/agent-harness";
 import { DEMO_SCRIPT_OUTPUT_PATH } from "../schemas/artifacts";
 import {
   type DefaultDemoPipelineOptions,
@@ -328,6 +329,7 @@ describe("runDefaultDemoPipeline", () => {
         async runHarnessPipeline(input, dependencies, harnessOptions) {
           calls.push(`harness:${input.repoUrl}:${input.runId}`);
           expect(harnessOptions).toEqual({
+            captureAcceptedScript: expect.any(Function),
             destroyWorkspaceOnCompletion: false,
             jobDeadlineMs: 90 * 60_000,
             repoPreparationRepairLimit: 2,
@@ -348,7 +350,7 @@ describe("runDefaultDemoPipeline", () => {
             "/workspace/.makeademo/pipeline-run-manifest.json",
             { finalStatus: "passed" },
           );
-          return {
+          const pipelineResult: AgentHarnessPipelineResult = {
             pipelineRunManifest: {
               artifactPaths: {
                 captureRuntimeReset:
@@ -457,6 +459,30 @@ describe("runDefaultDemoPipeline", () => {
               },
             ],
           };
+          const { preparationManifest, scriptCandidate } = pipelineResult;
+          if (
+            preparationManifest === undefined ||
+            scriptCandidate === undefined
+          ) {
+            throw new Error("test harness result is missing capture inputs");
+          }
+          const captureReport = await harnessOptions?.captureAcceptedScript?.({
+            captureRuntimeReset: {
+              artifactPath:
+                "/workspace/.makeademo/capture-runtime-reset-validation-report.json",
+              stage: "capture-runtime-reset",
+              status: "passed",
+            },
+            preparationManifest,
+            scriptCandidate,
+            workspace: workspaceHandle.workspace,
+          });
+          expect(captureReport).toMatchObject({
+            failureClassification: "none",
+            stage: "footage-capture",
+            status: "passed",
+          });
+          return pipelineResult;
         },
       },
     );

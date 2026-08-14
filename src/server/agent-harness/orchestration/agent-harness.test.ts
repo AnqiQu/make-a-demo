@@ -805,6 +805,110 @@ describe("runAgentHarnessPipeline", () => {
     );
   });
 
+  it("repairs a failed continuous take, revalidates it, and captures again within budget", async () => {
+    // N137 (calcom, 2026-08-14): capture-path validation passed, but the
+    // real take lost a client-navigation race on return-availability. The
+    // take's typed failure must spend the bounded script lane, then pass the
+    // static, dry-run, and fresh-runtime gates again before a retake.
+    const calls: string[] = [];
+    let footageAttempts = 0;
+    const repairedCandidate = {
+      ...scriptCandidate(),
+      scriptJsonContent: { scriptId: "script_repaired" },
+    };
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_footage_capture_repair" }),
+      stubPipelineDependencies({
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairScript({ failureReport }) {
+          calls.push(`repair:${failureReport.stage}`);
+          expect(failureReport.failedAction).toEqual({
+            actionId: "return-availability",
+            sceneId: "availability-settings",
+          });
+          return repairedCandidate;
+        },
+        async resetCaptureRuntime() {
+          calls.push("reset");
+          return report("capture-runtime-reset", "passed");
+        },
+        async validateCapturePath() {
+          calls.push("dynamic");
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          calls.push("static");
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      {
+        async captureAcceptedScript({ scriptCandidate: candidate }) {
+          footageAttempts += 1;
+          calls.push(
+            `footage:${(candidate.scriptJsonContent as { scriptId?: string }).scriptId}`,
+          );
+          return footageAttempts === 1
+            ? {
+                ...report("footage-capture", "failed"),
+                failedAction: {
+                  actionId: "return-availability",
+                  sceneId: "availability-settings",
+                },
+                failureClassification: "timing/state failure",
+                logsSummary:
+                  "Browser action return-availability failed in Scene availability-settings. goto: net::ERR_ABORTED",
+              }
+            : report("footage-capture", "passed");
+        },
+        scriptRepairLimit: 1,
+      },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(result.scriptCandidate).toEqual(repairedCandidate);
+    expect(calls).toEqual([
+      "static",
+      "reset",
+      "dynamic",
+      "reset",
+      "footage:script_001",
+      "repair:footage-capture",
+      "static",
+      "reset",
+      "dynamic",
+      "reset",
+      "footage:script_repaired",
+    ]);
+    expect(
+      result.validationReports.filter(
+        (validation) => validation.stage === "footage-capture",
+      ),
+    ).toMatchObject([
+      { retryCount: 0, status: "failed" },
+      { retryCount: 1, status: "passed" },
+    ]);
+  });
+
   it("passes the failed candidate identity into locator regrounding", async () => {
     // N125: regrounding must know which candidate failed at replay — the
     // action, its verified locator, the scene prefix ahead of it, and the

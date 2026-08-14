@@ -596,6 +596,50 @@ describe("DemoScriptContract", () => {
     ).toMatchObject({ status: "passed" });
   });
 
+  it("rejects a goto immediately after a click that started client-side navigation", () => {
+    // N137 (calcom, 2026-08-14): clicking New started a redirect to
+    // /auth/login, then the next compiled step raced it with goto
+    // /availability. The dry-run happened to win; the continuous take lost
+    // with net::ERR_ABORTED. Exploration's path-shaped "became visible"
+    // outcome is direct evidence that the click navigates.
+    const catalog = readActionCatalog({
+      ...actionCatalog(),
+      actions: [
+        ...actionCatalog().actions.map((action) =>
+          action.id === "open-dashboard"
+            ? {
+                ...action,
+                expectedResult: "/auth/login became visible",
+              }
+            : action,
+        ),
+        navigateAction(),
+      ],
+    });
+    const script = structuredClone(validDemoScript()) as unknown as {
+      scenes: Array<{ actions: BrowserAction[] }>;
+    };
+    script.scenes[0]?.actions.splice(1, 0, {
+      id: "return-dashboard",
+      path: "/",
+      sourceActionId: "navigate-dashboard",
+      type: "goto",
+    });
+
+    expect(
+      validateDemoScriptCandidateContract({
+        actionCatalog: catalog,
+        flowSpec: flowSpec(),
+        preparationManifest: preparationManifest(),
+        scriptCandidate: scriptCandidate(script),
+      }),
+    ).toMatchObject({
+      failureClassification: "script contract failure",
+      logsSummary: expect.stringContaining("started client-side navigation"),
+      status: "failed",
+    });
+  });
+
   it("derives the missing Scene navigation from the catalog route", () => {
     const catalog = readActionCatalog({
       ...actionCatalog(),

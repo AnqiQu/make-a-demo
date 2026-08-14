@@ -643,11 +643,26 @@ function assertBrowserActionsGrounded(input: {
     // interaction runs, so the scene must replay that interaction first —
     // asserted earlier, the capture fails deterministically.
     const earlierSceneActionIds = new Set<string>();
+    let previousAction:
+      | {
+          scriptAction: BrowserAction;
+          sourceAction: ActionCatalog["actions"][number];
+        }
+      | undefined;
     for (const action of scene.actions) {
       const sourceAction = readGroundedCatalogAction(
         action,
         catalogActionsById,
       );
+      if (
+        action.type === "goto" &&
+        previousAction?.scriptAction.type === "click" &&
+        clickStartedClientNavigation(previousAction.sourceAction)
+      ) {
+        throw new Error(
+          `Browser action ${previousAction.scriptAction.id} started client-side navigation (${previousAction.sourceAction.expectedResult}); goto ${action.id} must not run immediately afterward. Settle the click navigation first (for example with an assert-url action compiled to waitForURL), or reorder the scene so the two navigations cannot race.`,
+        );
+      }
       assertActionMatchesCatalog(action, sourceAction, selectedFeature, true);
       if (
         sourceAction.revealedBy !== undefined &&
@@ -659,6 +674,7 @@ function assertBrowserActionsGrounded(input: {
       }
       earlierSceneActionIds.add(sourceAction.id);
       sourceActionIds.add(sourceAction.id);
+      previousAction = { scriptAction: action, sourceAction };
     }
   }
 
@@ -688,6 +704,15 @@ function assertBrowserActionsGrounded(input: {
       }
     }
   }
+}
+
+function clickStartedClientNavigation(
+  action: ActionCatalog["actions"][number],
+): boolean {
+  return (
+    action.kind === "click" &&
+    /^[/#?]\S* became visible$/i.test(action.expectedResult.trim())
+  );
 }
 
 function readGroundedCatalogAction(

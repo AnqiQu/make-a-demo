@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import type { AgentHarnessWorkspaceHandle } from "../../agent-harness/daytona/workspace.interface";
 import { createFakeAgentHarnessWorkspace } from "../../agent-harness/daytona/workspace.test-helpers";
+import { CaptureBrowserActionFailureError } from "./capture-runtime-protocol";
 import { PreparedWorkspacePlaywrightSceneRecorder } from "./playwright-scene-recorder";
 
 const execFileAsync = promisify(execFile);
@@ -115,6 +116,86 @@ describe("PreparedWorkspacePlaywrightSceneRecorder", () => {
         expect(message).toContain("stderr.log");
         return true;
       });
+    } finally {
+      await rm(runDirectory, { force: true, recursive: true });
+    }
+  }, 20_000);
+
+  it("preserves the failed action identity from a continuous-take scene failure", async () => {
+    // N137 (calcom, 2026-08-14): the real take emitted complete step/action
+    // failure markers for return-availability, but Footage Capture replaced
+    // them with a generic continuous-take exit error. Script Repair needs the
+    // same {sceneId, actionId} identity the dry-run already consumes.
+    const runDirectory = await mkdtemp(
+      join(tmpdir(), "makeademo-recorder-test-"),
+    );
+    const sceneId = "availability-settings";
+    const actionId = "return-availability";
+    const failureMessage =
+      "goto: net::ERR_ABORTED at http://127.0.0.1:3000/availability";
+    const recorder = new PreparedWorkspacePlaywrightSceneRecorder({
+      preparationWorkspace: fakeCaptureWorkspace({
+        bunResult: {
+          exitCode: 1,
+          stdout: [
+            sceneMarker({ elapsedMs: 1, event: "started", sceneId }),
+            runtimeMarker("step", {
+              elapsedMs: 2,
+              event: "started",
+              sceneId,
+              stepId: actionId,
+            }),
+            runtimeMarker("action", {
+              elapsedMs: 3,
+              event: "started",
+              label: "page.goto(http://127.0.0.1:3000/availability)",
+              sceneId,
+            }),
+            runtimeMarker("action", {
+              elapsedMs: 4,
+              event: "failed",
+              label: "page.goto(http://127.0.0.1:3000/availability)",
+              message: failureMessage,
+              sceneId,
+            }),
+            runtimeMarker("step", {
+              elapsedMs: 4,
+              event: "failed",
+              message: failureMessage,
+              sceneId,
+              stepId: actionId,
+            }),
+            sceneMarker({
+              elapsedMs: 4,
+              event: "failed",
+              sceneId,
+            }),
+          ].join("\n"),
+        },
+      }),
+    });
+
+    try {
+      let caught: unknown;
+      try {
+        await recorder.recordScenes({
+          baseUrl: "http://127.0.0.1:3000",
+          demoPlaywrightScript: validDemoScript(sceneId),
+          runDirectory,
+          scenes: [
+            sceneDescription(sceneId, [
+              { id: actionId, path: "/availability", type: "goto" },
+            ]),
+          ],
+          sectionId: "demo-script",
+        });
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(CaptureBrowserActionFailureError);
+      expect(caught).toMatchObject({ actionId, sceneId });
+      expect((caught as Error).message).toContain("net::ERR_ABORTED");
     } finally {
       await rm(runDirectory, { force: true, recursive: true });
     }
@@ -673,4 +754,11 @@ function sceneMarker(input: {
   sceneId: string;
 }) {
   return `[makeademo:scene] ${JSON.stringify(input)}`;
+}
+
+function runtimeMarker(
+  kind: "action" | "step",
+  input: Record<string, unknown>,
+) {
+  return `[makeademo:${kind}] ${JSON.stringify(input)}`;
 }
