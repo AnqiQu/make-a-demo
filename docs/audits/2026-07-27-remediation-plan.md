@@ -7563,6 +7563,17 @@ on its first line; attempt-5 summarizes with the
 Killed yarn rebuild line first and the ECONNREFUSED
 storm deduplicated with its count.
 
+Landed: install, build, service, and lifecycle
+failures now share deterministic causal-headline
+selection, promote real kills, fatal/module errors,
+and nonzero tool exits once, and keep raw context
+below the headline. Teed evidence is ANSI-cleaned
+before its bounded tail is taken, repeated identical
+error stacks collapse with an occurrence count, and a
+timeout that contains a kill or failed tool can no
+longer claim the preceding work completed
+successfully.
+
 ### N146 (High, infra) — right-size the sandbox for repos that measure it
 
 twenty slammed the 8GiB memory ceiling in both the
