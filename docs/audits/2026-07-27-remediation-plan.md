@@ -7061,3 +7061,186 @@ bundler-visible gate or is steered to the
 provisioned-service rung, and any dead gate that slips
 through is named "client stub not engaged" on round
 one instead of round five.
+
+## Addendum (2026-08-14, wave-8 — homer green; the batch machinery held everywhere; four failures, each one layer deeper: N137–N140)
+
+The 2026-08-14T03-07 batch: homer PASSED in 306s
+(final video composited; three grounded features
+selected, droppedFeatures empty). Every wave-7 fix
+validated on its first exercise: both multi-GB clones
+completed with zero exit-128s (N134 limiter + gzip —
+calcom's archive 162MB, twenty's 294MB tar became
+134MB and uploaded inside one ordinary attempt), the
+N122(5) provisioned-Postgres rung executed for real on
+three entries, N135's count rule was satisfied
+normally, and N136 fired and was obeyed. The four
+failures are new, deeper walls: a capture-stage race
+with no repair path (calcom), an OOM-killed migration
+hidden behind npm noise (twenty), N136's own blind
+spot between "gate dead" and "gate live but partial"
+(directus), and an asset-404 storm classified as empty
+app state (ghostfolio).
+
+### Diagnoses (2026-08-14T03-07)
+
+homer — passed, 306s. Flow planning selected
+service-tiles, operations-page, service-search — all
+three groundable this round, droppedFeatures empty —
+and capture and compositing ran clean.
+
+calcom — five minutes from a final video; the N122(5)
+acceptance question is ANSWERED YES. Provisioned
+Postgres migrated and seeded via the repo's own
+commands (`yarn workspace @calcom/prisma db-deploy` /
+`db-seed`), preflight passed, DB-backed features
+produced real browser evidence, the capture-path
+dry-run passed. The terminal failure is a race in the
+real continuous take: the script clicked "New
+schedule" (which starts the app's own client-side
+redirect) and immediately issued
+`page.goto(/availability)`; the redirect aborted the
+goto (net::ERR_ABORTED). The identical script passed
+the dry-run fifteen minutes earlier — timing-dependent
+by construction. Seam gap: a scene failure in the real
+take goes straight to pipeline.failed; only the
+dry-run routes to script-repair (→ N137).
+
+twenty — provisioned Postgres booted and the declared
+migration created schemas public/core and extensions
+against the real service; then the migration's command
+runner (a full NestJS bootstrap after SWC-compiling
+7,314 files) was `Killed` at the sandbox's ~8GB memory
+ceiling. That one-word fact is the literal last line
+of the evidence; the failure summary headlined npm
+config-warning noise instead, so six rounds (including
+a detour through lifecycle-timeout and
+lockfile-reconciliation install failures) never
+addressed memory, and the run died at the 90-minute
+deadline (→ N140).
+
+directus — the N136 arc worked, then hit its own blind
+spot. Rounds 1–4 fixed a Vite config crash, the predev
+build, and an app-served 500 (the N117/N128 detector
+caught it). Round 5 fired "client stub not engaged"
+correctly. The round-6 repair obeyed the hint — gate
+moved to VITE_MAKEADEMO_DEMO, read via
+import.meta.env, declared in envUsed (which
+guardedRuntimeEnv spreads into the app's process) —
+and the stub partially engaged: screenshots show the
+app chrome rendering "Directus Demo" from fixtures.
+But uncovered endpoints still refused (12×
+ECONNREFUSED 127.0.0.1:8055), an "owner not set"
+onboarding modal blocked every route, and the target
+route 404'd. Because refusals persisted, N136 fired
+again with the now-false "the stub is dead code"
+message and misdirected the final round; budget
+exhausted (→ N138; modal and route on the watchlist).
+
+ghostfolio — blank pages with the mechanism sitting in
+the console evidence. Round 1 was an honest
+provisioned-service seed failure (headline: the same
+npm noise class as twenty — N140 applies), rounds 2–3
+build failures, round 4 the known 404-mid-compile
+readiness shape. Round 5 passed preflight, then
+exploration found four routes serving their document
+shell and rendering nothing: every asset request
+doubles the locale prefix — /en/en/styles.css,
+/en/en/chunk-*.js — all 404 (the Angular i18n build's
+`<base href="/en/">` composing with the serve path),
+so zero JavaScript loads. Classified
+"empty/unmeaningful app state", which aimed repair at
+data fixtures instead of the serve configuration
+(→ N139).
+
+### New items
+
+### N137 (High, bugfix) — capture failures deserve the same repair path as validation failures
+
+A scene failure during the real continuous take must
+route through the bounded script-repair loop the
+dry-run already uses (the N125 structured failedAction
+machinery exists; the take should produce the same
+failure shape), instead of ending the pipeline on the
+first flake. Additionally, the script contract should
+forbid the racy shape itself: a `goto` immediately
+following a click that triggers client-side navigation
+(require waitForURL or equivalent settling first) —
+enforce at the static script validation seam so the
+script is fixed before any take runs. Acceptance:
+calcom's exact failure (click "New schedule" →
+immediate goto aborted) either never validates or is
+repaired and retaken within budget.
+
+### N138 (High, bugfix) — N136 must distinguish a dead gate from partial stub coverage
+
+When the refused-loopback signature fires but the
+probed routes rendered real content (exploration found
+headings/controls, i.e. the stub demonstrably
+delivered fixtures), reclassify as "client stub
+partially engaged": name the refused request targets
+(and paths where available from the runtime network
+guard) so repair aims at the uncovered client seams,
+not at delivery that already works. Keep routing to
+repo-preparation-repair. The "dead code / delivery
+channel" message fires only when routes rendered
+nothing stub-shaped. Acceptance: directus round-6
+evidence produces the partial-coverage classification
+listing 127.0.0.1:8055, not the delivery message.
+
+### N139 (High, bugfix) — a same-origin subresource-404 storm is a serve failure, not empty app state
+
+Extend the N128 entry-chunk rule: when exploration's
+console evidence shows the document's own styles and
+script chunks 404ing (same-origin subresources), the
+classification must become a serve/configuration
+failure that names the failing asset path prefix —
+including the doubled-prefix shape (/en/en/…) — never
+"empty/unmeaningful app state". Acceptance:
+ghostfolio's round-5 evidence classifies as a serve
+failure whose message contains the /en/en/ prefix.
+
+### N140 (High, bugfix) — surface the kill, not the epilogue, in service-command evidence
+
+Provisioned-service migration/seed failure summaries
+must headline the causal line — a trailing `Killed`,
+`fatal:`, or nonzero-exit marker — not the npm
+config-warning epilogue (the N130/N134-D lesson
+applied to this seam). When the command was killed
+(signal/OOM shape), say so and carry the
+memory-ceiling hint (bounded NODE_OPTIONS
+--max-old-space-size for the migration/seed command in
+envUsed, prefer narrower targets); keep the
+"service migration failure"/"service seed failure"
+classifications and their preparation-repair routing so
+the repair can actually bound the memory. Acceptance:
+twenty's attempt-6 evidence produces a summary whose
+first line names the Killed migration, and ghostfolio's
+attempt-1 seed failure headlines its real error.
+
+### Watchlist (no fix scheduled; re-check next matrix)
+
+- directus under a working stub: the "owner not set"
+  onboarding modal blocks every route, and
+  /admin/settings/data-model/+ 404s — fixture
+  completeness (project-settings owner) and route
+  coverage, visible only once N138 stops misdirecting.
+- twenty's mid-run detour: automatic lockfile
+  reconciliation failed in rounds 3–5 before the run
+  returned to the migration wall — reconciliation
+  robustness under berry.
+- calcom absorbed one "features declare identical
+  proofs" preparation-manifest rejection (round 1) —
+  recovered, but worth watching for prompt drift.
+- The capture dry-run passed a script the real take
+  failed — beyond N137's repair path, dry-run/take
+  parity may deserve its own look if recurrence shows.
+
+### Rerun
+
+All five entries after N137–N140 land. Expected:
+calcom green (its only wall is the capture race);
+twenty reaches a bounded migration or fails it with a
+memory headline on round one; directus spends its
+budget on stub coverage and the modal instead of
+delivery; ghostfolio's serve-path fix gets named on
+round one; homer stays green.
