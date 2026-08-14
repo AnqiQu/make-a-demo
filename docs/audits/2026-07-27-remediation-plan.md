@@ -7685,3 +7685,65 @@ partial-coverage classification; twenty clears install
 and build inside the larger class — or fails with the
 resource or the unbuilt dependency named on line one —
 and meets last wave's migration wall with N140 armed.
+
+## Addendum (2026-08-14, wave-10 launch failure — N146's resources channel cannot ride a snapshot; N147)
+
+Two post-N141–N146 runs died at sandbox creation
+before any pipeline work: the 2026-08-14T19-59 batch
+(all five entries failed in 2–66 seconds — the spread
+is clone time, homer 2.4s, calcom/twenty ~65s) and a
+20-15 solo homer retest, every one with the same
+Daytona API rejection at
+daytona.submitted-code-sandbox.create:
+
+    Cannot specify Sandbox resources when using a snapshot
+
+Cause: the N146 landing (1f7cb2e) replaced the
+previous top-level `disk` create param with a nested
+`resources` object — `{disk: 10}` for the standard
+class, `{cpu: 4, disk: 10, memory: 16}` for
+heavyweight — passed alongside `snapshot:`. Daytona
+sandboxes created from a snapshot inherit the
+snapshot's resource spec; `resources` is only legal
+for image-based creation, and the API says so in the
+error verbatim. Because BOTH classes now send
+`resources`, every entry fails — the sizing change
+broke the standard path it was supposed to leave
+untouched. (The removed top-level `disk` was almost
+certainly inert all along: it is not a
+snapshot-creation param, and the observed 10GiB disks
+match the snapshot's own spec.) The N133 ladder
+behaved correctly — the 4xx-class rejection was
+treated as fatal after one attempt, no retry burn. The
+staging-purge half of N146 landed fine and is
+unaffected.
+
+### N147 (High, bugfix) — capacity classes are snapshot variants, not creation-time overrides
+
+Remove `resources` from snapshot-based creation
+entirely and restore the plain snapshot create shape.
+Implement the heavyweight class as a SECOND snapshot:
+the provider selects the snapshot name by class —
+standard keeps MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT,
+heavyweight reads
+MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT_HEAVYWEIGHT.
+When the heavyweight variable is unset, fall back to
+the standard snapshot with a logged warning — never
+fail creation over a missing upgrade. Keep
+selectSubmittedCodeSandboxClass and its threading
+exactly as landed. Owner prerequisite: build the
+heavyweight snapshot in Daytona (a 4-CPU/16GiB variant
+of the current submitted-code snapshot, same N132
+service binaries and verifier guard; check whether the
+org disk cap really is 10GB when building — if larger
+disk is available, take 20GB) and set the env var.
+Acceptance: a batch launches with all five entries
+past sandbox creation; twenty's run logs the
+heavyweight snapshot name, or the explicit fallback
+warning when the variable is unset.
+
+### Rerun
+
+Any run at all is the gate: five entries past sandbox
+creation. The wave-9 rerun expectations then apply
+unchanged.
