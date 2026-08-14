@@ -13,6 +13,7 @@ import { type AddressInfo, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import {
   type RepoSnapshotGit,
@@ -228,7 +229,7 @@ describe("readGithubRepoSnapshot", () => {
       {
         git: {
           async archiveRevision(input) {
-            await writeFile(input.archivePath, "vendored archive");
+            await writeFile(input.archivePath, gzipSync("vendored archive"));
           },
           async clone(input) {
             await mkdir(join(input.checkoutPath, "node_modules/pkg"), {
@@ -379,7 +380,10 @@ describe("readGithubRepoSnapshot", () => {
     const git: RepoSnapshotGit = {
       async archiveRevision(input) {
         excludedPaths = input.excludedPaths ?? [];
-        await writeFile(input.archivePath, "sanitized execution archive");
+        await writeFile(
+          input.archivePath,
+          gzipSync("sanitized execution archive"),
+        );
       },
       async clone(input) {
         await mkdir(join(input.checkoutPath, "certificates"), {
@@ -474,7 +478,10 @@ describe("readGithubRepoSnapshot", () => {
     const git: RepoSnapshotGit = {
       async archiveRevision(input) {
         excludedPaths = input.excludedPaths ?? [];
-        await writeFile(input.archivePath, "sanitized execution archive");
+        await writeFile(
+          input.archivePath,
+          gzipSync("sanitized execution archive"),
+        );
       },
       async clone(input) {
         await mkdir(join(input.checkoutPath, "config"), { recursive: true });
@@ -585,9 +592,43 @@ describe("readGithubRepoSnapshot", () => {
     expect(snapshot.secretQuarantineManifest.entries).toEqual([
       expect.objectContaining({ kind: "environment-file", path: ".env" }),
     ]);
-    const archive = await readFile(snapshot.sourceArchive.path);
+    const archive = gunzipSync(await readFile(snapshot.sourceArchive.path));
     expect(archive.includes("index.ts")).toBe(true);
     expect(archive.includes("production-secret")).toBe(false);
+  });
+
+  it("produces a gzip-compressed archive through the real git", async () => {
+    // The screened archive crosses the network twice (developer uplink to the
+    // sandbox); twenty's uncompressed 294MB tar could not finish inside the
+    // upload attempt timeout on a contended uplink (2026-08-13T23-23 matrix).
+    const runDirectory = join(
+      tmpdir(),
+      `makeademo-gzip-archive-${crypto.randomUUID()}`,
+    );
+    await mkdir(runDirectory, { recursive: true });
+    const git: RepoSnapshotGit = {
+      archiveRevision: defaultRepoSnapshotGit.archiveRevision,
+      async clone(input) {
+        await createRealGitCheckout(input.checkoutPath);
+      },
+      readHead: defaultRepoSnapshotGit.readHead,
+    };
+
+    const snapshot = await readGithubRepoSnapshot(
+      {
+        log: async () => undefined,
+        repoUrl: "https://github.com/acme/gzip-archive-app",
+        runDirectory,
+      },
+      { git },
+    );
+
+    expect(snapshot.sourceArchive.path.endsWith("screened-repo.tar.gz")).toBe(
+      true,
+    );
+    const archive = await readFile(snapshot.sourceArchive.path);
+    expect(archive[0]).toBe(0x1f);
+    expect(archive[1]).toBe(0x8b);
   });
 
   it("rejects an archive that still contains a quarantined path", async () => {
@@ -697,7 +738,7 @@ describe("readGithubRepoSnapshot", () => {
     expect(archivedRevisions).toEqual(["abc123def456"]);
     expect(snapshot.sourceArchive).toEqual({
       commitSha: "abc123def456",
-      path: join(runDirectory, "screened-repo.tar"),
+      path: join(runDirectory, "screened-repo.tar.gz"),
       sha256: createHash("sha256").update(archiveContents).digest("hex"),
     });
     await expect(readFile(snapshot.sourceArchive.path, "utf8")).resolves.toBe(

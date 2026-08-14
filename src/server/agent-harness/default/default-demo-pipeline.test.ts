@@ -39,7 +39,7 @@ describe("runDefaultDemoPipeline", () => {
     const outputRoot = await mkdtemp(join(tmpdir(), "makeademo-private-"));
     const sourceArchive = {
       commitSha: "abc123def456",
-      path: join(outputRoot, "screened-repo.tar"),
+      path: join(outputRoot, "screened-repo.tar.gz"),
       sha256: "archive-sha256",
     };
     const installationTokenProvider = {
@@ -254,7 +254,7 @@ describe("runDefaultDemoPipeline", () => {
             },
             sourceArchive: {
               commitSha: "abc123def456",
-              path: join(outputRoot, "screened-repo.tar"),
+              path: join(outputRoot, "screened-repo.tar.gz"),
               sha256: "screened-repo-sha256",
             },
           };
@@ -533,7 +533,7 @@ describe("runDefaultDemoPipeline", () => {
               },
               sourceArchive: {
                 commitSha: "abc123def456",
-                path: join(outputRoot, "screened-repo.tar"),
+                path: join(outputRoot, "screened-repo.tar.gz"),
                 sha256: "screened-repo-sha256",
               },
             };

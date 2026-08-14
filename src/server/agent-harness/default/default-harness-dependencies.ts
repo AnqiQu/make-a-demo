@@ -2178,7 +2178,7 @@ async function materializeScreenedRepo(input: {
   if (!/^[0-9a-f]{64}$/.test(input.sourceArchive.sha256)) {
     throw new Error("Screened repository archive SHA-256 is malformed.");
   }
-  const remoteArchivePath = `${makeADemoDirectory}/screened-repo.tar`;
+  const remoteArchivePath = `${makeADemoDirectory}/screened-repo.tar.gz`;
   await input.workspace.uploadFiles([
     {
       destinationPath: remoteArchivePath,
@@ -2193,7 +2193,7 @@ async function materializeScreenedRepo(input: {
         `test "$actual_sha" = ${shellQuote(input.sourceArchive.sha256)}`,
         `rm -rf ${shellQuote(workspaceRepoDirectory)}`,
         `mkdir -p ${shellQuote(workspaceRepoDirectory)}`,
-        `tar --no-same-owner --no-same-permissions -xf ${shellQuote(remoteArchivePath)} -C ${shellQuote(workspaceRepoDirectory)}`,
+        `tar --no-same-owner --no-same-permissions -xzf ${shellQuote(remoteArchivePath)} -C ${shellQuote(workspaceRepoDirectory)}`,
         `git -C ${shellQuote(workspaceRepoDirectory)} init -q`,
         `git -C ${shellQuote(workspaceRepoDirectory)} add -f -A`,
         `git -C ${shellQuote(workspaceRepoDirectory)} -c user.name=MakeADemo -c user.email=makeademo@localhost commit -q --allow-empty -m ${shellQuote(`Screened source ${input.sourceArchive.commitSha}`)}`,

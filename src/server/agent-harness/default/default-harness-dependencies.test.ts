@@ -2827,7 +2827,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
         if (
           files.some(
             ({ destinationPath }) =>
-              destinationPath === "/workspace/.makeademo/screened-repo.tar",
+              destinationPath === "/workspace/.makeademo/screened-repo.tar.gz",
           )
         ) {
           screenedRepoMaterializations += 1;
@@ -10509,7 +10509,7 @@ function repoSourceArchive(): Promise<RepoSourceArchive> {
       `makeademo-screened-source-${crypto.randomUUID()}`,
     );
     await mkdir(directory, { recursive: true });
-    const path = join(directory, "screened-repo.tar");
+    const path = join(directory, "screened-repo.tar.gz");
     const contents = "screened repository archive";
     await writeFile(path, contents);
     return {
