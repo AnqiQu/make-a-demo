@@ -482,6 +482,40 @@ export async function exploreSubmittedApp(input: {
   const errorSignal = readStderrErrorSignal(
     diagnostics.stderrExcerpts.join("\n"),
   );
+  // N136 (directus, 2026-08-13): a declared client-stub whose demo gate
+  // never reaches browser code leaves every original transport live — the
+  // routes render hollow, the probe reads unobservable features, and repair
+  // aims at the data layer while the fault is the gate. A repeated
+  // refused-connection storm in the app's own stderr while a client-stub is
+  // declared proves live transports, so the failure is renamed to the stub
+  // engagement itself.
+  const refusedBackends = readRefusedLoopbackBackends(
+    diagnostics.stderrExcerpts.join("\n"),
+  );
+  const stubNotEngaged =
+    (input.dataStrategy ?? []).some(
+      (declaration) => declaration.rung === "client-stub",
+    ) &&
+    refusedBackends !== undefined &&
+    featureObservabilityClassifications.has(
+      artifacts.validationReport.failureClassification ?? "",
+    );
+  if (stubNotEngaged) {
+    return {
+      ...artifacts,
+      validationReport: {
+        ...artifacts.validationReport,
+        failureClassification: "client stub not engaged",
+        logsSummary: `Client stub not engaged: dataStrategy declares client-stub fixtures, but the running app repeatedly issued real backend calls that were refused (${refusedBackends.join(", ")}). The demo gate is not active in the browser bundle, so the stub is dead code and every original transport is live. Deliver the gate through a channel the bundler exposes to client code (for Vite: a VITE_-prefixed variable in import.meta.env or an explicit define in the config) and verify the fixtures actually render. Original failure: ${artifacts.validationReport.logsSummary}`,
+        stderrExcerpts: diagnostics.stderrExcerpts,
+        suggestedRepairHints: [
+          "The declared client-stub is not intercepting requests: fix the demo gate delivery, not the feature selection. A browser-side seam cannot read plain process environment variables — bundlers only expose allowlisted values to client code.",
+          `Repair the gate so it is provably true in the browser, then confirm no request reaches the refused backend(s): ${refusedBackends.join(", ")}.`,
+          ...artifacts.validationReport.suggestedRepairHints,
+        ],
+      },
+    };
+  }
   return {
     ...artifacts,
     validationReport: {
@@ -497,6 +531,35 @@ export async function exploreSubmittedApp(input: {
       ],
     },
   };
+}
+
+// The wrong-layer readings a dead stub produces: hollow routes ground no
+// features and read as empty state. Serve-layer classifications (app server
+// error, missing dependency) stay untouched — they already name a cause
+// below the stub.
+const featureObservabilityClassifications = new Set([
+  "empty/unmeaningful app state",
+  "prepared feature not observable",
+  "requested feature not observable",
+]);
+
+/**
+ * Extracts the distinct loopback backends the app's own process repeatedly
+ * failed to reach, from refused-connection lines in managed-app stderr.
+ * Returns undefined below two refusals: a single refused connection can be a
+ * benign startup probe, and the stub-not-engaged conversion must only fire
+ * on the repeated storm that proves live transports.
+ */
+function readRefusedLoopbackBackends(stderr: string): string[] | undefined {
+  const refusals = [
+    ...stderr.matchAll(
+      /ECONNREFUSED\s+((?:127\.0\.0\.1|\[?::1\]?|localhost):\d+)/g,
+    ),
+  ];
+  if (refusals.length < 2) return undefined;
+  return [...new Set(refusals.map((match) => match[1] ?? ""))].filter(
+    (target) => target.length > 0,
+  );
 }
 
 async function readWorkspaceCapacityEvidence(

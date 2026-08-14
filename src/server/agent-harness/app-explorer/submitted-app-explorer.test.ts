@@ -1242,6 +1242,117 @@ describe("exploreSubmittedApp", () => {
     ).not.toContain("complete response schema");
   });
 
+  it("classifies repeated refused backend calls as a client stub that never engaged", async () => {
+    // directus, 2026-08-13T23-23 matrix: the declared client-stub gated on an
+    // env var the bundler never delivers to browser code, so the stub was
+    // dead code and every data call flowed to a backend that does not exist.
+    // The probe read the hollow routes as unobservable features and five
+    // repair rounds aimed at the data layer; the refused-call storm must
+    // rename the failure to the stub gate itself.
+    const proxyError = (path: string) =>
+      `[vite] http proxy error: ${path}\nError: connect ECONNREFUSED 127.0.0.1:8055`;
+    const { result } = await exploreObservation({
+      dataStrategy: [
+        {
+          detail: "Axios and SDK seams return in-code fixtures in demo mode.",
+          rung: "client-stub",
+          service: "postgres",
+        },
+      ],
+      featureInventory: [preparedFeature()],
+      readSubmittedCodeAppStatus: async () => ({
+        running: true,
+        stderr: [
+          proxyError("/auth?sessionOnly"),
+          proxyError("/server/info"),
+        ].join("\n"),
+        stdout: "",
+      }),
+      routes: [
+        observedRoute({
+          featureIds: ["post-article"],
+          headings: [],
+          path: "/#/editor",
+          text: [],
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.failureClassification).toBe(
+      "client stub not engaged",
+    );
+    expect(result.validationReport.logsSummary).toContain("127.0.0.1:8055");
+    const hints = result.validationReport.suggestedRepairHints.join(" ");
+    expect(hints).toContain("demo gate");
+    expect(hints).toContain("browser");
+  });
+
+  it("keeps the feature classification when refused backend calls appear without a client-stub rung", async () => {
+    const { result } = await exploreObservation({
+      dataStrategy: [
+        {
+          detail: "Provisioned postgres on loopback.",
+          rung: "provisioned-service",
+          service: "postgres",
+        },
+      ],
+      featureInventory: [preparedFeature()],
+      readSubmittedCodeAppStatus: async () => ({
+        running: true,
+        stderr:
+          "Error: connect ECONNREFUSED 127.0.0.1:5432\nError: connect ECONNREFUSED 127.0.0.1:5432",
+        stdout: "",
+      }),
+      routes: [
+        observedRoute({
+          featureIds: ["post-article"],
+          headings: [],
+          path: "/#/editor",
+          text: [],
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.failureClassification).not.toBe(
+      "client stub not engaged",
+    );
+  });
+
+  it("keeps the feature classification when a declared stub sees a single refused call", async () => {
+    // One refused connection can be a benign startup probe; the conversion
+    // demands the repeated storm that proves live transports.
+    const { result } = await exploreObservation({
+      dataStrategy: [
+        {
+          detail: "Axios and SDK seams return in-code fixtures in demo mode.",
+          rung: "client-stub",
+          service: "postgres",
+        },
+      ],
+      featureInventory: [preparedFeature()],
+      readSubmittedCodeAppStatus: async () => ({
+        running: true,
+        stderr: "Error: connect ECONNREFUSED 127.0.0.1:8055",
+        stdout: "",
+      }),
+      routes: [
+        observedRoute({
+          featureIds: ["post-article"],
+          headings: [],
+          path: "/#/editor",
+          text: [],
+        }),
+      ],
+    });
+
+    expect(result.validationReport.status).toBe("failed");
+    expect(result.validationReport.failureClassification).not.toBe(
+      "client stub not engaged",
+    );
+  });
+
   it("attaches the observation to a grounding failure for diagnosis", async () => {
     const { result } = await exploreObservation({ routes: [] });
 

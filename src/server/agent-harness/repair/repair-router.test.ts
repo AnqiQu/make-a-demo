@@ -52,6 +52,15 @@ describe("RepairRouter", () => {
     expect(isDependencyRepairFailure("app server error")).toBe(false);
   });
 
+  it("routes a client stub that never engaged to preparation repair with full repo latitude", () => {
+    // The stub gate is app source (a demo-mode flag the bundler must deliver
+    // to browser code), so only full-latitude preparation repair can fix it.
+    expect(
+      classifyRepairRoute({ failureClassification: "client stub not engaged" }),
+    ).toBe("repo-preparation-repair");
+    expect(isDependencyRepairFailure("client stub not engaged")).toBe(false);
+  });
+
   it("does not restrict a listen failure to dependency-metadata repairs", () => {
     expect(isDependencyRepairFailure("listen failure")).toBe(false);
     expect(isDependencyRepairFailure("install failure")).toBe(true);
