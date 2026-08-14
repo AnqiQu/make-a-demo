@@ -8490,16 +8490,16 @@ describe("createDefaultAgentHarnessDependencies", () => {
     });
   });
 
-  it("preserves HTTP error metadata and classifies a crashing route as a build failure", async () => {
+  it("classifies Directus's Vite-proxied entry-route 502 as an app server error", async () => {
     vi.useFakeTimers();
     const workspace = createFakeAgentHarnessWorkspace({
       async executeSubmittedCode(command) {
         return command.includes("curl -")
           ? {
               exitCode: 22,
-              stderr: "curl: (22) The requested URL returned error: 500",
+              stderr: "curl: (22) The requested URL returned error: 502",
               stdout:
-                '[makeademo:probe] {"httpStatus":500,"url":"http://127.0.0.1:3000/dashboard"}',
+                '[makeademo:probe] {"httpStatus":502,"url":"http://127.0.0.1:3000/settings/data-model/+"}',
             }
           : { exitCode: 0, stderr: "", stdout: "" };
       },
@@ -8507,7 +8507,11 @@ describe("createDefaultAgentHarnessDependencies", () => {
         return {
           running: true,
           stderr: "",
-          stdout: "route compilation failed",
+          stdout: [
+            "VITE v5.4.0 ready in 463 ms",
+            "[vite] http proxy error: /settings/data-model/+",
+            "Error: connect ECONNREFUSED 127.0.0.1:8055",
+          ].join("\n"),
         };
       },
     });
@@ -8520,8 +8524,23 @@ describe("createDefaultAgentHarnessDependencies", () => {
 
     try {
       const validation = harness.dependencies.validatePreparation({
-        preparationManifest: preparationManifest(),
-        repoProfile: repoProfile(),
+        preparationManifest: {
+          ...preparationManifest(),
+          productContext: {
+            ...preparationManifest().productContext,
+            featureInventory:
+              preparationManifest().productContext.featureInventory.map(
+                (feature) => ({
+                  ...feature,
+                  entryPaths: ["/settings/data-model/+"],
+                }),
+              ),
+          },
+        },
+        repoProfile: {
+          ...repoProfile(),
+          detectedFrameworks: ["vite"],
+        },
         runPlan: runPlan(),
         workspace,
       });
@@ -8529,13 +8548,17 @@ describe("createDefaultAgentHarnessDependencies", () => {
       const report = await validation;
 
       expect(report).toMatchObject({
-        failureClassification: "build failure",
+        failureClassification: "app server error",
         runtimeProbe: {
-          finalUrl: "http://127.0.0.1:3000/dashboard",
-          httpStatus: 500,
+          finalUrl: "http://127.0.0.1:3000/settings/data-model/+",
+          httpStatus: 502,
         },
         status: "failed",
       });
+      expect(report.logsSummary).toMatch(
+        /\/settings\/data-model\/\+.*HTTP 502/i,
+      );
+      expect(report.logsSummary).toMatch(/Vite proxy.*backend is absent/i);
     } finally {
       vi.useRealTimers();
     }

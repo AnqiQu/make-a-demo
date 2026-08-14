@@ -84,6 +84,7 @@ import {
 } from "../repo-preparation/prepared-feature-inventory";
 import { synthesizeRunPlan } from "../run-planner/run-plan-synthesis";
 import {
+  type ResolvedRuntimeTarget,
   findRuntimeConfigurationIssue,
   resolvePreparationRuntime,
 } from "../run-planner/runtime-target-resolution";
@@ -3060,8 +3061,30 @@ async function validateResolvedSubmittedCodeRuntime(
     .join("\n");
   const probeSucceeded = probeResponded && appStatus?.running !== false;
   const blockedRuntimeNetworkAttempts = readRuntimeNetworkAttempts(appOutput);
+  const failureClassification = probeSucceeded
+    ? ("none" as const)
+    : probeExecutionFailed
+      ? ("harness/internal failure" as const)
+      : classifyPreparationRuntimeFailure(
+          preflightResult.runtimeProbe,
+          appOutput,
+          appStatus?.running === false,
+          appStatus?.running === true,
+        );
+  const serveFailureHeadline =
+    failureClassification === "app server error"
+      ? readReadinessServeFailureHeadline({
+          appOutput,
+          manifest,
+          preflightUrl,
+          repoProfile: input.repoProfile,
+          runtimeProbe: preflightResult.runtimeProbe,
+          runtimeTarget,
+        })
+      : undefined;
   const failedLogs = [
-    `Prepared submitted-code runtime readiness failed: ${preflightResult.stderr || preflightResult.stdout}`,
+    serveFailureHeadline ??
+      `Prepared submitted-code runtime readiness failed: ${preflightResult.stderr || preflightResult.stdout}`,
     appStatus === undefined
       ? undefined
       : appStatus.running
@@ -3074,16 +3097,6 @@ async function validateResolvedSubmittedCodeRuntime(
   ]
     .filter((value): value is string => value !== undefined)
     .join("\n");
-
-  const failureClassification = probeSucceeded
-    ? ("none" as const)
-    : probeExecutionFailed
-      ? ("harness/internal failure" as const)
-      : classifyPreparationRuntimeFailure(
-          preflightResult.runtimeProbe,
-          appOutput,
-          appStatus?.running === false,
-        );
   return validationReport({
     attemptedCommand: `curl ${preflightUrl}`,
     exitCode: preflightResult.exitCode,
@@ -3255,7 +3268,16 @@ function classifyPreparationRuntimeFailure(
   probe: RuntimeProbeDiagnostics,
   appOutput: string,
   processExited = false,
+  processRunning = false,
 ): string {
+  const outcome = probe.attempts.at(-1)?.outcome;
+  if (
+    processRunning &&
+    outcome === "http-error" &&
+    (probe.httpStatus ?? 0) >= 500
+  ) {
+    return "app server error";
+  }
   const missingSpecifiers = [
     ...appOutput.matchAll(
       /(?:can'?t resolve|cannot find module|could not resolve|failed to resolve entry for package)\s+["']([^"']+)["']/gi,
@@ -3266,7 +3288,6 @@ function classifyPreparationRuntimeFailure(
   }
   if (missingSpecifiers.length > 0) return "build failure";
   if (processExited) return "runtime crash";
-  const outcome = probe.attempts.at(-1)?.outcome;
   if (outcome === "render-timeout") return "render timeout";
   if (outcome === "runtime-exited") return "runtime crash";
   if (outcome === "connection-refused") return "listen failure";
@@ -3277,6 +3298,47 @@ function classifyPreparationRuntimeFailure(
     if ((probe.httpStatus ?? 0) >= 500) return "build failure";
   }
   return "start failure";
+}
+
+function readReadinessServeFailureHeadline(input: {
+  appOutput: string;
+  manifest: PreparationManifest;
+  preflightUrl: string;
+  repoProfile: RepoProfile;
+  runtimeProbe: RuntimeProbeDiagnostics;
+  runtimeTarget: ResolvedRuntimeTarget | undefined;
+}): string {
+  const parsedPreflightUrl = new URL(input.preflightUrl);
+  const route = `${parsedPreflightUrl.pathname}${parsedPreflightUrl.search}`;
+  const status = input.runtimeProbe.httpStatus ?? "unknown";
+  const selectedCandidate = input.repoProfile.browserRuntimeCandidates?.find(
+    (candidate) =>
+      candidate.dir ===
+      (input.runtimeTarget?.targetId ?? input.manifest.appDir),
+  );
+  const viteEvidence = [
+    input.appOutput,
+    input.manifest.startCommandUsed,
+    input.runtimeTarget?.start.command,
+    ...(selectedCandidate === undefined
+      ? input.manifest.appDir === "."
+        ? [
+            ...input.repoProfile.detectedFrameworks,
+            ...Object.values(input.repoProfile.packageScripts),
+          ]
+        : []
+      : [
+          ...selectedCandidate.frameworks,
+          ...Object.values(selectedCandidate.scripts),
+        ]),
+  ]
+    .filter((value): value is string => value !== undefined)
+    .join("\n");
+  const viteProxyExplanation =
+    status === 502 && /\bvite\b/i.test(viteEvidence)
+      ? " The Vite proxy may have minted this 502 because the route's backend is absent; repair the backend or data-delivery seam."
+      : "";
+  return `Prepared entry route ${route} returned HTTP ${status} while the managed app command was still running; this is a serve/backend failure, not a build or listen failure.${viteProxyExplanation}`;
 }
 
 function isBarePackageSpecifier(specifier: string): boolean {
