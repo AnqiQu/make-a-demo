@@ -7476,6 +7476,17 @@ failure naming the click — never a FlowSpec
 referencing the auth-degraded click and never a silent
 drop of a requested feature.
 
+Landed: the route observer, click-evidence gate, Flow
+Planning groundability rule, validator, and capture
+reset now share one auth-wall route-shape predicate.
+Requested features whose only exercised click reaches
+auth fail as `feature auth barrier` with the click and
+destination named; inferred features must be recorded
+in `droppedFeatures`, while explicitly requested auth
+footage remains legal. Reset probes also reject a
+nominally-200 scene route whose effective URL changed
+to authentication.
+
 ### N143 (High, bugfix) — a stub declared in words must show its mechanism
 
 Fidelity must reject a dataStrategy rung whose claim
