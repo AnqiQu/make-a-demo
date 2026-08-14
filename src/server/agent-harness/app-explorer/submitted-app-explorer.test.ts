@@ -114,6 +114,7 @@ describe("exploreSubmittedApp", () => {
               }),
             }),
           ],
+          navigationDestination: "/dashboard",
           preferredLocatorCandidateId: "click-link-1-1-locator-1",
         }),
       ]),

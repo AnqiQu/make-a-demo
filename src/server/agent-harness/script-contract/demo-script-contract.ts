@@ -245,6 +245,7 @@ export function createDemoScriptContract(): DemoScriptContract {
       "scene",
       "step",
       "page.goto",
+      "page.waitForURL",
       "page.locator",
       "page.getByRole",
       "page.getByLabel",
@@ -310,11 +311,10 @@ export function createDemoScriptContract(): DemoScriptContract {
 }
 
 /**
- * Prepends a grounded goto to every browser Scene that does not begin with
- * one: a Scene's route is already known from its first action's ActionCatalog
- * evidence, so navigation is backend-derived infrastructure and script agents
- * never have to author it. Idempotent; Scenes whose route has no observed
- * navigate action are left untouched.
+ * Adds backend-owned navigation metadata: a grounded goto for every browser
+ * Scene that needs one, plus the observed destination for every click that
+ * changed URL during exploration. Idempotent; agents never have to infer or
+ * author either piece of navigation infrastructure.
  */
 export function ensureSceneNavigation(input: {
   actionCatalog: ActionCatalog;
@@ -337,6 +337,28 @@ export function ensureSceneNavigation(input: {
       .map((action) => [action.route, action]),
   );
   let changed = false;
+  const enrichClickNavigation = (actions: unknown[]): unknown[] => {
+    let actionsChanged = false;
+    const enriched = actions.map((action) => {
+      if (typeof action !== "object" || action === null) return action;
+      const record = action as Record<string, unknown>;
+      if (record.type !== "click") return action;
+      const source =
+        typeof record.sourceActionId === "string"
+          ? actionsById.get(record.sourceActionId)
+          : undefined;
+      const destination =
+        source?.kind === "click" ? source.navigationDestination : undefined;
+      if (record.navigationDestination === destination) return action;
+      actionsChanged = true;
+      changed = true;
+      const { navigationDestination: _ignored, ...withoutDestination } = record;
+      return destination === undefined
+        ? withoutDestination
+        : { ...withoutDestination, navigationDestination: destination };
+    });
+    return actionsChanged ? enriched : actions;
+  };
   const augmentedScenes = scenes.map((scene) => {
     if (typeof scene !== "object" || scene === null) {
       return scene;
@@ -348,14 +370,14 @@ export function ensureSceneNavigation(input: {
     ) {
       return scene;
     }
-    const actions = record.actions as unknown[];
+    const actions = enrichClickNavigation(record.actions as unknown[]);
     const first = actions[0];
     if (
       typeof first === "object" &&
       first !== null &&
       (first as Record<string, unknown>).type === "goto"
     ) {
-      return scene;
+      return actions === record.actions ? scene : { ...record, actions };
     }
     const firstGrounded = actions.find(
       (action): action is Record<string, unknown> =>
@@ -370,7 +392,7 @@ export function ensureSceneNavigation(input: {
     const navigate =
       route === undefined ? undefined : navigateByRoute.get(route);
     if (navigate === undefined) {
-      return scene;
+      return actions === record.actions ? scene : { ...record, actions };
     }
     changed = true;
     return {
@@ -386,6 +408,10 @@ export function ensureSceneNavigation(input: {
       ],
     };
   });
+  const setupActions = (script as { setupActions?: unknown }).setupActions;
+  const augmentedSetupActions = Array.isArray(setupActions)
+    ? enrichClickNavigation(setupActions)
+    : setupActions;
   if (!changed) {
     return input.scriptCandidate;
   }
@@ -394,6 +420,9 @@ export function ensureSceneNavigation(input: {
     scriptJsonContent: {
       ...(script as Record<string, unknown>),
       scenes: augmentedScenes,
+      ...(Array.isArray(setupActions)
+        ? { setupActions: augmentedSetupActions }
+        : {}),
     },
   };
 }
@@ -643,26 +672,11 @@ function assertBrowserActionsGrounded(input: {
     // interaction runs, so the scene must replay that interaction first —
     // asserted earlier, the capture fails deterministically.
     const earlierSceneActionIds = new Set<string>();
-    let previousAction:
-      | {
-          scriptAction: BrowserAction;
-          sourceAction: ActionCatalog["actions"][number];
-        }
-      | undefined;
     for (const action of scene.actions) {
       const sourceAction = readGroundedCatalogAction(
         action,
         catalogActionsById,
       );
-      if (
-        action.type === "goto" &&
-        previousAction?.scriptAction.type === "click" &&
-        clickStartedClientNavigation(previousAction.sourceAction)
-      ) {
-        throw new Error(
-          `Browser action ${previousAction.scriptAction.id} started client-side navigation (${previousAction.sourceAction.expectedResult}); goto ${action.id} must not run immediately afterward. Settle the click navigation first (for example with an assert-url action compiled to waitForURL), or reorder the scene so the two navigations cannot race.`,
-        );
-      }
       assertActionMatchesCatalog(action, sourceAction, selectedFeature, true);
       if (
         sourceAction.revealedBy !== undefined &&
@@ -674,7 +688,6 @@ function assertBrowserActionsGrounded(input: {
       }
       earlierSceneActionIds.add(sourceAction.id);
       sourceActionIds.add(sourceAction.id);
-      previousAction = { scriptAction: action, sourceAction };
     }
   }
 
@@ -704,15 +717,6 @@ function assertBrowserActionsGrounded(input: {
       }
     }
   }
-}
-
-function clickStartedClientNavigation(
-  action: ActionCatalog["actions"][number],
-): boolean {
-  return (
-    action.kind === "click" &&
-    /^[/#?]\S* became visible$/i.test(action.expectedResult.trim())
-  );
 }
 
 function readGroundedCatalogAction(
@@ -754,6 +758,16 @@ function assertActionMatchesCatalog(
     throw new Error(
       `Browser action ${action.id} targets ${action.path} but its observed ActionCatalog route is ${sourceAction.route}`,
     );
+  }
+  if (action.type === "click") {
+    if (
+      action.navigationDestination !== undefined &&
+      action.navigationDestination !== sourceAction.navigationDestination
+    ) {
+      throw new Error(
+        `Browser action ${action.id} navigationDestination does not match its ActionCatalog evidence`,
+      );
+    }
   }
   // Catalog agreement is no defense: when both carry a placeholder the
   // capture would navigate it verbatim into a guaranteed 404 (outline,

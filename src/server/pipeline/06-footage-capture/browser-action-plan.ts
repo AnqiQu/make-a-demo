@@ -22,7 +22,13 @@ export type BrowserAction =
   | (BrowserActionBase & { path: string; type: "goto" })
   | (BrowserActionBase & {
       locator: BrowserLocator;
-      type: "click" | "hover" | "assert-visible";
+      /** Backend-derived from ActionCatalog browser evidence. */
+      navigationDestination?: string;
+      type: "click";
+    })
+  | (BrowserActionBase & {
+      locator: BrowserLocator;
+      type: "hover" | "assert-visible";
     })
   | (BrowserActionBase & {
       locator: BrowserLocator;
@@ -76,7 +82,14 @@ const actionKeysByType = {
     "sourceActionId",
     "type",
   ],
-  click: ["id", "locator", "locatorCandidateId", "sourceActionId", "type"],
+  click: [
+    "id",
+    "locator",
+    "locatorCandidateId",
+    "navigationDestination",
+    "sourceActionId",
+    "type",
+  ],
   fill: [
     "id",
     "locator",
@@ -217,7 +230,21 @@ export function createBrowserActionJsonSchema() {
           },
           ["path"],
         ),
-        schema("click", { locator }, ["locator"]),
+        schema(
+          "click",
+          {
+            locator,
+            navigationDestination: {
+              description:
+                "Backend-derived local destination observed for this click.",
+              minLength: 1,
+              pattern: localAppPathPatternSource,
+              readOnly: true,
+              type: "string",
+            },
+          },
+          ["locator"],
+        ),
         schema("hover", { locator }, ["locator"]),
         schema("scroll", { locator, position: { enum: ["bottom", "top"] } }, [
           "locator",
@@ -339,6 +366,21 @@ function readBrowserAction(value: unknown, path: string): BrowserAction {
   }
 
   const locator = readBrowserLocator(record.locator, `${path}.locator`);
+  if (type === "click") {
+    return {
+      ...common,
+      locator,
+      ...(record.navigationDestination === undefined
+        ? {}
+        : {
+            navigationDestination: readLocalPath(
+              record.navigationDestination,
+              `${path}.navigationDestination`,
+            ),
+          }),
+      type,
+    };
+  }
   if (type === "scroll") {
     const position = readString(record.position, `${path}.position`);
     if (position !== "bottom" && position !== "top") {
@@ -460,7 +502,15 @@ function compileAction(action: BrowserAction): string[] {
   // Humanized helpers are emitted directly so the validated artifact is the
   // executed artifact; a later string rewrite could diverge on hostile values.
   if (action.type === "click") {
-    return [`await animatedClick(page, ${locator});`];
+    if (action.navigationDestination === undefined) {
+      return [`await animatedClick(page, ${locator});`];
+    }
+    return [
+      "await Promise.all([",
+      `  page.waitForURL(new URL(${JSON.stringify(action.navigationDestination)}, baseUrl).toString()),`,
+      `  animatedClick(page, ${locator}),`,
+      "]);",
+    ];
   }
   if (action.type === "hover") {
     return [`await animatedHover(page, ${locator});`];

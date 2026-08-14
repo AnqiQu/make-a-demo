@@ -505,6 +505,13 @@ type ActionCatalogAction = {
    * pair is selected together.
    */
   revealedBy?: string;
+  /**
+   * Local app destination observed when this click changed the page URL.
+   * This is browser evidence, not a description inferred from
+   * `expectedResult`; capture compilation uses it to settle the navigation
+   * before another navigation can start.
+   */
+  navigationDestination?: string;
   featureIds?: string[];
   route: string;
   kind:
@@ -1608,6 +1615,15 @@ function readAction(value: unknown, index: number): ActionCatalogAction {
       `${path}.stateTransition is only valid on browser-exercised actions`,
     );
   }
+  const navigationDestination =
+    record.navigationDestination === undefined
+      ? undefined
+      : readLocalRoute(record, "navigationDestination", path);
+  if (navigationDestination !== undefined && kind !== "click") {
+    throw new Error(
+      `${path}.navigationDestination is only valid on click actions`,
+    );
+  }
   if (
     locatorCandidates !== undefined &&
     preferredLocatorCandidateId === undefined
@@ -1642,6 +1658,7 @@ function readAction(value: unknown, index: number): ActionCatalogAction {
     id: readNonEmptyString(record, "id", path),
     kind,
     ...(locatorCandidates === undefined ? {} : { locatorCandidates }),
+    ...(navigationDestination === undefined ? {} : { navigationDestination }),
     preferredLocator: readPreferredLocator(record.preferredLocator, path),
     ...(preferredLocatorCandidateId === undefined
       ? {}

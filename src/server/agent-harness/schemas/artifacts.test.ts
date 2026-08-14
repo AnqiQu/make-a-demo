@@ -43,7 +43,7 @@ describe("agent harness artifact schemas", () => {
       "open-dashboard",
     ]);
     expect(scriptCandidate.sourceFlowSpecId).toBe("flow_001");
-    expect(scriptCandidate.browserActionCompilerVersion).toBe("2026-07-18.1");
+    expect(scriptCandidate.browserActionCompilerVersion).toBe("2026-08-14.1");
     expect(scriptCandidate.bunRuntimeVersion).toBe("1.3.14");
     expect(scriptCandidate.playwrightRuntimeVersion).toBe("1.60.0");
     expect(pipelineRunManifest.stageStatuses["script-writing"]).toBe("passed");
@@ -137,6 +137,45 @@ describe("agent harness artifact schemas", () => {
       from: "disabled",
       to: "enabled",
     });
+  });
+
+  it("parses a local click navigation destination without reading outcome prose", () => {
+    const catalog = validActionCatalog();
+    const parsed = readActionCatalog({
+      ...catalog,
+      actions: catalog.actions.map((action, index) =>
+        index === 0
+          ? {
+              ...action,
+              expectedResult: "The next surface opened",
+              navigationDestination: "/auth/login?next=%2Fevent",
+            }
+          : action,
+      ),
+    });
+
+    expect(parsed.actions[0]?.navigationDestination).toBe(
+      "/auth/login?next=%2Fevent",
+    );
+  });
+
+  it("rejects non-click and off-origin navigation destinations", () => {
+    const catalog = validActionCatalog();
+    const action = catalog.actions[0];
+    expect(() =>
+      readActionCatalog({
+        ...catalog,
+        actions: [{ ...action, kind: "fill", navigationDestination: "/next" }],
+      }),
+    ).toThrow("navigationDestination is only valid on click actions");
+    expect(() =>
+      readActionCatalog({
+        ...catalog,
+        actions: [
+          { ...action, navigationDestination: "https://example.com/login" },
+        ],
+      }),
+    ).toThrow("actions[0].navigationDestination must be a local app route");
   });
 
   it("rejects a state transition on an action the browser never exercised", () => {
@@ -763,7 +802,7 @@ function validScriptCandidate() {
   return {
     assumptions: ["dashboard available"],
     captureSdkVersion: "generated",
-    browserActionCompilerVersion: "2026-07-18.1",
+    browserActionCompilerVersion: "2026-08-14.1",
     bunRuntimeVersion: "1.3.14",
     conformanceResult: validValidationReport(),
     contractVersion: "2026-07-08",

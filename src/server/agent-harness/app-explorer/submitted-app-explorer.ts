@@ -188,6 +188,8 @@ type ObservedInteraction = {
   };
   locatorEvidence?: ObservedLocatorEvidence | null;
   name: string;
+  /** Local same-origin destination observed after a click changed the URL. */
+  navigationDestination?: string;
   outcome: string;
   /**
    * The control state change this interaction caused (N105): a
@@ -1256,6 +1258,20 @@ function routeShellKey(path: string): string {
     : pathname;
 }
 
+function readLocalLinkDestination(
+  href: string,
+  sameOrigin: boolean | undefined,
+): string | undefined {
+  if (/^(?:\/(?!\/)|#|\?)/.test(href)) return href;
+  if (sameOrigin !== true) return undefined;
+  try {
+    const target = new URL(href);
+    return target.pathname + target.search + target.hash;
+  } catch {
+    return undefined;
+  }
+}
+
 function createActions(
   routes: ObservedRoute[],
   featureInventory: PreparedDemoFeature[],
@@ -1477,6 +1493,9 @@ function createActions(
         id,
         kind: interaction.kind,
         ...createLocatorCandidateFields(id, interaction.locatorEvidence),
+        ...(interaction.navigationDestination === undefined
+          ? {}
+          : { navigationDestination: interaction.navigationDestination }),
         preferredLocator,
         risks: [],
         route: route.path,
@@ -1519,6 +1538,10 @@ function createActions(
         return;
       }
       const id = `click-link-${routeIndex + 1}-${index + 1}`;
+      const navigationDestination = readLocalLinkDestination(
+        link.href,
+        link.sameOrigin,
+      );
       actions.push({
         confidence: 0.9,
         evidence: `Playwright observed link to ${link.href}`,
@@ -1527,6 +1550,9 @@ function createActions(
         id,
         kind: "click",
         ...createLocatorCandidateFields(id, link.locatorEvidence),
+        ...(navigationDestination === undefined
+          ? {}
+          : { navigationDestination }),
         preferredLocator: {
           name: link.name,
           strategy: "role",
@@ -3707,8 +3733,12 @@ try {
           const outcome = describeVisibleOutcome(before, after);
           if (!outcome) continue;
           const stateTransition = readStateTransition(before, after);
+          let navigationDestination;
           if (after.url !== before.url) {
             const landed = new URL(after.url);
+            if (landed.origin === baseOrigin) {
+              navigationDestination = landed.pathname + landed.search + landed.hash;
+            }
             if (crawlScope === "full" && landed.origin === baseOrigin && !seen.has(normalizeCrawlUrl(landed.href))) {
               queue.push({
                 featureIds: [],
@@ -3723,6 +3753,7 @@ try {
             locator: { name, strategy: "role", value: "button" },
             locatorEvidence,
             name,
+            ...(navigationDestination ? { navigationDestination } : {}),
             outcome,
             ...(stateTransition ? { stateTransition } : {}),
             ...(revealedTexts.length > 0 ? { revealedTexts } : {}),

@@ -596,12 +596,11 @@ describe("DemoScriptContract", () => {
     ).toMatchObject({ status: "passed" });
   });
 
-  it("rejects a goto immediately after a click that started client-side navigation", () => {
-    // N137 (calcom, 2026-08-14): clicking New started a redirect to
-    // /auth/login, then the next compiled step raced it with goto
-    // /availability. The dry-run happened to win; the continuous take lost
-    // with net::ERR_ABORTED. Exploration's path-shaped "became visible"
-    // outcome is direct evidence that the click navigates.
+  it("derives click navigation settlement from structured catalog evidence", () => {
+    // N141 (calcom, 2026-08-14): clicking New redirects to /auth/login and
+    // the immediately following goto must wait for that navigation. The
+    // destination is structured browser evidence; prose is deliberately
+    // uninformative so this cannot regress to expectedResult parsing.
     const catalog = readActionCatalog({
       ...actionCatalog(),
       actions: [
@@ -609,7 +608,8 @@ describe("DemoScriptContract", () => {
           action.id === "open-dashboard"
             ? {
                 ...action,
-                expectedResult: "/auth/login became visible",
+                expectedResult: "The next surface opened",
+                navigationDestination: "/auth/login",
               }
             : action,
         ),
@@ -626,18 +626,27 @@ describe("DemoScriptContract", () => {
       type: "goto",
     });
 
+    const augmented = ensureSceneNavigation({
+      actionCatalog: catalog,
+      scriptCandidate: readScriptCandidate(scriptCandidate(script)),
+    });
+    const augmentedActions = (
+      augmented.scriptJsonContent as {
+        scenes: Array<{ actions: BrowserAction[] }>;
+      }
+    ).scenes[0]?.actions;
+
     expect(
       validateDemoScriptCandidateContract({
         actionCatalog: catalog,
         flowSpec: flowSpec(),
         preparationManifest: preparationManifest(),
-        scriptCandidate: scriptCandidate(script),
+        scriptCandidate: augmented,
       }),
-    ).toMatchObject({
-      failureClassification: "script contract failure",
-      logsSummary: expect.stringContaining("started client-side navigation"),
-      status: "failed",
-    });
+    ).toMatchObject({ status: "passed" });
+    expect(
+      augmentedActions?.find((action) => action.id === "open-dashboard"),
+    ).toMatchObject({ navigationDestination: "/auth/login", type: "click" });
   });
 
   it("derives the missing Scene navigation from the catalog route", () => {
@@ -902,7 +911,7 @@ describe("DemoScriptContract", () => {
           ...scriptCandidate(validDemoScript()),
           browserActionCompilerVersion: "stale",
         },
-        "browserActionCompilerVersion must be 2026-07-18.1",
+        "browserActionCompilerVersion must be 2026-08-14.1",
       ],
       [
         "agent-authored Playwright source",
@@ -1023,7 +1032,7 @@ function scriptCandidate(scriptJsonContent: unknown) {
       stdoutExcerpts: [],
       suggestedRepairHints: [],
     },
-    browserActionCompilerVersion: "2026-07-18.1",
+    browserActionCompilerVersion: "2026-08-14.1",
     bunRuntimeVersion: "1.3.14",
     captureSdkVersion: "2026-07-18.1",
     contractVersion: "2026-07-12.1",

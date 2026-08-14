@@ -55,6 +55,50 @@ describe("Browser Action Plan", () => {
     expect(script).toContain(".toBeVisible();");
   });
 
+  it("settles catalog-observed click navigation before the following goto", () => {
+    const script = compileBrowserActionPlan({
+      scenes: [
+        {
+          actions: readBrowserActions([
+            {
+              id: "new-event",
+              locator: {
+                name: "New",
+                role: "button",
+                strategy: "role",
+              },
+              navigationDestination: "/auth/login",
+              sourceActionId: "catalog-new-event",
+              type: "click",
+            },
+            {
+              id: "open-availability",
+              path: "/availability",
+              sourceActionId: "catalog-availability",
+              type: "goto",
+            },
+            {
+              id: "availability-visible",
+              locator: { strategy: "text", value: "Availability" },
+              type: "assert-visible",
+            },
+          ]),
+          id: "availability",
+        },
+      ],
+    });
+
+    const settle =
+      'page.waitForURL(new URL("/auth/login", baseUrl).toString()),';
+    const click =
+      'animatedClick(page, page.getByRole("button", { name: "New" })),';
+    const nextGoto =
+      'await page.goto(new URL("/availability", baseUrl).toString(), { waitUntil: "domcontentloaded" });';
+    expect(script).toContain(settle);
+    expect(script.indexOf(settle)).toBeLessThan(script.indexOf(click));
+    expect(script.indexOf(click)).toBeLessThan(script.indexOf(nextGoto));
+  });
+
   it("compiles humanized interactions directly so no later rewrite can diverge", () => {
     const hostileValue = 'ignore").fill("; await page.close(); //';
     const script = compileBrowserActionPlan({
