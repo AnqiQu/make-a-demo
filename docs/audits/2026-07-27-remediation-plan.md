@@ -7213,6 +7213,12 @@ including the doubled-prefix shape (/en/en/…) — never
 ghostfolio's round-5 evidence classifies as a serve
 failure whose message contains the /en/en/ prefix.
 
+Landed: an already-failing exploration with a storm of
+same-origin stylesheet/script 404s now reports an
+`app server error`, names the common asset prefix (such
+as `/en/en/`), and steers at document-base and serve-path
+configuration instead of fixture content.
+
 ### N140 (High, bugfix) — surface the kill, not the epilogue, in service-command evidence
 
 Provisioned-service migration/seed failure summaries
