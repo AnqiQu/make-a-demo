@@ -7171,6 +7171,13 @@ calcom's exact failure (click "New schedule" →
 immediate goto aborted) either never validates or is
 repaired and retaken within budget.
 
+Landed: static validation now rejects an immediate
+`goto` after a click proven to start client-side
+navigation, continuous-take failures retain their
+structured action identity, and the default pipeline
+routes them through a bounded repair, full revalidation,
+fresh reset, and retake.
+
 ### N138 (High, bugfix) — N136 must distinguish a dead gate from partial stub coverage
 
 When the refused-loopback signature fires but the
