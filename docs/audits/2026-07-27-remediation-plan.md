@@ -7194,6 +7194,13 @@ nothing stub-shaped. Acceptance: directus round-6
 evidence produces the partial-coverage classification
 listing 127.0.0.1:8055, not the delivery message.
 
+Landed: repeated refused-loopback evidence now records
+both backend targets and proxy paths. Routes that
+rendered headings or controls classify as
+`client stub partially engaged` and steer repair toward
+uncovered client seams; only hollow routes retain the
+dead-gate diagnosis.
+
 ### N139 (High, bugfix) — a same-origin subresource-404 storm is a serve failure, not empty app state
 
 Extend the N128 entry-chunk rule: when exploration's
