@@ -7430,6 +7430,14 @@ Acceptance: calcom's exact attempt-3 script shape
 a settle between click and goto and validates
 statically with no repair round.
 
+Landed: exploration now records same-origin click
+destinations as structured ActionCatalog evidence,
+backend enrichment copies only that evidence into the
+typed click, and the capture compiler races the click
+against `waitForURL(destination)` before the next step
+can begin. The contradictory prose-regex static rule
+is gone, and the compiler contract version advanced.
+
 ### N142 (High, bugfix) — a click observed to land on an auth wall grounds nothing
 
 Extend N135's groundability to interactions: a catalog
