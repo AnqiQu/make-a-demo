@@ -668,7 +668,7 @@ function syntheticSuccessOptions(config: {
         },
         sourceArchive: {
           commitSha: "abc123def456",
-          path: join(outputRoot, "screened-repo.tar"),
+          path: join(outputRoot, "screened-repo.tar.gz"),
           sha256: "screened-repo-sha256",
         },
       };
