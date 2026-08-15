@@ -92,8 +92,8 @@ type DaytonaControlPlaneRunOptions = {
   /** Conflict polls before giving up; each waits `conflictPollDelayMs`. */
   conflictPollLimit?: number;
   /**
-   * How many attempts abandoned by `attemptTimeoutMs` the envelope tolerates
-   * before exhausting, independent of remaining ladder steps. Hung attempts
+   * How many consecutive attempts against one target may be abandoned by
+   * `attemptTimeoutMs` before that target is considered wedged. Hung attempts
    * are the expensive failure shape — each burns the full per-attempt bound
    * and a repeat carries no new information — so their cap is far below the
    * ladder length that fast-rejecting transients deserve (N133: an 8-attempt
@@ -103,9 +103,17 @@ type DaytonaControlPlaneRunOptions = {
   hungAttemptLimit?: number;
   /** Transient-retry delays; its length bounds the retries. */
   ladderMs?: readonly number[];
+  /**
+   * Replaces a target declared wedged after `hungAttemptLimit` consecutive
+   * attempt timeouts. Returning true keeps the operation inside its existing
+   * transient ladder so the next attempt replays against the replacement;
+   * false preserves the ordinary hang-cap exhaustion behavior.
+   */
+  onTargetWedged?: (error: unknown) => Promise<boolean> | boolean;
   /** Runs before each wait — seams with their own retry events hook here. */
   onRetry?: (error: unknown, delayMs: number) => Promise<void> | void;
-  sandboxId?: string;
+  /** Static id, or a reader when target recreation can change the id. */
+  sandboxId?: string | (() => string | undefined);
   /**
    * When false, exhaustion rethrows the raw error for seams that carry
    * their own infrastructure-family wrapping (artifact transfers).
@@ -200,8 +208,11 @@ function runAttemptWithTimeout<T>(
  * transport loss and re-issued through the transient ladder, so one stuck
  * HTTP call can never wedge the run. Hung attempts also count against
  * `hungAttemptLimit` (default 2), a cap independent of the ladder: each
- * hang burns the full per-attempt bound, so retrying them at ladder length
- * would let one envelope consume most of a job's wall clock (N133).
+ * consecutive hang against one target burns the full per-attempt bound, so
+ * retrying them at ladder length would let one envelope consume most of a
+ * job's wall clock (N133). A caller with a replaceable target can use
+ * `onTargetWedged` as a rung in that same ladder; the replay still consumes
+ * the next ordinary retry and therefore cannot widen the existing budget.
  *
  * Command execution and managed-app session commands run through the
  * envelope too (N123: a raw 502 on a manifest `cat` killed a finished
@@ -254,18 +265,25 @@ export function createDaytonaControlPlaneEnvelope(envelopeOptions: {
         options.conflictPollLimit ?? defaultConflictPollLimit;
       const hungAttemptLimit =
         options.hungAttemptLimit ?? defaultHungAttemptLimit;
-      const attribution =
-        options.sandboxId === undefined ? {} : { sandboxId: options.sandboxId };
+      const readAttribution = (): { sandboxId?: string } => {
+        const sandboxId =
+          typeof options.sandboxId === "function"
+            ? options.sandboxId()
+            : options.sandboxId;
+        return sandboxId === undefined ? {} : { sandboxId };
+      };
       let transientRetries = 0;
       let conflictPolls = 0;
-      let hungAttempts = 0;
+      let consecutiveHungAttempts = 0;
+      let lastHungSandboxId: string | undefined;
       for (let attemptNumber = 1; ; attemptNumber += 1) {
+        const attemptAttribution = readAttribution();
         await logBestEffort(
           "info",
           {
             attempt: attemptNumber,
             event: `daytona.${operation}.attempt`,
-            ...attribution,
+            ...attemptAttribution,
           },
           `Daytona ${operation} attempt ${attemptNumber}.`,
         );
@@ -276,15 +294,51 @@ export function createDaytonaControlPlaneEnvelope(envelopeOptions: {
             attemptTimeoutMs,
           );
         } catch (error) {
-          if (
+          const attemptTimedOut =
             (error as { name?: unknown } | null)?.name ===
-            attemptTimeoutErrorName
-          ) {
-            hungAttempts += 1;
+            attemptTimeoutErrorName;
+          if (attemptTimedOut) {
+            const attemptSandboxId = attemptAttribution.sandboxId;
+            consecutiveHungAttempts =
+              attemptSandboxId === lastHungSandboxId
+                ? consecutiveHungAttempts + 1
+                : 1;
+            lastHungSandboxId = attemptSandboxId;
+          } else {
+            consecutiveHungAttempts = 0;
+            lastHungSandboxId = undefined;
           }
           const classification = classify(error);
+          const hasTransientRetryBudget =
+            classification === "transient" &&
+            transientRetries < ladderMs.length;
+          const targetWedged =
+            attemptTimedOut && consecutiveHungAttempts >= hungAttemptLimit;
+          let targetReplaced = false;
+          if (
+            targetWedged &&
+            hasTransientRetryBudget &&
+            options.onTargetWedged !== undefined
+          ) {
+            await logBestEffort(
+              "warn",
+              {
+                attempt: attemptNumber,
+                classification: "wedged-sandbox-target",
+                error: formatErrorDiagnostic(error),
+                event: `daytona.${operation}.target-wedged`,
+                ...attemptAttribution,
+              },
+              `Daytona ${operation} target produced ${consecutiveHungAttempts} consecutive attempt timeouts; recreating the wedged target inside the remaining retry budget.`,
+            );
+            targetReplaced = await options.onTargetWedged(error);
+            if (targetReplaced) {
+              consecutiveHungAttempts = 0;
+              lastHungSandboxId = undefined;
+            }
+          }
           const delayMs =
-            hungAttempts >= hungAttemptLimit
+            targetWedged && !targetReplaced
               ? undefined
               : classification === "conflict"
                 ? conflictPolls < conflictPollLimit
@@ -303,7 +357,7 @@ export function createDaytonaControlPlaneEnvelope(envelopeOptions: {
                 classification,
                 error: formatErrorDiagnostic(error),
                 event: `daytona.${operation}.failed`,
-                ...attribution,
+                ...attemptAttribution,
               },
               `Daytona ${operation} failed (${classification}) after ${attemptNumber} attempt(s).`,
             );
@@ -315,7 +369,7 @@ export function createDaytonaControlPlaneEnvelope(envelopeOptions: {
               cause: error,
               classification,
               operation,
-              ...attribution,
+              ...attemptAttribution,
             });
           }
           if (classification === "conflict") {
@@ -331,7 +385,7 @@ export function createDaytonaControlPlaneEnvelope(envelopeOptions: {
               delayMs,
               error: formatErrorDiagnostic(error),
               event: `daytona.${operation}.retrying`,
-              ...attribution,
+              ...readAttribution(),
             },
             `Daytona ${operation} ${classification}; retrying in ${delayMs}ms.`,
           );

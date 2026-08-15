@@ -120,6 +120,10 @@ type DaytonaSdkSandbox = {
   }): Promise<void>;
 };
 
+type RecreateSubmittedCodeSandbox = (
+  staleSandbox: DaytonaSdkSandbox,
+) => Promise<DaytonaSdkSandbox>;
+
 type DaytonaSdkPty = Awaited<
   ReturnType<DaytonaSdkSandbox["process"]["createPty"]>
 >;
@@ -337,27 +341,21 @@ export class DaytonaSdkPreparationWorkspaceProvider
     const submittedCodeSnapshot = await this.resolveSubmittedCodeSnapshot(
       input?.submittedCodeSandboxClass ?? "standard",
     );
+    const createSubmittedCodeSandbox =
+      submittedCodeSnapshot === undefined
+        ? undefined
+        : () =>
+            this.createLinkedSubmittedCodeSandbox({
+              createOptions,
+              linkedSandboxId: id,
+              snapshot: submittedCodeSnapshot,
+            });
     let submittedCodeSandbox: DaytonaSdkSandbox | undefined;
     try {
       submittedCodeSandbox =
-        submittedCodeSnapshot === undefined
+        createSubmittedCodeSandbox === undefined
           ? undefined
-          : await this.controlPlane.run(
-              "submitted-code-sandbox.create",
-              () =>
-                this.client.create(
-                  {
-                    autoStopInterval: 0,
-                    autoDeleteInterval: 0,
-                    ephemeral: true,
-                    linkedSandbox: id,
-                    networkBlockAll: true,
-                    snapshot: submittedCodeSnapshot,
-                  },
-                  createOptions,
-                ),
-              { sandboxId: id },
-            );
+          : await createSubmittedCodeSandbox();
     } catch (error) {
       // The linked-create failure is the root cause; a failing compensating
       // delete must not replace it. The auto-delete backstop reaps the parent.
@@ -375,8 +373,54 @@ export class DaytonaSdkPreparationWorkspaceProvider
       ptyConnectionTimeoutMs: this.ptyConnectionTimeoutMs,
       sandboxLogSinks: this.sandboxLogSinks,
       sandbox,
+      ...(createSubmittedCodeSandbox === undefined
+        ? {}
+        : {
+            recreateSubmittedCodeSandbox: async (
+              staleSandbox: DaytonaSdkSandbox,
+            ) => {
+              const replacement = await createSubmittedCodeSandbox();
+              // The stale target may also hang on delete. Start best-effort
+              // cleanup, but never make replay against the healthy replacement
+              // wait on another response from the wedged sandbox.
+              void this.deleteSandboxBestEffort(staleSandbox);
+              return replacement;
+            },
+          }),
       ...(submittedCodeSandbox === undefined ? {} : { submittedCodeSandbox }),
     });
+  }
+
+  /**
+   * Creates a network-locked child through the same control-plane path for
+   * both initial provisioning and bounded replacement of a wedged target.
+   */
+  private async createLinkedSubmittedCodeSandbox(input: {
+    createOptions: { timeout: number };
+    linkedSandboxId: string;
+    snapshot: string;
+  }): Promise<DaytonaSdkSandbox> {
+    const sandbox = await this.controlPlane.run(
+      "submitted-code-sandbox.create",
+      () =>
+        this.client.create(
+          {
+            autoStopInterval: 0,
+            autoDeleteInterval: 0,
+            ephemeral: true,
+            linkedSandbox: input.linkedSandboxId,
+            networkBlockAll: true,
+            snapshot: input.snapshot,
+          },
+          input.createOptions,
+        ),
+      { sandboxId: input.linkedSandboxId },
+    );
+    const sandboxId = sandbox.id ?? sandbox.name;
+    if (sandboxId === undefined || sandboxId.trim() === "") {
+      throw new Error("Daytona did not return a submitted-code sandbox id.");
+    }
+    return sandbox;
   }
 
   /**
@@ -485,6 +529,7 @@ function createPreparationWorkspaceHandle(input: {
   ptyConnectionTimeoutMs: number;
   sandboxLogSinks?: PipelineLogSink[];
   sandbox: DaytonaSdkSandbox;
+  recreateSubmittedCodeSandbox?: RecreateSubmittedCodeSandbox;
   submittedCodeSandbox?: DaytonaSdkSandbox;
 }): AgentHarnessWorkspaceHandle {
   const workspace = new DaytonaSdkPreparationWorkspace(
@@ -499,6 +544,7 @@ function createPreparationWorkspaceHandle(input: {
     input.controlPlane ??
       createControlPlaneEnvelopeForSinks(input.sandboxLogSinks ?? []),
     input.sandboxLogSinks ?? [],
+    input.recreateSubmittedCodeSandbox,
   );
 
   const handle: AgentHarnessWorkspaceHandle = {
@@ -521,11 +567,13 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
   /** True after org policy rejected a network open, proving the sandbox stayed blocked. */
   private networkOverrideRestricted = false;
   private readonly sandboxLogger: PipelineEventLogger;
-  readonly submittedCodeSandboxId?: string;
+  private submittedCodeSandbox: DaytonaSdkSandbox | undefined;
+  private submittedCodeSandboxRecreationUsed = false;
+  submittedCodeSandboxId?: string;
 
   constructor(
     private readonly sandbox: DaytonaSdkSandbox,
-    private readonly submittedCodeSandbox: DaytonaSdkSandbox | undefined,
+    submittedCodeSandbox: DaytonaSdkSandbox | undefined,
     private readonly client: DaytonaSdkClient,
     private readonly workspaceId: string,
     private readonly commandTimeoutMs: number,
@@ -534,8 +582,12 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     private readonly artifactTransferBackoffMs: number[],
     private readonly controlPlane: DaytonaControlPlaneEnvelope,
     sandboxLogSinks: PipelineLogSink[],
+    private readonly recreateSubmittedCodeSandbox:
+      | RecreateSubmittedCodeSandbox
+      | undefined,
   ) {
     this.agentSandboxId = workspaceId;
+    this.submittedCodeSandbox = submittedCodeSandbox;
     const submittedCodeSandboxId =
       submittedCodeSandbox?.id ?? submittedCodeSandbox?.name;
     if (submittedCodeSandboxId !== undefined) {
@@ -1065,15 +1117,19 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
   private runTransferThroughEnvelope<T>(input: {
     attempt: () => Promise<T>;
     attemptTimeoutMs?: number;
+    onTargetWedged?: (error: unknown) => Promise<boolean> | boolean;
     onRetry?: (error: unknown) => Promise<void> | void;
     operation: string;
-    sandboxId: string;
+    sandboxId: string | (() => string | undefined);
   }): Promise<T> {
     return this.controlPlane.run(input.operation, input.attempt, {
       ...(input.attemptTimeoutMs === undefined
         ? {}
         : { attemptTimeoutMs: input.attemptTimeoutMs }),
       ladderMs: this.artifactTransferBackoffMs,
+      ...(input.onTargetWedged === undefined
+        ? {}
+        : { onTargetWedged: input.onTargetWedged }),
       ...(input.onRetry === undefined ? {} : { onRetry: input.onRetry }),
       sandboxId: input.sandboxId,
       wrapExhausted: false,
@@ -1270,22 +1326,61 @@ class DaytonaSdkPreparationWorkspace implements AgentHarnessWorkspace {
     const attemptTimeoutMs = await readUploadAttemptTimeoutMs(
       files.map((file) => file.sourcePath),
     );
-    const submittedCodeSandbox = this.submittedCodeSandbox;
     await this.runTransferThroughEnvelope({
       attempt: () => this.sandbox.fs.uploadFiles(uploadedFiles),
       ...(attemptTimeoutMs === undefined ? {} : { attemptTimeoutMs }),
       operation: "fs.upload",
       sandboxId: this.agentSandboxId,
     });
-    if (submittedCodeSandbox !== undefined) {
+    if (this.submittedCodeSandbox !== undefined) {
       await this.runTransferThroughEnvelope({
-        attempt: () => submittedCodeSandbox.fs.uploadFiles(uploadedFiles),
+        attempt: () =>
+          this.requireSubmittedCodeSandbox().fs.uploadFiles(uploadedFiles),
         ...(attemptTimeoutMs === undefined ? {} : { attemptTimeoutMs }),
+        ...(this.recreateSubmittedCodeSandbox === undefined
+          ? {}
+          : {
+              onTargetWedged: async () => {
+                if (this.submittedCodeSandboxRecreationUsed) {
+                  return false;
+                }
+                this.submittedCodeSandboxRecreationUsed = true;
+                await this.replaceWedgedSubmittedCodeSandbox();
+                return true;
+              },
+            }),
         operation: "fs.upload",
-        sandboxId:
+        sandboxId: () =>
           this.submittedCodeSandboxId ?? "unknown-submitted-code-sandbox",
       });
     }
+  }
+
+  /**
+   * Replaces the linked child only at the initial screened-workspace upload
+   * seam. That upload is fully replayable; later runtime transfers cannot
+   * recreate safely because a fresh sandbox would discard prepared state.
+   */
+  private async replaceWedgedSubmittedCodeSandbox(): Promise<void> {
+    const recreate = this.recreateSubmittedCodeSandbox;
+    if (recreate === undefined) {
+      throw new Error("Submitted-code Daytona sandbox cannot be recreated.");
+    }
+    const staleSandbox = this.requireSubmittedCodeSandbox();
+    const replacement = await recreate(staleSandbox);
+    const replacementId = replacement.id ?? replacement.name;
+    if (replacementId === undefined || replacementId.trim() === "") {
+      throw new Error("Daytona did not return a submitted-code sandbox id.");
+    }
+    this.submittedCodeSandbox = replacement;
+    this.submittedCodeSandboxId = replacementId;
+    this.submittedCodeSandboxDeleted = false;
+    this.activeSubmittedCodeApp = undefined;
+    this.networkOverrideRestricted = false;
+    this.networkStateTransitions.push({
+      at: new Date().toISOString(),
+      state: "runtime-locked",
+    });
   }
 
   async writeTextFile(path: string, contents: string): Promise<void> {

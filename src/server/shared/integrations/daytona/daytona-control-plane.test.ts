@@ -371,6 +371,115 @@ describe("createDaytonaControlPlaneEnvelope", () => {
     expect(events.at(-1)?.entry.event).toBe("daytona.fs.sync.failed");
   });
 
+  it("recreates a wedged target after two consecutive hangs and finishes inside the remaining ladder", async () => {
+    const { envelope, events, waits } = createRecordingEnvelope();
+    let attempts = 0;
+    let recreations = 0;
+    let sandboxId = "submitted_wedged";
+
+    const result = await envelope.run(
+      "fs.upload",
+      () => {
+        attempts += 1;
+        return sandboxId === "submitted_wedged"
+          ? new Promise<string>(() => {})
+          : Promise.resolve("uploaded");
+      },
+      {
+        attemptTimeoutMs: 10,
+        ladderMs: [1_000, 2_000],
+        onTargetWedged: async () => {
+          recreations += 1;
+          sandboxId = "submitted_replacement";
+          return true;
+        },
+        sandboxId: () => sandboxId,
+      },
+    );
+
+    expect(result).toBe("uploaded");
+    expect(attempts).toBe(3);
+    expect(recreations).toBe(1);
+    expect(waits).toEqual([1_000, 2_000]);
+    expect(
+      events.find(
+        (event) => event.entry.event === "daytona.fs.upload.target-wedged",
+      )?.entry,
+    ).toMatchObject({
+      classification: "wedged-sandbox-target",
+      sandboxId: "submitted_wedged",
+    });
+    expect(
+      events
+        .filter((event) => event.entry.event === "daytona.fs.upload.attempt")
+        .at(-1)?.entry,
+    ).toMatchObject({ sandboxId: "submitted_replacement" });
+  });
+
+  it("does not combine hangs from different sandbox targets", async () => {
+    const { envelope, waits } = createRecordingEnvelope();
+    let attempts = 0;
+    let recreations = 0;
+    let sandboxId = "submitted_first";
+
+    const result = await envelope.run(
+      "fs.upload",
+      () => {
+        attempts += 1;
+        return attempts <= 2
+          ? new Promise<string>(() => {})
+          : Promise.resolve("uploaded");
+      },
+      {
+        attemptTimeoutMs: 10,
+        ladderMs: [1_000, 2_000],
+        onRetry: () => {
+          if (attempts === 1) {
+            sandboxId = "submitted_second";
+          }
+        },
+        onTargetWedged: () => {
+          recreations += 1;
+          return true;
+        },
+        sandboxId: () => sandboxId,
+      },
+    );
+
+    expect(result).toBe("uploaded");
+    expect(attempts).toBe(3);
+    expect(recreations).toBe(0);
+    expect(waits).toEqual([1_000, 2_000]);
+  });
+
+  it("does not recreate a wedged target after the transient ladder budget is spent", async () => {
+    const { envelope } = createRecordingEnvelope();
+    let attempts = 0;
+    let recreations = 0;
+
+    await expect(
+      envelope.run(
+        "fs.upload",
+        () => {
+          attempts += 1;
+          return new Promise<void>(() => {});
+        },
+        {
+          attemptTimeoutMs: 10,
+          ladderMs: [1_000],
+          onTargetWedged: () => {
+            recreations += 1;
+            return true;
+          },
+          sandboxId: "submitted_wedged",
+        },
+      ),
+    ).rejects.toBeInstanceOf(AgentHarnessControlPlaneError);
+
+    expect(attempts).toBe(2);
+    expect(recreations).toBe(0);
+  });
+
   it("keeps the full ladder for fast-rejecting transients after a hung attempt", async () => {
     // The hang cap must not shorten the escalating ladder that fast 502
     // storms need (the 2026-08-12 lesson): only attempts abandoned by the

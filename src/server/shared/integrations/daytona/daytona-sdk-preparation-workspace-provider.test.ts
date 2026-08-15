@@ -722,6 +722,106 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     );
   });
 
+  it("recreates one wedged linked sandbox and replays the screened workspace upload", async () => {
+    const calls: unknown[] = [];
+    const parentSandbox = fakeLinkedSandbox(
+      calls,
+      "parent_sandbox",
+      "parent ok",
+    );
+    const wedgedSandbox = fakeLinkedSandbox(
+      calls,
+      "submitted_wedged",
+      "wedged",
+      { uploadFilesNeverResolves: true },
+    );
+    const replacementSandbox = fakeLinkedSandbox(
+      calls,
+      "submitted_replacement",
+      "replacement ok",
+    );
+    let linkedCreates = 0;
+    const fastEnvelope = createDaytonaControlPlaneEnvelope({
+      logger: {
+        error: async () => {},
+        info: async () => {},
+        warn: async () => {},
+      },
+      random: () => 0.5,
+      wait: async () => {},
+    });
+    const provider = new DaytonaSdkPreparationWorkspaceProvider({
+      artifactTransferBackoffMs: [1, 1],
+      client: {
+        async create(input: unknown, options?: unknown) {
+          calls.push({ create: input, options });
+          if (
+            typeof input === "object" &&
+            input !== null &&
+            "linkedSandbox" in input
+          ) {
+            linkedCreates += 1;
+            return linkedCreates === 1 ? wedgedSandbox : replacementSandbox;
+          }
+          return parentSandbox;
+        },
+        async delete(input: { id?: string; name?: string }) {
+          const sandboxId = input.id ?? input.name;
+          calls.push({ delete: sandboxId });
+          if (sandboxId === "submitted_wedged") {
+            // Cleanup of the wedged target must not hold the replay hostage.
+            await new Promise<void>(() => {});
+          }
+        },
+      } as never,
+      controlPlane: {
+        run(operation, attempt, options) {
+          return fastEnvelope.run(operation, attempt, {
+            ...options,
+            attemptTimeoutMs: 10,
+          });
+        },
+      },
+      submittedCodeSnapshot: "makeademo-submitted-code-browser",
+    });
+    const handle = await provider.create();
+
+    await handle.workspace.uploadFiles([
+      {
+        destinationPath: "/workspace/.makeademo/screened-repo.tar.gz",
+        sourcePath: "/tmp/screened-repo.tar.gz",
+      },
+    ]);
+
+    expect(linkedCreates).toBe(2);
+    expect(
+      calls.filter(
+        (call) =>
+          "uploadFiles" in Object(call) &&
+          (call as { uploadFiles: { sandbox: string } }).uploadFiles.sandbox ===
+            "submitted_wedged",
+      ),
+    ).toHaveLength(2);
+    expect(
+      calls.filter(
+        (call) =>
+          "uploadFiles" in Object(call) &&
+          (call as { uploadFiles: { sandbox: string } }).uploadFiles.sandbox ===
+            "submitted_replacement",
+      ),
+    ).toHaveLength(1);
+    expect(calls).toContainEqual({ delete: "submitted_wedged" });
+    expect(handle.workspace.submittedCodeSandboxId).toBe(
+      "submitted_replacement",
+    );
+    const linkedCreateCalls = calls.filter(
+      (call) =>
+        "create" in Object(call) &&
+        "linkedSandbox" in Object((call as { create: unknown }).create),
+    );
+    expect(linkedCreateCalls[1]).toEqual(linkedCreateCalls[0]);
+  });
+
   it("reconnects to an existing sandbox as a preparation workspace", async () => {
     const calls: unknown[] = [];
 
@@ -2934,6 +3034,7 @@ function fakeLinkedSandbox(
     sessionStatus502FailuresBeforeSuccess?: number;
     submittedExecute502?: { commandIncludes: string; failures: number };
     submittedUploadFailuresBeforeSuccess?: number;
+    uploadFilesNeverResolves?: boolean;
   } = {},
 ) {
   let uploadAttempts = 0;
@@ -2961,6 +3062,9 @@ function fakeLinkedSandbox(
             ...(timeoutSec === undefined ? {} : { timeoutSec }),
           },
         });
+        if (options.uploadFilesNeverResolves === true) {
+          await new Promise<void>(() => {});
+        }
         if (
           id === "submitted_sandbox" &&
           uploadAttempts <= (options.submittedUploadFailuresBeforeSuccess ?? 0)
