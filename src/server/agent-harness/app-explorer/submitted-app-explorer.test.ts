@@ -1951,6 +1951,61 @@ describe("exploreSubmittedApp", () => {
     expect(result.validationReport.logsSummary).toContain("/auth/login");
   });
 
+  it("does not let a passing declared proof mask auth-degraded requested-feature interactions", async () => {
+    const feature = preparedFeature({
+      description: "Open and share a public scheduling link.",
+      entryPaths: ["/event-types"],
+      expectedProof: { kind: "visible-text", text: "Event types" },
+      id: "event-types-public-link",
+      label: "Public scheduling link",
+      requestedFeature: "open a public scheduling link",
+    });
+    const { result } = await exploreObservation({
+      declaredProofs: [
+        {
+          detail: '"Event types" is visible on /event-types',
+          featureId: feature.id,
+          passed: true,
+        },
+      ],
+      featureInventory: [feature],
+      requestedFeatures: ["open a public scheduling link"],
+      routes: [
+        observedRoute({
+          featureIds: [feature.id],
+          headings: ["Event types"],
+          interactions: [
+            {
+              kind: "click",
+              locator: {
+                name: "Open public link",
+                strategy: "role",
+                value: "button",
+              },
+              name: "Open public link",
+              navigationDestination: "/auth/login",
+              outcome: "/auth/login became visible",
+            },
+          ],
+          path: "/event-types",
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      failureClassification: "feature auth barrier",
+      featureVerdicts: [
+        expect.objectContaining({
+          failedBecause: "auth-wall",
+          featureId: feature.id,
+          verdict: "failed",
+        }),
+      ],
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain("/auth/login");
+  });
+
   it("recognizes an OAuth-only redirect as a protected feature auth wall", async () => {
     const invoice = preparedFeature({
       authStrategy: "bypass",

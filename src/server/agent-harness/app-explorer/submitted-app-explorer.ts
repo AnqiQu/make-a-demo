@@ -1935,31 +1935,6 @@ function readFeatureVerdicts(input: {
         feature.entryPaths,
       );
     }
-    // A declared proof's executed verdict subsumes the wording bridge
-    // (N107): "undo/redo" must pass its declared transition, not ride a
-    // nearby heading. An absent result is missing evidence, not failed
-    // evidence — the wording chain below still applies.
-    const proofResult =
-      feature.expectedProof === undefined
-        ? undefined
-        : input.declaredProofResults.get(feature.id);
-    if (proofResult !== undefined) {
-      if (proofResult.passed) {
-        return {
-          detail: proofResult.detail,
-          evidence: [`declared-proof-${feature.id}`],
-          featureId: feature.id,
-          groundedBy: "declared-proof",
-          verdict: "grounded",
-        } satisfies FeatureVerdict;
-      }
-      return failed(
-        feature,
-        "declared-proof-failed",
-        proofResult.detail,
-        feature.entryPaths,
-      );
-    }
     const tagged = input.actionsByFeatureId.get(feature.id) ?? [];
     const authDegradedActions =
       input.authDegradedActionsByFeatureId.get(feature.id) ?? [];
@@ -1983,6 +1958,31 @@ function readFeatureVerdicts(input: {
         "auth-wall",
         `auth-degraded browser interaction${destinations.length === 1 ? "" : "s"}: ${destinations.join(", ")}`,
         authDegradedActions.map(({ id }) => id),
+      );
+    }
+    // A declared proof's executed verdict subsumes the wording bridge
+    // (N107): "undo/redo" must pass its declared transition, not ride a
+    // nearby heading. An absent result is missing evidence, not failed
+    // evidence — the wording chain below still applies.
+    const proofResult =
+      feature.expectedProof === undefined
+        ? undefined
+        : input.declaredProofResults.get(feature.id);
+    if (proofResult !== undefined) {
+      if (proofResult.passed) {
+        return {
+          detail: proofResult.detail,
+          evidence: [`declared-proof-${feature.id}`],
+          featureId: feature.id,
+          groundedBy: "declared-proof",
+          verdict: "grounded",
+        } satisfies FeatureVerdict;
+      }
+      return failed(
+        feature,
+        "declared-proof-failed",
+        proofResult.detail,
+        feature.entryPaths,
       );
     }
     const matchingAsserts = tagged.filter(
