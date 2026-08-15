@@ -7905,13 +7905,84 @@ calcom-shaped run's per-round cost drops enough that
 six rounds fit the wall clock with margin; no
 carried-forward evidence survives a failing re-probe.
 
+### Refactor-not-add (2026-08-14): N148–N150 extend existing rules
+
+Audited on request before implementation: each item
+lands inside machinery that already exists, and two of
+them get stricter — not just cheaper — when built that
+way. Implementers should follow this shape rather than
+adding parallel rules.
+
+N148 — extend the readiness classifier; make the
+escape hatch structured. The readiness failure
+classifier (default-harness-dependencies.ts, the
+failures[] builder around
+readReadinessServeFailureHeadline) already
+special-cases redirect-to-auth into "auth wall"; the
+start-consumes-missing-build-output shape is one more
+branch there, not a new rule. The repair prompt's
+preserve rule currently prose-matches the summary
+("unless the failure summary explicitly reports a
+runtime-configuration error") — the same fragility the
+rules audit flagged in N141's prose regex. Refactor:
+add the classification once to the router vocabulary
+(repair-router.ts) and export a shared
+runtimeConfigurationClassifications set consumed by
+BOTH the router and the repair-prompt builder, so the
+escape hatch keys on failureClassification instead of
+summary wording. The static half is one new invariant
+line in the existing
+createPreparationManifestContract() invariants list
+(production-entry start with buildCommandUsed
+omitted), not a new validation module.
+
+N149 — one vocabulary entry plus one headline
+pattern. Routing is a single line added to the
+existing preparationFailureClassifications table; it
+must NOT join dependencyFailureClassifications,
+precisely so the metadata-only handcuff the rules
+audit flagged cannot forbid the real fix (building
+the workspace package). Detection extends N145's
+causal-headline chooser (ANSI-strip +
+collapseRepeatedErrorBlocks + headline selection)
+with the two measured shapes ("Failed to resolve
+entry for package X"; ERR_MODULE_NOT_FOUND under a
+workspace package's dist/) — no parallel log scanner.
+The is-X-a-workspace-package test reads
+RepoProfile.workspacePackages, which the repo profile
+already enumerates for the N146 class selector.
+
+N150 — no new rules at all; it is a scoping change in
+orchestration. Everything it needs exists:
+featureVerdicts already persists per-feature verdicts
+per round (schemas/artifacts.ts),
+recordFailingFeatureProgress already computes the
+failing set for budget bonuses,
+probeSubmittedCodeRuntime with budgetMs 0 is the
+cheap single-shot probe, and N125's replay-context
+verification is the evidence re-check. The only new
+code is the exploration planner consulting the
+previous round's verdicts to scope full exploration
+to failed/diff-touched features, plus the
+promote-on-failed-re-probe wiring for the rest.
+
 ### Watchlist (updated)
 
-- OWNER TODO (blocks twenty entirely): build the
-  heavyweight submitted-code snapshot and set
-  MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT_HEAVYWEIGHT.
-  Until then twenty runs 8GiB/10GB and dies exactly as
-  wave-11 shows.
+- Heavyweight snapshot: built 2026-08-14 as
+  makeademo-submitted-code-browser-ca-20260814-services-cpu4-mem8
+  and MAKEADEMO_DAYTONA_SUBMITTED_CODE_SNAPSHOT_HEAVYWEIGHT
+  now points at it — but Daytona rejected the 16GiB
+  spec: "Memory request 16GB exceeds maximum allowed
+  per sandbox (8GB)", the same org-cap class as the
+  10GB disk limit measured 2026-08-08. The variant
+  doubles CPU (4 vs the standard's 2) inside the same
+  8GiB/10GB envelope: that buys wall-clock headroom,
+  not memory. Lifting the memory ceiling needs a
+  Daytona plan change (support@daytona.io). Until
+  then twenty passes only if preparation keeps
+  build+migration under 8GiB (N140's guidance), so
+  twenty stays on the watchlist as
+  capacity-constrained, not fixed.
 - calcom seeded-session robustness: N142 now names the
   auth barrier and steers at session seeding; whether
   the preparation can hold an authenticated session
@@ -7924,9 +7995,11 @@ carried-forward evidence survives a failing re-probe.
 
 ### Rerun
 
-After N148–N150 land AND the heavyweight snapshot
-exists: homer green; twenty finally meets its
-migration on 16GiB with N140's memory guidance live;
+After N148–N150 land (the heavyweight snapshot now
+exists, CPU-doubled but memory-capped at the org's
+8GB): homer green; twenty gets 2× CPU but stays under
+the 8GiB ceiling, so it passes only if N140's memory
+guidance keeps build and migration under the cap;
 ghostfolio repairs its runtime on round 2 and returns
 green; directus builds @directus/extensions round 1
 and re-enters the stub arc (N143/N138 finally
