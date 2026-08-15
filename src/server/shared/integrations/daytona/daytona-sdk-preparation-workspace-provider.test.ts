@@ -741,6 +741,14 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
       "replacement ok",
     );
     let linkedCreates = 0;
+    let markStaleDeleteStarted!: () => void;
+    let releaseStaleDelete!: () => void;
+    const staleDeleteStarted = new Promise<void>((resolve) => {
+      markStaleDeleteStarted = resolve;
+    });
+    const staleDeletePending = new Promise<void>((resolve) => {
+      releaseStaleDelete = resolve;
+    });
     const fastEnvelope = createDaytonaControlPlaneEnvelope({
       logger: {
         error: async () => {},
@@ -770,7 +778,8 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
           calls.push({ delete: sandboxId });
           if (sandboxId === "submitted_wedged") {
             // Cleanup of the wedged target must not hold the replay hostage.
-            await new Promise<void>(() => {});
+            markStaleDeleteStarted();
+            await staleDeletePending;
           }
         },
       } as never,
@@ -786,12 +795,32 @@ describe("DaytonaSdkPreparationWorkspaceProvider", () => {
     });
     const handle = await provider.create();
 
-    await handle.workspace.uploadFiles([
+    const upload = handle.workspace.uploadFiles([
       {
         destinationPath: "/workspace/.makeademo/screened-repo.tar.gz",
         sourcePath: "/tmp/screened-repo.tar.gz",
       },
     ]);
+
+    await staleDeleteStarted;
+    try {
+      await vi.waitFor(
+        () => {
+          expect(
+            calls.filter(
+              (call) =>
+                "uploadFiles" in Object(call) &&
+                (call as { uploadFiles: { sandbox: string } }).uploadFiles
+                  .sandbox === "submitted_replacement",
+            ),
+          ).toHaveLength(1);
+        },
+        { interval: 5, timeout: 500 },
+      );
+    } finally {
+      releaseStaleDelete();
+    }
+    await upload;
 
     expect(linkedCreates).toBe(2);
     expect(
