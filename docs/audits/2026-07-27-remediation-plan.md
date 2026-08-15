@@ -8250,6 +8250,18 @@ wave-12 script executes past open-create-field and
 open-create-role; a synthetic nested-marker
 violation names both labels.
 
+Landed: `page.waitForURL` remains the bounded
+concurrent settle for a navigation-observed click,
+but the Capture SDK now treats it as synchronization
+rather than opening a second Browser Action marker
+span. The click retains its action markers and step
+failures still carry synchronization errors. Nested
+marker diagnostics name both the open and newly
+started labels, and an identical Capture Script
+protocol violation after one statically conformant
+repair trips the repeated-failure budget instead of
+spending all three script repairs.
+
 ### N153 (Medium, bugfix) — consecutive hangs on one sandbox mean the sandbox is wedged, not the network
 
 Extend N133's retry ladder with an escalation rung:
