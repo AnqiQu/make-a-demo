@@ -8211,6 +8211,15 @@ availability-and-duration at app-exploration with
 preparation-repair instead of dying in flow
 planning.
 
+Landed: requested-feature verdicts now evaluate
+exercised auth-degraded interactions before accepting
+a declared proof. A passing route-level proof can no
+longer ground a feature whose only exercised clicks
+reach authentication; the persisted verdict is
+`auth-wall`, the report is `feature auth barrier`,
+and the existing router sends the run to Repo
+Preparation Repair.
+
 ### N152 (High, bugfix) — navigation-observed clicks must compile to one marker span
 
 N141's settle is correct about WHAT to wait for and
