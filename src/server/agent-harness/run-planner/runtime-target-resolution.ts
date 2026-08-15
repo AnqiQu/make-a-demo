@@ -84,11 +84,7 @@ export function findRuntimeConfigurationIssue(input: {
       ? readProductionEntry(resolvedStartCommand)
       : undefined;
   if (productionEntry !== undefined) {
-    const resolution =
-      startScriptName === undefined
-        ? `runs ${input.preparationManifest.startCommandUsed}`
-        : `resolves ${input.preparationManifest.startCommandUsed} to ${resolvedStartCommand}`;
-    return `startCommandUsed ${resolution}, but buildCommandUsed is omitted; declare the build that emits ${productionEntry}, or use the repository's development server.`;
+    return `Runtime-configuration error: startCommandUsed runs ${productionEntry} but no declared build produces it — declare the build that emits ${productionEntry}, or start the dev server instead.`;
   }
   for (const command of [
     input.preparationManifest.buildCommandUsed,

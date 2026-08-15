@@ -2452,7 +2452,7 @@ async function validateResolvedSubmittedCodeRuntime(
   if (runtimeConfigurationIssue !== undefined) {
     return failedPreparationValidation({
       attemptedCommand: manifest.startCommandUsed,
-      classification: "start failure",
+      classification: "runtime-configuration error",
       logsSummary: runtimeConfigurationIssue,
       manifest,
       stage,

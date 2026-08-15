@@ -1119,7 +1119,7 @@ describe("resolveRuntimeTarget", () => {
         }),
       }),
     ).toBe(
-      "startCommandUsed resolves npm run start to node dist/apps/api/main, but buildCommandUsed is omitted; declare the build that emits dist/apps/api/main, or use the repository's development server.",
+      "Runtime-configuration error: startCommandUsed runs dist/apps/api/main but no declared build produces it — declare the build that emits dist/apps/api/main, or start the dev server instead.",
     );
   });
 
