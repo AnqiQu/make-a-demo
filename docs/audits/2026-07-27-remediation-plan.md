@@ -7927,6 +7927,19 @@ calcom-shaped run's per-round cost drops enough that
 six rounds fit the wall clock with margin; no
 carried-forward evidence survives a failing re-probe.
 
+Landed: repair validation now receives the previous
+feature-verdict ledger plus feature IDs mapped from
+the repair's source/data-seam diff and any changed
+feature declarations. Prior failed, touched, new, or
+non-replayable features take full entry exploration;
+unchanged grounded features reuse the same-round
+readiness result (or a 15-second single-shot route
+probe) and execute only their declared proofs from
+fresh navigation. Any missing or failed route/proof
+verdict promotes that feature to full exploration,
+and merged failure reports contain only evidence
+freshly produced in the current round.
+
 ### Refactor-not-add (2026-08-14): N148–N150 extend existing rules
 
 Audited on request before implementation: each item
