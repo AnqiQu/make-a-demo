@@ -104,6 +104,17 @@ describe("RepairRouter", () => {
     );
   });
 
+  it("routes an unbuilt workspace dependency with full repair latitude", () => {
+    expect(
+      classifyRepairRoute({
+        failureClassification: "unbuilt workspace dependency",
+      }),
+    ).toBe("repo-preparation-repair");
+    expect(isDependencyRepairFailure("unbuilt workspace dependency")).toBe(
+      false,
+    );
+  });
+
   it("routes unreproducible replay evidence to preparation repair", () => {
     // N125(3): the element behind a browser-verified candidate no longer
     // exists in the state capture replays it in. The script channel cannot

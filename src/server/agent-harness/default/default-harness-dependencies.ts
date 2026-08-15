@@ -115,6 +115,7 @@ import {
   type NetworkAttempt,
   type PreparationManifest,
   type RepoProfile,
+  type RepoWorkspacePackage,
   type RunPlan,
   type RuntimeProbeAttempt,
   type RuntimeProbeDiagnostics,
@@ -3010,13 +3011,12 @@ async function validateResolvedSubmittedCodeRuntime(
       // twenty's EvalError naming the unbuilt package survived only there
       // while the PTY stream dropped it, and the N67 steering never fired
       // (2026-08-09).
-      const unbuiltWorkspaceHints = readUnbuiltWorkspacePackageHints(
-        `${buildResult.stderr}\n${buildResult.stdout}\n${buildFileTail}`,
-        {
-          appDir: manifest.appDir,
-          workspacePackages: input.repoProfile.workspacePackages,
-        },
-      );
+      const buildOutput = `${buildResult.stderr}\n${buildResult.stdout}\n${buildFileTail}`;
+      const unbuiltWorkspace = inspectUnbuiltWorkspacePackages(buildOutput, {
+        appDir: manifest.appDir,
+        packageManager: input.repoProfile.packageManager,
+        workspacePackages: input.repoProfile.workspacePackages,
+      });
       const buildFailureEvidence = readCommandFailureEvidence({
         exitCode: buildResult.exitCode,
         fileTail: buildFileTail,
@@ -3031,21 +3031,26 @@ async function validateResolvedSubmittedCodeRuntime(
         ...(buildDiskPressure.exhausted
           ? [diskExhaustionRepairHint(buildDiskPressure.markerLines)]
           : []),
-        ...unbuiltWorkspaceHints,
+        ...unbuiltWorkspace.hints,
       ];
+      const buildFailureClassification =
+        blockedBuildAttempts.length > 0
+          ? "external network attempted"
+          : unbuiltWorkspace.packageNames.length > 0
+            ? "unbuilt workspace dependency"
+            : "build failure";
       return failedPreparationValidation({
         attemptedCommand: manifest.buildCommandUsed,
         blockedNetworkAttempts: blockedBuildAttempts,
-        classification:
-          blockedBuildAttempts.length > 0
-            ? "external network attempted"
-            : "build failure",
+        classification: buildFailureClassification,
         exitCode: buildResult.exitCode,
         logsSummary: [
           formatCommandFailureSummary(
             blockedBuildAttempts.length > 0
               ? `Submitted-code build requested ${blockedBuildAttempts.length} uncached external resource(s)`
-              : "Submitted-code build failed",
+              : unbuiltWorkspace.packageNames.length > 0
+                ? `Unbuilt workspace dependency ${unbuiltWorkspace.packageNames.join(", ")}`
+                : "Submitted-code build failed",
             buildFailureEvidence,
           ),
           ...buildDiskPressure.markerLines,
@@ -3115,10 +3120,12 @@ async function validateResolvedSubmittedCodeRuntime(
       ? { classification: "harness/internal failure" as const }
       : classifyPreparationRuntimeFailure({
           appOutput,
+          exitCode: appStatus?.exitCode ?? preflightResult.exitCode,
           manifest,
           probe: preflightResult.runtimeProbe,
           processExited: appStatus?.running === false,
           processRunning: appStatus?.running === true,
+          repoProfile: input.repoProfile,
         });
   const failureClassification = runtimeFailure.classification;
   const serveFailureHeadline =
@@ -3176,12 +3183,7 @@ async function validateResolvedSubmittedCodeRuntime(
               "The process is alive but nothing listens on the probed port and the captured app output stopped changing — the bind failure or crash is already in that output (a supervisor such as nodemon may be keeping the parent alive after its child crashed). Fix the cause shown there instead of adjusting ports or probes.",
             ]
           : []),
-        ...(probeSucceeded
-          ? []
-          : readUnbuiltWorkspacePackageHints(appOutput, {
-              appDir: manifest.appDir,
-              workspacePackages: input.repoProfile.workspacePackages,
-            })),
+        ...(probeSucceeded ? [] : (runtimeFailure.suggestedRepairHints ?? [])),
         ...(probeSucceeded
           ? []
           : readMissingRequiredEnvHints(manifest, input.repoProfile)),
@@ -3202,75 +3204,124 @@ async function validateResolvedSubmittedCodeRuntime(
 // class without a file path: its package.json entry points at unbuilt
 // dist/. A runtime file missing under a sibling workspace's directory is
 // the asset variant: the file is that sibling's build product.
-function readUnbuiltWorkspacePackageHints(
+function inspectUnbuiltWorkspacePackages(
   output: string,
   context: {
     appDir: string;
+    packageManager: RepoProfile["packageManager"];
     workspacePackages: RepoProfile["workspacePackages"];
   },
-): string[] {
-  const hints: string[] = [];
-  const missingFilePackages = new Set<string>();
-  for (const match of output.matchAll(
-    /(?:can'?t resolve|cannot find module|could not resolve)\s+["'][^"']*node_modules\/((?:@[A-Za-z0-9_.-]+\/)?[A-Za-z0-9_.-]+)\/[^"']+["']/gi,
-  )) {
-    const name = match[1];
-    if (name !== undefined) {
-      missingFilePackages.add(name);
+): { hints: string[]; packageNames: string[] } {
+  const workspacePackages = context.workspacePackages ?? [];
+  const appDir = normalizeRepoRelativeDir(context.appDir);
+  const packagesByName = new Map<string, RepoWorkspacePackage>();
+  for (const workspacePackage of workspacePackages) {
+    if (
+      workspacePackage.name !== undefined &&
+      normalizeRepoRelativeDir(workspacePackage.dir) !== appDir
+    ) {
+      packagesByName.set(workspacePackage.name, workspacePackage);
     }
   }
-  hints.push(
-    ...[...missingFilePackages].map(
-      (name) =>
-        `${name} resolves into the repo's own node_modules but the imported file does not exist — it is likely an internal workspace package whose build output was never produced, and dependency install builds no workspace member. Set buildCommandUsed to the repository's own target that builds ${name} before the app, naming ${name} in the command (check the repo's build, nx, or turbo scripts); the backend keeps a build command that names a real workspace package, even for dev-server starts. Do not change the import.`,
-    ),
-  );
+  const matchedPackages = new Map<
+    string,
+    { evidencePath?: string; workspacePackage: RepoWorkspacePackage }
+  >();
+  const addPackage = (name: string | undefined, evidencePath?: string) => {
+    if (name === undefined) return;
+    const workspacePackage = packagesByName.get(name);
+    if (workspacePackage !== undefined) {
+      const existing = matchedPackages.get(name);
+      const resolvedEvidencePath = existing?.evidencePath ?? evidencePath;
+      matchedPackages.set(name, {
+        ...(resolvedEvidencePath === undefined
+          ? {}
+          : { evidencePath: resolvedEvidencePath }),
+        workspacePackage,
+      });
+    }
+  };
 
-  const workspacePackages = context.workspacePackages ?? [];
-  const workspaceNames = new Set(
-    workspacePackages.flatMap(({ name }) => (name === undefined ? [] : [name])),
-  );
-  const entryPackages = new Set<string>();
   for (const match of output.matchAll(
     /failed to resolve entry for package\s+["']([^"'\n]+)["']/gi,
   )) {
-    const name = match[1];
-    if (
-      name !== undefined &&
-      workspaceNames.has(name) &&
-      !missingFilePackages.has(name)
-    ) {
-      entryPackages.add(name);
+    addPackage(match[1]);
+  }
+
+  for (const match of output.matchAll(
+    /(?:can'?t resolve|cannot find module|could not resolve)\s+["']([^"'\n]+)["']/gi,
+  )) {
+    const reference = match[1];
+    if (reference === undefined) continue;
+    const nodeModulesPackage =
+      /(?:^|\/)node_modules\/((?:@[A-Za-z0-9_.-]+\/)?[A-Za-z0-9_.-]+)(?:\/|$)/i.exec(
+        reference,
+      )?.[1];
+    if (nodeModulesPackage !== undefined) {
+      addPackage(nodeModulesPackage, reference);
+      continue;
+    }
+    for (const name of packagesByName.keys()) {
+      if (reference === name || reference.startsWith(`${name}/`)) {
+        addPackage(name, reference);
+      }
+    }
+    const repoPath = normalizeSubmittedRepoPath(reference);
+    if (repoPath === undefined) continue;
+    for (const [name, workspacePackage] of packagesByName) {
+      const packageDir = normalizeRepoRelativeDir(workspacePackage.dir);
+      if (
+        packageDir !== "" &&
+        (repoPath === packageDir || repoPath.startsWith(`${packageDir}/`))
+      ) {
+        addPackage(name, repoPath);
+      }
     }
   }
-  hints.push(
-    ...[...entryPackages].map(
-      (name) =>
-        `${name} is an internal workspace package whose entry point does not resolve — its package.json main/module/exports names build output that dependency install never produces. Set buildCommandUsed to the repository's own target that builds ${name} before the app, naming ${name} in the command (check the repo's build, nx, or turbo scripts); the backend keeps a build command that names a real workspace package, even for dev-server starts. Do not change the import.`,
-    ),
-  );
 
   // The root workspace directory would claim every repo path, so only
   // named subdirectory siblings participate in asset matching.
-  const appDir = normalizeRepoRelativeDir(context.appDir);
   const siblingWorkspaces = workspacePackages.flatMap((pkg) => {
     const dir = normalizeRepoRelativeDir(pkg.dir);
     return dir === "" || dir === appDir ? [] : [{ dir, name: pkg.name }];
   });
-  const missingAssetHints = new Map<string, string>();
+  const missingAssetPaths: string[] = [];
   for (const match of output.matchAll(
     /(?:ENOENT|no such file or directory)[^'"\n]*['"]([^'"\n]+)['"]/gi,
   )) {
     const rawPath = match[1];
-    if (rawPath === undefined) {
-      continue;
-    }
+    if (rawPath === undefined) continue;
     const path = rawPath.replace(/^\/workspace\/repo\//, "");
-    if (path.startsWith("/") || path.includes("node_modules/")) {
-      continue;
+    if (path.startsWith("/") || path.includes("node_modules/")) continue;
+    missingAssetPaths.push(path);
+    for (const [name, workspacePackage] of packagesByName) {
+      const packageDir = normalizeRepoRelativeDir(workspacePackage.dir);
+      if (path === packageDir || path.startsWith(`${packageDir}/`)) {
+        addPackage(name, path);
+      }
     }
+  }
+
+  const hints = [...matchedPackages].map(([name, match]) =>
+    createUnbuiltWorkspacePackageHint({
+      ...(match.evidencePath === undefined
+        ? {}
+        : { evidencePath: match.evidencePath }),
+      name,
+      packageManager: context.packageManager,
+      workspacePackage: match.workspacePackage,
+    }),
+  );
+  const missingAssetHints = new Map<string, string>();
+  const matchedPackageDirs = new Set(
+    [...matchedPackages.values()].map(({ workspacePackage }) =>
+      normalizeRepoRelativeDir(workspacePackage.dir),
+    ),
+  );
+  for (const path of missingAssetPaths) {
     for (const sibling of siblingWorkspaces) {
       if (
+        !matchedPackageDirs.has(sibling.dir) &&
         !missingAssetHints.has(sibling.dir) &&
         (path === sibling.dir || path.startsWith(`${sibling.dir}/`))
       ) {
@@ -3283,7 +3334,51 @@ function readUnbuiltWorkspacePackageHints(
     }
   }
   hints.push(...missingAssetHints.values());
-  return hints;
+  return { hints, packageNames: [...matchedPackages.keys()] };
+}
+
+function createUnbuiltWorkspacePackageHint(input: {
+  evidencePath?: string;
+  name: string;
+  packageManager: RepoProfile["packageManager"];
+  workspacePackage: RepoWorkspacePackage;
+}): string {
+  const buildScript =
+    Object.entries(input.workspacePackage.scripts).find(
+      ([scriptName]) => scriptName === "build",
+    ) ??
+    Object.entries(input.workspacePackage.scripts).find(([scriptName]) =>
+      /^build(?::|$)/.test(scriptName),
+    );
+  const buildDirection =
+    buildScript === undefined
+      ? `Use the repository's own nx, turbo, or workspace target that builds ${input.name}`
+      : `${input.name}'s package.json declares ${JSON.stringify(buildScript[0])}: ${JSON.stringify(buildScript[1])}; run ${workspaceBuildInvocation(input.packageManager, input.name, buildScript[0])}`;
+  const missingEvidence =
+    input.evidencePath === undefined
+      ? `${input.name}'s entry or imported build output does not resolve`
+      : `${input.evidencePath} is missing from ${input.name}`;
+  return `${missingEvidence}; ${input.name} is an internal workspace package, and dependency install builds no workspace member. ${buildDirection} before the app through buildCommandUsed, or widen the repository's install/predev filter so it includes ${input.name}. Keep ${input.name} in the command so the backend preserves the build, even for development-server starts. Do not change the import.`;
+}
+
+function workspaceBuildInvocation(
+  packageManager: RepoProfile["packageManager"],
+  packageName: string,
+  scriptName: string,
+): string {
+  const quotedName = JSON.stringify(packageName);
+  switch (packageManager) {
+    case "bun":
+      return `bun --filter ${quotedName} run ${scriptName}`;
+    case "npm":
+      return `npm run ${scriptName} --workspace ${quotedName}`;
+    case "pnpm":
+      return `pnpm --filter ${quotedName} run ${scriptName}`;
+    case "yarn":
+      return `yarn workspace ${quotedName} ${scriptName}`;
+    default:
+      return `the ${scriptName} script for ${packageName}`;
+  }
 }
 
 function normalizeRepoRelativeDir(dir: string): string {
@@ -3317,11 +3412,17 @@ function readMissingRequiredEnvHints(
 
 function classifyPreparationRuntimeFailure(input: {
   appOutput?: string;
+  exitCode?: number;
   manifest?: PreparationManifest;
   probe: RuntimeProbeDiagnostics;
   processExited?: boolean;
   processRunning?: boolean;
-}): { classification: string; headline?: string } {
+  repoProfile?: RepoProfile;
+}): {
+  classification: string;
+  headline?: string;
+  suggestedRepairHints?: string[];
+} {
   const outcome = input.probe.attempts.at(-1)?.outcome;
   if (
     input.processRunning &&
@@ -3329,6 +3430,27 @@ function classifyPreparationRuntimeFailure(input: {
     (input.probe.httpStatus ?? 0) >= 500
   ) {
     return { classification: "app server error" };
+  }
+  const unbuiltWorkspace = input.repoProfile
+    ? inspectUnbuiltWorkspacePackages(input.appOutput ?? "", {
+        appDir: input.manifest?.appDir ?? ".",
+        packageManager: input.repoProfile.packageManager,
+        workspacePackages: input.repoProfile.workspacePackages,
+      })
+    : { hints: [], packageNames: [] };
+  if (unbuiltWorkspace.packageNames.length > 0) {
+    return {
+      classification: "unbuilt workspace dependency",
+      headline: formatCommandFailureSummary(
+        `Unbuilt workspace dependency ${unbuiltWorkspace.packageNames.join(", ")}`,
+        readCommandFailureEvidence({
+          exitCode: input.exitCode ?? 1,
+          stderr: input.appOutput ?? "",
+          stdout: "",
+        }),
+      ),
+      suggestedRepairHints: unbuiltWorkspace.hints,
+    };
   }
   const missingBuildOutputEntry = input.manifest
     ? readMissingBuildOutputEntry({

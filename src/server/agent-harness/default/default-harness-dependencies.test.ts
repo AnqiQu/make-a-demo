@@ -6678,18 +6678,35 @@ describe("createDefaultAgentHarnessDependencies", () => {
         buildCommandUsed: "vite build",
         installCommandUsed: "npm ci --no-audit",
       },
-      repoProfile: repoProfile(),
+      repoProfile: {
+        ...repoProfile(),
+        workspacePackages: [
+          {
+            dir: ".",
+            name: "twenty",
+            ports: [3000],
+            scripts: { build: "vite build", dev: "bun run dev" },
+          },
+          {
+            dir: "packages/twenty-ui",
+            name: "twenty-ui",
+            ports: [],
+            scripts: { build: "tsup" },
+          },
+        ],
+        workspaces: { isMonorepo: true, packageDirectories: ["packages/*"] },
+      },
       runPlan: runPlan(),
       workspace,
     });
 
     expect(report).toMatchObject({
-      failureClassification: "build failure",
+      failureClassification: "unbuilt workspace dependency",
       status: "failed",
     });
     expect(report.suggestedRepairHints.join("\n")).toContain("twenty-ui");
     expect(report.suggestedRepairHints.join("\n")).toContain(
-      "build output was never produced",
+      "dependency install builds no workspace member",
     );
   });
 
@@ -7486,16 +7503,26 @@ describe("createDefaultAgentHarnessDependencies", () => {
       repoProfile: {
         ...repoProfile(),
         packageScripts: { build: "vite build", dev: "bun run dev" },
+        workspacePackages: [
+          {
+            dir: "packages/twenty-shared",
+            name: "twenty-shared",
+            ports: [],
+            scripts: { build: "tsup" },
+          },
+        ],
+        workspaces: { isMonorepo: true, packageDirectories: ["packages/*"] },
       },
       runPlan: runPlan(),
       workspace,
     });
 
     expect(report).toMatchObject({
-      failureClassification: "build failure",
+      failureClassification: "unbuilt workspace dependency",
       status: "failed",
     });
     const headline = report.logsSummary.split("\n", 1)[0] ?? "";
+    expect(headline).toContain("Unbuilt workspace dependency twenty-shared");
     expect(headline).toContain("ERR_MODULE_NOT_FOUND");
     expect(headline).toContain("twenty-shared/dist/vite.mjs");
     expect(headline).not.toContain("vite.config.ts (16:41)");
@@ -7503,10 +7530,11 @@ describe("createDefaultAgentHarnessDependencies", () => {
     const hints = report.suggestedRepairHints.join("\n");
     expect(hints).toContain("twenty-shared");
     expect(hints).toContain("workspace package");
+    expect(hints).toContain("tsup");
     expect(hints).toContain("Do not change the import");
   });
 
-  it("steers an unresolved workspace entry at the repo's own build target", async () => {
+  it("classifies an unresolved workspace entry as an unbuilt workspace dependency", async () => {
     // vite names only the package when its entry points at unbuilt dist/
     // output: no node_modules file path ever appears, so the missing-file
     // rule stays silent and the run burned rounds without steering.
@@ -7529,7 +7557,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
           running: false,
           startedAt: "2026-08-06T00:00:00.000Z",
           stderr:
-            'Error: Failed to resolve entry for package "@acme/ui". The package may have incorrect main/module/exports specified in its package.json.',
+            'Error: Failed to resolve entry for package "@directus/extensions". The package may have incorrect main/module/exports specified in its package.json.',
           stdout: "",
         };
       },
@@ -7553,7 +7581,12 @@ describe("createDefaultAgentHarnessDependencies", () => {
               ports: [3000],
               scripts: { dev: "bun run dev" },
             },
-            { dir: "packages/ui", name: "@acme/ui", ports: [], scripts: {} },
+            {
+              dir: "packages/extensions",
+              name: "@directus/extensions",
+              ports: [],
+              scripts: { build: "vite build" },
+            },
           ],
           workspaces: { isMonorepo: true, packageDirectories: ["packages/*"] },
         },
@@ -7564,12 +7597,79 @@ describe("createDefaultAgentHarnessDependencies", () => {
       const report = await validation;
 
       expect(report).toMatchObject({
-        failureClassification: "missing dependency",
+        failureClassification: "unbuilt workspace dependency",
         status: "failed",
       });
+      expect(report.logsSummary.split("\n", 1)[0]).toContain(
+        "@directus/extensions",
+      );
       const hints = report.suggestedRepairHints.join("\n");
-      expect(hints).toContain("@acme/ui");
+      expect(hints).toContain("@directus/extensions");
       expect(hints).toContain("buildCommandUsed");
+      expect(hints).toContain("vite build");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("recognizes missing output under an in-repo workspace path", async () => {
+    vi.useFakeTimers();
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        return command.includes("curl -")
+          ? {
+              exitCode: 7,
+              stderr: "curl: (7) Failed to connect to 127.0.0.1 port 3000",
+              stdout: "",
+            }
+          : { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async readSubmittedCodeAppStatus() {
+        return {
+          exitCode: 1,
+          running: false,
+          stderr:
+            "Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/workspace/repo/packages/ui/dist/index.js' imported from /workspace/repo/apps/web/server.js",
+          stdout: "",
+        };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    try {
+      const validation = harness.dependencies.validatePreparation({
+        preparationManifest: preparationManifest(),
+        repoProfile: {
+          ...repoProfile(),
+          workspacePackages: [
+            {
+              dir: "packages/ui",
+              name: "@acme/ui",
+              ports: [],
+              scripts: { build: "vite build" },
+            },
+          ],
+          workspaces: { isMonorepo: true, packageDirectories: ["packages/*"] },
+        },
+        runPlan: runPlan(),
+        workspace,
+      });
+      await vi.advanceTimersByTimeAsync(200_000);
+      const report = await validation;
+
+      expect(report).toMatchObject({
+        failureClassification: "unbuilt workspace dependency",
+        status: "failed",
+      });
+      expect(report.logsSummary.split("\n", 1)[0]).toContain("@acme/ui");
+      expect(report.suggestedRepairHints.join("\n")).toContain(
+        "packages/ui/dist/index.js",
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -7595,8 +7695,10 @@ describe("createDefaultAgentHarnessDependencies", () => {
           exitCode: 1,
           running: false,
           startedAt: "2026-08-06T00:00:00.000Z",
-          stderr:
+          stderr: [
             'Error: Failed to resolve entry for package "left-pad-ultra". The package may have incorrect main/module/exports specified in its package.json.',
+            "Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/workspace/repo/node_modules/left-pad-ultra/dist/index.js'",
+          ].join("\n"),
           stdout: "",
         };
       },

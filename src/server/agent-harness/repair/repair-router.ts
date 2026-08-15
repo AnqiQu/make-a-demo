@@ -52,6 +52,7 @@ const preparationFailureClassifications = new Set([
   "service seed failure",
   "service start failure",
   "start failure",
+  "unbuilt workspace dependency",
 ]);
 
 export function classifyRepairRoute(input: {
