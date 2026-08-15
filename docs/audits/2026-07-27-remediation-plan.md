@@ -7896,6 +7896,16 @@ The runtime classification half needs no change — it
 keys on the observed missing entry, not the command
 text.
 
+Landed: manifest validation now resolves npm, yarn,
+pnpm, and bun `run <script>` starts through the
+selected package's profiled script table before
+applying the existing production-entry rule. A
+Ghostfolio-shaped `npm run start` resolving to
+`node dist/apps/api/main` is rejected while
+`buildCommandUsed` is omitted, and the published
+Preparation Manifest contract states the same
+script-indirection invariant.
+
 ### N149 (High, bugfix) — name the unbuilt workspace dependency
 
 Detect the recurring shape at the readiness/build
