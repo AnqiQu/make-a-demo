@@ -8281,6 +8281,19 @@ Acceptance: a wedged-sandbox fs.upload scenario
 recreates once and completes inside budget instead
 of failing the run after two 10-minute hangs.
 
+Landed: the Daytona control-plane envelope now
+counts consecutive attempt-timeout hangs per dynamic
+sandbox id and, only while a transient ladder rung
+remains, emits a `wedged-sandbox-target` escalation.
+The initial screened-workspace upload can spend that
+rung once to recreate its network-locked linked child
+through the existing submitted-sandbox create path,
+switch attribution to the replacement, and replay the
+same upload. Stale-target deletion is best-effort and
+cannot hold the healthy replay hostage; later runtime
+transfers do not recreate because a fresh child would
+discard prepared state.
+
 ### Watchlist (updated)
 
 - Twenty has still never reached its migration on the
