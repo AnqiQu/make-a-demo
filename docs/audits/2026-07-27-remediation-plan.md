@@ -7868,6 +7868,17 @@ runtime-configuration summary naming
 dist/apps/api/main and the repair changes build/start
 on round 2 instead of failing identically four times.
 
+Landed: readiness now recognizes a production start
+whose missing entry lives under dist/, build/,
+.next/, .output/, or out/ when no build is declared,
+classifies it as `runtime-configuration error`, and
+headlines the missing entry plus the legal build or
+development-server repairs. The router and repair
+prompt share one structured runtime-configuration
+vocabulary, so build/start edits no longer depend on
+matching summary prose, and the Preparation Manifest
+contract rejects the shape before lifecycle execution.
+
 ### N149 (High, bugfix) — name the unbuilt workspace dependency
 
 Detect the recurring shape at the readiness/build
