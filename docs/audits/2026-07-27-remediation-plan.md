@@ -7879,6 +7879,23 @@ vocabulary, so build/start edits no longer depend on
 matching summary prose, and the Preparation Manifest
 contract rejects the shape before lifecycle execution.
 
+Amendment (2026-08-15, wave-12): the static invariant
+matches only literal production-entry starts
+("node dist/...", "node build/...", "node .next/...")
+and ghostfolio evaded it with `npm run start`, which
+reaches node dist/apps/api/main through package.json
+script indirection — the run passed only because the
+agent ran three undeclared `npm run build`s that left
+dist in the workspace, so the manifest still cannot
+reproduce its own pass. Extend the invariant: when
+startCommandUsed is npm/yarn/pnpm/bun `run <script>`,
+resolve the script through the repo profile's
+packageScripts (already on RepoProfile) and apply the
+same production-entry test to the resolved command.
+The runtime classification half needs no change — it
+keys on the observed missing entry, not the command
+text.
+
 ### N149 (High, bugfix) — name the unbuilt workspace dependency
 
 Detect the recurring shape at the readiness/build
@@ -8049,29 +8066,46 @@ passes: homer (fourth consecutive) and ghostfolio
 (second video). Three failures, each a different
 stage and each new in shape.
 
-What wave-12 validated: the N146/N147 heavyweight
-path worked end to end on its first outing — twenty's
-class selected heavyweight, the cpu4-mem8 snapshot
-booted, no fallback warning, and the submitted-code
-upload succeeded. N142's flow-spec gate fired
-exactly as amended (it is what caught calcom).
-N148's diagnosis is confirmed from the lucky side:
-ghostfolio's manifest again declared `npm run start`
-with buildCommandUsed omitted, and passed only
-because the sandbox log shows the agent ran
-`npm run build` three times without declaring it —
-the run rode on undeclared workspace state that the
-manifest cannot reproduce. The static half of N148
-would have forced the declaration and cost nothing.
-N150 went unexercised (calcom never reached a repair
-loop this wave).
+Wave-12 ran with N148–N150 live (landed 2026-08-14
+18:04–18:38, before the batch launched; an earlier
+revision of this addendum wrongly called them
+unimplemented — corrected 2026-08-15). What the wave
+validated: the N146/N147 heavyweight path worked end
+to end on its first outing — twenty's class selected
+heavyweight, the cpu4-mem8 snapshot booted, no
+fallback warning, and the submitted-code upload
+succeeded. N142's flow-spec gate fired exactly as
+amended (it is what caught calcom). N149 met its
+acceptance criterion verbatim: directus preflight
+attempts 1–2 classified "unbuilt workspace
+dependency" naming @directus/extensions, repair
+built it, and that is why directus reached capture
+at all — its deepest run ever. N150 was exercised
+inside directus's preparation repair (attempt 6:
+"freshly re-grounded 0 unchanged feature(s)");
+calcom died before any repair loop, so the
+calcom-shaped wall-clock acceptance remains
+untested. N148 is live but was evaded twice over on
+ghostfolio: see below.
 
-ghostfolio (passed, evidence for N148): manifest
+ghostfolio (passed, N148 evaded twice over): manifest
 install `npm ci --no-audit`, build omitted, start
 `npm run start`; sandbox log records three
-`npm run build` invocations during preparation.
-Same shape failed wave-11 when dist was absent at
-lifecycle time. No new item — N148 covers it.
+`npm run build` invocations during preparation. The
+landed static invariant keys on literal
+production-entry starts ("node dist/...", "node
+build/...", "node .next/..."), and `npm run start`
+reaches node dist/apps/api/main only through
+package.json script indirection — so the manifest
+passed validation. The runtime classification then
+never fired because the undeclared builds left dist
+present in the workspace. The video is real but the
+manifest still cannot reproduce it. No new item —
+amended into N148 (see its section): the
+production-entry invariant must resolve
+npm/yarn/pnpm/bun `run <script>` start commands
+through the repo profile's packageScripts before
+matching.
 
 calcom (failed 56m, flow-planning): all three
 requested features grounded at app-exploration via
@@ -8096,7 +8130,12 @@ has no route back to preparation-repair; the run
 died on the artifact retry budget (→ N151).
 
 directus (failed 82m, capture-path-validation — its
-deepest run ever): static contract validation and
+deepest run ever): preparation itself was N149's win
+(preflight attempts 1–2 classified the unbuilt
+@directus/extensions and repair built it) and the
+stub arc finally engaged (attempt 3: "client stub
+partially engaged", repaired through by attempt 6).
+Then static contract validation and
 capture preflight passed; script execution then
 failed four identical times with "Capture Script
 Protocol Violation: Capture script emitted nested
@@ -8223,15 +8262,20 @@ of failing the run after two 10-minute hangs.
   repair seam, but whether preparation can hold an
   authenticated session across exploration is still
   the underlying churn.
-- N143/N144/N138 and the directus stub arc remain
-  unexercised; directus now dies later than ever, so
-  N152 is the gate to finally reaching them.
-- N148–N150 remain specified and unimplemented;
-  wave-12 added confirming evidence for N148.
+- The directus stub arc engaged during preparation
+  (client-stub classifications fired and repaired
+  through); its capture arc is still unreached, and
+  N152 is the gate. N141's first exercise is N152
+  itself; N144 remains unexercised.
+- N148–N150 landed 2026-08-14 and ran live in
+  wave-12: N149 validated end to end on directus,
+  N150 exercised inside directus's repair (calcom's
+  wall-clock acceptance still untested), N148 amended
+  for script-indirected production starts.
 
 ### Rerun
 
-After N151–N153 land (with N148–N150 still queued):
+After N151–N153 land:
 homer and ghostfolio stay green; directus executes
 its script and reaches the stub/fixture arc; calcom
 enters preparation-repair at exploration and its
