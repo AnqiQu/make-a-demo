@@ -8326,3 +8326,174 @@ enters preparation-repair at exploration and its
 fate turns on session repair; twenty survives upload
 and finally shows whether 4 CPUs and 8GiB clear the
 migration.
+
+## Addendum (2026-08-15, wave-13 — the classification layer is done, the convergence layer is the frontier: N148/N149 both fired with perfect headlines and both failed to converge: N154–N155)
+
+Batch matrix-2026-08-15T05-38-26-724Z, report
+matrix-report-2026-08-15T07-18-13-216Z.json,
+launched 2026-08-14 22:38 local — twelve minutes
+after N151–N153 landed, so every specced item to
+date ran live. Homer passed (fifth consecutive).
+Four failures, and for the first time none of them
+is a diagnosis problem: every failure carries the
+right classification and a causal headline. What
+failed is convergence — repairs that were correctly
+prescribed and then defeated by machinery one seam
+downstream.
+
+ghostfolio (failed 30m, preflight ×3): N148 end to
+end minus the last seam. The classifier fired
+verbatim ("Runtime-configuration error:
+startCommandUsed runs dist/apps/api/main but no
+declared build produces it…"), routed to
+preparation-repair with the structured escape
+hatch, and the repair agent did exactly the right
+thing twice: round 1 declared
+`npm run nx -- run api:build`, round 2
+`npm run build:production`. Both candidates passed
+validation and were adopted by the orchestrator —
+and then resolvePreparationRuntime
+(runtime-target-resolution.ts) stripped the build
+both times: it destructures buildCommandUsed out of
+the manifest and honors an agent build only when
+the command references a workspace package by name
+or directory (N131's carve-out). Ghostfolio's repo
+profile has no named workspace packages, so the
+honored-build test can never pass, the resolved
+lifecycle re-ran buildless, and the identical
+failure recurred until the repair budget died. The
+escape hatch reached the classifier, the router,
+and the repair prompt — but not the resolver, which
+un-corrects the correction every round (→ N154).
+This is N131's bug shape recurring one level up,
+and the second resolver-strips-the-fix incident;
+the resolver seam should be presumed guilty in any
+future repair-does-not-stick diagnosis.
+
+directus (failed 26m, preflight ×5): N149 fired and
+named the right package every time — and the chain
+defeated it. Attempt 1: unbuilt @directus/extensions
+(repair built it). Attempt 2: unbuilt
+@directus/constants — the package extensions
+depends on. Attempt 3: runtime crash. Attempt 4:
+@directus/extensions again, headline showing a
+sibling build's output. Attempt 5:
+@directus/extensions again as TS2307 from a
+dependent's own compile. One package per round
+against a dependency graph is whack-a-mole, and it
+can even revisit the same package when a dependent's
+build re-fails (→ N155). Wave-12 converged in two
+rounds only because that day's chain was shallow.
+
+calcom (failed 55m, preflight ×5): real progress,
+then data-state churn. No auth degradation anywhere
+this wave — the two features N142/N151 fought for
+grounded cleanly. The failure moved to
+public-booking's declared proof: "no visible element
+with accessible name 'View next month' on
+/free/30min" — the booking calendar widget never
+rendered, which on cal.com means no availability
+data behind the page. Five repair rounds could not
+seed a schedule the calendar would show. The
+classification ("requested feature not observable")
+and proof-level detail are correct and actionable;
+this is the calcom watchlist item advanced from the
+session layer to the seeded-data layer, not a new
+harness rule.
+
+twenty (failed 97m, wall clock; preflight ×6 on the
+heavyweight sandbox): the capacity question is
+answered, negatively. Upload was clean (no N153
+trigger), fidelity passed six times, and preflight
+died six ways inside the org's caps: the postgres
+migration command Killed (OOM at 8GiB, attempt 1),
+lifecycle Killed (2), yarn install ENOSPC on the
+10GB disk (3, 4), migration failure (5), lifecycle
+Killed (6). Four CPUs did not change the memory
+arithmetic. Twenty is capacity-blocked at the
+Daytona org limits, with every failure correctly
+headlined — there is no harness item here. Owner
+decision: request higher per-sandbox limits
+(support@daytona.io) or accept twenty as out of
+envelope; a lighter preparation path (dev-mode
+serve, partial workspace) is the only code-side
+lever left and is speculative.
+
+N152 and N153 went unexercised (nothing reached
+capture; no upload hung).
+
+### N154 (High, bugfix) — the resolver must honor the build a runtime-configuration failure demanded
+
+Extend the honored-build exception in
+resolvePreparationRuntime beyond
+workspace-package-referencing commands: when the
+manifest's declared build is being adopted from a
+repair of a runtime-configuration-error failure —
+or equivalently, when the resolved target's start
+command consumes a production entry
+(readProductionEntry) and the resolver would
+otherwise emit no build — honor the agent's
+declared buildCommandUsed after the existing
+absent-package safety check, instead of dropping
+it. A resolver that emits a production-entry start
+with no build is resolving to a lifecycle the N148
+classifier will provably reject; refusing that
+resolution is also acceptable (treat it as
+unresolved and let the repair path negotiate),
+dropping the declared build is not. Refactor, not
+add: readProductionEntry and the honored-build
+machinery both already live in
+runtime-target-resolution.ts; N148's
+runtimeConfigurationClassifications set is already
+shared. Acceptance: ghostfolio's wave-13 evidence
+converges on round 2 — the resolved lifecycle runs
+the agent's declared build, and preflight's
+runtime-configuration failure does not recur.
+
+### N155 (High, bugfix) — unbuilt-workspace chains escalate to the workspace-graph build
+
+After one unbuilt-workspace-dependency repair round,
+a second unbuilt-workspace-dependency failure (any
+package) escalates the repair hint — and the
+honored-build acceptance — from "build package X"
+to the repository's own workspace-graph build: the
+root build/prepare script, or the monorepo tool's
+topological invocation (pnpm -r / turbo / nx
+run-many) scoped to the app's dependency closure
+when the repo declares one. The N149 headline
+builder already knows the failing package and the
+repo profile already enumerates workspacePackages
+with scripts; the escalation is a state check
+against the previous round's classification (the
+fingerprint ledger already records it), not new
+detection. Acceptance: directus's wave-13 evidence
+builds its package graph in at most two rounds and
+preflight proceeds past dependency resolution.
+
+### Watchlist (updated)
+
+- Twenty: capacity-blocked at the Daytona org caps
+  (8GiB memory measured against migration OOM, 10GB
+  disk against install ENOSPC, on the cpu4-mem8
+  heavyweight snapshot). Owner decision required;
+  no harness item.
+- Calcom: seeded-data depth — the booking calendar
+  needs real availability data behind /free/30min;
+  proof-level failure details are correct, agent
+  convergence on seeding is the open question.
+- Resolver seam: two incidents (N131, N154) of
+  resolution silently discarding an agent fix the
+  failure demanded. Any future repair-loop
+  no-progress diagnosis should check
+  resolvePreparationRuntime first.
+- N152/N153 remain unexercised; directus's capture
+  arc (N152's acceptance) is gated on N155 now.
+
+### Rerun
+
+After N154–N155 land: homer green; ghostfolio
+converges round 2 and returns green; directus
+builds its graph and finally exercises N152's
+single-span capture markers; calcom's fate turns on
+availability seeding; twenty stays red until the
+org caps move.
