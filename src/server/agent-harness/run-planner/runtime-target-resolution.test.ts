@@ -1106,6 +1106,23 @@ describe("resolveRuntimeTarget", () => {
     ).toContain('script "missing"');
   });
 
+  it("rejects a run-script start whose resolved entry requires an undeclared build", () => {
+    const preparationManifest = manifest("src/page.tsx");
+    preparationManifest.startCommandUsed = "npm run start";
+
+    expect(
+      findRuntimeConfigurationIssue({
+        preparationManifest,
+        repoProfile: profile({
+          packageManager: "npm",
+          packageScripts: { start: "node dist/apps/api/main" },
+        }),
+      }),
+    ).toBe(
+      "startCommandUsed resolves npm run start to node dist/apps/api/main, but buildCommandUsed is omitted; declare the build that emits dist/apps/api/main, or use the repository's development server.",
+    );
+  });
+
   it("rejects a runtime command that selects a package absent from the workspace", () => {
     const preparationManifest = manifest("src/page.tsx");
     preparationManifest.startCommandUsed =

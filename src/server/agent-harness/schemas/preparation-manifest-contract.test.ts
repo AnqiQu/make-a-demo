@@ -117,6 +117,7 @@ describe("createPreparationManifestContract", () => {
 
     expect(invariants).toContain("production-entry startCommandUsed");
     expect(invariants).toContain("buildCommandUsed");
+    expect(invariants).toContain("packageScripts");
     expect(invariants).toContain("development server");
   });
 

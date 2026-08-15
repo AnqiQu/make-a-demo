@@ -67,6 +67,29 @@ export function findRuntimeConfigurationIssue(input: {
       name === undefined ? [] : [name],
     ),
   );
+  const runtimeScripts = readRuntimeScripts(
+    input.preparationManifest.appDir,
+    input.repoProfile,
+  );
+  const startScriptName = readScriptName(
+    input.preparationManifest.startCommandUsed,
+  );
+  const resolvedStartCommand =
+    startScriptName === undefined
+      ? input.preparationManifest.startCommandUsed
+      : runtimeScripts?.[startScriptName];
+  const productionEntry =
+    input.preparationManifest.buildCommandUsed === undefined &&
+    resolvedStartCommand !== undefined
+      ? readProductionEntry(resolvedStartCommand)
+      : undefined;
+  if (productionEntry !== undefined) {
+    const resolution =
+      startScriptName === undefined
+        ? `runs ${input.preparationManifest.startCommandUsed}`
+        : `resolves ${input.preparationManifest.startCommandUsed} to ${resolvedStartCommand}`;
+    return `startCommandUsed ${resolution}, but buildCommandUsed is omitted; declare the build that emits ${productionEntry}, or use the repository's development server.`;
+  }
   for (const command of [
     input.preparationManifest.buildCommandUsed,
     input.preparationManifest.startCommandUsed,
@@ -75,12 +98,7 @@ export function findRuntimeConfigurationIssue(input: {
       continue;
     }
     const scriptName = readScriptName(command);
-    const scripts =
-      input.preparationManifest.appDir === "."
-        ? input.repoProfile.packageScripts
-        : input.repoProfile.workspacePackages?.find(
-            ({ dir }) => dir === input.preparationManifest.appDir,
-          )?.scripts;
+    const scripts = runtimeScripts;
     if (scriptName !== undefined && scripts?.[scriptName] === undefined) {
       return `Runtime script "${scriptName}" is not defined for ${input.preparationManifest.appDir}.`;
     }
@@ -104,6 +122,21 @@ export function findRuntimeConfigurationIssue(input: {
 
 function readScriptName(command: string): string | undefined {
   return /^(?:bun|pnpm|yarn|npm)\s+run\s+([^\s]+)/.exec(command.trim())?.[1];
+}
+
+function readRuntimeScripts(
+  appDir: string,
+  repoProfile: RepoProfile,
+): Record<string, string> | undefined {
+  return appDir === "."
+    ? repoProfile.packageScripts
+    : repoProfile.workspacePackages?.find(({ dir }) => dir === appDir)?.scripts;
+}
+
+function readProductionEntry(command: string): string | undefined {
+  return /^\s*(?:node|bun)\s+(?:--\S+\s+)*["']?((?:\.\/)?(?:\.next|\.output|build|dist|out)\/[^"'\s]+)/.exec(
+    command,
+  )?.[1];
 }
 
 /** Applies an unambiguous backend-owned target to the auditable manifest. */

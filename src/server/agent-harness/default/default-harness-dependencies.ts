@@ -5697,6 +5697,13 @@ async function tryReadPreparationManifest(
   try {
     const manifest = readPreparationManifest(json.value);
     if (featureValidation !== undefined) {
+      const runtimeConfigurationIssue = findRuntimeConfigurationIssue({
+        preparationManifest: manifest,
+        repoProfile: featureValidation.repoProfile,
+      });
+      if (runtimeConfigurationIssue !== undefined) {
+        throw new Error(runtimeConfigurationIssue);
+      }
       assertPreparedFeatureInventory({
         demoBrief: featureValidation.demoBrief,
         preparationManifest: manifest,
