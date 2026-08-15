@@ -8998,6 +8998,67 @@ describe("createDefaultAgentHarnessDependencies", () => {
     });
   });
 
+  it("classifies a production start missing undeclared build output as a runtime-configuration error", async () => {
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        return command.includes("curl -")
+          ? {
+              exitCode: 7,
+              stderr:
+                "curl: (7) Failed to connect to 127.0.0.1 port 3000 after 0 ms: Couldn't connect to server",
+              stdout: "",
+            }
+          : { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async readSubmittedCodeAppStatus() {
+        return {
+          exitCode: 1,
+          running: false,
+          stderr: [
+            "Error: Cannot find module '/workspace/repo/dist/apps/api/main'",
+            "  code: 'MODULE_NOT_FOUND',",
+            "  requireStack: []",
+          ].join("\n"),
+          stdout: [
+            "> ghostfolio@3.51.0 start",
+            "> node dist/apps/api/main",
+          ].join("\n"),
+        };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        startCommandUsed: "npm run start",
+      },
+      repoProfile: {
+        ...repoProfile(),
+        packageScripts: {
+          ...repoProfile().packageScripts,
+          start: "node dist/apps/api/main",
+        },
+      },
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "runtime-configuration error",
+      status: "failed",
+    });
+    const headline = report.logsSummary.split("\n", 1)[0] ?? "";
+    expect(headline).toContain("startCommandUsed runs dist/apps/api/main");
+    expect(headline).toContain("no declared build produces it");
+    expect(headline).toContain("start the dev server instead");
+  });
+
   it("classifies an unresolved bare import as a missing dependency", async () => {
     vi.useFakeTimers();
     const workspace = createFakeAgentHarnessWorkspace({

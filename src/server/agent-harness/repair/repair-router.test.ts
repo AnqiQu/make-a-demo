@@ -3,6 +3,7 @@ import {
   classifyRepairRoute,
   isDependencyRepairFailure,
   readRepairBudgetDecision,
+  runtimeConfigurationClassifications,
 } from "./repair-router";
 
 describe("RepairRouter", () => {
@@ -87,6 +88,20 @@ describe("RepairRouter", () => {
       classifyRepairRoute({ failureClassification: "lifecycle timeout" }),
     ).toBe("repo-preparation-repair");
     expect(isDependencyRepairFailure("lifecycle timeout")).toBe(false);
+  });
+
+  it("routes structured runtime-configuration errors with full repair latitude", () => {
+    expect(runtimeConfigurationClassifications).toContain(
+      "runtime-configuration error",
+    );
+    expect(
+      classifyRepairRoute({
+        failureClassification: "runtime-configuration error",
+      }),
+    ).toBe("repo-preparation-repair");
+    expect(isDependencyRepairFailure("runtime-configuration error")).toBe(
+      false,
+    );
   });
 
   it("routes unreproducible replay evidence to preparation repair", () => {

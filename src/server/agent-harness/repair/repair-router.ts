@@ -14,6 +14,15 @@ const scriptFailureClassifications = new Set([
   "timing/state failure",
 ]);
 
+/**
+ * Preparation failures that explicitly authorize changing backend-resolved
+ * runtime fields. Repair prompts consume this same vocabulary as the router
+ * so that permission never depends on matching human-readable summary text.
+ */
+export const runtimeConfigurationClassifications: ReadonlySet<string> = new Set(
+  ["runtime-configuration error"],
+);
+
 const preparationFailureClassifications = new Set([
   "app route crashes",
   "app route not discoverable",
@@ -37,6 +46,7 @@ const preparationFailureClassifications = new Set([
   "product fidelity violation",
   "requested feature not observable",
   "render timeout",
+  ...runtimeConfigurationClassifications,
   "runtime crash",
   "service migration failure",
   "service seed failure",

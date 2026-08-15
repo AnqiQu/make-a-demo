@@ -70,7 +70,10 @@ import type {
   AgentHarnessPipelineDependencies,
   AgentHarnessPipelineInput,
 } from "../orchestration/agent-harness";
-import { isDependencyRepairFailure } from "../repair/repair-router";
+import {
+  isDependencyRepairFailure,
+  runtimeConfigurationClassifications,
+} from "../repair/repair-router";
 import { createFeatureVerificationGuide } from "../repo-preparation/feature-verification-guide";
 import {
   type FidelityCandidate,
@@ -3106,16 +3109,18 @@ async function validateResolvedSubmittedCodeRuntime(
     .join("\n");
   const probeSucceeded = probeResponded && appStatus?.running !== false;
   const blockedRuntimeNetworkAttempts = readRuntimeNetworkAttempts(appOutput);
-  const failureClassification = probeSucceeded
-    ? ("none" as const)
+  const runtimeFailure = probeSucceeded
+    ? { classification: "none" as const }
     : probeExecutionFailed
-      ? ("harness/internal failure" as const)
-      : classifyPreparationRuntimeFailure(
-          preflightResult.runtimeProbe,
+      ? { classification: "harness/internal failure" as const }
+      : classifyPreparationRuntimeFailure({
           appOutput,
-          appStatus?.running === false,
-          appStatus?.running === true,
-        );
+          manifest,
+          probe: preflightResult.runtimeProbe,
+          processExited: appStatus?.running === false,
+          processRunning: appStatus?.running === true,
+        });
+  const failureClassification = runtimeFailure.classification;
   const serveFailureHeadline =
     failureClassification === "app server error"
       ? readReadinessServeFailureHeadline({
@@ -3128,7 +3133,8 @@ async function validateResolvedSubmittedCodeRuntime(
         })
       : undefined;
   const failedLogs = [
-    serveFailureHeadline ??
+    runtimeFailure.headline ??
+      serveFailureHeadline ??
       `Prepared submitted-code runtime readiness failed: ${preflightResult.stderr || preflightResult.stdout}`,
     appStatus === undefined
       ? undefined
@@ -3309,40 +3315,130 @@ function readMissingRequiredEnvHints(
   ];
 }
 
-function classifyPreparationRuntimeFailure(
-  probe: RuntimeProbeDiagnostics,
-  appOutput: string,
-  processExited = false,
-  processRunning = false,
-): string {
-  const outcome = probe.attempts.at(-1)?.outcome;
+function classifyPreparationRuntimeFailure(input: {
+  appOutput?: string;
+  manifest?: PreparationManifest;
+  probe: RuntimeProbeDiagnostics;
+  processExited?: boolean;
+  processRunning?: boolean;
+}): { classification: string; headline?: string } {
+  const outcome = input.probe.attempts.at(-1)?.outcome;
   if (
-    processRunning &&
+    input.processRunning &&
     outcome === "http-error" &&
-    (probe.httpStatus ?? 0) >= 500
+    (input.probe.httpStatus ?? 0) >= 500
   ) {
-    return "app server error";
+    return { classification: "app server error" };
+  }
+  const missingBuildOutputEntry = input.manifest
+    ? readMissingBuildOutputEntry({
+        appOutput: input.appOutput ?? "",
+        manifest: input.manifest,
+      })
+    : undefined;
+  if (missingBuildOutputEntry !== undefined) {
+    return {
+      classification: "runtime-configuration error",
+      headline: `Runtime-configuration error: startCommandUsed runs ${missingBuildOutputEntry} but no declared build produces it — declare the build that emits ${missingBuildOutputEntry}, or start the dev server instead.`,
+    };
   }
   const missingSpecifiers = [
-    ...appOutput.matchAll(
+    ...(input.appOutput ?? "").matchAll(
       /(?:can'?t resolve|cannot find module|could not resolve|failed to resolve entry for package)\s+["']([^"']+)["']/gi,
     ),
   ].map((match) => match[1] ?? "");
   if (missingSpecifiers.some(isBarePackageSpecifier)) {
-    return "missing dependency";
+    return { classification: "missing dependency" };
   }
-  if (missingSpecifiers.length > 0) return "build failure";
-  if (processExited) return "runtime crash";
-  if (outcome === "render-timeout") return "render timeout";
-  if (outcome === "runtime-exited") return "runtime crash";
-  if (outcome === "connection-refused") return "listen failure";
+  if (missingSpecifiers.length > 0) {
+    return { classification: "build failure" };
+  }
+  if (input.processExited) return { classification: "runtime crash" };
+  if (outcome === "render-timeout") return { classification: "render timeout" };
+  if (outcome === "runtime-exited") return { classification: "runtime crash" };
+  if (outcome === "connection-refused") {
+    return { classification: "listen failure" };
+  }
   if (outcome === "http-error") {
-    if (probe.httpStatus === 401 || probe.httpStatus === 403)
-      return "auth wall";
-    if (probe.httpStatus === 404) return "app route not discoverable";
-    if ((probe.httpStatus ?? 0) >= 500) return "build failure";
+    if (input.probe.httpStatus === 401 || input.probe.httpStatus === 403) {
+      return { classification: "auth wall" };
+    }
+    if (input.probe.httpStatus === 404) {
+      return { classification: "app route not discoverable" };
+    }
+    if ((input.probe.httpStatus ?? 0) >= 500) {
+      return { classification: "build failure" };
+    }
   }
-  return "start failure";
+  return { classification: "start failure" };
+}
+
+const buildOutputDirectoryNames = new Set([
+  ".next",
+  ".output",
+  "build",
+  "dist",
+  "out",
+]);
+
+function readMissingBuildOutputEntry(input: {
+  appOutput: string;
+  manifest: PreparationManifest;
+}): string | undefined {
+  if (input.manifest.buildCommandUsed?.trim()) return undefined;
+  const missingPaths = [
+    ...input.appOutput.matchAll(
+      /(?:cannot find module|module not found)\s+["']([^"'\n]+)["']/gi,
+    ),
+    ...input.appOutput.matchAll(
+      /(?:ENOENT|no such file or directory)[^"'\n]*["']([^"'\n]+)["']/gi,
+    ),
+  ].flatMap((match) => {
+    const path = normalizeSubmittedRepoPath(match[1] ?? "");
+    return path !== undefined &&
+      !path.split("/").includes("node_modules") &&
+      path.split("/").some((part) => buildOutputDirectoryNames.has(part))
+      ? [path]
+      : [];
+  });
+  if (missingPaths.length === 0) return undefined;
+
+  const startEntries = [
+    input.manifest.startCommandUsed,
+    ...input.appOutput.split("\n"),
+  ].flatMap((line) => {
+    const match =
+      /^\s*(?:>\s*)?(?:node|bun)\s+(?:--\S+\s+)*["']?([^"'\s]+)["']?/i.exec(
+        line,
+      );
+    const entry = normalizeSubmittedRepoPath(match?.[1] ?? "");
+    return entry === undefined ? [] : [entry];
+  });
+  return missingPaths.find(
+    (missingPath) =>
+      startEntries.some(
+        (entry) =>
+          entry === missingPath ||
+          entry.startsWith(`${missingPath}.`) ||
+          missingPath.startsWith(`${entry}.`),
+      ) || /requireStack\s*:\s*\[\s*\]/i.test(input.appOutput),
+  );
+}
+
+function normalizeSubmittedRepoPath(value: string): string | undefined {
+  const unprefixed = value
+    .trim()
+    .replace(/^file:\/\//, "")
+    .replace(/^\/workspace\/repo\//, "")
+    .replace(/^\.\//, "");
+  if (
+    unprefixed.length === 0 ||
+    unprefixed.startsWith("/") ||
+    unprefixed.split("/").includes("..")
+  ) {
+    return undefined;
+  }
+  return unprefixed;
 }
 
 function readReadinessServeFailureHeadline(input: {
@@ -3496,7 +3592,9 @@ async function confirmCaptureSceneRoutesServe(input: {
         ? "auth wall"
         : redirected
           ? "app route not discoverable"
-          : classifyPreparationRuntimeFailure(probe.runtimeProbe, ""),
+          : classifyPreparationRuntimeFailure({
+              probe: probe.runtimeProbe,
+            }).classification,
       detail:
         redirected && finalUrl !== undefined
           ? `${route} redirected to ${normalizedPath(finalUrl)}${probe.runtimeProbe.httpStatus === undefined ? "" : ` (HTTP ${probe.runtimeProbe.httpStatus})`}`
@@ -6035,6 +6133,9 @@ function createRuntimePreparationRepairPrompt(input: {
   const dependencyRepair = isDependencyRepairFailure(
     input.failureReport.failureClassification,
   );
+  const runtimeConfigurationRepair = runtimeConfigurationClassifications.has(
+    input.failureReport.failureClassification?.trim() ?? "",
+  );
   const rebuildFromScreenedSource =
     input.failureReport.stage === "preparation-fidelity";
   return createStagePrompt({
@@ -6076,7 +6177,13 @@ function createRuntimePreparationRepairPrompt(input: {
         : []),
       "Do not run the app, install dependencies, or use the network. The backend will rerun install, build, start, and browser validation in the isolated submitted-code sandbox.",
       "Omit buildCommandUsed for development-server starts. If validation reports that a root aggregate build is too broad, use the exact app-scoped command from the failure summary.",
-      "Preserve backend-resolved appDir, install, build, start, port, and base URL fields unless the failure summary explicitly reports a runtime-configuration error.",
+      ...(runtimeConfigurationRepair
+        ? [
+            "The backend classified this as a runtime-configuration error. Correct the backend-resolved build/start command fields that caused it; keep appDir, install, port, and base URL unchanged unless the same structured failure names one of them.",
+          ]
+        : [
+            "Preserve backend-resolved appDir, install, build, start, port, and base URL fields.",
+          ]),
       `The selected browser application remains ${input.runPlan.appDir}; validation difficulty never authorizes switching to a runnable sibling.`,
       ...(dependencyRepair
         ? [

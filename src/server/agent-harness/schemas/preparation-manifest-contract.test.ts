@@ -112,6 +112,14 @@ describe("createPreparationManifestContract", () => {
     );
   });
 
+  it("rejects production entry starts that omit their build command", () => {
+    const invariants = createPreparationManifestContract().invariants.join(" ");
+
+    expect(invariants).toContain("production-entry startCommandUsed");
+    expect(invariants).toContain("buildCommandUsed");
+    expect(invariants).toContain("development server");
+  });
+
   it("carries no version field that nothing reads", () => {
     expect(createPreparationManifestContract()).not.toHaveProperty(
       "contractVersion",
