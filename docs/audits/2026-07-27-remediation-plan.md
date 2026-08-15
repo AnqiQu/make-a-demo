@@ -7898,6 +7898,17 @@ wave-11 attempt-1 evidence classifies as unbuilt
 workspace dependency naming @directus/extensions, and
 the hint names a build for it.
 
+Landed: build and readiness failures now share one
+workspace-aware inspection of entry-resolution,
+`node_modules/<workspace>/...`, and in-repo sibling
+paths. A match is classified as `unbuilt workspace
+dependency`; its causal headline names the package,
+and its repair hint names the package's declared build
+script (when present) plus the install/predev-filter
+alternative. The classification routes to full
+preparation repair, never dependency-only repair, and
+unknown registry packages retain the generic path.
+
 ### N150 (Medium, bugfix) — repair rounds re-verify only what failed
 
 Full re-exploration of every feature on every repair
