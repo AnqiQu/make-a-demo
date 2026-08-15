@@ -133,6 +133,38 @@ describe("Capture Runtime Protocol", () => {
     ).toThrow("nested step markers");
   });
 
+  it("names both Browser Action labels when marker spans overlap", () => {
+    const protocol = readCaptureRuntimeProtocol({
+      stderr: "",
+      stdout: [
+        '[makeademo:validation] script started {"baseUrl":"http://127.0.0.1:3000"}',
+        sceneMarker(10, "started", "scene-one"),
+        actionMarker(
+          11,
+          "started",
+          "scene-one",
+          "page.waitForURL(http://127.0.0.1:3000/roles/new)",
+        ),
+        actionMarker(
+          12,
+          "started",
+          "scene-one",
+          "locator.click(getByRole(button, Create role))",
+        ),
+      ].join("\n"),
+    });
+
+    expect(() =>
+      readSuccessfulCaptureProtocol({
+        protocol,
+        requireVisibleAssertions: false,
+        sceneIds: ["scene-one"],
+      }),
+    ).toThrow(
+      "Capture script emitted nested Browser Action markers: page.waitForURL(http://127.0.0.1:3000/roles/new) was still open when locator.click(getByRole(button, Create role)) started.",
+    );
+  });
+
   it("rejects a Browser Action marker attributed to an undeclared Scene", () => {
     const protocol = readCaptureRuntimeProtocol({
       stderr: "",

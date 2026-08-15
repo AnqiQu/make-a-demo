@@ -245,7 +245,6 @@ const makeADemoPageActionMethods = new Set([
   'waitForResponse',
   'waitForSelector',
   'waitForTimeout',
-  'waitForURL',
 ]);
 const makeADemoLocatorActionMethods = new Set([
   'blur',
@@ -318,6 +317,14 @@ function instrumentPage(page, sdk, sceneId, timeoutMs) {
           const locator = value.apply(target, args);
           return instrumentLocator(locator, sdk, sceneId, property, formatActionArguments(args), timeoutMs);
         };
+      }
+
+      if (property === 'waitForURL') {
+        return (...args) =>
+          value.apply(
+            target,
+            withPageActionTimeoutOptions(property, args, timeoutMs),
+          );
       }
 
       if (!makeADemoPageActionMethods.has(property)) {

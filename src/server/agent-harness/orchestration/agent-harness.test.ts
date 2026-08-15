@@ -4323,6 +4323,63 @@ describe("runAgentHarnessPipeline", () => {
     ]);
   });
 
+  it("stops an identical capture protocol violation after one script repair", async () => {
+    let captureAttempts = 0;
+    let repairAttempts = 0;
+    let staticAttempts = 0;
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({ runId: "run_repeated_capture_protocol_violation" }),
+        stubPipelineDependencies({
+          async exploreApp() {
+            return {
+              kind: "artifacts" as const,
+              actionCatalog: actionCatalog(),
+              appMap: appMap(),
+              validationReport: report("app-exploration", "passed"),
+            };
+          },
+          async planFlow() {
+            return flowSpec();
+          },
+          async prepareRepo() {
+            return { manifest: preparationManifest() };
+          },
+          async repairScript() {
+            repairAttempts += 1;
+            return scriptCandidate();
+          },
+          async validateCapturePath() {
+            captureAttempts += 1;
+            return {
+              ...report("capture-path-validation", "failed"),
+              failureClassification: "script contract failure",
+              logsSummary:
+                "Capture Script Protocol Violation: Capture script emitted nested Browser Action markers: page.waitForURL(/roles/new) was still open when locator.click(Create role) started.",
+            };
+          },
+          async validatePreparation() {
+            return report("preparation-preflight", "passed");
+          },
+          async validateScriptContract() {
+            staticAttempts += 1;
+            return report("static-script-contract-validation", "passed");
+          },
+          async writeScript() {
+            return scriptCandidate();
+          },
+        }),
+      ),
+    ).rejects.toThrow(
+      "script-repair repeated failure retry budget exhausted after 1 attempts",
+    );
+
+    expect(captureAttempts).toBe(2);
+    expect(repairAttempts).toBe(1);
+    expect(staticAttempts).toBe(2);
+  });
+
   it("repairs preparation and regenerates downstream artifacts after a runtime capture failure", async () => {
     let captureAttempts = 0;
     const calls: string[] = [];

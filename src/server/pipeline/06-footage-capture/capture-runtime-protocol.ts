@@ -310,7 +310,7 @@ export function readSuccessfulCaptureProtocol(input: {
       if (marker.event === "started") {
         if (activeAction !== undefined) {
           throw violation(
-            "Capture script emitted nested Browser Action markers.",
+            `Capture script emitted nested Browser Action markers: ${activeAction.label} was still open when ${marker.label} started.`,
           );
         }
         activeAction = { label: marker.label, sceneId: marker.sceneId };

@@ -526,6 +526,7 @@ export async function runAgentHarnessPipeline(
     const preparationRepairAttemptsByPhase: Record<string, number> = {};
     const scriptRepairAttemptsByPhase: Record<string, number> = {};
     const dynamicActionFailureCounts: Record<string, number> = {};
+    const captureProtocolFailureCounts: Record<string, number> = {};
     // N125(4): the ping-pong breaker's chain state. A capture-path locator
     // failure arms `pendingCaptureLocatorFailure`; a static locator-equality
     // rejection naming the same action completes one alternation pair. Two
@@ -966,6 +967,26 @@ export async function runAgentHarnessPipeline(
         ) {
           transientCaptureRetries += 1;
           continue;
+        }
+
+        const captureProtocolFingerprint =
+          readCaptureProtocolFailureFingerprint(capturePathValidation);
+        if (captureProtocolFingerprint !== undefined) {
+          const failures =
+            (captureProtocolFailureCounts[captureProtocolFingerprint] ?? 0) +
+            1;
+          captureProtocolFailureCounts[captureProtocolFingerprint] = failures;
+          if (failures > 1) {
+            throw new Error(
+              `${capturePathValidation.stage} failed: ${capturePathValidation.logsSummary}. ${repairBudgetExhaustedMessage(
+                {
+                  attempts: 1,
+                  budgetLabel: "repeated failure",
+                  route: "script-repair",
+                },
+              )}`,
+            );
+          }
         }
 
         // N125(4): a locator failure arms the breaker's pending half-pair;
@@ -2380,6 +2401,29 @@ function preparationFailureFingerprint(report: ValidationReport): string {
     normalizeFailureSummaryLine(
       rejectionParts.length === 1 ? "" : (rejectionParts.at(-1) ?? ""),
     ),
+  ].join("\u0000");
+}
+
+/**
+ * Fingerprints a Capture SDK protocol violation only after the static Demo
+ * Script contract passed in the current loop. One identical repeat is a
+ * harness-owned contradiction, so another agent-authored script repair would
+ * only spend budget without changing the generated protocol implementation.
+ */
+function readCaptureProtocolFailureFingerprint(
+  report: ValidationReport,
+): string | undefined {
+  if (
+    report.stage !== "capture-path-validation" ||
+    report.failureClassification !== "script contract failure" ||
+    !/^Capture Script Protocol Violation:/i.test(report.logsSummary.trim())
+  ) {
+    return undefined;
+  }
+  return [
+    report.stage,
+    report.failureClassification,
+    normalizeFailureSummaryLine(report.logsSummary),
   ].join("\u0000");
 }
 
