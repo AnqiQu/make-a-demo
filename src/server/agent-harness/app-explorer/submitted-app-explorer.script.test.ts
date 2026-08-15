@@ -29,7 +29,7 @@ setTimeout(() => {
 async function buildExplorerScript(
   baseUrl: string,
   featureInventory?: PreparedDemoFeature[],
-  scope?: "feature-entries",
+  scope?: "feature-entries" | "feature-proofs",
   captureFailure?: Parameters<typeof exploreSubmittedApp>[0]["captureFailure"],
 ): Promise<string> {
   const commands: string[] = [];
@@ -1880,6 +1880,87 @@ document.body.appendChild(document.createElement("vite-error-overlay"));
       expect(
         result.routes.find((route) => route.path === "/panel")?.headings,
       ).toContain("Signal panel");
+    } finally {
+      server.close();
+    }
+  }, 30_000);
+
+  it("runs only fresh declared proofs in feature-proofs scope", async () => {
+    const requestedPaths: string[] = [];
+    const server = createServer((request, response) => {
+      const path = new URL(request.url ?? "/", "http://s").pathname;
+      requestedPaths.push(path);
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+      });
+      response.end(`<!doctype html><html><head><title>Proof</title></head><body>
+<h1>${path === "/panel" ? "Signal panel" : "Unexpected route"}</h1>
+</body></html>`);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-proofs-"),
+      );
+      const script = (
+        await buildExplorerScript(
+          `http://127.0.0.1:${address.port}`,
+          [
+            {
+              authStrategy: "none",
+              description: "Watch live relay signal strength.",
+              entryPaths: ["/panel"],
+              expectedProof: {
+                kind: "visible-text",
+                text: "Signal panel",
+              },
+              fixtureNotes: [],
+              id: "signal-panel",
+              label: "Signal panel",
+              requestedFeature: "signal panel",
+              sourcePaths: ["src/panel.tsx"],
+            },
+          ],
+          "feature-proofs",
+        )
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 25_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        declaredProofs: Array<{
+          featureId: string;
+          passed: boolean;
+        }>;
+        fatalError?: string;
+        routes: Array<{ featureIds?: string[]; path: string }>;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      expect(result.declaredProofs).toEqual([
+        expect.objectContaining({ featureId: "signal-panel", passed: true }),
+      ]);
+      expect(result.routes).toEqual([
+        expect.objectContaining({
+          featureIds: ["signal-panel"],
+          path: "/panel",
+        }),
+      ]);
+      expect(requestedPaths).toEqual(["/panel"]);
     } finally {
       server.close();
     }

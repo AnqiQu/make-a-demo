@@ -69,6 +69,7 @@ import {
 import type {
   AgentHarnessPipelineDependencies,
   AgentHarnessPipelineInput,
+  RepairFeatureVerification,
 } from "../orchestration/agent-harness";
 import {
   isDependencyRepairFailure,
@@ -114,6 +115,7 @@ import {
   type FlowSpec,
   type NetworkAttempt,
   type PreparationManifest,
+  type PreparedDemoFeature,
   type RepoProfile,
   type RepoWorkspacePackage,
   type RunPlan,
@@ -781,74 +783,204 @@ export async function createDefaultAgentHarnessDependencies(
   // authority over everything it has not judged.
   const probePreparedFeatures = async (input: {
     preparationManifest: PreparationManifest;
+    repairFeatureVerification?: RepairFeatureVerification;
     report: ValidationReport;
     workspace: AgentHarnessWorkspace;
   }): Promise<ValidationReport> => {
     const featureInventory =
       input.preparationManifest.productContext.featureInventory;
     if (featureInventory.length === 0) return input.report;
-    const exploration = await runWithExternalResourceBroker({
-      readBlockedAttempts: (result: SubmittedAppExplorationResult) =>
-        result.validationReport.blockedNetworkAttempts,
-      run: () =>
-        exploreSubmittedApp({
-          baseUrl: input.preparationManifest.baseUrl,
-          ...(input.preparationManifest.dataStrategy === undefined
-            ? {}
-            : { dataStrategy: input.preparationManifest.dataStrategy }),
-          ...(externalResourceManifest === undefined
-            ? {}
-            : { externalResourceManifest }),
-          featureInventory,
-          preparationManifestId: input.preparationManifest.id,
-          // The coverage gate guarantees requestedFeature values mirror the
-          // demo brief, so the probe classifies requested-feature failures
-          // exactly as the gate will.
-          requestedFeatures: featureInventory.flatMap((feature) =>
-            feature.requestedFeature === undefined
-              ? []
-              : [feature.requestedFeature],
-          ),
-          scope: "feature-entries",
-          workspace: input.workspace,
-        }),
-      stage: "preparation-preflight",
-      workspace: input.workspace,
-    });
-    const probeReport = exploration.validationReport;
-    const verdictFailed = (probeReport.featureVerdicts ?? []).some(
-      (verdict) => verdict.verdict === "failed",
-    );
-    if (probeReport.status !== "failed" || !verdictFailed) {
+    const exploreFeatures = (
+      features: PreparedDemoFeature[],
+      scope: "feature-entries" | "feature-proofs",
+    ) =>
+      runWithExternalResourceBroker({
+        readBlockedAttempts: (result: SubmittedAppExplorationResult) =>
+          result.validationReport.blockedNetworkAttempts,
+        run: () =>
+          exploreSubmittedApp({
+            baseUrl: input.preparationManifest.baseUrl,
+            ...(input.preparationManifest.dataStrategy === undefined
+              ? {}
+              : { dataStrategy: input.preparationManifest.dataStrategy }),
+            ...(externalResourceManifest === undefined
+              ? {}
+              : { externalResourceManifest }),
+            featureInventory: features,
+            preparationManifestId: input.preparationManifest.id,
+            // The coverage gate guarantees requestedFeature values mirror the
+            // demo brief, so the probe classifies requested-feature failures
+            // exactly as the gate will.
+            requestedFeatures: features.flatMap((feature) =>
+              feature.requestedFeature === undefined
+                ? []
+                : [feature.requestedFeature],
+            ),
+            scope,
+            workspace: input.workspace,
+          }),
+        stage: "preparation-preflight",
+        workspace: input.workspace,
+      });
+    const failedProbeReport = async (
+      probeReport: ValidationReport,
+      featureVerdicts = probeReport.featureVerdicts ?? [],
+    ): Promise<ValidationReport> => {
+      // The probe's screenshots and snapshots are the repair round's visual
+      // evidence; persist them under their own directory so the later gate
+      // run does not overwrite the record of what the repair agent saw.
+      await persistExplorationEvidence({
+        directoryName: "feature-probe-evidence",
+        logger: options.logger,
+        outputRoot: options.outputRoot,
+        workspace: input.workspace,
+      });
+      const failingFeatureIds = featureVerdicts
+        .filter(({ verdict }) => verdict === "failed")
+        .map(({ featureId }) => featureId);
+      return {
+        ...probeReport,
+        ...(failingFeatureIds.length === 0 ? {} : { failingFeatureIds }),
+        featureVerdicts,
+        logsSummary: `Feature verification probe failed after the runtime preflight passed: ${probeReport.logsSummary}`,
+        stage: "preparation-preflight",
+      };
+    };
+    const inconclusiveProbeReport = async (probeReport: ValidationReport) => {
+      await options.logger?.warn({
+        classification: probeReport.failureClassification,
+        event: "preparation.feature-probe.inconclusive",
+        message: probeReport.logsSummary.slice(0, 500),
+      });
+      return {
+        ...input.report,
+        logsSummary: `${input.report.logsSummary} Feature probe inconclusive (${probeReport.failureClassification ?? "unclassified"}); app exploration remains the authority.`,
+      };
+    };
+
+    if (input.repairFeatureVerification === undefined) {
+      const exploration = await exploreFeatures(
+        featureInventory,
+        "feature-entries",
+      );
+      const probeReport = exploration.validationReport;
+      const verdictFailed = (probeReport.featureVerdicts ?? []).some(
+        (verdict) => verdict.verdict === "failed",
+      );
+      if (probeReport.status === "failed" && verdictFailed) {
+        return await failedProbeReport(probeReport);
+      }
       if (probeReport.status === "failed") {
-        await options.logger?.warn({
-          classification: probeReport.failureClassification,
-          event: "preparation.feature-probe.inconclusive",
-          message: probeReport.logsSummary.slice(0, 500),
-        });
+        return await inconclusiveProbeReport(probeReport);
       }
       return {
         ...input.report,
-        logsSummary: `${input.report.logsSummary} ${
-          probeReport.status === "failed"
-            ? `Feature probe inconclusive (${probeReport.failureClassification ?? "unclassified"}); app exploration remains the authority.`
-            : `Feature probe grounded all ${featureInventory.length} prepared feature(s) on their entry routes.`
-        }`,
+        logsSummary: `${input.report.logsSummary} Feature probe grounded all ${featureInventory.length} prepared feature(s) on their entry routes.`,
       };
     }
-    // The probe's screenshots and snapshots are the repair round's visual
-    // evidence; persist them under their own directory so the later gate
-    // run does not overwrite the record of what the repair agent saw.
-    await persistExplorationEvidence({
-      directoryName: "feature-probe-evidence",
-      logger: options.logger,
-      outputRoot: options.outputRoot,
-      workspace: input.workspace,
+
+    const priorVerdicts = new Map(
+      input.repairFeatureVerification.priorFeatureVerdicts.map((verdict) => [
+        verdict.featureId,
+        verdict,
+      ]),
+    );
+    const touchedFeatureIds = new Set(
+      input.repairFeatureVerification.touchedFeatureIds,
+    );
+    const fullExplorationIds = new Set<string>();
+    const cheapProbeCandidates: PreparedDemoFeature[] = [];
+    for (const feature of featureInventory) {
+      const priorVerdict = priorVerdicts.get(feature.id);
+      if (
+        priorVerdict?.verdict === "grounded" &&
+        !touchedFeatureIds.has(feature.id) &&
+        feature.expectedProof !== undefined
+      ) {
+        cheapProbeCandidates.push(feature);
+      } else {
+        fullExplorationIds.add(feature.id);
+      }
+    }
+
+    const entryProbeResults = await Promise.all(
+      cheapProbeCandidates.map(async (feature) => ({
+        feature,
+        serves: await preparedFeatureEntryRouteServes({
+          baseUrl: input.preparationManifest.baseUrl,
+          feature,
+          readinessReport: input.report,
+          workspace: input.workspace,
+        }),
+      })),
+    );
+    const proofCandidates = entryProbeResults.flatMap(({ feature, serves }) => {
+      if (serves) return [feature];
+      fullExplorationIds.add(feature.id);
+      return [];
     });
+    const freshlyGrounded: NonNullable<ValidationReport["featureVerdicts"]> =
+      [];
+    if (proofCandidates.length > 0) {
+      const proofExploration = await exploreFeatures(
+        proofCandidates,
+        "feature-proofs",
+      );
+      const proofVerdicts = new Map(
+        (proofExploration.validationReport.featureVerdicts ?? []).map(
+          (verdict) => [verdict.featureId, verdict],
+        ),
+      );
+      for (const feature of proofCandidates) {
+        const verdict = proofVerdicts.get(feature.id);
+        if (verdict?.verdict === "grounded") {
+          freshlyGrounded.push(verdict);
+        } else {
+          fullExplorationIds.add(feature.id);
+        }
+      }
+    }
+
+    const fullExplorationFeatures = featureInventory.filter((feature) =>
+      fullExplorationIds.has(feature.id),
+    );
+    const fullExploration =
+      fullExplorationFeatures.length === 0
+        ? undefined
+        : await exploreFeatures(fullExplorationFeatures, "feature-entries");
+    const fullReport = fullExploration?.validationReport;
+    const freshVerdicts = new Map(
+      [...freshlyGrounded, ...(fullReport?.featureVerdicts ?? [])].map(
+        (verdict) => [verdict.featureId, verdict],
+      ),
+    );
+    const mergedVerdicts = featureInventory.flatMap((feature) => {
+      const verdict = freshVerdicts.get(feature.id);
+      return verdict === undefined ? [] : [verdict];
+    });
+    if (
+      fullReport?.status === "failed" &&
+      mergedVerdicts.some(({ verdict }) => verdict === "failed")
+    ) {
+      return await failedProbeReport(fullReport, mergedVerdicts);
+    }
+    const allFeaturesGrounded = featureInventory.every(
+      ({ id }) => freshVerdicts.get(id)?.verdict === "grounded",
+    );
+    if (!allFeaturesGrounded) {
+      return await inconclusiveProbeReport(
+        fullReport ?? {
+          ...input.report,
+          failureClassification: "feature re-probe inconclusive",
+          logsSummary:
+            "At least one prior grounded feature did not produce fresh replay evidence.",
+          status: "failed",
+        },
+      );
+    }
     return {
-      ...probeReport,
-      logsSummary: `Feature verification probe failed after the runtime preflight passed: ${probeReport.logsSummary}`,
-      stage: "preparation-preflight",
+      ...input.report,
+      logsSummary: `${input.report.logsSummary} Repair feature probe freshly re-grounded ${freshlyGrounded.length} unchanged feature(s) and fully explored ${fullExplorationFeatures.length} failed or touched feature(s).`,
     };
   };
 
@@ -1808,6 +1940,7 @@ export async function createDefaultAgentHarnessDependencies(
       installDependencies,
       preparationManifest,
       reconcileLockfile,
+      repairFeatureVerification,
       repoProfile,
       runPlan,
       workspace,
@@ -1825,6 +1958,9 @@ export async function createDefaultAgentHarnessDependencies(
       // in place before preparation is allowed to hand off.
       return await probePreparedFeatures({
         preparationManifest,
+        ...(repairFeatureVerification === undefined
+          ? {}
+          : { repairFeatureVerification }),
         report,
         workspace,
       });
@@ -4484,6 +4620,68 @@ const submittedCodeBuildTimeoutMs = 15 * 60_000;
 const serviceProvisionTimeoutMs = 3 * 60_000;
 const serviceSetupTimeoutMs = 10 * 60_000;
 
+async function preparedFeatureEntryRouteServes(input: {
+  baseUrl: string;
+  feature: PreparedDemoFeature;
+  readinessReport: ValidationReport;
+  workspace: AgentHarnessWorkspace;
+}): Promise<boolean> {
+  const entryPath = input.feature.entryPaths[0];
+  if (entryPath === undefined) return false;
+  let baseUrl: URL;
+  let requestedUrl: URL;
+  try {
+    baseUrl = new URL(input.baseUrl);
+    requestedUrl = new URL(entryPath, input.baseUrl);
+  } catch {
+    return false;
+  }
+  if (requestedUrl.origin !== baseUrl.origin) return false;
+  const routeIdentity = (url: URL) =>
+    `${url.pathname.replace(/\/+$/, "") || "/"}${url.search}`;
+  const probeServes = (runtimeProbe: RuntimeProbeDiagnostics) => {
+    if (runtimeProbe.attempts.at(-1)?.outcome !== "responded") return false;
+    let finalUrl: URL;
+    try {
+      finalUrl = new URL(runtimeProbe.finalUrl ?? requestedUrl.toString());
+    } catch {
+      return false;
+    }
+    const requestedRoute = `${requestedUrl.pathname}${requestedUrl.search}${requestedUrl.hash}`;
+    const finalRoute = `${finalUrl.pathname}${finalUrl.search}${finalUrl.hash}`;
+    return (
+      finalUrl.origin === requestedUrl.origin &&
+      routeIdentity(finalUrl) === routeIdentity(requestedUrl) &&
+      !(
+        !hasAuthWallRouteShape(requestedRoute) &&
+        hasAuthWallRouteShape(finalRoute)
+      )
+    );
+  };
+  if (
+    input.readinessReport.runtimeProbe !== undefined &&
+    input.readinessReport.urlChecked !== undefined
+  ) {
+    try {
+      const checkedUrl = new URL(input.readinessReport.urlChecked);
+      if (
+        checkedUrl.origin === requestedUrl.origin &&
+        routeIdentity(checkedUrl) === routeIdentity(requestedUrl)
+      ) {
+        return probeServes(input.readinessReport.runtimeProbe);
+      }
+    } catch {
+      // A malformed readiness URL cannot prove this entry route; probe it.
+    }
+  }
+  const probe = await probeSubmittedCodeRuntime(
+    input.workspace,
+    requestedUrl.toString(),
+    0,
+  );
+  return probeServes(probe.runtimeProbe);
+}
+
 async function probeSubmittedCodeRuntime(
   workspace: AgentHarnessWorkspace,
   url: string,
@@ -4507,12 +4705,16 @@ async function probeSubmittedCodeRuntime(
   let delayMs = runtimeReadinessInitialDelayMs;
   let budgetEndMs = budgetMs;
   let lastAppOutputLength: number | undefined;
+  const singleShot = budgetMs === 0;
+  const responseOutputPath = singleShot
+    ? "/dev/null"
+    : "/tmp/makeademo/preflight.html";
   for (let attempt = 1; ; attempt += 1) {
     const startedAt = new Date().toISOString();
     const startedAtMs = Date.now();
     result = await executeSubmitted(
       workspace,
-      `curl -fsS --location --max-redirs 5 --connect-timeout 2 --max-time 90 --write-out ${shellQuote(`\n[makeademo:probe] {"httpStatus":%{http_code},"url":"%{url_effective}"}\n`)} ${shellQuote(url)} -o /tmp/makeademo/preflight.html`,
+      `curl -fsS --location --max-redirs 5 --connect-timeout 2 --max-time ${singleShot ? 15 : 90} --write-out ${shellQuote(`\n[makeademo:probe] {"httpStatus":%{http_code},"url":"%{url_effective}"}\n`)} ${shellQuote(url)} -o ${responseOutputPath}`,
       // The probe loop already re-issues this GET by design (N120), so a
       // transient control-plane loss may retry it too.
       { retry: "transient" },

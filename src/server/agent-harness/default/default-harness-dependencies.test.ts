@@ -4612,6 +4612,358 @@ describe("createDefaultAgentHarnessDependencies", () => {
     ).toContain('const crawlScope = "feature-entries"');
   });
 
+  it("cheaply re-probes grounded features and fully explores only prior failures", async () => {
+    const commands: string[] = [];
+    const explorerScripts: string[] = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        if (!command.includes("explore-app.mjs")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        const encodedScript = /printf %s '([^']+)'/.exec(command)?.[1] ?? "";
+        const script = Buffer.from(encodedScript, "base64").toString("utf8");
+        explorerScripts.push(script);
+        const proofOnly = script.includes(
+          'const crawlScope = "feature-proofs"',
+        );
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout: `\n[makeademo:exploration] ${JSON.stringify({
+            blockedNetworkAttempts: [],
+            consoleErrors: [],
+            declaredProofs: proofOnly
+              ? [
+                  {
+                    detail: "fresh dashboard proof",
+                    featureId: "dashboard",
+                    passed: true,
+                  },
+                  {
+                    detail: "fresh reports proof",
+                    featureId: "reports",
+                    passed: true,
+                  },
+                ]
+              : [
+                  {
+                    detail: "fresh availability proof",
+                    featureId: "availability",
+                    passed: true,
+                  },
+                  {
+                    detail: "booking remained unavailable",
+                    featureId: "booking",
+                    passed: false,
+                  },
+                ],
+            pageErrors: [],
+            routes: (proofOnly
+              ? [
+                  {
+                    featureId: "dashboard",
+                    heading: "Dashboard",
+                    path: "/dashboard",
+                    text: "Dashboard overview",
+                  },
+                  {
+                    featureId: "reports",
+                    heading: "Reports",
+                    path: "/reports",
+                    text: "Archived reports",
+                  },
+                ]
+              : [
+                  {
+                    featureId: "availability",
+                    heading: "Availability",
+                    path: "/availability",
+                    text: "Weekly availability",
+                  },
+                  {
+                    featureId: "booking",
+                    heading: "Booking",
+                    path: "/booking",
+                    text: "Book event",
+                  },
+                ]
+            ).map((route) => ({
+              buttons: [],
+              featureIds: [route.featureId],
+              forms: [],
+              headings: [route.heading],
+              inputs: [],
+              links: [],
+              path: route.path,
+              primaryNavigation: [],
+              requestedPath: route.path,
+              screenshot: `/workspace/.makeademo/exploration/${route.featureId}.png`,
+              snapshot: `/workspace/.makeademo/exploration/${route.featureId}.aria.yml`,
+              text: [route.text],
+              title: route.heading,
+            })),
+            unreachableRoutes: [],
+          })}\n`,
+        };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+    const dashboard = {
+      ...(preparationManifest().productContext
+        .featureInventory[0] as NonNullable<
+        PreparationManifest["productContext"]["featureInventory"][number]
+      >),
+      entryPaths: ["/dashboard"],
+    };
+    const booking = {
+      ...dashboard,
+      description: "Create a booking.",
+      entryPaths: ["/booking"],
+      expectedProof: { kind: "visible-text" as const, text: "Book event" },
+      id: "booking",
+      label: "Booking",
+      requestedFeature: "booking",
+      sourcePaths: ["src/booking/page.tsx"],
+    };
+    const availability = {
+      ...dashboard,
+      description: "Configure weekly availability.",
+      entryPaths: ["/availability"],
+      expectedProof: {
+        kind: "visible-text" as const,
+        text: "Weekly availability",
+      },
+      id: "availability",
+      label: "Availability",
+      requestedFeature: "availability",
+      sourcePaths: ["src/availability/page.tsx"],
+    };
+    const reports = {
+      ...dashboard,
+      description: "Review archived reports.",
+      entryPaths: ["/reports"],
+      expectedProof: {
+        kind: "visible-text" as const,
+        text: "Archived reports",
+      },
+      id: "reports",
+      label: "Reports",
+      requestedFeature: "reports",
+      sourcePaths: ["src/reports/page.tsx"],
+    };
+    const manifest = {
+      ...preparationManifest(),
+      productContext: {
+        ...preparationManifest().productContext,
+        featureInventory: [dashboard, reports, availability, booking],
+      },
+    };
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: manifest,
+      repairFeatureVerification: {
+        priorFeatureVerdicts: [
+          {
+            detail: "stale dashboard proof",
+            evidence: ["declared-proof-dashboard"],
+            featureId: "dashboard",
+            groundedBy: "declared-proof",
+            verdict: "grounded",
+          },
+          {
+            detail: "booking was unavailable",
+            failedBecause: "declared-proof-failed",
+            featureId: "booking",
+            verdict: "failed",
+          },
+          {
+            detail: "stale reports proof",
+            evidence: ["declared-proof-reports"],
+            featureId: "reports",
+            groundedBy: "declared-proof",
+            verdict: "grounded",
+          },
+          {
+            detail: "stale availability proof",
+            evidence: ["declared-proof-availability"],
+            featureId: "availability",
+            groundedBy: "declared-proof",
+            verdict: "grounded",
+          },
+        ],
+        touchedFeatureIds: ["availability"],
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(explorerScripts).toHaveLength(2);
+    expect(explorerScripts[0]).toContain('const crawlScope = "feature-proofs"');
+    expect(explorerScripts[1]).toContain(
+      'const crawlScope = "feature-entries"',
+    );
+    expect(report.logsSummary).toContain("Feature verification probe failed");
+    expect(report).toMatchObject({
+      failingFeatureIds: ["booking"],
+      status: "failed",
+    });
+    expect(report.featureVerdicts).toEqual([
+      expect.objectContaining({
+        detail: "fresh dashboard proof",
+        featureId: "dashboard",
+        verdict: "grounded",
+      }),
+      expect.objectContaining({
+        detail: "fresh reports proof",
+        featureId: "reports",
+        verdict: "grounded",
+      }),
+      expect.objectContaining({
+        detail: "fresh availability proof",
+        featureId: "availability",
+        verdict: "grounded",
+      }),
+      expect.objectContaining({ featureId: "booking", verdict: "failed" }),
+    ]);
+    expect(JSON.stringify(report.featureVerdicts)).not.toContain("stale");
+    expect(explorerScripts[0]).toContain('"featureId":"dashboard"');
+    expect(explorerScripts[0]).toContain('"featureId":"reports"');
+    expect(explorerScripts[0]).not.toContain('"featureId":"availability"');
+    expect(explorerScripts[0]).not.toContain('"featureId":"booking"');
+    expect(explorerScripts[1]).toContain('"featureId":"availability"');
+    expect(explorerScripts[1]).toContain('"featureId":"booking"');
+    expect(explorerScripts[1]).not.toContain('"featureId":"dashboard"');
+    expect(explorerScripts[1]).not.toContain('"featureId":"reports"');
+    expect(commands).toContainEqual(expect.stringContaining("/dashboard"));
+    expect(commands).not.toContainEqual(
+      expect.stringContaining("/availability"),
+    );
+    const dashboardProbe = commands.find(
+      (command) =>
+        command.includes("curl -") &&
+        command.includes("/dashboard") &&
+        command.includes("--max-time 15"),
+    );
+    expect(dashboardProbe).toBeUndefined();
+    const reportsProbe = commands.find(
+      (command) =>
+        command.includes("curl -") &&
+        command.includes("/reports") &&
+        command.includes("--max-time 15"),
+    );
+    expect(reportsProbe).toContain("-o /dev/null");
+  });
+
+  it("promotes a failed cheap proof to full exploration without stale evidence", async () => {
+    const explorerScripts: string[] = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (!command.includes("explore-app.mjs")) {
+          return { exitCode: 0, stderr: "", stdout: "" };
+        }
+        const encodedScript = /printf %s '([^']+)'/.exec(command)?.[1] ?? "";
+        const script = Buffer.from(encodedScript, "base64").toString("utf8");
+        explorerScripts.push(script);
+        const proofOnly = script.includes(
+          'const crawlScope = "feature-proofs"',
+        );
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout: `\n[makeademo:exploration] ${JSON.stringify({
+            blockedNetworkAttempts: [],
+            consoleErrors: [],
+            declaredProofs: [
+              {
+                detail: proofOnly
+                  ? "cheap replay no longer found Dashboard overview"
+                  : "full exploration still did not find Dashboard overview",
+                featureId: "dashboard",
+                passed: false,
+              },
+            ],
+            pageErrors: [],
+            routes: [
+              {
+                buttons: [],
+                featureIds: ["dashboard"],
+                forms: [],
+                headings: ["Dashboard"],
+                inputs: [],
+                links: [],
+                path: "/dashboard",
+                primaryNavigation: [],
+                requestedPath: "/dashboard",
+                screenshot: "/workspace/.makeademo/exploration/dashboard.png",
+                snapshot:
+                  "/workspace/.makeademo/exploration/dashboard.aria.yml",
+                text: ["Service status"],
+                title: "Dashboard",
+              },
+            ],
+            unreachableRoutes: [],
+          })}\n`,
+        };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+    const manifest = preparationManifest();
+    const feature = manifest.productContext.featureInventory[0];
+    if (feature === undefined) throw new Error("dashboard fixture missing");
+    feature.entryPaths = ["/dashboard"];
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: manifest,
+      repairFeatureVerification: {
+        priorFeatureVerdicts: [
+          {
+            detail: "stale dashboard proof",
+            evidence: ["declared-proof-dashboard"],
+            featureId: "dashboard",
+            groundedBy: "declared-proof",
+            verdict: "grounded",
+          },
+        ],
+        touchedFeatureIds: [],
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(explorerScripts).toHaveLength(2);
+    expect(explorerScripts[0]).toContain('const crawlScope = "feature-proofs"');
+    expect(explorerScripts[1]).toContain(
+      'const crawlScope = "feature-entries"',
+    );
+    expect(report).toMatchObject({
+      failingFeatureIds: ["dashboard"],
+      status: "failed",
+    });
+    expect(report.featureVerdicts).toEqual([
+      expect.objectContaining({
+        detail: "full exploration still did not find Dashboard overview",
+        featureId: "dashboard",
+        verdict: "failed",
+      }),
+    ]);
+    expect(JSON.stringify(report.featureVerdicts)).not.toContain(
+      "stale dashboard proof",
+    );
+  });
+
   it("passes preflight and notes the probe when every prepared feature grounds on its entry route", async () => {
     const workspace = createFakeAgentHarnessWorkspace({
       async executeSubmittedCode(command) {

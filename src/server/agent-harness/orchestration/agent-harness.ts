@@ -40,6 +40,7 @@ import {
   type ActionCatalog,
   type AppMap,
   DEMO_SCRIPT_OUTPUT_PATH,
+  type FeatureVerdict,
   type FidelityAdjudicationVerdict,
   type FlowSpec,
   type PipelineRunManifest,
@@ -89,6 +90,17 @@ export type AgentHarnessPipelineInput = {
 
 type AgentHarnessArtifactStore = {
   writeJson(path: string, value: unknown): Promise<void>;
+};
+
+/**
+ * Evidence scope for a preparation validation that follows a repair.
+ * Implementations must freshly re-probe prior grounded features, fully
+ * explore prior failures and diff-touched features, and never carry a prior
+ * verdict when its re-probe fails or is inconclusive.
+ */
+export type RepairFeatureVerification = {
+  priorFeatureVerdicts: readonly FeatureVerdict[];
+  touchedFeatureIds: readonly string[];
 };
 
 export type AgentHarnessPipelineDependencies = {
@@ -231,6 +243,8 @@ export type AgentHarnessPipelineDependencies = {
     installDependencies?: boolean;
     /** Regenerate the package-manager lockfile before frozen installation. */
     reconcileLockfile?: boolean;
+    /** Scope browser verification from the immediately preceding repair. */
+    repairFeatureVerification?: RepairFeatureVerification;
     preparationManifest: PreparationManifest;
     repoProfile: RepoProfile;
     runPlan: RunPlan;
@@ -1810,6 +1824,17 @@ async function ensureValidPreparation(input: {
       input.validationAttemptCounts,
       input.preparationRepairAttemptsByPhase["preparation-fidelity"] ?? 0,
     );
+    const repairFeatureVerification =
+      activeRepairFailure?.featureVerdicts === undefined
+        ? undefined
+        : {
+            priorFeatureVerdicts: activeRepairFailure.featureVerdicts,
+            touchedFeatureIds: readDiffTouchedFeatureIds({
+              changedPaths: repairDelta?.changedPaths ?? [],
+              currentManifest: preparationManifest,
+              previousManifest: manifestBaseline,
+            }),
+          };
     dependencyRepair = false;
     repairBaseline = undefined;
     manifestBaseline = undefined;
@@ -1859,6 +1884,9 @@ async function ensureValidPreparation(input: {
             : { installDependencies: false }),
           preparationManifest,
           ...(reconcileLockfile ? { reconcileLockfile: true } : {}),
+          ...(repairFeatureVerification === undefined
+            ? {}
+            : { repairFeatureVerification }),
           repoProfile: input.repoProfile,
           runPlan: input.runPlan,
           workspace: input.workspace,
@@ -2269,6 +2297,66 @@ function recordFailingFeatureProgress(
   ) {
     budget.bonusRounds += 1;
   }
+}
+
+/**
+ * Maps a repair delta back to the manifest features it can invalidate. Source
+ * files and declared data seams are feature-owned paths; a changed feature
+ * declaration is touched too, even when the repair changed only the manifest.
+ * Both sides of the manifest comparison participate so moving a source path
+ * cannot hide the edit that moved it.
+ */
+function readDiffTouchedFeatureIds(input: {
+  changedPaths: readonly string[];
+  currentManifest: PreparationManifest;
+  previousManifest: PreparationManifest | undefined;
+}): string[] {
+  const normalizePath = (path: string) =>
+    path
+      .replace(/^\/workspace\/repo\//, "")
+      .replace(/^\.\//, "")
+      .replace(/\/+$/, "");
+  const changedPaths = input.changedPaths
+    .map(normalizePath)
+    .filter((path) => path.length > 0);
+  const previousFeatures = new Map(
+    (input.previousManifest?.productContext.featureInventory ?? []).map(
+      (feature) => [feature.id, feature],
+    ),
+  );
+  const featurePaths = (
+    feature: PreparationManifest["productContext"]["featureInventory"][number],
+  ) => [
+    ...feature.sourcePaths,
+    ...(feature.dataSeams ?? []).flatMap((seam) => [
+      seam.path,
+      seam.fixtureModule,
+    ]),
+  ];
+  const pathsOverlap = (left: string, right: string) =>
+    left === right ||
+    left.startsWith(`${right}/`) ||
+    right.startsWith(`${left}/`);
+
+  return input.currentManifest.productContext.featureInventory.flatMap(
+    (feature) => {
+      const previousFeature = previousFeatures.get(feature.id);
+      const declarationChanged =
+        previousFeature === undefined ||
+        JSON.stringify(previousFeature) !== JSON.stringify(feature);
+      const ownedPaths = [
+        ...featurePaths(feature),
+        ...(previousFeature === undefined ? [] : featurePaths(previousFeature)),
+      ].map(normalizePath);
+      const workspaceTouched = changedPaths.some((changedPath) =>
+        ownedPaths.some(
+          (ownedPath) =>
+            ownedPath.length > 0 && pathsOverlap(changedPath, ownedPath),
+        ),
+      );
+      return declarationChanged || workspaceTouched ? [feature.id] : [];
+    },
+  );
 }
 
 /**

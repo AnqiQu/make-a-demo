@@ -1793,6 +1793,93 @@ describe("runAgentHarnessPipeline", () => {
     );
   });
 
+  it("passes the prior feature ledger and diff-touched features into repair validation", async () => {
+    const verificationScopes: Array<
+      Parameters<
+        AgentHarnessPipelineDependencies["validatePreparation"]
+      >[0]["repairFeatureVerification"]
+    > = [];
+    let preflightAttempts = 0;
+    let diffCalls = 0;
+    const dashboardFailure = {
+      detail: "Dashboard overview was not found",
+      failedBecause: "declared-proof-failed" as const,
+      featureId: "dashboard",
+      verdict: "failed" as const,
+    };
+    const repairedManifest = {
+      ...preparationManifest(),
+      envUsed: { MAKEADEMO_DEMO: "true" },
+    };
+    const repairedDiff = {
+      changedFileSha256: {
+        "src/page.tsx": `sha256:${"d".repeat(64)}` as const,
+      },
+      changedPaths: ["/workspace/repo/src/page.tsx"],
+      patch:
+        "diff --git a/src/page.tsx b/src/page.tsx\n+if (process.env.MAKEADEMO_DEMO === 'true') return 'Dashboard overview';",
+      patchSha256: `sha256:${"d".repeat(64)}` as const,
+      sourceCommitSha: "abc123def456",
+    };
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_repair_feature_scope" }),
+      stubPipelineDependencies({
+        async capturePreparationWorkspaceDiff() {
+          diffCalls += 1;
+          return diffCalls === 1 ? unchangedWorkspaceDiff() : repairedDiff;
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation() {
+          return { manifest: repairedManifest };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation({ repairFeatureVerification }) {
+          preflightAttempts += 1;
+          verificationScopes.push(repairFeatureVerification);
+          return preflightAttempts === 1
+            ? {
+                ...report("preparation-preflight", "failed"),
+                failingFeatureIds: ["dashboard"],
+                failureClassification: "requested feature not observable",
+                featureVerdicts: [dashboardFailure],
+              }
+            : report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    expect(verificationScopes).toEqual([
+      undefined,
+      {
+        priorFeatureVerdicts: [dashboardFailure],
+        touchedFeatureIds: ["dashboard"],
+      },
+    ]);
+  });
+
   it("reinstalls after a lifecycle timeout instead of reusing the incomplete install", async () => {
     // A timed-out lifecycle (N98) left native builds and postinstall codegen
     // unfinished: reusing that install would skip the lifecycle re-run and

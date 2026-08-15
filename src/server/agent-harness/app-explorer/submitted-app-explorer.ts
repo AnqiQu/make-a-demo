@@ -316,8 +316,9 @@ const explorationCommandTimeoutMs = 7 * 60_000;
  * `scope: "feature-entries"` restricts the crawl to the manifest's declared
  * entry routes plus the base URL — no discovered link or navigation is
  * followed — while keeping every other gate behavior (harvest, interactions,
- * declared proofs, verdict ledger) identical. This is the N108 preparation
- * probe: same judgment as the gate, cost proportional to the feature count.
+ * declared proofs, verdict ledger) identical. `scope: "feature-proofs"`
+ * skips that crawl and executes only declared proofs from fresh navigations;
+ * callers must use it only after independently proving the entry route serves.
  */
 export async function exploreSubmittedApp(input: {
   baseUrl: string;
@@ -336,7 +337,7 @@ export async function exploreSubmittedApp(input: {
   featureInventory?: PreparedDemoFeature[];
   preparationManifestId: string;
   requestedFeatures?: string[];
-  scope?: "feature-entries" | "full";
+  scope?: "feature-entries" | "feature-proofs" | "full";
   workspace: AgentHarnessWorkspace;
 }): Promise<SubmittedAppExplorationResult> {
   // Normalized once at ingestion: every downstream consumer — crawl
@@ -3168,7 +3169,7 @@ function createExplorerScript(
   baseUrl: string,
   featureInventory: PreparedDemoFeature[],
   externalResourceManifest?: ExternalResourceManifest,
-  scope: "feature-entries" | "full" = "full",
+  scope: "feature-entries" | "feature-proofs" | "full" = "full",
   captureFailure?: CaptureLocatorFailure,
 ): string {
   const featureEntryTargets = createFeatureEntryTargets(
@@ -3614,15 +3615,19 @@ try {
           title: document.title || clean(document.querySelector("h1")?.textContent) || location.pathname,
         };
   };
-  const queue = [
-    ...featureEntryTargets,
-    { featureIds: [], requestedPath: new URL(baseUrl).pathname, url: new URL(baseUrl).toString() },
-  ];
+  const queue = crawlScope === "feature-proofs"
+    ? []
+    : [
+        ...featureEntryTargets,
+        { featureIds: [], requestedPath: new URL(baseUrl).pathname, url: new URL(baseUrl).toString() },
+      ];
   const seen = new Set();
   const harvestedOnEarlierRoutes = new Set();
-  const maxRoutes = crawlScope === "feature-entries"
-    ? featureEntryTargets.length + 1
-    : Math.min(30, featureEntryTargets.length + 9);
+  const maxRoutes = crawlScope === "feature-proofs"
+    ? 0
+    : crawlScope === "feature-entries"
+      ? featureEntryTargets.length + 1
+      : Math.min(30, featureEntryTargets.length + 9);
   await mkdir(outputDirectory, { recursive: true });
   while (queue.length > 0 && seen.size < maxRoutes && Date.now() < deadlineAtMs) {
     const target = queue.shift();
@@ -4062,6 +4067,36 @@ try {
       }
     } catch (error) {
       if (isAppUnavailableError(error)) break;
+    } finally {
+      if (
+        crawlScope === "feature-proofs" &&
+        result.declaredProofs.some((proof) => proof.featureId === target.featureId) &&
+        !result.routes.some((route) => (route.featureIds || []).includes(target.featureId))
+      ) {
+        const proofSlug = String(target.featureId).replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 80) || "feature";
+        const screenshot = outputDirectory + "/proof-" + proofSlug + ".png";
+        const snapshot = outputDirectory + "/proof-" + proofSlug + ".aria.yml";
+        await page.screenshot({ fullPage: false, path: screenshot });
+        const ariaSnapshot = await (typeof page.locator("body").ariaSnapshot === "function"
+          ? page.locator("body").ariaSnapshot()
+          : page.locator("body").innerText());
+        await writeFile(snapshot, ariaSnapshot);
+        result.routes.push({
+          buttons: [],
+          featureIds: [target.featureId],
+          forms: [],
+          headings: [],
+          inputs: [],
+          links: [],
+          path: target.path,
+          primaryNavigation: [],
+          requestedPath: target.path,
+          screenshot,
+          snapshot,
+          text: [],
+          title: (await page.title().catch(() => "")) || target.path,
+        });
+      }
     }
   }
   // N125: a capture-failed candidate is re-verified in its replay context.
@@ -4132,7 +4167,7 @@ try {
   // never show a 404 page, so the probe teaches nothing). Skipped past the
   // deadline and on overlay-stuck apps, where the probe would pay the full
   // overlay wait to harvest a page that renders nothing.
-  if (Date.now() < deadlineAtMs && !result.routes.some((route) => route.loadingOverlay === true)) try {
+  if (crawlScope !== "feature-proofs" && Date.now() < deadlineAtMs && !result.routes.some((route) => route.loadingOverlay === true)) try {
     const probeMarker = ${JSON.stringify(notFoundProbePathMarker)};
     const probeUrl = featureEntryTargets.some((target) => target.url.includes("#/"))
       ? new URL("#/" + probeMarker, baseUrl).toString()
