@@ -8040,3 +8040,201 @@ green; directus builds @directus/extensions round 1
 and re-enters the stub arc (N143/N138 finally
 exercised); calcom converges inside the clock with
 N150's cheap re-verification.
+
+## Addendum (2026-08-15, wave-12 — two videos; N141's first real exercise breaks capture; a weak proof masks a dead session; a wedged sandbox eats a run: N151–N153)
+
+Batch matrix-2026-08-15T02-47-42-772Z, report
+matrix-report-2026-08-15T04-11-19-185Z.json. Two
+passes: homer (fourth consecutive) and ghostfolio
+(second video). Three failures, each a different
+stage and each new in shape.
+
+What wave-12 validated: the N146/N147 heavyweight
+path worked end to end on its first outing — twenty's
+class selected heavyweight, the cpu4-mem8 snapshot
+booted, no fallback warning, and the submitted-code
+upload succeeded. N142's flow-spec gate fired
+exactly as amended (it is what caught calcom).
+N148's diagnosis is confirmed from the lucky side:
+ghostfolio's manifest again declared `npm run start`
+with buildCommandUsed omitted, and passed only
+because the sandbox log shows the agent ran
+`npm run build` three times without declaring it —
+the run rode on undeclared workspace state that the
+manifest cannot reproduce. The static half of N148
+would have forced the declaration and cost nothing.
+N150 went unexercised (calcom never reached a repair
+loop this wave).
+
+ghostfolio (passed, evidence for N148): manifest
+install `npm ci --no-audit`, build omitted, start
+`npm run start`; sandbox log records three
+`npm run build` invocations during preparation.
+Same shape failed wave-11 when dist was absent at
+lifecycle time. No new item — N148 covers it.
+
+calcom (failed 56m, flow-planning): all three
+requested features grounded at app-exploration via
+declared-proof — route-level visible-text checks
+("Event types" is visible on /event-types) — while
+the action catalog already recorded that the only
+exercised interactions for event-types-public-link
+and availability-and-duration were auth-degraded
+(clicks on /event-types and /availability observed
+"/auth/login became visible"). The verdict builder
+returns declared-proof grounding before the N142
+auth-degraded check runs
+(submitted-app-explorer.ts, declared-proof branch
+precedes the requested-feature auth-degraded
+branch), so the "feature auth barrier" →
+repo-preparation-repair route never fired. Flow
+planning then inherited a catalog whose only clicks
+for two requested features ground nothing; the N142
+flow-spec gate correctly refused three times; the
+flow-planning agent cannot repair a demo session and
+has no route back to preparation-repair; the run
+died on the artifact retry budget (→ N151).
+
+directus (failed 82m, capture-path-validation — its
+deepest run ever): static contract validation and
+capture preflight passed; script execution then
+failed four identical times with "Capture Script
+Protocol Violation: Capture script emitted nested
+Browser Action markers." and script-repair burned
+its 3-round budget without moving the failure. The
+candidate JSON is conformant; the defect is
+harness-owned. N141's compiler settle emits
+`await Promise.all([page.waitForURL(dest),
+animatedClick(page, locator)])`
+(browser-action-plan.ts), and the Capture SDK's
+proxy instrumentation emits a started/succeeded
+action-marker pair around EVERY instrumented call
+(capture-sdk-contract.ts runInstrumentedStep). The
+two spans overlap by construction — waitForURL's
+span is still open when the click's started marker
+is emitted — so every navigation-observed click
+trips the validator's single-activeAction check
+(capture-runtime-protocol.ts). Deterministic, and
+invisible until now: wave-12 is the first run to
+reach capture with a navigationDestination click
+(homer's and ghostfolio's scripts contain zero).
+The violation message also names neither the open
+action nor the new one, so the repair agent had
+nothing to aim at, and no identical-failure
+fingerprint covers capture protocol violations —
+three doomed repairs ran (→ N152).
+
+twenty (failed 27m, upload): the agent-sandbox
+fs.upload hung for the full 600s attempt timeout,
+was classified transient, retried against the same
+sandbox, hung another 600s, and the run failed with
+~63 minutes of budget left. The target was wedged,
+not the transport: the parallel upload of the same
+archive to the submitted-code sandbox succeeded 17s
+earlier, and three sibling runs used the control
+plane throughout the hang window. Retrying a hung
+call against the same sandbox is the one retry shape
+N133's ladder gets wrong (→ N153).
+
+### N151 (High, bugfix) — a passing declared proof must not mask a dead demo session on a requested feature
+
+Reorder the existing checks in the exploration
+verdict builder: for a requested feature, run the
+auth-degraded-interactions test before (or inside)
+the declared-proof grounding branch. A requested
+feature whose declared proof passes but whose
+exercised interactions are all auth-degraded fails
+with the existing "feature auth barrier"
+classification and routes to repo-preparation-repair
+— the session seam, which can actually fix it. A
+route-level visible-text proof proves the page
+renders, not that the requested behavior ("open a
+public scheduling link") is filmable; the feature's
+interactions are what capture will replay. This is a
+reordering of two rules that already exist (the
+declared-proof branch and the N142 auth-degraded
+branch in the same function), not a new rule; the
+flow-spec gate stays as the downstream backstop.
+Acceptance: calcom's wave-12 evidence fails
+event-types-public-link and
+availability-and-duration at app-exploration with
+"feature auth barrier", and the run enters
+preparation-repair instead of dying in flow
+planning.
+
+### N152 (High, bugfix) — navigation-observed clicks must compile to one marker span
+
+N141's settle is correct about WHAT to wait for and
+wrong about HOW to emit it: two concurrently
+instrumented calls can never share a Promise.all
+under a marker protocol whose validator holds a
+single activeAction. Compile a navigation-observed
+click to ONE instrumented composite SDK helper
+(e.g. navigatedClick(page, locator, destination))
+that performs the concurrent waitForURL+click inside
+a single started/succeeded span labeled with the
+click and its destination; the compiler emits one
+call (an acceptable minimal variant: leave the
+Promise.all shape and exclude page.waitForURL from
+action-marker instrumentation — it is
+synchronization, not a browser action — so only the
+click emits a span; failures still surface through
+the step marker). Either way, two hardening moves
+from this incident: the nested-marker violation must
+name both labels (the open action and the one that
+started — N145 doctrine: a repair agent cannot fix
+what is not named), and capture protocol violations
+from a statically conformant candidate should trip
+the identical-failure fingerprint after one repeat
+instead of burning the full script-repair budget on
+a harness-owned defect. Acceptance: directus's
+wave-12 script executes past open-create-field and
+open-create-role; a synthetic nested-marker
+violation names both labels.
+
+### N153 (Medium, bugfix) — consecutive hangs on one sandbox mean the sandbox is wedged, not the network
+
+Extend N133's retry ladder with an escalation rung:
+when an attempt fails by attempt-timeout (a hang —
+no response, as opposed to an error response) twice
+consecutively against the same sandbox, reclassify
+from transient transport loss to a wedged sandbox
+target and escalate to recreating that sandbox
+(bounded by the same remaining-budget arithmetic the
+ladder already does; re-upload after recreate). The
+evidence discriminates: a sibling call to another
+sandbox succeeded during the same window, so the
+loss was target-scoped. This is a new rung in the
+existing ladder plus reuse of the envelope's
+existing create path, not a new retry system.
+Acceptance: a wedged-sandbox fs.upload scenario
+recreates once and completes inside budget instead
+of failing the run after two 10-minute hangs.
+
+### Watchlist (updated)
+
+- Twenty has still never reached its migration on the
+  heavyweight snapshot: wave-12 died at upload before
+  the sandbox did any work, so the cpu4-mem8 +
+  8GiB-cap question (does N140's guidance keep
+  build+migration under the ceiling?) remains open.
+- Calcom seeded-session robustness is now the sole
+  blocker for its arc: N151 routes it to the right
+  repair seam, but whether preparation can hold an
+  authenticated session across exploration is still
+  the underlying churn.
+- N143/N144/N138 and the directus stub arc remain
+  unexercised; directus now dies later than ever, so
+  N152 is the gate to finally reaching them.
+- N148–N150 remain specified and unimplemented;
+  wave-12 added confirming evidence for N148.
+
+### Rerun
+
+After N151–N153 land (with N148–N150 still queued):
+homer and ghostfolio stay green; directus executes
+its script and reaches the stub/fixture arc; calcom
+enters preparation-repair at exploration and its
+fate turns on session repair; twenty survives upload
+and finally shows whether 4 CPUs and 8GiB clear the
+migration.
