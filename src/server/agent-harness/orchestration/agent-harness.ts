@@ -973,8 +973,7 @@ export async function runAgentHarnessPipeline(
           readCaptureProtocolFailureFingerprint(capturePathValidation);
         if (captureProtocolFingerprint !== undefined) {
           const failures =
-            (captureProtocolFailureCounts[captureProtocolFingerprint] ?? 0) +
-            1;
+            (captureProtocolFailureCounts[captureProtocolFingerprint] ?? 0) + 1;
           captureProtocolFailureCounts[captureProtocolFingerprint] = failures;
           if (failures > 1) {
             throw new Error(
