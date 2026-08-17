@@ -798,6 +798,97 @@ describe("resolveRuntimeTarget", () => {
     );
   });
 
+  it("keeps a safe repair build when the resolved start consumes production output", () => {
+    // N154 (ghostfolio, 2026-08-15): runtime repair declared the build that
+    // emits dist/apps/api/main, but resolution dropped it because the command
+    // named no workspace. The resulting start-without-build lifecycle was
+    // guaranteed to fail N148's static runtime-configuration check again.
+    const preparationManifest = manifest("apps/api/src/main.ts");
+    preparationManifest.buildCommandUsed = "npm run build:production";
+    preparationManifest.startCommandUsed = "npm run start";
+    const scripts = {
+      "build:production": "nx run api:build",
+      start: "node dist/apps/api/main",
+    };
+    const runPlan: RunPlan = {
+      allowedPorts: [3000],
+      appDir: ".",
+      assumptions: [],
+      env: {},
+      expectedLocalUrl: "http://127.0.0.1:3000",
+      installCommand: "npm ci --no-audit",
+      localServices: [],
+      riskFlags: [],
+      runtime: "node",
+      startCommand: "npm run start",
+      targetSelection: {
+        evidencePaths: ["package.json", "apps/api/src/main.ts"],
+        reason: "The repository exposes one browser runtime.",
+        role: "product",
+        source: "single-candidate",
+        targetId: ".",
+      },
+      validationExpectations: [],
+    };
+
+    const resolution = resolvePreparationRuntime({
+      preparationManifest,
+      repoProfile: profile({
+        browserRuntimeCandidates: [
+          {
+            dir: ".",
+            evidencePaths: ["package.json", "apps/api/src/main.ts"],
+            frameworks: ["angular"],
+            ports: [],
+            scripts,
+          },
+        ],
+        candidateInstallCommands: ["npm ci --no-audit"],
+        lockfiles: ["package-lock.json"],
+        packageManager: "npm",
+        packageScripts: scripts,
+        workspacePackages: [],
+      }),
+      runPlan,
+    });
+
+    expect(resolution.preparationManifest.buildCommandUsed).toBe(
+      "npm run build:production",
+    );
+    expect(resolution.preparationManifest.startCommandUsed).toBe(
+      "npm run start",
+    );
+  });
+
+  it("still rejects an absent workspace build for a production-entry start", () => {
+    const preparationManifest = manifest("apps/api/src/main.ts");
+    preparationManifest.buildCommandUsed =
+      "pnpm --filter=@acme/website run build";
+    const scripts = { start: "node dist/main.js" };
+
+    const resolution = resolvePreparationRuntime({
+      preparationManifest,
+      repoProfile: profile({
+        candidateInstallCommands: ["pnpm install --frozen-lockfile"],
+        lockfiles: ["pnpm-lock.yaml"],
+        packageManager: "pnpm",
+        packageScripts: {},
+        workspacePackages: [
+          {
+            dir: "apps/api",
+            name: "@acme/api",
+            ports: [],
+            scripts,
+          },
+        ],
+      }),
+    });
+
+    expect(resolution.preparationManifest).not.toHaveProperty(
+      "buildCommandUsed",
+    );
+  });
+
   it("keeps a repair-set buildCommandUsed that names a real workspace build target", () => {
     // N131 (directus, 2026-08-13): the unbuilt-workspace hints steer the
     // agent to "Set buildCommandUsed to build <package>", and resolution

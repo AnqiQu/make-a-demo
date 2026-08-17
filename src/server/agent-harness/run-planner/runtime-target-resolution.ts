@@ -71,17 +71,13 @@ export function findRuntimeConfigurationIssue(input: {
     input.preparationManifest.appDir,
     input.repoProfile,
   );
-  const startScriptName = readScriptName(
-    input.preparationManifest.startCommandUsed,
-  );
-  const resolvedStartCommand =
-    startScriptName === undefined
-      ? input.preparationManifest.startCommandUsed
-      : runtimeScripts?.[startScriptName];
   const productionEntry =
     input.preparationManifest.buildCommandUsed === undefined &&
-    resolvedStartCommand !== undefined
-      ? readProductionEntry(resolvedStartCommand)
+    input.preparationManifest.startCommandUsed !== undefined
+      ? readResolvedProductionEntry(
+          input.preparationManifest.startCommandUsed,
+          runtimeScripts,
+        )
       : undefined;
   if (productionEntry !== undefined) {
     return `Runtime-configuration error: startCommandUsed runs ${productionEntry} but no declared build produces it — declare the build that emits ${productionEntry}, or start the dev server instead.`;
@@ -135,6 +131,18 @@ function readProductionEntry(command: string): string | undefined {
   )?.[1];
 }
 
+function readResolvedProductionEntry(
+  command: string,
+  scripts: Record<string, string> | undefined,
+): string | undefined {
+  const scriptName = readScriptName(command);
+  const resolvedCommand =
+    scriptName === undefined ? command : scripts?.[scriptName];
+  return resolvedCommand === undefined
+    ? undefined
+    : readProductionEntry(resolvedCommand);
+}
+
 /** Applies an unambiguous backend-owned target to the auditable manifest. */
 export function resolvePreparationRuntime(input: {
   preparationManifest: PreparationManifest;
@@ -158,12 +166,19 @@ export function resolvePreparationRuntime(input: {
   }
   const { buildCommandUsed: agentBuildCommand, ...manifest } =
     input.preparationManifest;
+  const startsFromProductionEntry =
+    runtimeTarget.build === undefined &&
+    readResolvedProductionEntry(
+      runtimeTarget.start.command,
+      readRuntimeScripts(runtimeTarget.start.cwd, input.repoProfile),
+    ) !== undefined;
   const buildCommandUsed =
     runtimeTarget.build?.command ??
-    readHonoredWorkspaceBuildCommand(
+    readHonoredAgentBuildCommand(
       agentBuildCommand,
       input.repoProfile,
       runtimeTarget.targetId,
+      startsFromProductionEntry,
     );
   return {
     preparationManifest: {
@@ -180,21 +195,19 @@ export function resolvePreparationRuntime(input: {
 }
 
 /**
- * The one agent-authored runtime field resolution honors instead of
- * replacing: a buildCommandUsed that names a real workspace package. A dev
- * server rebuilds the app on demand but never a sibling workspace package,
- * so when resolution forces build undefined the only channel for "build
- * <sibling> before the app" is the manifest — and the unbuilt-workspace
- * hints steer repairs to exactly that channel (N131: directus's agent
- * obeyed the hint three rounds running while resolution stripped it).
- * Honored only when the command, or the app script body it runs one level
- * down, references a known workspace package by its full name and selects
- * no absent one; anything else stays backend-owned and is dropped.
+ * The agent-authored runtime field resolution can safely honor instead of
+ * replacing. A build that names a real workspace package supplies a sibling
+ * output a dev server cannot rebuild (N131). A build paired with a resolved
+ * production-entry start is also required: dropping it would emit the exact
+ * start-without-build lifecycle rejected by runtime configuration validation
+ * (N154). Both exceptions remain behind the absent-workspace selector check;
+ * anything else stays backend-owned and is dropped.
  */
-function readHonoredWorkspaceBuildCommand(
+function readHonoredAgentBuildCommand(
   agentBuildCommand: string | undefined,
   repoProfile: RepoProfile,
   targetDir: string,
+  startsFromProductionEntry: boolean,
 ): string | undefined {
   if (agentBuildCommand === undefined) {
     return undefined;
@@ -218,6 +231,9 @@ function readHonoredWorkspaceBuildCommand(
     .join(" ");
   if (readAbsentWorkspacePackage(surfaces, knownWorkspaceNames) !== undefined) {
     return undefined;
+  }
+  if (startsFromProductionEntry) {
+    return agentBuildCommand;
   }
   // Unnamed workspace packages are hinted by directory, and pnpm-style path
   // filters spell directories as `./<dir>` — both count as naming a target.
