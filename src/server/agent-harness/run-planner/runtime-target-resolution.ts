@@ -145,6 +145,8 @@ function readResolvedProductionEntry(
 
 /** Applies an unambiguous backend-owned target to the auditable manifest. */
 export function resolvePreparationRuntime(input: {
+  /** Authorize a safe graph build only after the repair ledger escalates it. */
+  honorWorkspaceGraphBuild?: boolean;
   preparationManifest: PreparationManifest;
   repoProfile: RepoProfile;
   runPlan?: RunPlan;
@@ -179,6 +181,7 @@ export function resolvePreparationRuntime(input: {
       input.repoProfile,
       runtimeTarget.targetId,
       startsFromProductionEntry,
+      input.honorWorkspaceGraphBuild === true,
     );
   return {
     preparationManifest: {
@@ -200,14 +203,17 @@ export function resolvePreparationRuntime(input: {
  * output a dev server cannot rebuild (N131). A build paired with a resolved
  * production-entry start is also required: dropping it would emit the exact
  * start-without-build lifecycle rejected by runtime configuration validation
- * (N154). Both exceptions remain behind the absent-workspace selector check;
- * anything else stays backend-owned and is dropped.
+ * (N154). After repeated unbuilt-workspace failures, the orchestrator may
+ * also authorize the repository's graph build (N155). Every exception stays
+ * behind the absent-workspace selector check; anything else remains
+ * backend-owned and is dropped.
  */
 function readHonoredAgentBuildCommand(
   agentBuildCommand: string | undefined,
   repoProfile: RepoProfile,
   targetDir: string,
   startsFromProductionEntry: boolean,
+  honorWorkspaceGraphBuild: boolean,
 ): string | undefined {
   if (agentBuildCommand === undefined) {
     return undefined;
@@ -235,6 +241,15 @@ function readHonoredAgentBuildCommand(
   if (startsFromProductionEntry) {
     return agentBuildCommand;
   }
+  if (
+    honorWorkspaceGraphBuild &&
+    isWorkspaceGraphBuildCommand(agentBuildCommand, surfaces, {
+      repoProfile,
+      targetDir,
+    })
+  ) {
+    return agentBuildCommand;
+  }
   // Unnamed workspace packages are hinted by directory, and pnpm-style path
   // filters spell directories as `./<dir>` — both count as naming a target.
   const referenceIdentifiers = [
@@ -248,6 +263,130 @@ function readHonoredAgentBuildCommand(
   )
     ? agentBuildCommand
     : undefined;
+}
+
+function isWorkspaceGraphBuildCommand(
+  command: string,
+  resolvedSurfaces: string,
+  input: { repoProfile: RepoProfile; targetDir: string },
+): boolean {
+  const expected = createWorkspaceGraphBuildCommand(input);
+  if (expected !== undefined && command.trim() === expected) {
+    return true;
+  }
+  if (
+    input.targetDir === "." &&
+    ["build", "prepare"].some(
+      (scriptName) =>
+        readScriptName(command) === scriptName &&
+        input.repoProfile.packageScripts[scriptName] !== undefined,
+    )
+  ) {
+    return true;
+  }
+  return (
+    /(?:^|\s)pnpm\s+(?=[^\n]*(?:-r|--recursive)(?:\s|$))(?=[^\n]*(?:run\s+)?(?:build|prepare)(?:\s|$))/.test(
+      resolvedSurfaces,
+    ) ||
+    /(?:^|\s)(?:npx\s+)?turbo\s+(?:run\s+)?(?:build|prepare)(?:\s|$)/.test(
+      resolvedSurfaces,
+    ) ||
+    /(?:^|\s)(?:npx\s+)?nx\s+run-many\b(?=[^\n]*(?:--target(?:=|\s+)|-t\s+)(?:build|prepare)(?:\s|$))/.test(
+      resolvedSurfaces,
+    )
+  );
+}
+
+/**
+ * Returns one repository-backed workspace graph build for a selected app.
+ * The command uses only profiled package identities, scopes to the declared
+ * dependency closure when complete filters exist, and never changes cwd in
+ * the command. Undefined means the profile exposes no safe graph runner.
+ */
+export function createWorkspaceGraphBuildCommand(input: {
+  repoProfile: RepoProfile;
+  targetDir: string;
+}): string | undefined {
+  if (!input.repoProfile.workspaces.isMonorepo) {
+    return undefined;
+  }
+  const target =
+    input.repoProfile.workspacePackages?.find(
+      ({ dir }) => dir === input.targetDir,
+    ) ??
+    input.repoProfile.browserRuntimeCandidates?.find(
+      ({ dir }) => dir === input.targetDir,
+    );
+  if (target === undefined) {
+    return undefined;
+  }
+  if (target.dir === ".") {
+    const rootScript = ["build", "prepare"].find(
+      (scriptName) =>
+        input.repoProfile.packageScripts[scriptName] !== undefined,
+    );
+    if (rootScript !== undefined) {
+      return createRunScriptCommand(
+        input.repoProfile.packageManager,
+        rootScript,
+      );
+    }
+  }
+
+  const graphPackages =
+    target.workspaceDependencies === undefined
+      ? undefined
+      : readWorkspaceDependencyClosure(input.repoProfile, target, []);
+  const graphRunnerScripts = [
+    ...Object.values(input.repoProfile.packageScripts),
+    ...Object.values(target.scripts),
+  ].join("\n");
+  const graphTask = ["build", "prepare"].find((scriptName) =>
+    (graphPackages ?? input.repoProfile.workspacePackages ?? []).some(
+      ({ scripts }) => scripts[scriptName] !== undefined,
+    ),
+  );
+  if (graphTask === undefined) {
+    return undefined;
+  }
+  const graphTaskPackages = graphPackages?.filter(
+    ({ scripts }) => scripts[graphTask] !== undefined,
+  );
+
+  if (/\bturbo(?:\s+run)?\b/.test(graphRunnerScripts)) {
+    const filters = readNamedGraphFilters(graphTaskPackages);
+    return `npx turbo run ${graphTask}${filters
+      .map((filter) => ` --filter=${filter}`)
+      .join("")}`;
+  }
+  if (/\bnx\s+(?:run|run-many)\b/.test(graphRunnerScripts)) {
+    const projects = readNamedGraphFilters(graphTaskPackages);
+    return `npx nx run-many --target=${graphTask}${
+      projects.length === 0 ? " --all" : ` --projects=${projects.join(",")}`
+    }`;
+  }
+  if (input.repoProfile.packageManager === "pnpm") {
+    const targetFilter =
+      target.workspaceDependencies === undefined
+        ? undefined
+        : readWorkspaceFilter(target);
+    return `pnpm --recursive${
+      targetFilter === undefined ? "" : ` --filter=${targetFilter}...`
+    } run ${graphTask}`;
+  }
+  return undefined;
+}
+
+function readNamedGraphFilters(
+  graphPackages: RepoWorkspacePackage[] | undefined,
+): string[] {
+  if (
+    graphPackages === undefined ||
+    graphPackages.some(({ name }) => name === undefined)
+  ) {
+    return [];
+  }
+  return graphPackages.map(({ name }) => name as string).sort();
 }
 
 /**
@@ -711,9 +850,10 @@ function findScopedRootScript(
  * scope with a known workspace, an unscoped name only when the repo actually
  * uses unscoped workspace names and the name matches neither a full workspace
  * name nor a workspace's short name (so `--filter=web` still resolves to
- * `@a/web`). Registry dependencies of a foreign scope, path filters
- * (`./pkg`), globs (`@a/*`), and pnpm relationship patterns (`web...`) are
- * never judged, so only a genuinely missing target trips this.
+ * `@a/web`). Pnpm relationship markers are stripped before that check, while
+ * registry dependencies of a foreign scope, path filters (`./pkg`), and
+ * globs (`@a/*`) are never judged, so only a genuinely missing target trips
+ * this.
  */
 function readAbsentWorkspacePackage(
   command: string,
@@ -735,35 +875,41 @@ function readAbsentWorkspacePackage(
   for (const match of command.matchAll(
     /--(?:filter|workspace|scope|projects?)[=\s]+["']?([^"'\s]+)["']?/g,
   )) {
-    const selector = match[1];
-    // pnpm relationship patterns (`web...`, `...web`) select by graph, not a
-    // literal name, so a `...` never names a missing package.
-    if (selector === undefined || selector.includes("...")) {
-      continue;
-    }
-    const scope = readScope(selector);
-    if (scope !== undefined) {
-      // A clean scoped name only; a scoped glob (`@a/*`) or extra segment is
-      // not a literal package selector.
-      if (!/^@[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(selector)) {
+    // Nx accepts a comma-delimited --projects list. Every project remains an
+    // independent selector for the same absent-workspace safety invariant.
+    for (const rawSelector of (match[1] ?? "").split(",")) {
+      // Pnpm relationship markers (`web...`, `...web`) change graph breadth;
+      // their base remains a literal selector and must still resolve.
+      const selector = rawSelector
+        .replace(/^\.\.\./, "")
+        .replace(/\.\.\.$/, "");
+      if (selector.length === 0 || selector.includes("...")) {
         continue;
       }
-      if (knownScopes.has(scope) && !knownWorkspaceNames.has(selector)) {
+      const scope = readScope(selector);
+      if (scope !== undefined) {
+        // A clean scoped name only; a scoped glob (`@a/*`) or extra segment is
+        // not a literal package selector.
+        if (!/^@[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(selector)) {
+          continue;
+        }
+        if (knownScopes.has(scope) && !knownWorkspaceNames.has(selector)) {
+          return selector;
+        }
+        continue;
+      }
+      // A bare identifier only; anything with a slash is a path filter and
+      // anything with glob/pattern punctuation is not a literal name.
+      if (!/^[A-Za-z0-9._-]+$/.test(selector)) {
+        continue;
+      }
+      if (
+        repoUsesUnscopedNames &&
+        !knownWorkspaceNames.has(selector) &&
+        !knownShortNames.has(selector)
+      ) {
         return selector;
       }
-      continue;
-    }
-    // A bare identifier only; anything with a slash is a path filter and
-    // anything with glob/pattern punctuation is not a literal name.
-    if (!/^[A-Za-z0-9._-]+$/.test(selector)) {
-      continue;
-    }
-    if (
-      repoUsesUnscopedNames &&
-      !knownWorkspaceNames.has(selector) &&
-      !knownShortNames.has(selector)
-    ) {
-      return selector;
     }
   }
   return undefined;

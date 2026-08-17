@@ -5,6 +5,7 @@ import type {
   RunPlan,
 } from "../schemas/artifacts";
 import {
+  createWorkspaceGraphBuildCommand,
   expandPreparationInstallScopeForMissingWorkspace,
   findRuntimeConfigurationIssue,
   resolvePreparationRuntime,
@@ -1040,6 +1041,192 @@ describe("resolveRuntimeTarget", () => {
     expect(resolution.preparationManifest).not.toHaveProperty(
       "buildCommandUsed",
     );
+  });
+
+  it("builds a selected app's declared workspace dependency graph in topological mode", () => {
+    expect(
+      createWorkspaceGraphBuildCommand({
+        repoProfile: profile({
+          candidateInstallCommands: ["pnpm install --frozen-lockfile"],
+          lockfiles: ["pnpm-lock.yaml"],
+          packageManager: "pnpm",
+          workspacePackages: [
+            {
+              dir: "app",
+              name: "@directus/app",
+              ports: [5173],
+              scripts: { build: "vite build", dev: "vite --host" },
+              workspaceDependencies: [
+                "@directus/extensions",
+                "@directus/constants",
+              ],
+            },
+            {
+              dir: "packages/extensions",
+              name: "@directus/extensions",
+              ports: [],
+              scripts: { build: "tsdown" },
+              workspaceDependencies: ["@directus/constants"],
+            },
+            {
+              dir: "packages/constants",
+              name: "@directus/constants",
+              ports: [],
+              scripts: { build: "tsdown" },
+            },
+          ],
+        }),
+        targetDir: "app",
+      }),
+    ).toBe("pnpm --recursive --filter=@directus/app... run build");
+  });
+
+  it("uses the repository's root build or prepare lifecycle when the app is the root", () => {
+    expect(
+      createWorkspaceGraphBuildCommand({
+        repoProfile: profile({
+          candidateInstallCommands: ["npm ci --no-audit"],
+          lockfiles: ["package-lock.json"],
+          packageManager: "npm",
+          packageScripts: { prepare: "npm run generate" },
+          workspacePackages: [
+            {
+              dir: ".",
+              name: "acme",
+              ports: [3000],
+              scripts: { dev: "vite", prepare: "npm run generate" },
+            },
+          ],
+        }),
+        targetDir: ".",
+      }),
+    ).toBe("npm run prepare");
+  });
+
+  it("uses profiled turbo and nx graph runners without targeting packages that lack the task", () => {
+    const turboPackages = [
+      {
+        dir: "apps/web",
+        name: "@acme/web",
+        ports: [3000],
+        scripts: { build: "vite build", dev: "vite" },
+        workspaceDependencies: ["@acme/ui"],
+      },
+      {
+        dir: "packages/ui",
+        name: "@acme/ui",
+        ports: [],
+        scripts: { build: "tsc" },
+      },
+    ];
+    expect(
+      createWorkspaceGraphBuildCommand({
+        repoProfile: profile({
+          packageManager: "npm",
+          packageScripts: { dev: "turbo run dev --filter=@acme/web" },
+          workspacePackages: turboPackages,
+        }),
+        targetDir: "apps/web",
+      }),
+    ).toBe("npx turbo run build --filter=@acme/ui --filter=@acme/web");
+
+    expect(
+      createWorkspaceGraphBuildCommand({
+        repoProfile: profile({
+          packageManager: "yarn",
+          workspacePackages: [
+            {
+              dir: "apps/web",
+              name: "@acme/web",
+              ports: [3000],
+              scripts: { build: "nx run web:build", dev: "vite" },
+              workspaceDependencies: ["@acme/core", "@acme/ui"],
+            },
+            {
+              dir: "packages/core",
+              name: "@acme/core",
+              ports: [],
+              scripts: { build: "nx run core:build" },
+            },
+            {
+              dir: "packages/ui",
+              name: "@acme/ui",
+              ports: [],
+              scripts: {},
+            },
+          ],
+        }),
+        targetDir: "apps/web",
+      }),
+    ).toBe("npx nx run-many --target=build --projects=@acme/core,@acme/web");
+  });
+
+  it("honors a broad workspace-graph build only after repair escalation", () => {
+    const preparationManifest = manifest("apps/dashboard/src/app/page.tsx");
+    preparationManifest.buildCommandUsed = "pnpm --recursive run build";
+    const repoProfile = profile({
+      candidateInstallCommands: ["pnpm install --frozen-lockfile"],
+      lockfiles: ["pnpm-lock.yaml"],
+      packageManager: "pnpm",
+      workspacePackages: [
+        {
+          dir: "apps/dashboard",
+          name: "@acme/dashboard",
+          ports: [3001],
+          scripts: { dev: "next dev -p 3001" },
+        },
+        {
+          dir: "packages/ui",
+          name: "@acme/ui",
+          ports: [],
+          scripts: { build: "vite build" },
+        },
+      ],
+    });
+
+    expect(
+      resolvePreparationRuntime({
+        preparationManifest,
+        repoProfile,
+      }).preparationManifest,
+    ).not.toHaveProperty("buildCommandUsed");
+    expect(
+      resolvePreparationRuntime({
+        honorWorkspaceGraphBuild: true,
+        preparationManifest,
+        repoProfile,
+      }).preparationManifest.buildCommandUsed,
+    ).toBe("pnpm --recursive run build");
+  });
+
+  it("does not honor an escalated graph build that selects an absent workspace", () => {
+    const repoProfile = profile({
+      candidateInstallCommands: ["pnpm install --frozen-lockfile"],
+      lockfiles: ["pnpm-lock.yaml"],
+      packageManager: "pnpm",
+      workspacePackages: [
+        {
+          dir: "apps/dashboard",
+          name: "@acme/dashboard",
+          ports: [3001],
+          scripts: { dev: "next dev -p 3001" },
+        },
+      ],
+    });
+    for (const command of [
+      "npx nx run-many --target=build --projects=@acme/dashboard,@acme/website",
+      "pnpm --recursive --filter=@acme/website... run build",
+    ]) {
+      const preparationManifest = manifest("apps/dashboard/src/app/page.tsx");
+      preparationManifest.buildCommandUsed = command;
+      expect(
+        resolvePreparationRuntime({
+          honorWorkspaceGraphBuild: true,
+          preparationManifest,
+          repoProfile,
+        }).preparationManifest,
+      ).not.toHaveProperty("buildCommandUsed");
+    }
   });
 
   it("prefers the resolved build command over an agent-set one when resolution finds a build", () => {

@@ -32,6 +32,7 @@ import { profileRepo } from "../repo-profiler/repo-profiler";
 import type { SecretQuarantineManifest } from "../repo-security/secret-quarantine";
 import { screenStaticRepoSecurity } from "../repo-security/static-repo-security";
 import {
+  createWorkspaceGraphBuildCommand,
   expandPreparationInstallScopeForMissingWorkspace,
   resolvePreparationRuntime,
 } from "../run-planner/runtime-target-resolution";
@@ -1599,21 +1600,30 @@ async function ensureValidPreparation(input: {
         );
         failure = undefined;
       } else {
+        const repairFailure = appendWorkspaceGraphBuildEscalation({
+          failure,
+          preparationRepairBudget: input.preparationRepairBudget,
+          repoProfile: input.repoProfile,
+          runPlan: input.runPlan,
+        });
         const manifestBeforeRepair = preparationManifest;
         const workspaceDiffBeforeRepair = lastWorkspaceDiff;
         const repairingDependencies = isDependencyRepairFailure(
-          failure.failureClassification,
+          repairFailure.failureClassification,
         );
-        const phase = failure.stage;
-        const fingerprint = preparationFailureFingerprint(failure);
+        const phase = repairFailure.stage;
+        const fingerprint = preparationFailureFingerprint(repairFailure);
         const fingerprintRepairAttempts =
           input.preparationRepairBudget.attemptsByFingerprint[fingerprint] ?? 0;
         const phaseRepairAttempts =
           input.preparationRepairAttemptsByPhase[phase] ?? 0;
-        recordFailingFeatureProgress(input.preparationRepairBudget, failure);
+        recordFailingFeatureProgress(
+          input.preparationRepairBudget,
+          repairFailure,
+        );
         const repair = await repairPreparationManifest({
           dependencies: input.dependencies,
-          failureReport: failure,
+          failureReport: repairFailure,
           input: input.input,
           preparationManifest,
           phaseRepairAttempts,
@@ -1664,7 +1674,7 @@ async function ensureValidPreparation(input: {
           artifactPaths.preparationManifest,
           repairingDependencies ? manifestBeforeRepair : repairedManifest,
         );
-        activeRepairFailure = failure;
+        activeRepairFailure = repairFailure;
         dependencyRepair = repairingDependencies;
         repairBaseline = workspaceDiffBeforeRepair;
         manifestBaseline = manifestBeforeRepair;
@@ -1672,6 +1682,10 @@ async function ensureValidPreparation(input: {
     }
 
     const resolvedPreparation = resolvePreparationRuntime({
+      honorWorkspaceGraphBuild: hasChargedRepairForClassification(
+        input.preparationRepairBudget,
+        "unbuilt workspace dependency",
+      ),
       preparationManifest,
       repoProfile: input.repoProfile,
       runPlan: input.runPlan,
@@ -2401,6 +2415,48 @@ function preparationFailureFingerprint(report: ValidationReport): string {
       rejectionParts.length === 1 ? "" : (rejectionParts.at(-1) ?? ""),
     ),
   ].join("\u0000");
+}
+
+function hasChargedRepairForClassification(
+  budget: PreparationRepairBudget,
+  classification: string,
+): boolean {
+  return Object.entries(budget.attemptsByFingerprint).some(
+    ([fingerprint, attempts]) =>
+      attempts > 0 && fingerprint.split("\u0000")[1] === classification,
+  );
+}
+
+function appendWorkspaceGraphBuildEscalation(input: {
+  failure: ValidationReport;
+  preparationRepairBudget: PreparationRepairBudget;
+  repoProfile: RepoProfile;
+  runPlan: RunPlan;
+}): ValidationReport {
+  if (
+    input.failure.failureClassification !== "unbuilt workspace dependency" ||
+    !hasChargedRepairForClassification(
+      input.preparationRepairBudget,
+      "unbuilt workspace dependency",
+    )
+  ) {
+    return input.failure;
+  }
+  const graphBuild = createWorkspaceGraphBuildCommand({
+    repoProfile: input.repoProfile,
+    targetDir: input.runPlan.targetSelection?.targetId ?? input.runPlan.appDir,
+  });
+  const graphDirection =
+    graphBuild === undefined
+      ? "Use the repository's root build/prepare script, or its pnpm --recursive, turbo, or nx run-many topological build scoped to the selected app's dependency closure."
+      : `Set buildCommandUsed to exactly ${JSON.stringify(graphBuild)}.`;
+  const escalation = `A prior unbuilt-workspace repair already targeted one package, but a workspace build output is still missing. Build the selected app's workspace dependency graph now instead of another single package. ${graphDirection} This supersedes any single-package build hint.`;
+  return {
+    ...input.failure,
+    suggestedRepairHints: [
+      ...new Set([...input.failure.suggestedRepairHints, escalation]),
+    ],
+  };
 }
 
 /**

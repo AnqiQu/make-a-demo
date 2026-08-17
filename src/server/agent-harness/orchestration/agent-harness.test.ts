@@ -3222,6 +3222,164 @@ describe("runAgentHarnessPipeline", () => {
     expect(reconcileRequests).toEqual([undefined, true]);
   });
 
+  it("escalates a second unbuilt workspace failure to the app dependency graph", async () => {
+    // N155 (directus, 2026-08-15): repairing only the package named by each
+    // crash bounced from extensions to constants and back. Once one such
+    // repair has run, the next package proves the app's build graph is the
+    // unit of repair.
+    const graphBuild = "pnpm --recursive --filter=@directus/app... run build";
+    const narrowBuild = "pnpm --filter=@directus/extensions run build";
+    const repairHints: string[] = [];
+    const preflightBuilds: Array<string | undefined> = [];
+    let preflightAttempts = 0;
+    const basePreparationManifest = preparationManifest();
+    const preparedManifest = {
+      ...basePreparationManifest,
+      appDir: "app",
+      baseUrl: "http://127.0.0.1:5173",
+      installCommandUsed: "pnpm install --frozen-lockfile",
+      ports: [5173],
+      productContext: {
+        ...basePreparationManifest.productContext,
+        evidencePaths: ["app/package.json", "app/src/page.tsx"],
+        featureInventory:
+          basePreparationManifest.productContext.featureInventory.map(
+            (feature) => ({
+              ...feature,
+              sourcePaths: ["app/src/page.tsx"],
+            }),
+          ),
+      },
+      startCommandUsed: "pnpm run dev",
+    };
+    const selectedRunPlan = {
+      ...runPlan(),
+      allowedPorts: [5173],
+      appDir: "app",
+      expectedLocalUrl: "http://127.0.0.1:5173",
+      installCommand: "pnpm install --frozen-lockfile",
+      runtime: "node" as const,
+      startCommand: "pnpm run dev",
+      targetSelection: {
+        evidencePaths: ["app/package.json", "app/src/page.tsx"],
+        reason: "The app workspace is the product surface.",
+        role: "product" as const,
+        source: "model" as const,
+        targetId: "app",
+      },
+    };
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({
+        files: [
+          {
+            path: "package.json",
+            text: JSON.stringify({
+              name: "directus-monorepo",
+              packageManager: "pnpm@10.0.0",
+              scripts: { build: "pnpm --recursive run build" },
+              workspaces: ["app", "packages/*"],
+            }),
+          },
+          { path: "pnpm-lock.yaml", text: "" },
+          {
+            path: "app/package.json",
+            text: JSON.stringify({
+              dependencies: {
+                "@directus/constants": "workspace:*",
+                "@directus/extensions": "workspace:*",
+              },
+              name: "@directus/app",
+              scripts: { build: "vite build", dev: "vite --host" },
+            }),
+          },
+          { path: "app/src/page.tsx", text: "export default 1" },
+          {
+            path: "packages/extensions/package.json",
+            text: JSON.stringify({
+              dependencies: { "@directus/constants": "workspace:*" },
+              name: "@directus/extensions",
+              scripts: { build: "tsdown" },
+            }),
+          },
+          {
+            path: "packages/constants/package.json",
+            text: JSON.stringify({
+              name: "@directus/constants",
+              scripts: { build: "tsdown" },
+            }),
+          },
+        ],
+        runId: "run_workspace_graph_escalation",
+      }),
+      stubPipelineDependencies({
+        capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparedManifest };
+        },
+        async repairPreparation({ failureReport, preparationManifest }) {
+          repairHints.push(failureReport.suggestedRepairHints.join("\n"));
+          const buildCommandUsed =
+            repairHints.length === 1 ? narrowBuild : graphBuild;
+          return {
+            manifest: {
+              ...preparationManifest,
+              buildCommandUsed,
+              id: `prep_workspace_graph_${repairHints.length}`,
+            },
+          };
+        },
+        async synthesizeRunPlan() {
+          return selectedRunPlan;
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation({ preparationManifest }) {
+          preflightAttempts += 1;
+          preflightBuilds.push(preparationManifest.buildCommandUsed);
+          const packageName = ["@directus/extensions", "@directus/constants"][
+            preflightAttempts - 1
+          ];
+          return packageName === undefined
+            ? report("preparation-preflight", "passed")
+            : {
+                ...report("preparation-preflight", "failed"),
+                failureClassification: "unbuilt workspace dependency",
+                logsSummary: `Unbuilt workspace dependency ${packageName}: its dist entry is missing`,
+                suggestedRepairHints: [`Build ${packageName} before the app.`],
+              };
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript({ preparationManifest }) {
+          return {
+            ...scriptCandidate(),
+            sourcePreparationManifestId: preparationManifest.id,
+          };
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    expect(repairHints[0]).not.toContain("workspace dependency graph");
+    expect(repairHints[1]).toContain("workspace dependency graph");
+    expect(repairHints[1]).toContain(graphBuild);
+    expect(preflightBuilds).toEqual([undefined, narrowBuild, graphBuild]);
+  });
+
   it("recognizes a repeated failure whose logs differ only by port and temp path", async () => {
     let preflightAttempts = 0;
     let repairAttempts = 0;
