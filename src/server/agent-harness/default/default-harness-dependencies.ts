@@ -71,6 +71,10 @@ import type {
   AgentHarnessPipelineInput,
   RepairFeatureVerification,
 } from "../orchestration/agent-harness";
+import type {
+  RepairBudgetSnapshot,
+  RepairRoundLedger,
+} from "../repair/repair-round-ledger";
 import {
   isDependencyRepairFailure,
   runtimeConfigurationClassifications,
@@ -130,6 +134,10 @@ import {
 import { createFlowSpecContract } from "../schemas/flow-spec-contract";
 import { createPreparationManifestContract } from "../schemas/preparation-manifest-contract";
 import { createPreparationManifestTemplate } from "../schemas/preparation-manifest-template";
+import {
+  type RepairAdvice,
+  readRepairAdvice,
+} from "../schemas/repair-advice.schema";
 import { assembleDemoNarrative } from "../script-contract/demo-narrative";
 import {
   createDemoScriptContract,
@@ -209,6 +217,7 @@ const misplacedPreparationManifestPath =
 const openCodeConfigDirectory = "/tmp/makeademo/opencode";
 const openCodeInactivityTimeoutMs = 5 * 60_000;
 const fidelityAdjudicationTimeoutMs = 10 * 60_000;
+const repairStrategyTimeoutMs = 3 * 60_000;
 const preparationDiffCommandTimeoutMs = 60_000;
 const preparationHashMarker = "\0MAKEADEMO_HASHES\0";
 const preparationPatchMarker = "\0MAKEADEMO_PATCH\0";
@@ -232,6 +241,7 @@ export async function createDefaultAgentHarnessDependencies(
   let opencodeSessionId: string | undefined;
   let repoMaterialized = false;
   let runtimeRepairArtifactAttempt = 0;
+  let repairStrategyAttempt = 0;
   let scriptWritingBaseline: ScriptWritingContentSnapshot = {};
   const externalResourceDirectory = join(
     options.outputRoot,
@@ -985,6 +995,81 @@ export async function createDefaultAgentHarnessDependencies(
   };
 
   const dependencies: AgentHarnessPipelineDependencies = {
+    async adviseRepairStrategy(input) {
+      const workspace = workspaceHandle?.workspace;
+      if (workspace === undefined) return undefined;
+      repairStrategyAttempt += 1;
+      const attempt = repairStrategyAttempt;
+      const attemptPath = `${artifactPaths.agentArtifactAttempts}/repair-strategy/attempt-${attempt}.json`;
+      const persistAttempt = async (value: unknown) => {
+        try {
+          await options.artifactStore.writeJson(attemptPath, value);
+        } catch {
+          // Strategy and its audit copy are both advisory. Neither may fail
+          // the deterministic repair loop.
+        }
+      };
+      try {
+        await writeWorkspaceJson(
+          workspace,
+          artifactPaths.repairRoundLedger,
+          input.roundLedger,
+        );
+        await removeWorkspaceFile(workspace, artifactPaths.repairAdvice);
+        const result = await runOpenCode({
+          availableTools: ["read", "write"],
+          configDir: openCodeConfigDirectory,
+          model: `${providerID}/${modelID}`,
+          prompt: createRepairStrategyPrompt(input),
+          stage: "repair-strategy",
+          timeoutMs: repairStrategyTimeoutMs,
+          workingDirectory: workspaceRepoDirectory,
+          workspace,
+        });
+        if (result.exitCode !== 0) {
+          await persistAttempt({
+            attempt,
+            error:
+              result.timeoutError?.message ?? formatAgentCommandFailure(result),
+            status: "failed",
+          });
+          return undefined;
+        }
+        const readResult = await tryReadWorkspaceJson(
+          workspace,
+          artifactPaths.repairAdvice,
+        );
+        if (!readResult.ok) {
+          await persistAttempt({
+            attempt,
+            error: readResult.error,
+            status: "failed",
+          });
+          return undefined;
+        }
+        let advice: RepairAdvice;
+        try {
+          advice = readRepairAdvice(readResult.value);
+        } catch (error) {
+          await persistAttempt({
+            attempt,
+            candidate: readResult.value,
+            error: readErrorMessage(error),
+            status: "failed",
+          });
+          return undefined;
+        }
+        await persistAttempt({ advice, attempt, status: "passed" });
+        return advice;
+      } catch (error) {
+        await persistAttempt({
+          attempt,
+          error: readErrorMessage(error),
+          status: "failed",
+        });
+        return undefined;
+      }
+    },
     async adjudicateFidelityCandidates({
       candidates,
       preparationManifest,
@@ -1646,6 +1731,7 @@ export async function createDefaultAgentHarnessDependencies(
               : await readRepairedSourceParseFailure(workspace);
           if (parseFailure === undefined) {
             return {
+              candidateFingerprint: manifestResult.candidateFingerprint,
               manifest: manifestResult.manifest,
               ...(opencodeSessionId === undefined ? {} : { opencodeSessionId }),
             };
@@ -6585,6 +6671,32 @@ function createRepairPromptInstructions(input: {
     "Repair contract (always applies):",
     ...input.contract,
   ].join("\n");
+}
+
+function createRepairStrategyPrompt(input: {
+  budgets: RepairBudgetSnapshot;
+  failureReport: ValidationReport;
+  preparationManifest: PreparationManifest;
+  roundLedger: RepairRoundLedger;
+}): string {
+  return createStagePrompt({
+    artifactPaths: [
+      artifactPaths.repairRoundLedger,
+      artifactPaths.preparationManifest,
+      validationArtifactPath(input.failureReport.stage),
+      artifactPaths.repairAdvice,
+    ],
+    instructions: [
+      `Read ${artifactPaths.repairRoundLedger} as the complete comparative record of prior repair rounds.`,
+      `Read ${validationArtifactPath(input.failureReport.stage)} and ${artifactPaths.preparationManifest} for the current failure and resolved runtime.`,
+      `Current repair budget: ${JSON.stringify(input.budgets)}`,
+      "Choose exactly one bounded next move. You may not edit the repo, run commands, rewrite classifications, relax gates, or modify the manifest.",
+      'Write one JSON object in exactly one of these shapes: {"kind":"continue"}; {"kind":"escalate-hint","hint":"..."}; {"kind":"directive","directive":"..."}; {"kind":"stop","reason":"..."}; {"kind":"spend-bonus-round"}.',
+      "Use escalate-hint for additive evidence. Use directive only when the default repair approach itself must change; it lasts one round and never overrides the repair contract. Recommend stop only for repeated resource exhaustion or a wedged target; deterministic code retains the stop veto.",
+      `Write only the completed JSON object to ${artifactPaths.repairAdvice}. After writing it, do not call another tool.`,
+    ].join("\n"),
+    stage: "repair-strategy",
+  });
 }
 
 function validationArtifactPath(stage: string): string {

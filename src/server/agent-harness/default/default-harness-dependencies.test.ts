@@ -7555,6 +7555,157 @@ describe("createDefaultAgentHarnessDependencies", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("consults repair strategy through fresh ledger and advice artifacts", async () => {
+    const artifactAttempts: Array<{ path: string; value: unknown }> = [];
+    const commands: string[] = [];
+    const runs: Array<{
+      model: string;
+      sessionId: string | undefined;
+      stage: string;
+      timeoutMs: number;
+    }> = [];
+    const workspaceWrites = new Map<string, string>();
+    const workspace = createFakeAgentHarnessWorkspace({
+      async execute(command) {
+        commands.push(command);
+        if (command.includes("cat") && command.includes("repair-advice.json")) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: JSON.stringify({
+              hint: "Build the selected app's workspace dependency graph.",
+              kind: "escalate-hint",
+            }),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async writeTextFile(path, contents) {
+        workspaceWrites.set(path, contents);
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: {
+        async writeJson(path, value) {
+          artifactAttempts.push({ path, value });
+        },
+      },
+      modelID: "gpt-strategist",
+      openCodeRunner: {
+        async run(input) {
+          runs.push({
+            model: input.model,
+            sessionId: input.sessionId,
+            stage: input.stage,
+            timeoutMs: input.timeoutMs,
+          });
+          return {
+            exitCode: 0,
+            sessionId: "must-not-be-reused",
+            stderr: "",
+            stdout: "strategy written",
+          };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      providerID: "openai",
+      repoSourceArchive: await repoSourceArchive(),
+      workspaceProvider: {
+        async create() {
+          return { async destroy() {}, id: "workspace", workspace };
+        },
+      },
+    });
+    await harness.dependencies.createWorkspace({ repoProfile: repoProfile() });
+
+    const advice = await harness.dependencies.adviseRepairStrategy?.({
+      budgets: {
+        bonusRounds: 0,
+        fingerprintAttempts: 1,
+        totalAttempts: 1,
+      },
+      failureReport: {
+        ...validationReport("preparation-preflight", "failed"),
+        failureClassification: "unbuilt workspace dependency",
+      },
+      preparationManifest: preparationManifest(),
+      roundLedger: { rounds: [] },
+    });
+
+    expect(advice).toEqual({
+      hint: "Build the selected app's workspace dependency graph.",
+      kind: "escalate-hint",
+    });
+    expect(
+      JSON.parse(
+        workspaceWrites.get("/workspace/.makeademo/repair-round-ledger.json") ??
+          "null",
+      ),
+    ).toEqual({ rounds: [] });
+    expect(
+      commands.findIndex((command) => command.includes("rm -f")),
+    ).toBeLessThan(
+      commands.findIndex(
+        (command) =>
+          command.includes("repair-advice.json") && command.includes("cat"),
+      ),
+    );
+    expect(runs).toEqual([
+      {
+        model: "openai/gpt-strategist",
+        sessionId: undefined,
+        stage: "repair-strategy",
+        timeoutMs: 3 * 60_000,
+      },
+    ]);
+    expect(artifactAttempts).toContainEqual({
+      path: "/workspace/.makeademo/agent-artifact-attempts/repair-strategy/attempt-1.json",
+      value: {
+        advice: {
+          hint: "Build the selected app's workspace dependency graph.",
+          kind: "escalate-hint",
+        },
+        attempt: 1,
+        status: "passed",
+      },
+    });
+  });
+
+  it("fails open when repair strategy writes schema-invalid advice", async () => {
+    const scenario = await runRepairStrategyScenario({
+      artifact: { kind: "directive" },
+      result: {
+        exitCode: 0,
+        stderr: "",
+        stdout: "strategy written",
+      },
+    });
+
+    expect(scenario.advice).toBeUndefined();
+    expect(scenario.attempts[0]).toMatchObject({
+      candidate: { kind: "directive" },
+      status: "failed",
+    });
+  });
+
+  it("fails open when repair strategy times out", async () => {
+    const scenario = await runRepairStrategyScenario({
+      artifact: { kind: "continue" },
+      result: {
+        exitCode: 124,
+        stderr: "",
+        stdout: "strategy timed out",
+        timeoutError: new AgentHarnessCommandTimeoutError(3 * 60_000),
+      },
+    });
+
+    expect(scenario.advice).toBeUndefined();
+    expect(scenario.attempts[0]).toMatchObject({
+      error: expect.stringContaining("did not finish"),
+      status: "failed",
+    });
+  });
+
   it("carries the lifecycle evidence file tail when the stream drops the failure", async () => {
     // calcom (2026-08-09): the PTY stream ended at YN0007 "must be built" —
     // yarn's actual YN0009 failure report never reached the record, so the
@@ -11604,6 +11755,66 @@ function schemaRepairableRepoPreparationWorkspace(): AgentHarnessWorkspace & {
       manifest = validManifest;
     },
   };
+}
+
+async function runRepairStrategyScenario(input: {
+  artifact: unknown;
+  result: {
+    exitCode: number;
+    stderr: string;
+    stdout: string;
+    timeoutError?: AgentHarnessCommandTimeoutError;
+  };
+}) {
+  const attempts: unknown[] = [];
+  const workspace = createFakeAgentHarnessWorkspace({
+    async execute(command) {
+      if (command.includes("cat") && command.includes("repair-advice.json")) {
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout: JSON.stringify(input.artifact),
+        };
+      }
+      return { exitCode: 0, stderr: "", stdout: "" };
+    },
+  });
+  const harness = await createDefaultAgentHarnessDependencies({
+    artifactStore: {
+      async writeJson(path, value) {
+        if (path.includes("agent-artifact-attempts/repair-strategy")) {
+          attempts.push(value);
+        }
+      },
+    },
+    openCodeRunner: {
+      async run() {
+        return input.result;
+      },
+    },
+    outputRoot: "/tmp/makeademo-test",
+    repoSourceArchive: await repoSourceArchive(),
+    workspaceProvider: {
+      async create() {
+        return { async destroy() {}, id: "workspace", workspace };
+      },
+    },
+  });
+  await harness.dependencies.createWorkspace({ repoProfile: repoProfile() });
+  const advice = await harness.dependencies.adviseRepairStrategy?.({
+    budgets: {
+      bonusRounds: 0,
+      fingerprintAttempts: 1,
+      totalAttempts: 1,
+    },
+    failureReport: {
+      ...validationReport("preparation-preflight", "failed"),
+      failureClassification: "start failure",
+    },
+    preparationManifest: preparationManifest(),
+    roundLedger: { rounds: [] },
+  });
+  return { advice, attempts };
 }
 
 function repoProfile(): RepoProfile {

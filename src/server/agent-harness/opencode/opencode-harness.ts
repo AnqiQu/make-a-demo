@@ -7,6 +7,7 @@ export type OpenCodeHarnessStage =
   | "app-exploration"
   | "flow-planning"
   | "preparation-fidelity-adjudication"
+  | "repair-strategy"
   | "repo-preparation"
   | "repo-preparation-repair"
   | "runtime-target-selection"

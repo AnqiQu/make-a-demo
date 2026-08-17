@@ -39,6 +39,8 @@ export const makeADemoArtifactPaths = {
   preparationPreflight: `${makeADemoDirectory}/preparation-preflight-validation-report.json`,
   preparationWorkspaceDiff: `${makeADemoDirectory}/preparation-workspace-diff.json`,
   repoProfile: `${makeADemoDirectory}/repo-profile.json`,
+  repairAdvice: `${makeADemoDirectory}/repair-advice.json`,
+  repairRoundLedger: `${makeADemoDirectory}/repair-round-ledger.json`,
   runPlan: `${makeADemoDirectory}/run-plan.json`,
   runtimeTargetSelection: `${makeADemoDirectory}/runtime-target-selection.json`,
   runtimeTargetSelectionContract: `${makeADemoDirectory}/runtime-target-selection-contract.json`,
@@ -69,6 +71,8 @@ export function stageWriteableArtifactPaths(
       return [makeADemoArtifactPaths.flowSpec];
     case "preparation-fidelity-adjudication":
       return [makeADemoArtifactPaths.fidelityAdjudication];
+    case "repair-strategy":
+      return [makeADemoArtifactPaths.repairAdvice];
     case "runtime-target-selection":
       return [makeADemoArtifactPaths.runtimeTargetSelection];
     case "script-repair":

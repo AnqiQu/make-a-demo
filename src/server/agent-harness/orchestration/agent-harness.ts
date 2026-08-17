@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   type BrowserAction,
   readBrowserActions,
@@ -12,6 +13,12 @@ import {
   type AgentHarnessWorkspace,
   isAgentHarnessInfrastructureError,
 } from "../daytona/workspace.interface";
+import {
+  type RepairBudgetSnapshot,
+  type RepairRoundLedger,
+  type RepairRoundSource,
+  createRepairRoundLedger,
+} from "../repair/repair-round-ledger";
 import {
   classifyRepairRoute,
   isDependencyRepairFailure,
@@ -59,6 +66,7 @@ import {
   readScriptCandidate,
   readValidationReport,
 } from "../schemas/artifacts";
+import type { RepairAdvice } from "../schemas/repair-advice.schema";
 import { ensureSceneNavigation } from "../script-contract/demo-script-contract";
 import { readDisallowedScriptWritingChanges } from "../script-generation/read-only-boundary";
 import {
@@ -105,6 +113,17 @@ export type RepairFeatureVerification = {
 };
 
 export type AgentHarnessPipelineDependencies = {
+  /**
+   * Advises one bounded next move from the completed repair ledger.
+   * Implementations must return undefined for absence, timeout, execution
+   * failure, or schema-invalid output so deterministic repair behavior stands.
+   */
+  adviseRepairStrategy?(input: {
+    budgets: RepairBudgetSnapshot;
+    failureReport: ValidationReport;
+    preparationManifest: PreparationManifest;
+    roundLedger: RepairRoundLedger;
+  }): Promise<RepairAdvice | undefined>;
   /**
    * Adjudicates preparation-fidelity candidate vetoes with one agent judge
    * command in the preparation sandbox. Implementations must source verdicts
@@ -189,7 +208,11 @@ export type AgentHarnessPipelineDependencies = {
     repoSourcePaths: string[];
     runPlan: RunPlan;
     workspace: AgentHarnessWorkspace;
-  }): Promise<{ manifest: PreparationManifest; opencodeSessionId?: string }>;
+  }): Promise<{
+    candidateFingerprint?: string;
+    manifest: PreparationManifest;
+    opencodeSessionId?: string;
+  }>;
   repairPreparation?(input: {
     demoBrief: AgentHarnessPipelineInput["demoBrief"];
     failureReport: ValidationReport;
@@ -524,6 +547,7 @@ export async function runAgentHarnessPipeline(
       bonusRounds: 0,
       totalAttempts: 0,
     };
+    const repairRoundSources: RepairRoundSource[] = [];
     const preparationRepairAttemptsByPhase: Record<string, number> = {};
     const scriptRepairAttemptsByPhase: Record<string, number> = {};
     const dynamicActionFailureCounts: Record<string, number> = {};
@@ -560,6 +584,7 @@ export async function runAgentHarnessPipeline(
       preparationManifest,
       preparationRepairBudget,
       preparationRepairAttemptsByPhase,
+      repairRoundSources,
       recordOpenCodeSessionId,
       repoPreparationRepairLimit,
       repoProfile,
@@ -586,6 +611,7 @@ export async function runAgentHarnessPipeline(
         preparationManifest,
         preparationRepairBudget,
         preparationRepairAttemptsByPhase,
+        repairRoundSources,
         recordOpenCodeSessionId,
         repoPreparationRepairLimit,
         repoProfile,
@@ -1526,6 +1552,7 @@ async function ensureValidPreparation(input: {
   preparationManifest: PreparationManifest;
   preparationRepairBudget: PreparationRepairBudget;
   preparationRepairAttemptsByPhase: Record<string, number>;
+  repairRoundSources: RepairRoundSource[];
   recordOpenCodeSessionId: (sessionId?: string) => void;
   repoPreparationRepairLimit: number;
   repoProfile: RepoProfile;
@@ -1544,6 +1571,21 @@ async function ensureValidPreparation(input: {
   let failure = input.initialFailure;
   let acceptedPreparation = input.acceptedPreparation;
   let activeRepairFailure: ValidationReport | undefined;
+  let pendingLedgerRound:
+    | {
+        advice: RepairAdvice | undefined;
+        candidateFingerprint: string;
+        candidateManifest: PreparationManifest;
+        failureReport: ValidationReport;
+        fingerprint: string;
+      }
+    | undefined;
+  let chargedLedgerRound:
+    | (NonNullable<typeof pendingLedgerRound> & {
+        resolvedManifest: PreparationManifest;
+        workspaceDiff: PreparationWorkspaceDiff;
+      })
+    | undefined;
   let dependencyRepair = false;
   let reconcileLockfile = false;
   let repairBaseline: PreparationWorkspaceDiff | undefined;
@@ -1621,6 +1663,14 @@ async function ensureValidPreparation(input: {
           input.preparationRepairBudget,
           repairFailure,
         );
+        const advice = await consultRepairStrategy({
+          dependencies: input.dependencies,
+          failureReport: repairFailure,
+          fingerprintRepairAttempts,
+          preparationManifest,
+          preparationRepairBudget: input.preparationRepairBudget,
+          repairRoundSources: input.repairRoundSources,
+        });
         const repair = await repairPreparationManifest({
           dependencies: input.dependencies,
           failureReport: repairFailure,
@@ -1655,6 +1705,15 @@ async function ensureValidPreparation(input: {
         };
         input.recordOpenCodeSessionId(repair.opencodeSessionId);
         const repairedManifest = readPreparationManifest(repair.manifest);
+        pendingLedgerRound = {
+          advice,
+          candidateFingerprint:
+            repair.candidateFingerprint ??
+            fingerprintPreparationCandidate(repairedManifest),
+          candidateManifest: repairedManifest,
+          failureReport: repairFailure,
+          fingerprint,
+        };
         // A dependency repair's manifest is discarded below in favor of the
         // pre-repair manifest, so only a manifest the pipeline will adopt is
         // held to the feature-inventory contract.
@@ -1721,17 +1780,33 @@ async function ensureValidPreparation(input: {
         JSON.stringify(preparationManifest) ===
           JSON.stringify(manifestBaseline);
       if (workspaceUnchanged && (dependencyRepair || manifestUnchanged)) {
+        let chargedNoopRepair = false;
         if (unchargedNoopRepairs >= noopRepairGraceRounds) {
           pendingRepairCharge();
+          chargedNoopRepair = true;
         } else {
           unchargedNoopRepairs += 1;
         }
         pendingRepairCharge = undefined;
-        failure = appendNoopRepairRejection(
+        const noopFailure = appendNoopRepairRejection(
           activeRepairFailure,
           dependencyRepair,
         );
+        if (chargedNoopRepair && pendingLedgerRound !== undefined) {
+          recordCompletedRepairRound({
+            nextReport: noopFailure,
+            preparationRepairBudget: input.preparationRepairBudget,
+            repairRoundSources: input.repairRoundSources,
+            round: {
+              ...pendingLedgerRound,
+              resolvedManifest: preparationManifest,
+              workspaceDiff,
+            },
+          });
+        }
+        failure = noopFailure;
         activeRepairFailure = undefined;
+        pendingLedgerRound = undefined;
         dependencyRepair = false;
         repairBaseline = undefined;
         manifestBaseline = undefined;
@@ -1740,6 +1815,14 @@ async function ensureValidPreparation(input: {
       unchargedNoopRepairs = 0;
       pendingRepairCharge();
       pendingRepairCharge = undefined;
+      if (pendingLedgerRound !== undefined) {
+        chargedLedgerRound = {
+          ...pendingLedgerRound,
+          resolvedManifest: preparationManifest,
+          workspaceDiff,
+        };
+        pendingLedgerRound = undefined;
+      }
     }
     const fidelityAttempt =
       (input.validationAttemptCounts["preparation-fidelity"] ?? 0) + 1;
@@ -1873,6 +1956,15 @@ async function ensureValidPreparation(input: {
     repairBaseline = undefined;
     manifestBaseline = undefined;
     if (fidelityValidation.status === "failed") {
+      if (chargedLedgerRound !== undefined) {
+        recordCompletedRepairRound({
+          nextReport: fidelityValidation,
+          preparationRepairBudget: input.preparationRepairBudget,
+          repairRoundSources: input.repairRoundSources,
+          round: chargedLedgerRound,
+        });
+        chargedLedgerRound = undefined;
+      }
       if (
         acceptedPreparation !== undefined &&
         activeRepairFailure !== undefined &&
@@ -1972,11 +2064,29 @@ async function ensureValidPreparation(input: {
       }
     }
     if (preparationValidation.status === "passed") {
+      if (chargedLedgerRound !== undefined) {
+        recordCompletedRepairRound({
+          nextReport: preparationValidation,
+          preparationRepairBudget: input.preparationRepairBudget,
+          repairRoundSources: input.repairRoundSources,
+          round: chargedLedgerRound,
+        });
+        chargedLedgerRound = undefined;
+      }
       return {
         acceptedPreparation,
         preparationManifest,
         preparationValidation,
       };
+    }
+    if (chargedLedgerRound !== undefined) {
+      recordCompletedRepairRound({
+        nextReport: preparationValidation,
+        preparationRepairBudget: input.preparationRepairBudget,
+        repairRoundSources: input.repairRoundSources,
+        round: chargedLedgerRound,
+      });
+      chargedLedgerRound = undefined;
     }
     // The reuse note travels as a hint, never in logsSummary: the failure
     // fingerprint normalizes the summary, and a round-varying prefix would
@@ -2125,7 +2235,11 @@ async function repairPreparationManifest(input: {
   stageTimings: PipelineRunManifest["stageTimings"];
   totalRepairAttempts: number;
   workspace: AgentHarnessWorkspace;
-}): Promise<{ manifest: PreparationManifest; opencodeSessionId?: string }> {
+}): Promise<{
+  candidateFingerprint?: string;
+  manifest: PreparationManifest;
+  opencodeSessionId?: string;
+}> {
   const route = classifyRepairRoute(input.failureReport);
   if (
     route !== "repo-preparation-repair" ||
@@ -2178,10 +2292,108 @@ async function repairPreparationManifest(input: {
         runPlan: input.runPlan,
         workspace: input.workspace,
       }) as Promise<{
+        candidateFingerprint?: string;
         manifest: PreparationManifest;
         opencodeSessionId?: string;
       }>,
   );
+}
+
+async function consultRepairStrategy(input: {
+  dependencies: AgentHarnessPipelineDependencies;
+  failureReport: ValidationReport;
+  fingerprintRepairAttempts: number;
+  preparationManifest: PreparationManifest;
+  preparationRepairBudget: PreparationRepairBudget;
+  repairRoundSources: readonly RepairRoundSource[];
+}): Promise<RepairAdvice | undefined> {
+  if (
+    input.fingerprintRepairAttempts < 1 ||
+    input.dependencies.adviseRepairStrategy === undefined
+  ) {
+    return undefined;
+  }
+  try {
+    return await input.dependencies.adviseRepairStrategy({
+      budgets: {
+        bonusRounds: input.preparationRepairBudget.bonusRounds,
+        fingerprintAttempts: input.fingerprintRepairAttempts,
+        totalAttempts: input.preparationRepairBudget.totalAttempts,
+      },
+      failureReport: input.failureReport,
+      preparationManifest: input.preparationManifest,
+      roundLedger: createRepairRoundLedger(input.repairRoundSources),
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+function recordCompletedRepairRound(input: {
+  nextReport: ValidationReport;
+  preparationRepairBudget: PreparationRepairBudget;
+  repairRoundSources: RepairRoundSource[];
+  round: {
+    advice: RepairAdvice | undefined;
+    candidateFingerprint: string;
+    candidateManifest: PreparationManifest;
+    failureReport: ValidationReport;
+    fingerprint: string;
+    resolvedManifest: PreparationManifest;
+    workspaceDiff: PreparationWorkspaceDiff;
+  };
+}): void {
+  input.repairRoundSources.push({
+    advice: readRepairAdviceLedgerRecord(input.round.advice),
+    budget: {
+      bonusRounds: input.preparationRepairBudget.bonusRounds,
+      fingerprintAttempts:
+        input.preparationRepairBudget.attemptsByFingerprint[
+          input.round.fingerprint
+        ] ?? 0,
+      totalAttempts: input.preparationRepairBudget.totalAttempts,
+    },
+    candidateFingerprint: input.round.candidateFingerprint,
+    candidateManifest: input.round.candidateManifest,
+    failureReport: input.round.failureReport,
+    outcomeOfAdvice:
+      input.nextReport.status === "passed"
+        ? "resolved"
+        : preparationFailureFingerprint(input.nextReport) ===
+            input.round.fingerprint
+          ? "failure-unchanged"
+          : "failure-moved",
+    resolvedManifest: input.round.resolvedManifest,
+    round: input.repairRoundSources.length + 1,
+    workspaceDiff: input.round.workspaceDiff,
+  });
+}
+
+function readRepairAdviceLedgerRecord(
+  advice: RepairAdvice | undefined,
+): RepairRoundSource["advice"] {
+  if (advice === undefined) return null;
+  const text =
+    advice.kind === "escalate-hint"
+      ? advice.hint
+      : advice.kind === "directive"
+        ? advice.directive
+        : advice.kind === "stop"
+          ? advice.reason
+          : null;
+  return {
+    // Application levers land in the following change; consultation alone
+    // applies only the explicit no-op continue decision.
+    applied: advice.kind === "continue",
+    kind: advice.kind,
+    textDigest: text,
+  };
+}
+
+function fingerprintPreparationCandidate(
+  manifest: PreparationManifest,
+): string {
+  return createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
 }
 
 /**

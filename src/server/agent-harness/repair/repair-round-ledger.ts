@@ -1,12 +1,4 @@
-export const repairAdviceKinds = [
-  "continue",
-  "escalate-hint",
-  "directive",
-  "stop",
-  "spend-bonus-round",
-] as const;
-
-export type RepairAdviceKind = (typeof repairAdviceKinds)[number];
+import type { RepairAdvice } from "../schemas/repair-advice.schema";
 
 export type RepairLifecycle = {
   appDir: string;
@@ -24,7 +16,7 @@ export type RepairBudgetSnapshot = {
 
 export type RepairRoundAdviceRecord = {
   applied: boolean;
-  kind: RepairAdviceKind;
+  kind: RepairAdvice["kind"];
   textDigest: string | null;
 };
 

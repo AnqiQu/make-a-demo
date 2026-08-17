@@ -3463,6 +3463,92 @@ describe("runAgentHarnessPipeline", () => {
     expect(repairAttempts).toBe(2);
   });
 
+  it("consults repair strategy on the second occurrence of one failure fingerprint", async () => {
+    let preflightAttempts = 0;
+    let repairAttempts = 0;
+    const consultations: Parameters<
+      NonNullable<AgentHarnessPipelineDependencies["adviseRepairStrategy"]>
+    >[0][] = [];
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_repeated_failure_strategy" }),
+      stubPipelineDependencies({
+        async adviseRepairStrategy(input) {
+          consultations.push(input);
+          return { kind: "continue" };
+        },
+        capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation({ preparationManifest }) {
+          repairAttempts += 1;
+          return {
+            candidateFingerprint: `candidate-${repairAttempts}`,
+            manifest: {
+              ...preparationManifest,
+              envUsed: { REPAIR_ATTEMPT: String(repairAttempts) },
+              id: `prep_repair_${repairAttempts}`,
+            },
+          };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          return preflightAttempts >= 3
+            ? report("preparation-preflight", "passed")
+            : {
+                ...report("preparation-preflight", "failed"),
+                attemptedCommand: "bun run dev",
+                failureClassification: "start failure",
+                logsSummary: "Start command failed: Error: demo server crashed",
+              };
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      { repoPreparationRepairLimit: 5 },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(consultations).toHaveLength(1);
+    expect(consultations[0]).toMatchObject({
+      budgets: {
+        bonusRounds: 0,
+        fingerprintAttempts: 1,
+        totalAttempts: 1,
+      },
+      roundLedger: {
+        rounds: [
+          {
+            advice: null,
+            candidateFingerprint: "candidate-1",
+            outcomeOfAdvice: "failure-unchanged",
+            round: 1,
+          },
+        ],
+      },
+    });
+    expect(repairAttempts).toBe(2);
+  });
+
   it("does not collapse failures that share a symptom line but hide different causes", async () => {
     // The probe symptom (`curl: (7)`) is identical on every attempt; the
     // decisive cause buried in the managed output differs each time. Each

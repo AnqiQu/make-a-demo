@@ -453,6 +453,10 @@ describe("OpenCode harness seam", () => {
         stage: "repo-preparation-repair",
       },
       {
+        artifacts: ["../.makeademo/repair-advice.json"],
+        stage: "repair-strategy",
+      },
+      {
         artifacts: ["../.makeademo/runtime-target-selection.json"],
         stage: "runtime-target-selection",
       },
