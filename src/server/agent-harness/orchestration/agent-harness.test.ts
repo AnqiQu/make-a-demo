@@ -3549,6 +3549,152 @@ describe("runAgentHarnessPipeline", () => {
     expect(repairAttempts).toBe(2);
   });
 
+  it("adds strategist hints to the existing repair-hint channel", async () => {
+    let preflightAttempts = 0;
+    const repairHints: string[][] = [];
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_strategy_hint" }),
+      stubPipelineDependencies({
+        async adviseRepairStrategy() {
+          return {
+            hint: "Compare the accepted build command with the resolved manifest.",
+            kind: "escalate-hint",
+          };
+        },
+        capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation({ failureReport, preparationManifest }) {
+          repairHints.push(failureReport.suggestedRepairHints);
+          return {
+            manifest: {
+              ...preparationManifest,
+              envUsed: { REPAIR_ATTEMPT: String(repairHints.length) },
+              id: `prep_hint_${repairHints.length}`,
+            },
+          };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          return preflightAttempts >= 3
+            ? report("preparation-preflight", "passed")
+            : {
+                ...report("preparation-preflight", "failed"),
+                failureClassification: "start failure",
+                logsSummary: "Start command failed: Error: server crashed",
+                suggestedRepairHints: ["Keep the selected app target."],
+              };
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      { repoPreparationRepairLimit: 5 },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(repairHints[0]).toEqual(["Keep the selected app target."]);
+    expect(repairHints[1]).toEqual(
+      expect.arrayContaining([
+        "Keep the selected app target.",
+        "Compare the accepted build command with the resolved manifest.",
+      ]),
+    );
+  });
+
+  it("applies a strategist directive for one repair round only", async () => {
+    let preflightAttempts = 0;
+    const directives: Array<string | undefined> = [];
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_strategy_directive" }),
+      stubPipelineDependencies({
+        async adviseRepairStrategy() {
+          return {
+            directive:
+              "Use the workspace graph build instead of another package-local build.",
+            kind: "directive",
+          };
+        },
+        capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation({ preparationManifest, strategyDirective }) {
+          directives.push(strategyDirective);
+          return {
+            manifest: {
+              ...preparationManifest,
+              envUsed: { REPAIR_ATTEMPT: String(directives.length) },
+              id: `prep_directive_${directives.length}`,
+            },
+          };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          if (preflightAttempts >= 4) {
+            return report("preparation-preflight", "passed");
+          }
+          return {
+            ...report("preparation-preflight", "failed"),
+            failureClassification: "start failure",
+            logsSummary:
+              preflightAttempts <= 2
+                ? "Start command failed: Error: package-local build is incomplete"
+                : "Start command failed: Error: graph build reached a new dependency",
+          };
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      { repoPreparationRepairLimit: 5 },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(directives).toEqual([
+      undefined,
+      "Use the workspace graph build instead of another package-local build.",
+      undefined,
+    ]);
+  });
+
   it("does not collapse failures that share a symptom line but hide different causes", async () => {
     // The probe symptom (`curl: (7)`) is identical on every attempt; the
     // decisive cause buried in the managed output differs each time. Each

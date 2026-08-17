@@ -221,8 +221,18 @@ export type AgentHarnessPipelineDependencies = {
     repoProfile: RepoProfile;
     repoSourcePaths: string[];
     runPlan: RunPlan;
+    /**
+     * One-round repair-strategy steering. Implementations should place this
+     * after default approach guidance and before the invariant repair
+     * contract, and must not retain it for later rounds.
+     */
+    strategyDirective?: string;
     workspace: AgentHarnessWorkspace;
-  }): Promise<{ manifest: PreparationManifest; opencodeSessionId?: string }>;
+  }): Promise<{
+    candidateFingerprint?: string;
+    manifest: PreparationManifest;
+    opencodeSessionId?: string;
+  }>;
   /**
    * Restores the last Preparation candidate accepted by backend fidelity
    * validation. Implementations must verify the screened-source revision and
@@ -1574,6 +1584,7 @@ async function ensureValidPreparation(input: {
   let pendingLedgerRound:
     | {
         advice: RepairAdvice | undefined;
+        adviceApplied: boolean;
         candidateFingerprint: string;
         candidateManifest: PreparationManifest;
         failureReport: ValidationReport;
@@ -1671,9 +1682,13 @@ async function ensureValidPreparation(input: {
           preparationRepairBudget: input.preparationRepairBudget,
           repairRoundSources: input.repairRoundSources,
         });
+        const adviceApplication = applyRepairSteeringAdvice({
+          advice,
+          failureReport: repairFailure,
+        });
         const repair = await repairPreparationManifest({
           dependencies: input.dependencies,
-          failureReport: repairFailure,
+          failureReport: adviceApplication.failureReport,
           input: input.input,
           preparationManifest,
           phaseRepairAttempts,
@@ -1693,6 +1708,11 @@ async function ensureValidPreparation(input: {
           runPlan: input.runPlan,
           stageStatuses: input.stageStatuses,
           stageTimings: input.stageTimings,
+          ...(adviceApplication.strategyDirective === undefined
+            ? {}
+            : {
+                strategyDirective: adviceApplication.strategyDirective,
+              }),
           totalRepairAttempts: input.preparationRepairBudget.totalAttempts,
           workspace: input.workspace,
         });
@@ -1707,6 +1727,7 @@ async function ensureValidPreparation(input: {
         const repairedManifest = readPreparationManifest(repair.manifest);
         pendingLedgerRound = {
           advice,
+          adviceApplied: adviceApplication.applied,
           candidateFingerprint:
             repair.candidateFingerprint ??
             fingerprintPreparationCandidate(repairedManifest),
@@ -2233,6 +2254,7 @@ async function repairPreparationManifest(input: {
   runPlan: RunPlan;
   stageStatuses: Record<string, string>;
   stageTimings: PipelineRunManifest["stageTimings"];
+  strategyDirective?: string;
   totalRepairAttempts: number;
   workspace: AgentHarnessWorkspace;
 }): Promise<{
@@ -2290,6 +2312,9 @@ async function repairPreparationManifest(input: {
         repoProfile: input.repoProfile,
         repoSourcePaths: input.input.files.map((file) => file.path),
         runPlan: input.runPlan,
+        ...(input.strategyDirective === undefined
+          ? {}
+          : { strategyDirective: input.strategyDirective }),
         workspace: input.workspace,
       }) as Promise<{
         candidateFingerprint?: string;
@@ -2335,6 +2360,7 @@ function recordCompletedRepairRound(input: {
   repairRoundSources: RepairRoundSource[];
   round: {
     advice: RepairAdvice | undefined;
+    adviceApplied: boolean;
     candidateFingerprint: string;
     candidateManifest: PreparationManifest;
     failureReport: ValidationReport;
@@ -2344,7 +2370,10 @@ function recordCompletedRepairRound(input: {
   };
 }): void {
   input.repairRoundSources.push({
-    advice: readRepairAdviceLedgerRecord(input.round.advice),
+    advice: readRepairAdviceLedgerRecord(
+      input.round.advice,
+      input.round.adviceApplied,
+    ),
     budget: {
       bonusRounds: input.preparationRepairBudget.bonusRounds,
       fingerprintAttempts:
@@ -2371,6 +2400,7 @@ function recordCompletedRepairRound(input: {
 
 function readRepairAdviceLedgerRecord(
   advice: RepairAdvice | undefined,
+  applied: boolean,
 ): RepairRoundSource["advice"] {
   if (advice === undefined) return null;
   const text =
@@ -2382,11 +2412,44 @@ function readRepairAdviceLedgerRecord(
           ? advice.reason
           : null;
   return {
-    // Application levers land in the following change; consultation alone
-    // applies only the explicit no-op continue decision.
-    applied: advice.kind === "continue",
+    applied,
     kind: advice.kind,
     textDigest: text,
+  };
+}
+
+function applyRepairSteeringAdvice(input: {
+  advice: RepairAdvice | undefined;
+  failureReport: ValidationReport;
+}): {
+  applied: boolean;
+  failureReport: ValidationReport;
+  strategyDirective?: string;
+} {
+  if (input.advice?.kind === "escalate-hint") {
+    return {
+      applied: true,
+      failureReport: {
+        ...input.failureReport,
+        suggestedRepairHints: [
+          ...new Set([
+            ...input.failureReport.suggestedRepairHints,
+            input.advice.hint,
+          ]),
+        ],
+      },
+    };
+  }
+  if (input.advice?.kind === "directive") {
+    return {
+      applied: true,
+      failureReport: input.failureReport,
+      strategyDirective: input.advice.directive,
+    };
+  }
+  return {
+    applied: input.advice?.kind === "continue",
+    failureReport: input.failureReport,
   };
 }
 

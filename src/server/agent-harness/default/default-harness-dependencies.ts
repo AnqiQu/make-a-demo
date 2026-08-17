@@ -1593,6 +1593,7 @@ export async function createDefaultAgentHarnessDependencies(
       repoProfile,
       repoSourcePaths,
       runPlan,
+      strategyDirective,
       workspace,
     }) {
       const dependencyRepair = isDependencyRepairFailure(
@@ -1652,6 +1653,7 @@ export async function createDefaultAgentHarnessDependencies(
             preparationManifest,
             repoProfile,
             runPlan,
+            ...(strategyDirective === undefined ? {} : { strategyDirective }),
           }),
           ...optionalSessionId(opencodeSessionId),
           stage: "repo-preparation-repair",
@@ -6551,6 +6553,7 @@ function createRuntimePreparationRepairPrompt(input: {
   preparationManifest: PreparationManifest;
   repoProfile: RepoProfile;
   runPlan: RunPlan;
+  strategyDirective?: string;
 }): string {
   const dependencyRepair = isDependencyRepairFailure(
     input.failureReport.failureClassification,
@@ -6655,7 +6658,13 @@ function createRuntimePreparationRepairPrompt(input: {
       artifactPaths.preparationManifest,
       validationArtifactPath(input.failureReport.stage),
     ],
-    instructions: createRepairPromptInstructions({ approach, contract }),
+    instructions: createRepairPromptInstructions({
+      approach,
+      contract,
+      ...(input.strategyDirective === undefined
+        ? {}
+        : { directive: input.strategyDirective }),
+    }),
     stage: "repo-preparation-repair",
   });
 }
@@ -6663,11 +6672,20 @@ function createRuntimePreparationRepairPrompt(input: {
 function createRepairPromptInstructions(input: {
   approach: readonly string[];
   contract: readonly string[];
+  directive?: string;
 }): string {
   return [
     "Approach guidance (default repair strategy):",
     ...input.approach,
     "",
+    ...(input.directive === undefined
+      ? []
+      : [
+          "Repair Strategy Directive (this round only):",
+          "This directive supersedes conflicting approach guidance above for this round. It never supersedes the repair contract below.",
+          input.directive,
+          "",
+        ]),
     "Repair contract (always applies):",
     ...input.contract,
   ].join("\n");
