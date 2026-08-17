@@ -8516,3 +8516,117 @@ builds its graph and finally exercises N152's
 single-span capture markers; calcom's fate turns on
 availability seeding; twenty stays red until the
 org caps move.
+
+## Addendum (2026-08-17, wave-14 — the matrix doubled and the machinery generalized; N154/N155 validated; red-flag sweep before M1: N156–N157)
+
+Batch matrix-2026-08-17T04-03-08-593Z, report
+matrix-report-2026-08-17T06-03-26-810Z.json — the
+first eleven-entry matrix (six new repos). Five
+passed: homer (sixth consecutive, 4.6m), ghostfolio,
+and three first-timers — conduit (18m), midday
+(61m), cyberchef (50m). Three of six brand-new repos
+passing on first contact is the strongest
+generality evidence the program has produced: the
+N-item machinery was tuned on five repos and held on
+strangers.
+
+Validated this wave: N154 end to end — ghostfolio's
+final manifest declares the full nx build chain
+(client and api copy-assets + build) alongside the
+production start, resolution honored it, and the run
+converged and passed. N155 substantially — directus
+cleared the dependency chain (the workspace-graph
+build engaged; it needed three rounds, not the
+specced two, because the repo's own graph script
+failed partway on round two) and reached its real
+frontier: feature evidence for the data-model flows.
+Pass-run logs are clean: every warn/error event in
+the five passing runs is a mid-run repair that then
+converged.
+
+Red flags found by the sweep, in severity order:
+
+1. twenty ran 112.7 minutes against the 90-minute
+   budget — the deadline is asserted only between
+   stages, so a doomed run burned ~23 extra minutes
+   of sandbox time inside one long stage (→ N156).
+2. Canvas apps are ungroundable: excalidraw's
+   requested feature ("draw and label shapes,
+   connect with arrows") produced no browser
+   evidence because declared proofs speak
+   DOM-accessibility (visible-text, element-appears,
+   state-transition) and canvas content has no DOM
+   presence. This blocks an entire app category
+   (→ N157).
+3. N152 has never been exercised in production: all
+   five passing scripts contain zero
+   navigation-observed clicks — five waves running.
+   The single-span compiled shape is effectively
+   untested outside unit gates; directus's first
+   capture pass remains its real test. Watchlist.
+4. ghostfolio's compositing hydrated an external
+   favicon URL (t0.gstatic.com) and warned on
+   failure — a nondeterministic external dependency
+   in the render path (the video rendered without
+   it). Watchlist: the render path should not reach
+   external hosts at all.
+
+Non-flags, recorded: outline (new) died on a correct
+contract rejection — the agent cited its own added
+seedDemo.ts as product evidence and could not fix
+the citation within budget; the rule and message are
+right, convergence is the churn. calcom remains at
+the booking-availability seeded-data wall,
+unchanged. ghost (new) hit the wall clock in
+preparation churn — undiagnosed depth, next wave's
+work. twenty remains capacity-blocked (org caps),
+unchanged.
+
+### N156 (Medium, bugfix) — stage budgets must respect the wall clock
+
+Cap every stage timeout — agent commands, lifecycle
+waits, install/build gates — at the remaining
+wall-clock budget: a stage may never be granted more
+time than the job has left. The deadline assertion
+between stages stays; this bounds the overshoot a
+single long stage can add to a doomed run.
+Acceptance: a run that reaches its deadline
+mid-stage fails within minutes of the 90-minute
+mark, not twenty-plus.
+
+### N157 (High, feature) — a proof rung for canvas-rendered features
+
+Declared proofs need a vocabulary for features whose
+output never enters the DOM. Two candidate rungs, in
+preference order: app-state proof (assert against
+the application's own persisted scene/store state —
+excalidraw's scene JSON names its shapes and
+arrows), and canvas-delta proof (assert that a
+bounded canvas region changed after the action,
+screenshot-diff based, weakest acceptable form).
+Manifest contract, explorer verification, and the
+preflight probe all learn the new rung(s); flow
+planning treats canvas features as groundable only
+through them. Acceptance: excalidraw's wave-14
+requested features ground through an app-state or
+canvas-delta proof and the run proceeds past
+app-exploration.
+
+### Watchlist (updated)
+
+- N152 zero production exercise across five waves —
+  first directus capture pass is the test.
+- Compositing external-favicon hydration — remove
+  the external fetch from the render path.
+- ghost: undiagnosed wall-clock churn, next wave.
+- outline: correct-rule convergence churn on
+  evidence citations.
+- calcom seeded-availability, twenty org caps:
+  carried unchanged.
+
+### Rerun
+
+With N156–N157 landed and M1 in progress: the five
+greens hold; excalidraw grounds through the new
+rung; ghost gets a first real diagnosis; directus's
+capture arc finally exercises N152.
