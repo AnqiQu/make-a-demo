@@ -141,6 +141,25 @@ The strategist runs as an ordinary OpenCode stage
 consultation per repair round maximum, metered like any agent stage.
 Rare invocation means the strongest available model is affordable.
 
+### Statefulness: fresh invocations over a stateful ledger
+
+Each consultation is a fresh OpenCode session; the strategist never
+threads `opencodeSessionId` across rounds the way repair agents do.
+Repair agents are mid-task — their working memory is legitimately the
+conversation plus their workspace edits. The strategist's job is
+judgment over the record, so the record is the input, in full, every
+time: a consultation must be a pure function of the ledger. That
+keeps decisions auditable (what it saw is exactly what is persisted),
+replayable (M1 acceptance replays recorded ledgers), free of
+anchoring on stale conclusions, and immune to sandbox loss (sessions
+die with sandboxes — N153 exists because they wedge; artifacts
+survive). The requirement this creates: the ledger records the
+strategist's own history — each prior advice, whether it was applied,
+and the following round's outcome — so a fresh invocation can see
+"my round-2 hint did not move the failure" without having been
+present for round 2. Across runs there is no memory at all (see Open
+questions).
+
 ## Phases
 
 ### M1 (repair strategist)
