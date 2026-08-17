@@ -1,0 +1,81 @@
+{
+  "sourceRun": "matrix-2026-08-15T05-38-26-724Z-directus",
+  "rounds": [
+    {
+      "round": 1,
+      "failureReport": {
+        "stage": "preparation-preflight",
+        "failureClassification": "unbuilt workspace dependency",
+        "logsSummary": "Unbuilt workspace dependency @directus/extensions: Failed to resolve the package entry exported from packages/extensions/dist/index.js.",
+        "failingFeatureIds": []
+      },
+      "candidateFingerprint": "17ae3b36c477035f1a0592127c31bd2280b9b9302d4f5e939c813593453d71bd",
+      "candidateManifest": {
+        "appDir": "app",
+        "installCommandUsed": "pnpm install --frozen-lockfile --filter=@directus/app...",
+        "buildCommandUsed": null,
+        "startCommandUsed": "pnpm run dev",
+        "ports": [5173]
+      },
+      "resolvedManifest": {
+        "appDir": "app",
+        "installCommandUsed": "pnpm install --frozen-lockfile --filter=@directus/app...",
+        "buildCommandUsed": null,
+        "startCommandUsed": "pnpm run dev",
+        "ports": [5173]
+      },
+      "workspaceDiff": {
+        "changedPaths": [
+          "/workspace/repo/app/package.json",
+          "/workspace/repo/app/src/demo/fixtures.ts",
+          "/workspace/repo/app/vite.config.js"
+        ]
+      },
+      "budget": {
+        "totalAttempts": 1,
+        "fingerprintAttempts": 1,
+        "bonusRounds": 0
+      },
+      "advice": null,
+      "outcomeOfAdvice": null
+    },
+    {
+      "round": 2,
+      "failureReport": {
+        "stage": "preparation-preflight",
+        "failureClassification": "unbuilt workspace dependency",
+        "logsSummary": "Unbuilt workspace dependency @directus/constants: Cannot find packages/constants/dist/index.js imported from packages/extensions/dist/index.js.",
+        "failingFeatureIds": []
+      },
+      "candidateFingerprint": "8b404edbf842112bea71388bb22b8619fc7732726b2e7d0b57fea5270df3e2c4",
+      "candidateManifest": {
+        "appDir": "app",
+        "installCommandUsed": "pnpm install --frozen-lockfile",
+        "buildCommandUsed": null,
+        "startCommandUsed": "pnpm run dev",
+        "ports": [5173]
+      },
+      "resolvedManifest": {
+        "appDir": "app",
+        "installCommandUsed": "pnpm install --frozen-lockfile",
+        "buildCommandUsed": null,
+        "startCommandUsed": "pnpm run dev",
+        "ports": [5173]
+      },
+      "workspaceDiff": {
+        "changedPaths": [
+          "/workspace/repo/app/package.json",
+          "/workspace/repo/app/src/demo/fixtures.ts",
+          "/workspace/repo/app/vite.config.js"
+        ]
+      },
+      "budget": {
+        "totalAttempts": 2,
+        "fingerprintAttempts": 1,
+        "bonusRounds": 0
+      },
+      "advice": null,
+      "outcomeOfAdvice": null
+    }
+  ]
+}

@@ -1,0 +1,113 @@
+{
+  "sourceRun": "matrix-2026-08-17T04-03-08-593Z-directus",
+  "rounds": [
+    {
+      "round": 1,
+      "failureReport": {
+        "stage": "preparation-preflight",
+        "failureClassification": "unbuilt workspace dependency",
+        "logsSummary": "Unbuilt workspace dependency @directus/extensions: Failed to resolve the package entry exported from packages/extensions/dist/index.js.",
+        "failingFeatureIds": []
+      },
+      "candidateFingerprint": "6db4bd4c4d0079614391a75d2ad856519f71951e459736073fbfa1146301516d",
+      "candidateManifest": {
+        "appDir": "app",
+        "installCommandUsed": "pnpm install --frozen-lockfile --filter=@directus/app...",
+        "buildCommandUsed": null,
+        "startCommandUsed": "pnpm run dev",
+        "ports": [5173]
+      },
+      "resolvedManifest": {
+        "appDir": "app",
+        "installCommandUsed": "pnpm install --frozen-lockfile --filter=@directus/app...",
+        "buildCommandUsed": null,
+        "startCommandUsed": "pnpm run dev",
+        "ports": [5173]
+      },
+      "workspaceDiff": {
+        "changedPaths": [
+          "/workspace/repo/app/package.json",
+          "/workspace/repo/app/vite.config.js"
+        ]
+      },
+      "budget": {
+        "totalAttempts": 1,
+        "fingerprintAttempts": 1,
+        "bonusRounds": 0
+      },
+      "advice": null,
+      "outcomeOfAdvice": null
+    },
+    {
+      "round": 2,
+      "failureReport": {
+        "stage": "preparation-preflight",
+        "failureClassification": "unbuilt workspace dependency",
+        "logsSummary": "Unbuilt workspace dependency @directus/constants: Cannot find packages/constants/dist/index.js imported from packages/extensions/dist/index.js.",
+        "failingFeatureIds": []
+      },
+      "candidateFingerprint": "7d47166a709a17ec9dac4d4ceaf1414f4efef5f3518e94772d6a4853ce912e6a",
+      "candidateManifest": {
+        "appDir": "app",
+        "installCommandUsed": "pnpm install --frozen-lockfile --filter=@directus/app...",
+        "buildCommandUsed": "pnpm --recursive --filter=@directus/app... run build",
+        "startCommandUsed": "pnpm run dev",
+        "ports": [5173]
+      },
+      "resolvedManifest": {
+        "appDir": "app",
+        "installCommandUsed": "pnpm install --frozen-lockfile --filter=@directus/app...",
+        "buildCommandUsed": "pnpm --recursive --filter=@directus/app... run build",
+        "startCommandUsed": "pnpm run dev",
+        "ports": [5173]
+      },
+      "workspaceDiff": {
+        "changedPaths": ["/workspace/repo/app/vite.config.js"]
+      },
+      "budget": {
+        "totalAttempts": 2,
+        "fingerprintAttempts": 1,
+        "bonusRounds": 0
+      },
+      "advice": null,
+      "outcomeOfAdvice": null
+    },
+    {
+      "round": 3,
+      "failureReport": {
+        "stage": "preparation-preflight",
+        "failureClassification": "unbuilt workspace dependency",
+        "logsSummary": "Unbuilt workspace dependency @directus/extensions: Failed to resolve the package entry exported from packages/extensions/dist/index.js.",
+        "failingFeatureIds": []
+      },
+      "candidateFingerprint": "e63301c7b1168a1d63b605b72ae94218e9ed11f21bed9662b7d40fbbe2b08133",
+      "candidateManifest": {
+        "appDir": "app",
+        "installCommandUsed": "pnpm install --frozen-lockfile",
+        "buildCommandUsed": null,
+        "startCommandUsed": "pnpm run dev",
+        "ports": [5173]
+      },
+      "resolvedManifest": {
+        "appDir": "app",
+        "installCommandUsed": "pnpm install --frozen-lockfile",
+        "buildCommandUsed": "pnpm --recursive --filter=@directus/app... run build",
+        "startCommandUsed": "pnpm run dev",
+        "ports": [5173]
+      },
+      "workspaceDiff": {
+        "changedPaths": [
+          "/workspace/repo/app/package.json",
+          "/workspace/repo/app/vite.config.js"
+        ]
+      },
+      "budget": {
+        "totalAttempts": 3,
+        "fingerprintAttempts": 2,
+        "bonusRounds": 0
+      },
+      "advice": null,
+      "outcomeOfAdvice": null
+    }
+  ]
+}

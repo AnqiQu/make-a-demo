@@ -1,0 +1,119 @@
+{
+  "sourceRun": "matrix-2026-08-17T04-03-08-593Z-outline",
+  "rounds": [
+    {
+      "round": 1,
+      "failureReport": {
+        "stage": "repo-preparation-artifact-validation",
+        "failureClassification": "invalid-schema",
+        "logsSummary": "Invalid PreparationManifest: Runtime script demo:dev is not defined for the selected application.",
+        "failingFeatureIds": []
+      },
+      "candidateFingerprint": "ea18c5c4b734483391aedeff7ed512b1a7480a38e610c64911baa73d310514d1",
+      "candidateManifest": {
+        "appDir": ".",
+        "installCommandUsed": "yarn install --immutable",
+        "buildCommandUsed": null,
+        "startCommandUsed": "yarn run demo:dev",
+        "ports": [5173]
+      },
+      "resolvedManifest": {
+        "appDir": ".",
+        "installCommandUsed": "yarn install --immutable",
+        "buildCommandUsed": null,
+        "startCommandUsed": "yarn run demo:dev",
+        "ports": [5173]
+      },
+      "workspaceDiff": {
+        "changedPaths": [
+          "/workspace/repo/package.json",
+          "/workspace/repo/server/middlewares/authentication.ts",
+          "/workspace/repo/server/scripts/seedDemo.ts"
+        ]
+      },
+      "budget": {
+        "totalAttempts": 1,
+        "fingerprintAttempts": 1,
+        "bonusRounds": 0
+      },
+      "advice": null,
+      "outcomeOfAdvice": null
+    },
+    {
+      "round": 2,
+      "failureReport": {
+        "stage": "repo-preparation-artifact-validation",
+        "failureClassification": "invalid-schema",
+        "logsSummary": "Invalid PreparationManifest: feature sourcePaths cites app/scenes/Collection/Collection.tsx outside the screened repository.",
+        "failingFeatureIds": []
+      },
+      "candidateFingerprint": "04737b8494d75a03d50bfb7fb8ecde92651a8e76d142bd82809ade0db3e1d707",
+      "candidateManifest": {
+        "appDir": ".",
+        "installCommandUsed": "yarn install --immutable",
+        "buildCommandUsed": null,
+        "startCommandUsed": "yarn run dev",
+        "ports": [5173]
+      },
+      "resolvedManifest": {
+        "appDir": ".",
+        "installCommandUsed": "yarn install --immutable",
+        "buildCommandUsed": null,
+        "startCommandUsed": "yarn run dev",
+        "ports": [5173]
+      },
+      "workspaceDiff": {
+        "changedPaths": [
+          "/workspace/repo/package.json",
+          "/workspace/repo/server/middlewares/authentication.ts",
+          "/workspace/repo/server/scripts/seedDemo.ts"
+        ]
+      },
+      "budget": {
+        "totalAttempts": 2,
+        "fingerprintAttempts": 1,
+        "bonusRounds": 0
+      },
+      "advice": null,
+      "outcomeOfAdvice": null
+    },
+    {
+      "round": 3,
+      "failureReport": {
+        "stage": "repo-preparation-artifact-validation",
+        "failureClassification": "invalid-schema",
+        "logsSummary": "Invalid PreparationManifest: product evidence cites server/scripts/seedDemo.ts, a file added during preparation rather than an original screened source file.",
+        "failingFeatureIds": []
+      },
+      "candidateFingerprint": "0a2f043d27d764adfdb85a1a57a93a2b2a2a3de8ad1d7b060c1818213d98a16e",
+      "candidateManifest": {
+        "appDir": ".",
+        "installCommandUsed": "yarn install --immutable",
+        "buildCommandUsed": null,
+        "startCommandUsed": "yarn run dev",
+        "ports": [5173]
+      },
+      "resolvedManifest": {
+        "appDir": ".",
+        "installCommandUsed": "yarn install --immutable",
+        "buildCommandUsed": null,
+        "startCommandUsed": "yarn run dev",
+        "ports": [5173]
+      },
+      "workspaceDiff": {
+        "changedPaths": [
+          "/workspace/repo/package.json",
+          "/workspace/repo/server/middlewares/authentication.ts",
+          "/workspace/repo/server/scripts/seedDemo.ts"
+        ]
+      },
+      "budget": {
+        "totalAttempts": 3,
+        "fingerprintAttempts": 1,
+        "bonusRounds": 0
+      },
+      "advice": null,
+      "outcomeOfAdvice": null
+    }
+  ]
+}
