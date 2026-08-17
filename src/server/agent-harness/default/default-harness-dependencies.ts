@@ -6406,6 +6406,43 @@ function createRepoPreparationRepairPrompt(input: {
   repoProfile: RepoProfile;
   runPlan: RunPlan;
 }): string {
+  const approach = [
+    "Repo Preparation completed without producing the required artifact /workspace/.makeademo/preparation-manifest.json.",
+    `Read ${artifactPaths.featureVerificationGuide} for how the backend verifies each prepared feature and how to declare proofs that pass.`,
+    "The artifact may be missing, unreadable, invalid JSON, or schema-invalid.",
+    `Backend artifact validation failed with: ${input.readError}`,
+    "Inspect /workspace/repo and the durable artifacts before rebuilding the Repo Preparation output.",
+    "Inspect the source paths needed to replace productContext placeholders.",
+    offCameraAuthenticationInstruction,
+    offlineFeatureStateInstruction,
+    dataFixturePlaybookInstruction,
+    ...createDataStrategyInstruction(input.repoProfile),
+    `Use this local runtime URL in the manifest: ${input.runPlan.expectedLocalUrl}`,
+    `Use this install command unless you have a stronger repo-specific reason: ${input.runPlan.installCommand}`,
+    `Use this start command unless you have a stronger repo-specific reason: ${input.runPlan.startCommand}`,
+    `Previous OpenCode output excerpt:\n${formatOpenCodeOutputExcerpt(
+      input.previousResult,
+    )}`,
+    `Demo brief: ${JSON.stringify(input.demoBrief)}`,
+    // Never inline the repo profile: large monorepos serialize past the
+    // kernel argv limit (N65) and the file is already a listed artifact.
+    `Repo profile: read ${artifactPaths.repoProfile} for the backend-resolved repository profile.`,
+  ];
+  const contract = [
+    `The RunPlan target is immutable: prepare only ${input.runPlan.appDir}, keep appDir equal to ${input.runPlan.appDir}, and do not use evidence from a runnable sibling application.`,
+    "Repair only the Repo Preparation output contract. Write a valid PreparationManifest JSON object to /workspace/.makeademo/preparation-manifest.json.",
+    "Read /workspace/.makeademo/preparation-manifest-contract.json and use /workspace/.makeademo/preparation-manifest-template.json as the canonical shape.",
+    "Do not patch only the named field. Rebuild and validate every productContext.featureInventory entry against the complete contract before finishing.",
+    "Every requested feature must have one source-backed inventory entry and at least one browser entry path; do not solve validation by deleting a requested feature.",
+    "Preserve original routes, UI components, styles, brand assets, and interaction logic. Repair only authentication, data, external-service, fixture, seed, asset-vendoring, environment, or configuration seams; never create a replacement app or standalone demo server.",
+    "Do not finish until the manifest exists at that exact path.",
+    "Do not write secrets into files. Replace external services with local fixtures or mocks.",
+    "Omit buildCommandUsed for development-server starts. If a monorepo build is required, select an app-scoped package script instead of the root aggregate build.",
+    "Do not add command-level working directory flags; workspace command resolution is backend-owned.",
+    "The manifest must include every field required by the backend-owned contract. Changed files and validation evidence are recorded by the backend, not authored in the manifest.",
+    appDirShapeInstruction,
+    envUsedShapeInstruction,
+  ];
   return createStagePrompt({
     artifactPaths: [
       artifactPaths.repoProfile,
@@ -6416,39 +6453,7 @@ function createRepoPreparationRepairPrompt(input: {
       artifactPaths.featureVerificationGuide,
       artifactPaths.preparationManifest,
     ],
-    instructions: [
-      "Repo Preparation completed without producing the required artifact /workspace/.makeademo/preparation-manifest.json.",
-      `Read ${artifactPaths.featureVerificationGuide} for how the backend verifies each prepared feature and how to declare proofs that pass.`,
-      "The artifact may be missing, unreadable, invalid JSON, or schema-invalid.",
-      `The RunPlan target is immutable: prepare only ${input.runPlan.appDir}, keep appDir equal to ${input.runPlan.appDir}, and do not use evidence from a runnable sibling application.`,
-      `Backend artifact validation failed with: ${input.readError}`,
-      "Repair only the Repo Preparation output contract. Inspect /workspace/repo and the durable artifacts, then write a valid PreparationManifest JSON object to /workspace/.makeademo/preparation-manifest.json.",
-      "Read /workspace/.makeademo/preparation-manifest-contract.json and use /workspace/.makeademo/preparation-manifest-template.json as the canonical shape.",
-      "Do not patch only the named field. Rebuild and validate every productContext.featureInventory entry against the complete contract before finishing.",
-      "Inspect the source paths needed to replace productContext placeholders. Every requested feature must have one source-backed inventory entry and at least one browser entry path; do not solve validation by deleting a requested feature.",
-      offCameraAuthenticationInstruction,
-      offlineFeatureStateInstruction,
-      dataFixturePlaybookInstruction,
-      ...createDataStrategyInstruction(input.repoProfile),
-      "Preserve original routes, UI components, styles, brand assets, and interaction logic. Repair only authentication, data, external-service, fixture, seed, asset-vendoring, environment, or configuration seams; never create a replacement app or standalone demo server.",
-      "Do not finish until the manifest exists at that exact path.",
-      "Do not write secrets into files. Replace external services with local fixtures or mocks.",
-      "Omit buildCommandUsed for development-server starts. If a monorepo build is required, select an app-scoped package script instead of the root aggregate build.",
-      "Do not add command-level working directory flags; workspace command resolution is backend-owned.",
-      `Use this local runtime URL in the manifest: ${input.runPlan.expectedLocalUrl}`,
-      `Use this install command unless you have a stronger repo-specific reason: ${input.runPlan.installCommand}`,
-      `Use this start command unless you have a stronger repo-specific reason: ${input.runPlan.startCommand}`,
-      "The manifest must include every field required by the backend-owned contract. Changed files and validation evidence are recorded by the backend, not authored in the manifest.",
-      appDirShapeInstruction,
-      envUsedShapeInstruction,
-      `Previous OpenCode output excerpt:\n${formatOpenCodeOutputExcerpt(
-        input.previousResult,
-      )}`,
-      `Demo brief: ${JSON.stringify(input.demoBrief)}`,
-      // Never inline the repo profile: large monorepos serialize past the
-      // kernel argv limit (N65) and the file is already a listed artifact.
-      `Repo profile: read ${artifactPaths.repoProfile} for the backend-resolved repository profile.`,
-    ].join("\n"),
+    instructions: createRepairPromptInstructions({ approach, contract }),
     stage: "repo-preparation-repair",
   });
 }
@@ -6469,6 +6474,90 @@ function createRuntimePreparationRepairPrompt(input: {
   );
   const rebuildFromScreenedSource =
     input.failureReport.stage === "preparation-fidelity";
+  const approach = [
+    "Backend-owned submitted-code validation failed. Repair the prepared repo and update the PreparationManifest; do not claim success yourself.",
+    `Failure classification: ${input.failureReport.failureClassification ?? "unknown"}`,
+    `Failure summary: ${elideMiddle(input.failureReport.logsSummary, 16_000)}`,
+    `Browser observations: ${elideMiddle(JSON.stringify(input.failureReport.browserObservations), 8_000)}`,
+    `Blocked network attempts: ${elideMiddle(JSON.stringify(input.failureReport.blockedNetworkAttempts), 8_000)}`,
+    `Console errors: ${elideMiddle(JSON.stringify(input.failureReport.consoleErrors), 8_000)}`,
+    `Page errors: ${elideMiddle(JSON.stringify(input.failureReport.pageErrors), 8_000)}`,
+    `stderr evidence: ${elideMiddle(JSON.stringify(input.failureReport.stderrExcerpts), 8_000)}`,
+    `stdout evidence: ${elideMiddle(JSON.stringify(input.failureReport.stdoutExcerpts), 8_000)}`,
+    `Suggested repair hints: ${JSON.stringify(input.failureReport.suggestedRepairHints)}`,
+    ...(input.failureReport.featureVerdicts === undefined
+      ? []
+      : [
+          `The failure summary lists one verdict per prepared feature; read ${artifactPaths.featureVerificationGuide} for what each verdict means and the repair it calls for.`,
+        ]),
+    ...(input.artifactError === undefined
+      ? []
+      : [
+          `The previous repaired manifest was rejected: ${elideMiddle(input.artifactError, 8_000)}`,
+        ]),
+    ...(rebuildFromScreenedSource
+      ? [
+          "The repository was restored from the immutable screened source and the failed manifest was removed. Rebuild the complete preparation candidate and manifest from this clean baseline; no prior workspace edit remains.",
+        ]
+      : []),
+    "Omit buildCommandUsed for development-server starts. If validation reports that a root aggregate build is too broad, use the exact app-scoped command from the failure summary.",
+    ...(runtimeConfigurationRepair
+      ? [
+          "The backend classified this as a runtime-configuration error. Correct the backend-resolved build/start command fields that caused it; keep appDir, install, port, and base URL unchanged unless the same structured failure names one of them.",
+        ]
+      : [
+          "Preserve backend-resolved appDir, install, build, start, port, and base URL fields.",
+        ]),
+    ...(dependencyRepair
+      ? [
+          "Change only package manifests or recognized package-manager configuration required to resolve the reported dependency failure.",
+        ]
+      : []),
+    "For browser network failures, repair only unresolved URLs in the failure report. The backend already replays safe public GET resources, so preserve original product images, media, fonts, styles, and scripts. Adapt authenticated or stateful APIs at their service/data seams and never substitute visible assets.",
+    "Repair only authentication/session, data/API, external-service, fixture/seed, local asset, environment, or configuration seams.",
+    offCameraAuthenticationInstruction,
+    offlineFeatureStateInstruction,
+    // The playbook is long; interpolate it only for the data-surface
+    // failure class it exists to repair (prompt diet, N65).
+    ...(input.failureReport.failureClassification ===
+    "empty/unmeaningful app state"
+      ? [dataFixturePlaybookInstruction]
+      : []),
+    ...createDataStrategyInstruction(input.repoProfile),
+    sealedNetworkWorldRulesInstruction,
+    ...(rebuildFromScreenedSource
+      ? []
+      : [`Current manifest: ${JSON.stringify(input.preparationManifest)}`]),
+    `Run plan: ${JSON.stringify(input.runPlan)}`,
+    `Demo brief: ${JSON.stringify(input.demoBrief)}`,
+    // Never inline the repo profile: large monorepos serialize past the
+    // kernel argv limit and OpenCode fails to launch (E2BIG, exit 126).
+    `Repo profile: read ${artifactPaths.repoProfile} for the backend-resolved repository profile.`,
+  ];
+  const contract = [
+    "Do not run the app, install dependencies, or use the network. The backend will rerun install, build, start, and browser validation in the isolated submitted-code sandbox.",
+    `The selected browser application remains ${input.runPlan.appDir}; validation difficulty never authorizes switching to a runnable sibling.`,
+    ...(dependencyRepair
+      ? [
+          "Do not edit executable source, application scripts, workspace topology, or presentation files.",
+          "Do not rewrite the PreparationManifest; the accepted runtime, authentication, fixtures, and Product Context remain authoritative for an install repair.",
+        ]
+      : []),
+    "Do not edit lockfiles (bun.lock, package-lock.json, pnpm-lock.yaml, yarn.lock) in any repair; the backend regenerates and verifies them with the detected package manager after your changes.",
+    "Any authentication or integration change must be conditionally selected by the repository's active MAKEADEMO_DEMO gate and must keep the original behavior reachable on the non-demo branch; deleting original behavior fails fidelity validation.",
+    ...(dependencyRepair
+      ? ["Edit only the dependency files under /workspace/repo."]
+      : [
+          "You may edit /workspace/repo and must rewrite /workspace/.makeademo/preparation-manifest.json to match the actual repaired state.",
+        ]),
+    "The repaired runtime must still be the original product. Preserve its route tree, UI components, design system, styles, brand assets, and interaction logic; remove alternate demo servers, replacement pages, and commands that bypass the original app.",
+    "Do not remove workspace configuration or replace the package graph or lockfile with a smaller demo project.",
+    "Preserve every selected productContext feature, including every requested feature, and retain its source evidence and entryPaths.",
+    "Read /workspace/.makeademo/preparation-manifest-contract.json and use /workspace/.makeademo/preparation-manifest-template.json as the canonical shape.",
+    "Do not patch only the reported failure. Revalidate the complete manifest and every productContext.featureInventory entry before finishing.",
+    appDirShapeInstruction,
+    envUsedShapeInstruction,
+  ];
   return createStagePrompt({
     artifactPaths: [
       artifactPaths.repoProfile,
@@ -6480,84 +6569,22 @@ function createRuntimePreparationRepairPrompt(input: {
       artifactPaths.preparationManifest,
       validationArtifactPath(input.failureReport.stage),
     ],
-    instructions: [
-      "Backend-owned submitted-code validation failed. Repair the prepared repo and update the PreparationManifest; do not claim success yourself.",
-      `Failure classification: ${input.failureReport.failureClassification ?? "unknown"}`,
-      `Failure summary: ${elideMiddle(input.failureReport.logsSummary, 16_000)}`,
-      `Browser observations: ${elideMiddle(JSON.stringify(input.failureReport.browserObservations), 8_000)}`,
-      `Blocked network attempts: ${elideMiddle(JSON.stringify(input.failureReport.blockedNetworkAttempts), 8_000)}`,
-      `Console errors: ${elideMiddle(JSON.stringify(input.failureReport.consoleErrors), 8_000)}`,
-      `Page errors: ${elideMiddle(JSON.stringify(input.failureReport.pageErrors), 8_000)}`,
-      `stderr evidence: ${elideMiddle(JSON.stringify(input.failureReport.stderrExcerpts), 8_000)}`,
-      `stdout evidence: ${elideMiddle(JSON.stringify(input.failureReport.stdoutExcerpts), 8_000)}`,
-      `Suggested repair hints: ${JSON.stringify(input.failureReport.suggestedRepairHints)}`,
-      ...(input.failureReport.featureVerdicts === undefined
-        ? []
-        : [
-            `The failure summary lists one verdict per prepared feature; read ${artifactPaths.featureVerificationGuide} for what each verdict means and the repair it calls for.`,
-          ]),
-      ...(input.artifactError === undefined
-        ? []
-        : [
-            `The previous repaired manifest was rejected: ${elideMiddle(input.artifactError, 8_000)}`,
-          ]),
-      ...(rebuildFromScreenedSource
-        ? [
-            "The repository was restored from the immutable screened source and the failed manifest was removed. Rebuild the complete preparation candidate and manifest from this clean baseline; no prior workspace edit remains.",
-          ]
-        : []),
-      "Do not run the app, install dependencies, or use the network. The backend will rerun install, build, start, and browser validation in the isolated submitted-code sandbox.",
-      "Omit buildCommandUsed for development-server starts. If validation reports that a root aggregate build is too broad, use the exact app-scoped command from the failure summary.",
-      ...(runtimeConfigurationRepair
-        ? [
-            "The backend classified this as a runtime-configuration error. Correct the backend-resolved build/start command fields that caused it; keep appDir, install, port, and base URL unchanged unless the same structured failure names one of them.",
-          ]
-        : [
-            "Preserve backend-resolved appDir, install, build, start, port, and base URL fields.",
-          ]),
-      `The selected browser application remains ${input.runPlan.appDir}; validation difficulty never authorizes switching to a runnable sibling.`,
-      ...(dependencyRepair
-        ? [
-            "Change only package manifests or recognized package-manager configuration required to resolve the reported dependency failure. Do not edit executable source, application scripts, workspace topology, or presentation files.",
-            "Do not rewrite the PreparationManifest; the accepted runtime, authentication, fixtures, and Product Context remain authoritative for an install repair.",
-          ]
-        : []),
-      "Do not edit lockfiles (bun.lock, package-lock.json, pnpm-lock.yaml, yarn.lock) in any repair; the backend regenerates and verifies them with the detected package manager after your changes.",
-      "Any authentication or integration change must be conditionally selected by the repository's active MAKEADEMO_DEMO gate and must keep the original behavior reachable on the non-demo branch; deleting original behavior fails fidelity validation.",
-      "For browser network failures, repair only unresolved URLs in the failure report. The backend already replays safe public GET resources, so preserve original product images, media, fonts, styles, and scripts. Adapt authenticated or stateful APIs at their service/data seams and never substitute visible assets.",
-      ...(dependencyRepair
-        ? ["Edit only the dependency files under /workspace/repo."]
-        : [
-            "You may edit /workspace/repo and must rewrite /workspace/.makeademo/preparation-manifest.json to match the actual repaired state.",
-          ]),
-      "The repaired runtime must still be the original product. Preserve its route tree, UI components, design system, styles, brand assets, and interaction logic; remove alternate demo servers, replacement pages, and commands that bypass the original app.",
-      "Repair only authentication/session, data/API, external-service, fixture/seed, local asset, environment, or configuration seams. Do not remove workspace configuration or replace the package graph or lockfile with a smaller demo project.",
-      "Preserve every selected productContext feature, including every requested feature, and retain its source evidence and entryPaths.",
-      offCameraAuthenticationInstruction,
-      offlineFeatureStateInstruction,
-      // The playbook is long; interpolate it only for the data-surface
-      // failure class it exists to repair (prompt diet, N65).
-      ...(input.failureReport.failureClassification ===
-      "empty/unmeaningful app state"
-        ? [dataFixturePlaybookInstruction]
-        : []),
-      ...createDataStrategyInstruction(input.repoProfile),
-      sealedNetworkWorldRulesInstruction,
-      "Read /workspace/.makeademo/preparation-manifest-contract.json and use /workspace/.makeademo/preparation-manifest-template.json as the canonical shape.",
-      "Do not patch only the reported failure. Revalidate the complete manifest and every productContext.featureInventory entry before finishing.",
-      appDirShapeInstruction,
-      envUsedShapeInstruction,
-      ...(rebuildFromScreenedSource
-        ? []
-        : [`Current manifest: ${JSON.stringify(input.preparationManifest)}`]),
-      `Run plan: ${JSON.stringify(input.runPlan)}`,
-      `Demo brief: ${JSON.stringify(input.demoBrief)}`,
-      // Never inline the repo profile: large monorepos serialize past the
-      // kernel argv limit and OpenCode fails to launch (E2BIG, exit 126).
-      `Repo profile: read ${artifactPaths.repoProfile} for the backend-resolved repository profile.`,
-    ].join("\n"),
+    instructions: createRepairPromptInstructions({ approach, contract }),
     stage: "repo-preparation-repair",
   });
+}
+
+function createRepairPromptInstructions(input: {
+  approach: readonly string[];
+  contract: readonly string[];
+}): string {
+  return [
+    "Approach guidance (default repair strategy):",
+    ...input.approach,
+    "",
+    "Repair contract (always applies):",
+    ...input.contract,
+  ].join("\n");
 }
 
 function validationArtifactPath(stage: string): string {
