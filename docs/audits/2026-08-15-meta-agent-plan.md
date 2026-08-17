@@ -62,10 +62,12 @@ stage). Its contract is the template this plan generalizes:
    auditable in wave diagnosis.
 6. **Menu over prose, prose over power.** Where a decision can be a
    typed lever the orchestrator applies, prefer that. Where the space
-   cannot be enumerated (steering the next repair), the advice is a
-   hint injected through the existing failure-report/hint channel that
-   repair prompts already consume — never direct workspace edits or
-   command execution.
+   cannot be enumerated (steering the next repair), the advice is
+   prose through one of two graded channels — an additive hint via
+   the existing failure-report/hint channel, or a one-round directive
+   via the privileged slot that supersedes approach guidance but
+   never contract text (see Directives) — never direct workspace
+   edits or command execution.
 
 ## Architecture
 
@@ -199,8 +201,12 @@ questions).
 
 ### M1 (repair strategist)
 
-The seam, the ledger, the four-kind advice union, consultation on
-repeated fingerprints, application machinery for each kind.
+The seam, the ledger, the five-kind advice union, consultation on
+repeated fingerprints, application machinery for each kind, and the
+directive's prerequisite: splitting the consulted repair prompts into
+approach and contract sections (a standalone refactor commit that
+should land first — it makes existing rule contradictions visible by
+construction even before the strategist exists).
 Acceptance, from recorded waves: replaying ghostfolio wave-13's
 ledger, the strategist surfaces the candidate-vs-resolved build-field
 drop in a hint or stop rationale by round 2 (the deterministic fix is
