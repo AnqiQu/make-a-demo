@@ -8450,6 +8450,15 @@ converges on round 2 — the resolved lifecycle runs
 the agent's declared build, and preflight's
 runtime-configuration failure does not recur.
 
+Landed: runtime resolution now follows a selected
+start script one level to its production entry and,
+when the backend has no build of its own, preserves
+the agent-declared build after the absent-workspace
+selector check. The regression fixture mirrors
+ghostfolio's locked root target, empty workspace
+package inventory, `npm run start` wrapper, and
+`dist/apps/api/main` entry.
+
 ### N155 (High, bugfix) — unbuilt-workspace chains escalate to the workspace-graph build
 
 After one unbuilt-workspace-dependency repair round,
@@ -8469,6 +8478,16 @@ fingerprint ledger already records it), not new
 detection. Acceptance: directus's wave-13 evidence
 builds its package graph in at most two rounds and
 preflight proceeds past dependency resolution.
+
+Landed: the charged fingerprint ledger now arms a
+graph-build escalation after the first
+unbuilt-workspace repair. A second failure receives
+an exact root build/prepare or pnpm/turbo/nx graph
+command, scoped to the selected app's declared
+dependency closure, and runtime resolution honors
+that command only while the escalation is armed.
+Absent selectors still win, including Nx project
+lists and pnpm relationship selectors.
 
 ### Watchlist (updated)
 
