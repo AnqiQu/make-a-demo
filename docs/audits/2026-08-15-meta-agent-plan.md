@@ -90,6 +90,11 @@ A discriminated union, deliberately small at first:
 - `{ kind: "continue" }` — proceed with the normal repair round.
 - `{ kind: "escalate-hint", hint }` — proceed, but inject `hint` into
   the repair prompt through the existing artifactError/hint channel.
+  Additive: the hint competes with the prompt's default guidance.
+- `{ kind: "directive", directive }` — proceed, injecting `directive`
+  into the stage prompt's privileged directive slot, which explicitly
+  supersedes the prompt's default approach guidance for this round
+  (see Directives below). Never supersedes contract text.
 - `{ kind: "stop", reason }` — spend no further budget on this run;
   fail now with `reason` appended to the final report. Applied only
   when a deterministic floor is met (see Stop authority).
@@ -122,6 +127,36 @@ code with unit tests; the strategist only reads it.
   submitted-code sandbox class; output = preparation strategy hints
   and an envelope-fit warning.
 - Phase M3: offline, after a failed run; not in the pipeline at all.
+
+### Directives: strategist-authored approach steering
+
+A hint is not enough when the strategist's judgment is "the default
+approach is failing — do it differently": the stage prompts carry
+standing rules accumulated from N-items, and the recorded pattern
+(the dependency-repair handcuff, the preserve-fields rule) is that a
+mere suggestion loses to standing prompt text until it gets a
+structurally privileged channel. Full prompt authorship is the
+opposite error: it would silently regress every invariant the prompts
+encode. The directive kind is the bounded middle.
+
+Prerequisite refactor: each consulted stage prompt is split into an
+**approach** section (defaults, steering, priority order — policy)
+and a **contract** section (must/never rules, output artifact format,
+fidelity boundaries — law). The prompt builder owns both; the
+directive is injected into a labeled slot with explicit precedence:
+it supersedes the approach section for this round and never the
+contract section. A strategy that genuinely requires relaxing a
+contract rule cannot be expressed in directive prose — that is what
+typed levers and classification-driven escape hatches are for.
+
+Directives are safe here for the same reason the whole advisory
+design is safe: gates stay gates. A wrong directive's output still
+faces the same deterministic validation as any other round. Scope
+rules: a directive lasts one round and must be re-issued to persist,
+so a failed directive dies by default rather than becoming standing
+policy; it is persisted inside the advice artifact; and the next
+round's ledger records its outcome, so directive quality is itself
+auditable in wave diagnosis.
 
 ### Stop authority
 
