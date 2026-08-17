@@ -259,3 +259,59 @@ the dependency-chain shape.
 - Whether script-repair loops (capture-side) get the same strategist
   or a separate one once N152's fingerprinting lands. One seam, two
   consultation points is the default answer.
+
+## M1 implementation notes (2026-08-17)
+
+Pre-implementation review closed four gaps the design left to
+guesswork. These are decisions, not suggestions.
+
+**Sandbox artifact paths.** Both new artifacts join the
+`artifactPaths` registry (`schemas/artifact-paths.ts`), following the
+fidelity-adjudication precedent: the harness writes the ledger to
+`{makeADemoDirectory}/repair-round-ledger.json` before each
+consultation; the strategist writes its advice to
+`{makeADemoDirectory}/repair-advice.json`, which the harness removes
+before each consultation and reads back through the schema after
+(same remove-then-read shape as `fidelityAdjudication`).
+
+**RepairRoundLedger sketch.** One entry per completed repair round:
+`{ round, stage, failureClassification, causalHeadline,
+failingFeatureIds, candidateLifecycle: { appDir, installCommandUsed,
+buildCommandUsed, startCommandUsed, ports },
+resolvedLifecycle: { same fields, post-resolution },
+workspaceDiffSummary: { changedPathCount, topLevelDirs },
+budget: { totalAttempts, fingerprintAttempts, bonusRounds },
+advice: { kind, textDigest, applied } | null,
+outcomeOfAdvice: "failure-unchanged" | "failure-moved" | "resolved"
+| null }`. The candidate/resolved lifecycle pair is non-negotiable —
+it is how a ghostfolio-class field drop becomes visible. Exact
+naming may drift during TDD; the field *set* may not shrink.
+
+**Stop eligibility is a deterministic predicate, not a vocabulary.**
+No classification named "capacity kill" exists; OOM and disk
+exhaustion live in summary text. Implement
+`isStopEligibleFailure(report)` in the orchestrator: classification
+in { "install failure", "lifecycle timeout", "service migration
+failure", "start failure" } AND the causal headline matching a
+resource-exhaustion marker (`Killed`, `ENOSPC`, an org-cap
+rejection), OR the N153 wedged-target path. `stop` advice applies
+only when this predicate holds and at least two rounds have failed.
+
+**Acceptance fixtures are committed extracts, not run-dir reads.**
+`.makeademo-terminal-runs/` is gitignored, so the replay tests
+cannot reference it. Extract minimal JSON fixtures (the
+validation-attempt files and manifest pairs needed to build each
+ledger) into the test tree, naming the source run in a comment:
+ghostfolio and directus from matrix-2026-08-15T05-38 (wave-13), and
+from wave-14 (matrix-2026-08-17T04-03) the directus three-round
+dependency arc and outline's repeated evidence-citation failure —
+four ledger shapes total.
+
+**Prompt split scope.** M1 splits exactly two builders into
+approach/contract sections: `createRepoPreparationRepairPrompt` and
+`createRuntimePreparationRepairPrompt`. Other stage prompts are out
+of scope until their stages gain a consultation point.
+
+**Model.** The strategist uses the session's configured
+`${providerID}/${modelID}` like every other stage; no separate model
+knob in M1.
