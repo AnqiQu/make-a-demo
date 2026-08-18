@@ -10,8 +10,59 @@ import { DEMO_SCRIPT_OUTPUT_PATH } from "../schemas/artifacts";
 import {
   type AgentHarnessPipelineDependencies,
   type AgentHarnessPipelineInput,
+  isStopEligibleFailure,
   runAgentHarnessPipeline,
 } from "./agent-harness";
+
+describe("isStopEligibleFailure", () => {
+  it.each([
+    ["install failure", "Install failed: ENOSPC on the package cache"],
+    [
+      "lifecycle timeout",
+      "Lifecycle process was Killed after exhausting memory",
+    ],
+    ["service migration failure", "Migration Killed by the sandbox"],
+    ["start failure", "Organization resource cap rejected the sandbox request"],
+  ])(
+    "accepts %s with a resource-exhaustion headline",
+    (classification, headline) => {
+      expect(
+        isStopEligibleFailure({
+          ...report("preparation-preflight", "failed"),
+          failureClassification: classification,
+          logsSummary: headline,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("accepts the N153 wedged-target path independently of failure classification", () => {
+    expect(
+      isStopEligibleFailure({
+        ...report("preparation-preflight", "failed"),
+        failureClassification: "wedged-sandbox-target",
+        logsSummary: "Daytona upload exhausted its retry ladder",
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    ["start failure", "Start command exited with code 1"],
+    ["requested feature not observable", "Killed while probing the feature"],
+    [
+      "install failure",
+      "Install command failed\nENOSPC appeared only in detail",
+    ],
+  ])("rejects an ineligible %s report", (classification, logsSummary) => {
+    expect(
+      isStopEligibleFailure({
+        ...report("preparation-preflight", "failed"),
+        failureClassification: classification,
+        logsSummary,
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("runAgentHarnessPipeline", () => {
   it("refuses a dependency set that omits workspace-diff capture before any stage runs", async () => {
@@ -3693,6 +3744,118 @@ describe("runAgentHarnessPipeline", () => {
       "Use the workspace graph build instead of another package-local build.",
       undefined,
     ]);
+  });
+
+  it("applies stop advice only after two stop-eligible validation failures", async () => {
+    let repairAttempts = 0;
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({ runId: "run_strategy_stop" }),
+        stubPipelineDependencies({
+          async adviseRepairStrategy() {
+            return {
+              kind: "stop",
+              reason: "The migration is repeatedly exhausting sandbox memory.",
+            };
+          },
+          capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
+          async prepareRepo() {
+            return { manifest: preparationManifest() };
+          },
+          async repairPreparation({ preparationManifest }) {
+            repairAttempts += 1;
+            return {
+              manifest: {
+                ...preparationManifest,
+                envUsed: { REPAIR_ATTEMPT: String(repairAttempts) },
+                id: `prep_stop_${repairAttempts}`,
+              },
+            };
+          },
+          async resetCaptureRuntime() {
+            throw new Error("Capture reset must not run.");
+          },
+          async validatePreparation() {
+            return {
+              ...report("preparation-preflight", "failed"),
+              failureClassification: "service migration failure",
+              logsSummary: "Migration Killed after exhausting sandbox memory",
+            };
+          },
+        }),
+        { repoPreparationRepairLimit: 5 },
+      ),
+    ).rejects.toThrow(
+      /Repair strategist recommended stopping: The migration is repeatedly exhausting sandbox memory\./,
+    );
+
+    expect(repairAttempts).toBe(1);
+  });
+
+  it("vetoes stop advice when the deterministic failure predicate disagrees", async () => {
+    let preflightAttempts = 0;
+    let repairAttempts = 0;
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_strategy_stop_veto" }),
+      stubPipelineDependencies({
+        async adviseRepairStrategy() {
+          return {
+            kind: "stop",
+            reason: "The feature probe was killed twice.",
+          };
+        },
+        capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation({ preparationManifest }) {
+          repairAttempts += 1;
+          return {
+            manifest: {
+              ...preparationManifest,
+              envUsed: { REPAIR_ATTEMPT: String(repairAttempts) },
+              id: `prep_stop_veto_${repairAttempts}`,
+            },
+          };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          return preflightAttempts >= 3
+            ? report("preparation-preflight", "passed")
+            : {
+                ...report("preparation-preflight", "failed"),
+                failureClassification: "requested feature not observable",
+                logsSummary: "Killed while probing the requested feature",
+              };
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      { repoPreparationRepairLimit: 5 },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(repairAttempts).toBe(2);
   });
 
   it("does not collapse failures that share a symptom line but hide different causes", async () => {

@@ -1684,6 +1684,10 @@ async function ensureValidPreparation(input: {
         });
         const adviceApplication = applyRepairSteeringAdvice({
           advice,
+          failedValidationRounds:
+            input.repairRoundSources.filter(
+              (round) => round.outcomeOfAdvice !== "resolved",
+            ).length + 1,
           failureReport: repairFailure,
         });
         const repair = await repairPreparationManifest({
@@ -2420,6 +2424,7 @@ function readRepairAdviceLedgerRecord(
 
 function applyRepairSteeringAdvice(input: {
   advice: RepairAdvice | undefined;
+  failedValidationRounds: number;
   failureReport: ValidationReport;
 }): {
   applied: boolean;
@@ -2447,10 +2452,64 @@ function applyRepairSteeringAdvice(input: {
       strategyDirective: input.advice.directive,
     };
   }
+  if (
+    input.advice?.kind === "stop" &&
+    input.failedValidationRounds >= 2 &&
+    isStopEligibleFailure(input.failureReport)
+  ) {
+    throw new Error(
+      `${input.failureReport.stage} failed: ${input.failureReport.logsSummary}. Repair strategist recommended stopping: ${input.advice.reason}`,
+    );
+  }
   return {
     applied: input.advice?.kind === "continue",
     failureReport: input.failureReport,
   };
+}
+
+const stopEligibleFailureClassifications = new Set([
+  "install failure",
+  "lifecycle timeout",
+  "service migration failure",
+  "start failure",
+]);
+
+/**
+ * Applies the deterministic veto floor for strategist stop advice. A report
+ * is eligible only when its first nonblank causal headline identifies
+ * resource exhaustion in a known runtime class, or when it carries N153's
+ * explicit wedged-sandbox-target classification or headline.
+ */
+export function isStopEligibleFailure(report: ValidationReport): boolean {
+  const causalHeadline =
+    report.logsSummary
+      .split("\n")
+      .map((line) => line.trim())
+      .find((line) => line.length > 0) ?? "";
+  if (
+    report.failureClassification === "wedged-sandbox-target" ||
+    /\bwedged-sandbox-target\b/i.test(causalHeadline)
+  ) {
+    return true;
+  }
+  if (
+    !stopEligibleFailureClassifications.has(
+      report.failureClassification?.trim() ?? "",
+    )
+  ) {
+    return false;
+  }
+  const organizationCapRejection =
+    /\b(?:org|organization)\b/i.test(causalHeadline) &&
+    /\b(?:cap|limit|quota)\b/i.test(causalHeadline) &&
+    /\b(?:denied|exceed(?:ed)?|maximum|reached|reject(?:ed|ion)?)\b/i.test(
+      causalHeadline,
+    );
+  return (
+    /\bKilled\b/.test(causalHeadline) ||
+    /\bENOSPC\b/.test(causalHeadline) ||
+    organizationCapRejection
+  );
 }
 
 function fingerprintPreparationCandidate(
