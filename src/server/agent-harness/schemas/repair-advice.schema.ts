@@ -1,4 +1,4 @@
-export const repairAdviceKinds = [
+const repairAdviceKinds = [
   "continue",
   "escalate-hint",
   "directive",

@@ -1,6 +1,6 @@
 import type { RepairAdvice } from "../schemas/repair-advice.schema";
 
-export type RepairLifecycle = {
+type RepairLifecycle = {
   appDir: string;
   buildCommandUsed?: string | null;
   installCommandUsed: string;
@@ -14,16 +14,13 @@ export type RepairBudgetSnapshot = {
   totalAttempts: number;
 };
 
-export type RepairRoundAdviceRecord = {
+type RepairRoundAdviceRecord = {
   applied: boolean;
   kind: RepairAdvice["kind"];
   textDigest: string | null;
 };
 
-export type RepairAdviceOutcome =
-  | "failure-unchanged"
-  | "failure-moved"
-  | "resolved";
+type RepairAdviceOutcome = "failure-unchanged" | "failure-moved" | "resolved";
 
 /**
  * The artifact evidence for one completed preparation repair round.
@@ -47,7 +44,7 @@ export type RepairRoundSource = {
   workspaceDiff: { changedPaths: readonly string[] };
 };
 
-export type RepairRoundLedgerEntry = {
+type RepairRoundLedgerEntry = {
   advice: RepairRoundAdviceRecord | null;
   budget: RepairBudgetSnapshot;
   candidateFingerprint: string;
