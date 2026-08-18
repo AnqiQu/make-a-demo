@@ -217,6 +217,20 @@ fake strategist exercises every advice kind plus schema-invalid and
 timeout fallbacks; one test runs the real ledger builder against
 wave-13 artifacts.
 
+Landed: `a9baa20`–`03eab61` implement M1. The two preparation-repair
+prompts now separate default approach guidance from their invariant
+contracts and expose a one-round directive slot between them. A
+backend-built RepairRoundLedger preserves candidate and resolved
+lifecycle fields, workspace-diff summaries, budget and advice history,
+and is replay-tested against the four committed ghostfolio, directus,
+and outline wave-13/wave-14 extracts. Repeated fingerprints consult a
+fresh configured-model `repair-strategy` stage through durable ledger
+and advice artifacts; missing, invalid, timed-out, or failed advice is
+fail-open. All five advice kinds are mechanically applied: hints use
+the existing hint channel, directives expire after one round, stop is
+vetoed unless `isStopEligibleFailure` and the two-failure floor agree,
+and bonus rounds remain bounded by the existing bonus arithmetic.
+
 ### M2 (run triage)
 
 Startup consultation producing preparation-strategy hints consumed by
