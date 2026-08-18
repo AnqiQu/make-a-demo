@@ -3858,6 +3858,73 @@ describe("runAgentHarnessPipeline", () => {
     expect(repairAttempts).toBe(2);
   });
 
+  it("spends one strategist bonus round beyond the repeated-fingerprint cap", async () => {
+    let consultations = 0;
+    let preflightAttempts = 0;
+    let repairAttempts = 0;
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_strategy_bonus" }),
+      stubPipelineDependencies({
+        async adviseRepairStrategy() {
+          consultations += 1;
+          return consultations === 1
+            ? { kind: "spend-bonus-round" }
+            : { kind: "continue" };
+        },
+        capturePreparationWorkspaceDiff: advancingWorkspaceDiffCapture(),
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async repairPreparation({ preparationManifest }) {
+          repairAttempts += 1;
+          return {
+            manifest: {
+              ...preparationManifest,
+              envUsed: { REPAIR_ATTEMPT: String(repairAttempts) },
+              id: `prep_bonus_${repairAttempts}`,
+            },
+          };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          preflightAttempts += 1;
+          return preflightAttempts >= 4
+            ? report("preparation-preflight", "passed")
+            : {
+                ...report("preparation-preflight", "failed"),
+                failureClassification: "start failure",
+                logsSummary: "Start command failed: Error: server crashed",
+              };
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+      { repoPreparationRepairLimit: 2 },
+    );
+
+    expect(result.status).toBe("passed");
+    expect(consultations).toBe(2);
+    expect(repairAttempts).toBe(3);
+  });
+
   it("does not collapse failures that share a symptom line but hide different causes", async () => {
     // The probe symptom (`curl: (7)`) is identical on every attempt; the
     // decisive cause buried in the managed output differs each time. Each

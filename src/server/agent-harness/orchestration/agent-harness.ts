@@ -1689,12 +1689,14 @@ async function ensureValidPreparation(input: {
               (round) => round.outcomeOfAdvice !== "resolved",
             ).length + 1,
           failureReport: repairFailure,
+          preparationRepairBudget: input.preparationRepairBudget,
         });
         const repair = await repairPreparationManifest({
           dependencies: input.dependencies,
           failureReport: adviceApplication.failureReport,
           input: input.input,
           preparationManifest,
+          bonusRounds: input.preparationRepairBudget.bonusRounds,
           phaseRepairAttempts,
           fingerprintRepairAttempts,
           // Exploration is the terminal preparation gate and always runs
@@ -2247,6 +2249,7 @@ function sameRuntimeConfiguration(
 }
 
 async function repairPreparationManifest(input: {
+  bonusRounds: number;
   dependencies: AgentHarnessPipelineDependencies;
   failureReport: ValidationReport;
   fingerprintRepairAttempts: number;
@@ -2286,7 +2289,8 @@ async function repairPreparationManifest(input: {
     );
   }
   const repeatedFailureLimit = Math.min(
-    input.failureReport.stage === "preparation-fidelity" ? 1 : 2,
+    (input.failureReport.stage === "preparation-fidelity" ? 1 : 2) +
+      input.bonusRounds,
     input.repoPreparationRepairLimit,
   );
   if (input.fingerprintRepairAttempts >= repeatedFailureLimit) {
@@ -2426,6 +2430,7 @@ function applyRepairSteeringAdvice(input: {
   advice: RepairAdvice | undefined;
   failedValidationRounds: number;
   failureReport: ValidationReport;
+  preparationRepairBudget: PreparationRepairBudget;
 }): {
   applied: boolean;
   failureReport: ValidationReport;
@@ -2460,6 +2465,21 @@ function applyRepairSteeringAdvice(input: {
     throw new Error(
       `${input.failureReport.stage} failed: ${input.failureReport.logsSummary}. Repair strategist recommended stopping: ${input.advice.reason}`,
     );
+  }
+  if (input.advice?.kind === "spend-bonus-round") {
+    if (
+      input.preparationRepairBudget.bonusRounds >= preparationProgressBonusLimit
+    ) {
+      return {
+        applied: false,
+        failureReport: input.failureReport,
+      };
+    }
+    input.preparationRepairBudget.bonusRounds += 1;
+    return {
+      applied: true,
+      failureReport: input.failureReport,
+    };
   }
   return {
     applied: input.advice?.kind === "continue",
