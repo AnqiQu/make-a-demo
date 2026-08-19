@@ -8,9 +8,11 @@ import type {
   CaptureLocatorFailure,
   SubmittedAppExplorationResult,
 } from "../app-explorer/submitted-app-explorer";
+import { selectSubmittedCodeSandboxClass } from "../daytona/submitted-code-sandbox-class";
 import {
   AgentHarnessJobDeadlineError,
   type AgentHarnessWorkspace,
+  type SubmittedCodeSandboxClass,
   isAgentHarnessInfrastructureError,
 } from "../daytona/workspace.interface";
 import {
@@ -67,6 +69,7 @@ import {
   readValidationReport,
 } from "../schemas/artifacts";
 import type { RepairAdvice } from "../schemas/repair-advice.schema";
+import type { RunTriageAdvice } from "../schemas/run-triage-advice.schema";
 import { ensureSceneNavigation } from "../script-contract/demo-script-contract";
 import { readDisallowedScriptWritingChanges } from "../script-generation/read-only-boundary";
 import {
@@ -124,6 +127,18 @@ export type AgentHarnessPipelineDependencies = {
     preparationManifest: PreparationManifest;
     roundLedger: RepairRoundLedger;
   }): Promise<RepairAdvice | undefined>;
+  /**
+   * Advises pre-run preparation strategy once, at run start, for a run whose
+   * deterministic capacity classification is heavyweight. Advisory only:
+   * hints steer the Repo Preparation prompt and the envelope-fit warning
+   * annotates the run report. Implementations must return undefined for
+   * absence, timeout, execution failure, or schema-invalid output; triage
+   * can never fail, block, or stall a run.
+   */
+  adviseRunTriage?(input: {
+    repoProfile: RepoProfile;
+    submittedCodeSandboxClass: SubmittedCodeSandboxClass;
+  }): Promise<RunTriageAdvice | undefined>;
   /**
    * Adjudicates preparation-fidelity candidate vetoes with one agent judge
    * command in the preparation sandbox. Implementations must source verdicts
@@ -204,6 +219,12 @@ export type AgentHarnessPipelineDependencies = {
   prepareRepo(input: {
     demoBrief: AgentHarnessPipelineInput["demoBrief"];
     normalizedSupportingDocuments: AgentHarnessPipelineInput["normalizedSupportingDocuments"];
+    /**
+     * Advisory strategy hints from run triage. Implementations should
+     * surface them to the preparation agent as additive guidance that never
+     * supersedes standing contract text.
+     */
+    preparationStrategyHints?: readonly string[];
     repoProfile: RepoProfile;
     repoSourcePaths: string[];
     runPlan: RunPlan;
@@ -395,6 +416,7 @@ export async function runAgentHarnessPipeline(
     }
   };
   let primaryError: unknown;
+  let runTriage: RunTriageAdvice | undefined;
   let preparationWorkspaceDiff: PreparationWorkspaceDiff | undefined;
   let preparationWorkspaceDiffCaptureAttempted = false;
   let preparationWorkspaceMutated = false;
@@ -468,6 +490,7 @@ export async function runAgentHarnessPipeline(
     );
 
     workspace = await dependencies.createWorkspace({ repoProfile });
+    runTriage = await consultRunTriage({ dependencies, repoProfile });
     runPlan = await runAsyncStage(
       "run-plan-synthesis",
       stageStatuses,
@@ -497,6 +520,7 @@ export async function runAgentHarnessPipeline(
     try {
       await persistRunManifest({
         dependencies,
+        ...optionalString("envelopeFitWarning", runTriage?.envelopeFitWarning),
         input,
         opencodeSessionIds,
         stageStatuses,
@@ -529,6 +553,12 @@ export async function runAgentHarnessPipeline(
         dependencies.prepareRepo({
           demoBrief: input.demoBrief,
           normalizedSupportingDocuments: input.normalizedSupportingDocuments,
+          ...(runTriage === undefined ||
+          runTriage.preparationStrategyHints.length === 0
+            ? {}
+            : {
+                preparationStrategyHints: runTriage.preparationStrategyHints,
+              }),
           repoProfile,
           repoSourcePaths: input.files.map((file) => file.path),
           runPlan,
@@ -1194,6 +1224,7 @@ export async function runAgentHarnessPipeline(
 
     const pipelineRunManifest = await persistRunManifest({
       dependencies,
+      ...optionalString("envelopeFitWarning", runTriage?.envelopeFitWarning),
       input,
       opencodeSessionIds,
       stageStatuses,
@@ -1286,6 +1317,7 @@ export async function runAgentHarnessPipeline(
     try {
       await persistRunManifest({
         dependencies,
+        ...optionalString("envelopeFitWarning", runTriage?.envelopeFitWarning),
         input,
         opencodeSessionIds,
         stageStatuses,
@@ -1316,6 +1348,10 @@ export async function runAgentHarnessPipeline(
           try {
             await persistRunManifest({
               dependencies,
+              ...optionalString(
+                "envelopeFitWarning",
+                runTriage?.envelopeFitWarning,
+              ),
               input,
               opencodeSessionIds,
               stageStatuses,
@@ -2362,6 +2398,32 @@ async function consultRepairStrategy(input: {
   }
 }
 
+/**
+ * Consults run triage exactly once, at run start, and only when the
+ * deterministic submitted-code capacity classification is heavyweight —
+ * standard-class runs never pay for it. Any strategist failure falls back
+ * to "no advice"; triage has no authority to fail or stall the run.
+ */
+async function consultRunTriage(input: {
+  dependencies: AgentHarnessPipelineDependencies;
+  repoProfile: RepoProfile;
+}): Promise<RunTriageAdvice | undefined> {
+  if (
+    input.dependencies.adviseRunTriage === undefined ||
+    selectSubmittedCodeSandboxClass(input.repoProfile) !== "heavyweight"
+  ) {
+    return undefined;
+  }
+  try {
+    return await input.dependencies.adviseRunTriage({
+      repoProfile: input.repoProfile,
+      submittedCodeSandboxClass: "heavyweight",
+    });
+  } catch {
+    return undefined;
+  }
+}
+
 function recordCompletedRepairRound(input: {
   nextReport: ValidationReport;
   preparationRepairBudget: PreparationRepairBudget;
@@ -2947,6 +3009,7 @@ async function writeArtifact<T>(
 
 async function persistRunManifest(input: {
   dependencies: AgentHarnessPipelineDependencies;
+  envelopeFitWarning?: string;
   input: AgentHarnessPipelineInput;
   opencodeSessionIds: string[];
   stageStatuses: Record<string, string>;
@@ -2967,6 +3030,7 @@ async function persistRunManifest(input: {
         input.workspace?.submittedCodeSandboxId,
       ),
     },
+    ...optionalString("envelopeFitWarning", input.envelopeFitWarning),
     finalStatus: input.status,
     networkStateTransitions,
     opencodeSessionIds: [...new Set(input.opencodeSessionIds)],

@@ -647,6 +647,8 @@ export type PipelineRunManifest = {
   artifactPaths: Record<string, string>;
   finalStatus: "failed" | "passed" | "unsupported";
   unsupportedOrFailureReason?: string;
+  /** Run-triage envelope-fit warning; advisory, never a failure cause. */
+  envelopeFitWarning?: string;
 };
 
 export function readRunPlan(value: unknown): RunPlan {
@@ -1501,6 +1503,7 @@ export function readPipelineRunManifest(value: unknown): PipelineRunManifest {
     artifactPaths: readStringRecord(record, "artifactPaths"),
     ...optionalKey(record, "commitSha", readNonEmptyString),
     daytonaSandboxIds: readDaytonaSandboxIds(record.daytonaSandboxIds),
+    ...optionalKey(record, "envelopeFitWarning", readNonEmptyString),
     finalStatus: readEnum(record, "finalStatus", [
       "failed",
       "passed",

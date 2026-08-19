@@ -3925,6 +3925,218 @@ describe("runAgentHarnessPipeline", () => {
     expect(repairAttempts).toBe(3);
   });
 
+  it("consults run triage once for a heavyweight profile and applies its steering", async () => {
+    const consultations: Parameters<
+      NonNullable<AgentHarnessPipelineDependencies["adviseRunTriage"]>
+    >[0][] = [];
+    const stageOrder: string[] = [];
+    let preparationHints: readonly string[] | undefined;
+
+    const result = await runAgentHarnessPipeline(
+      // Twenty's screened archive measured 134,113,964 bytes (wave 9) — the
+      // recorded heavyweight capacity classification this triage gate keys on.
+      pipelineInput({
+        archiveSizeBytes: 134_113_964,
+        runId: "run_triage_heavyweight",
+      }),
+      stubPipelineDependencies({
+        async adviseRunTriage(input) {
+          consultations.push(input);
+          stageOrder.push("run-triage");
+          return {
+            envelopeFitWarning:
+              "Full workspace builds and migrations risk exceeding the heavyweight sandbox envelope.",
+            preparationStrategyHints: [
+              "Prefer the development server over a production build.",
+            ],
+          };
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo(input) {
+          stageOrder.push("repo-preparation");
+          preparationHints = input.preparationStrategyHints;
+          return { manifest: preparationManifest() };
+        },
+        async synthesizeRunPlan() {
+          stageOrder.push("run-plan-synthesis");
+          return runPlan();
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    expect(consultations).toEqual([
+      {
+        repoProfile: expect.objectContaining({
+          archiveSizeBytes: 134_113_964,
+        }),
+        submittedCodeSandboxClass: "heavyweight",
+      },
+    ]);
+    expect(stageOrder).toEqual([
+      "run-triage",
+      "run-plan-synthesis",
+      "repo-preparation",
+    ]);
+    expect(preparationHints).toEqual([
+      "Prefer the development server over a production build.",
+    ]);
+    expect(result.pipelineRunManifest.envelopeFitWarning).toBe(
+      "Full workspace builds and migrations risk exceeding the heavyweight sandbox envelope.",
+    );
+  });
+
+  it("never consults run triage for a standard-class profile", async () => {
+    let consultations = 0;
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_triage_standard" }),
+      stubPipelineDependencies({
+        async adviseRunTriage() {
+          consultations += 1;
+          return { preparationStrategyHints: ["Unwanted steering."] };
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    expect(consultations).toBe(0);
+    expect(result.pipelineRunManifest.envelopeFitWarning).toBeUndefined();
+  });
+
+  it("fails open when run triage errors and runs preparation unsteered", async () => {
+    let preparationHints: readonly string[] | undefined = ["sentinel"];
+
+    const result = await runAgentHarnessPipeline(
+      pipelineInput({
+        archiveSizeBytes: 134_113_964,
+        runId: "run_triage_fail_open",
+      }),
+      stubPipelineDependencies({
+        async adviseRunTriage() {
+          throw new Error("Run triage sandbox exploded.");
+        },
+        async exploreApp() {
+          return {
+            kind: "artifacts" as const,
+            actionCatalog: actionCatalog(),
+            appMap: appMap(),
+            validationReport: report("app-exploration", "passed"),
+          };
+        },
+        async planFlow() {
+          return flowSpec();
+        },
+        async prepareRepo(input) {
+          preparationHints = input.preparationStrategyHints;
+          return { manifest: preparationManifest() };
+        },
+        async validateCapturePath() {
+          return report("capture-path-validation", "passed");
+        },
+        async validatePreparation() {
+          return report("preparation-preflight", "passed");
+        },
+        async validateScriptContract() {
+          return report("static-script-contract-validation", "passed");
+        },
+        async writeScript() {
+          return scriptCandidate();
+        },
+      }),
+    );
+
+    expect(result.status).toBe("passed");
+    expect(preparationHints).toBeUndefined();
+    expect(result.pipelineRunManifest.envelopeFitWarning).toBeUndefined();
+  });
+
+  it("surfaces the envelope-fit warning in the failed run report", async () => {
+    const artifacts: Record<string, unknown> = {};
+
+    await expect(
+      runAgentHarnessPipeline(
+        pipelineInput({
+          archiveSizeBytes: 134_113_964,
+          runId: "run_triage_failed_report",
+        }),
+        stubPipelineDependencies({
+          async adviseRunTriage() {
+            return {
+              envelopeFitWarning:
+                "The default migration lifecycle exceeds the sandbox memory envelope.",
+              preparationStrategyHints: [],
+            };
+          },
+          artifactStore: {
+            async writeJson(path, value) {
+              artifacts[path] = value;
+            },
+          },
+          async prepareRepo() {
+            throw new Error("Killed while installing the workspace graph.");
+          },
+        }),
+      ),
+    ).rejects.toThrow("Killed while installing the workspace graph.");
+
+    expect(
+      artifacts["/workspace/.makeademo/pipeline-run-manifest.json"],
+    ).toMatchObject({
+      envelopeFitWarning:
+        "The default migration lifecycle exceeds the sandbox memory envelope.",
+      finalStatus: "failed",
+    });
+  });
+
   it("does not collapse failures that share a symptom line but hide different causes", async () => {
     // The probe symptom (`curl: (7)`) is identical on every attempt; the
     // decisive cause buried in the managed output differs each time. Each
