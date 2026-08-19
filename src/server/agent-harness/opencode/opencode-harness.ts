@@ -10,6 +10,7 @@ export type OpenCodeHarnessStage =
   | "repair-strategy"
   | "repo-preparation"
   | "repo-preparation-repair"
+  | "run-triage"
   | "runtime-target-selection"
   | "script-repair"
   | "script-writing";

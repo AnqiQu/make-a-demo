@@ -7706,6 +7706,159 @@ describe("createDefaultAgentHarnessDependencies", () => {
     });
   });
 
+  it("consults run triage through the repo profile and advice artifacts", async () => {
+    const artifactAttempts: Array<{ path: string; value: unknown }> = [];
+    const commands: string[] = [];
+    const runs: Array<{
+      model: string;
+      prompt: string;
+      sessionId: string | undefined;
+      stage: string;
+      timeoutMs: number;
+    }> = [];
+    const workspaceWrites = new Map<string, string>();
+    const workspace = createFakeAgentHarnessWorkspace({
+      async execute(command) {
+        commands.push(command);
+        if (
+          command.includes("cat") &&
+          command.includes("run-triage-advice.json")
+        ) {
+          return {
+            exitCode: 0,
+            stderr: "",
+            stdout: JSON.stringify({
+              envelopeFitWarning:
+                "Workspace-graph builds risk exceeding the heavyweight sandbox envelope.",
+              preparationStrategyHints: [
+                "Prefer the development server over a production build.",
+              ],
+            }),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async writeTextFile(path, contents) {
+        workspaceWrites.set(path, contents);
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: {
+        async writeJson(path, value) {
+          artifactAttempts.push({ path, value });
+        },
+      },
+      modelID: "gpt-triage",
+      openCodeRunner: {
+        async run(input) {
+          runs.push({
+            model: input.model,
+            prompt: input.prompt,
+            sessionId: input.sessionId,
+            stage: input.stage,
+            timeoutMs: input.timeoutMs,
+          });
+          return {
+            exitCode: 0,
+            sessionId: "must-not-be-reused",
+            stderr: "",
+            stdout: "triage written",
+          };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      providerID: "openai",
+      repoSourceArchive: await repoSourceArchive(),
+      workspaceProvider: {
+        async create() {
+          return { async destroy() {}, id: "workspace", workspace };
+        },
+      },
+    });
+    await harness.dependencies.createWorkspace({ repoProfile: repoProfile() });
+
+    const advice = await harness.dependencies.adviseRunTriage?.({
+      repoProfile: { ...repoProfile(), archiveSizeBytes: 134_113_964 },
+      submittedCodeSandboxClass: "heavyweight",
+    });
+
+    expect(advice).toEqual({
+      envelopeFitWarning:
+        "Workspace-graph builds risk exceeding the heavyweight sandbox envelope.",
+      preparationStrategyHints: [
+        "Prefer the development server over a production build.",
+      ],
+    });
+    expect(
+      JSON.parse(
+        workspaceWrites.get("/workspace/.makeademo/repo-profile.json") ??
+          "null",
+      ),
+    ).toMatchObject({ archiveSizeBytes: 134_113_964 });
+    expect(
+      commands.findIndex((command) => command.includes("rm -f")),
+    ).toBeLessThan(
+      commands.findIndex(
+        (command) =>
+          command.includes("run-triage-advice.json") && command.includes("cat"),
+      ),
+    );
+    expect(runs).toEqual([
+      {
+        model: "openai/gpt-triage",
+        prompt: expect.stringContaining("heavyweight"),
+        sessionId: undefined,
+        stage: "run-triage",
+        timeoutMs: 3 * 60_000,
+      },
+    ]);
+    expect(artifactAttempts).toContainEqual({
+      path: "/workspace/.makeademo/agent-artifact-attempts/run-triage/attempt-1.json",
+      value: {
+        advice: {
+          envelopeFitWarning:
+            "Workspace-graph builds risk exceeding the heavyweight sandbox envelope.",
+          preparationStrategyHints: [
+            "Prefer the development server over a production build.",
+          ],
+        },
+        attempt: 1,
+        status: "passed",
+      },
+    });
+  });
+
+  it("fails open when run triage writes schema-invalid advice", async () => {
+    const scenario = await runRunTriageScenario({
+      artifact: { preparationStrategyHints: [""], stopRun: true },
+      result: { exitCode: 0, stderr: "", stdout: "triage written" },
+    });
+
+    expect(scenario.advice).toBeUndefined();
+    expect(scenario.attempts[0]).toMatchObject({
+      candidate: { preparationStrategyHints: [""], stopRun: true },
+      status: "failed",
+    });
+  });
+
+  it("fails open when run triage times out", async () => {
+    const scenario = await runRunTriageScenario({
+      artifact: { preparationStrategyHints: [] },
+      result: {
+        exitCode: 124,
+        stderr: "",
+        stdout: "triage timed out",
+        timeoutError: new AgentHarnessCommandTimeoutError(3 * 60_000),
+      },
+    });
+
+    expect(scenario.advice).toBeUndefined();
+    expect(scenario.attempts[0]).toMatchObject({
+      error: expect.stringContaining("did not finish"),
+      status: "failed",
+    });
+  });
+
   it("carries the lifecycle evidence file tail when the stream drops the failure", async () => {
     // calcom (2026-08-09): the PTY stream ended at YN0007 "must be built" —
     // yarn's actual YN0009 failure report never reached the record, so the
@@ -11813,6 +11966,60 @@ async function runRepairStrategyScenario(input: {
     },
     preparationManifest: preparationManifest(),
     roundLedger: { rounds: [] },
+  });
+  return { advice, attempts };
+}
+
+async function runRunTriageScenario(input: {
+  artifact: unknown;
+  result: {
+    exitCode: number;
+    stderr: string;
+    stdout: string;
+    timeoutError?: AgentHarnessCommandTimeoutError;
+  };
+}) {
+  const attempts: unknown[] = [];
+  const workspace = createFakeAgentHarnessWorkspace({
+    async execute(command) {
+      if (
+        command.includes("cat") &&
+        command.includes("run-triage-advice.json")
+      ) {
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout: JSON.stringify(input.artifact),
+        };
+      }
+      return { exitCode: 0, stderr: "", stdout: "" };
+    },
+  });
+  const harness = await createDefaultAgentHarnessDependencies({
+    artifactStore: {
+      async writeJson(path, value) {
+        if (path.includes("agent-artifact-attempts/run-triage")) {
+          attempts.push(value);
+        }
+      },
+    },
+    openCodeRunner: {
+      async run() {
+        return input.result;
+      },
+    },
+    outputRoot: "/tmp/makeademo-test",
+    repoSourceArchive: await repoSourceArchive(),
+    workspaceProvider: {
+      async create() {
+        return { async destroy() {}, id: "workspace", workspace };
+      },
+    },
+  });
+  await harness.dependencies.createWorkspace({ repoProfile: repoProfile() });
+  const advice = await harness.dependencies.adviseRunTriage?.({
+    repoProfile: { ...repoProfile(), archiveSizeBytes: 134_113_964 },
+    submittedCodeSandboxClass: "heavyweight",
   });
   return { advice, attempts };
 }

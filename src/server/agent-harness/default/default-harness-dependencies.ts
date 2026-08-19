@@ -55,6 +55,7 @@ import {
   type AgentHarnessWorkspaceExecuteOptions,
   type AgentHarnessWorkspaceHandle,
   type AgentHarnessWorkspaceProvider,
+  type SubmittedCodeSandboxClass,
   isAgentHarnessInfrastructureError,
 } from "../daytona/workspace.interface";
 import { readGroundableFeatureIds } from "../flow-planning/feature-groundability";
@@ -138,6 +139,10 @@ import {
   type RepairAdvice,
   readRepairAdvice,
 } from "../schemas/repair-advice.schema";
+import {
+  type RunTriageAdvice,
+  readRunTriageAdvice,
+} from "../schemas/run-triage-advice.schema";
 import { assembleDemoNarrative } from "../script-contract/demo-narrative";
 import {
   createDemoScriptContract,
@@ -218,6 +223,7 @@ const openCodeConfigDirectory = "/tmp/makeademo/opencode";
 const openCodeInactivityTimeoutMs = 5 * 60_000;
 const fidelityAdjudicationTimeoutMs = 10 * 60_000;
 const repairStrategyTimeoutMs = 3 * 60_000;
+const runTriageTimeoutMs = 3 * 60_000;
 const preparationDiffCommandTimeoutMs = 60_000;
 const preparationHashMarker = "\0MAKEADEMO_HASHES\0";
 const preparationPatchMarker = "\0MAKEADEMO_PATCH\0";
@@ -242,6 +248,7 @@ export async function createDefaultAgentHarnessDependencies(
   let repoMaterialized = false;
   let runtimeRepairArtifactAttempt = 0;
   let repairStrategyAttempt = 0;
+  let runTriageAttempt = 0;
   let scriptWritingBaseline: ScriptWritingContentSnapshot = {};
   const externalResourceDirectory = join(
     options.outputRoot,
@@ -1050,6 +1057,85 @@ export async function createDefaultAgentHarnessDependencies(
         let advice: RepairAdvice;
         try {
           advice = readRepairAdvice(readResult.value);
+        } catch (error) {
+          await persistAttempt({
+            attempt,
+            candidate: readResult.value,
+            error: readErrorMessage(error),
+            status: "failed",
+          });
+          return undefined;
+        }
+        await persistAttempt({ advice, attempt, status: "passed" });
+        return advice;
+      } catch (error) {
+        await persistAttempt({
+          attempt,
+          error: readErrorMessage(error),
+          status: "failed",
+        });
+        return undefined;
+      }
+    },
+    async adviseRunTriage(input) {
+      const workspace = workspaceHandle?.workspace;
+      if (workspace === undefined) return undefined;
+      runTriageAttempt += 1;
+      const attempt = runTriageAttempt;
+      const attemptPath = `${artifactPaths.agentArtifactAttempts}/run-triage/attempt-${attempt}.json`;
+      const persistAttempt = async (value: unknown) => {
+        try {
+          await options.artifactStore.writeJson(attemptPath, value);
+        } catch {
+          // Triage and its audit copy are both advisory. Neither may fail
+          // or stall the run.
+        }
+      };
+      try {
+        // Triage runs before every other stage, so the screened repository
+        // may not exist in the sandbox yet; the strategist reads it to
+        // assess lifecycle weight.
+        await ensureRepoMaterialized(input.repoProfile, workspace);
+        await writeWorkspaceJson(
+          workspace,
+          artifactPaths.repoProfile,
+          input.repoProfile,
+        );
+        await removeWorkspaceFile(workspace, artifactPaths.runTriageAdvice);
+        const result = await runOpenCode({
+          availableTools: ["read", "write"],
+          configDir: openCodeConfigDirectory,
+          model: `${providerID}/${modelID}`,
+          prompt: createRunTriagePrompt(input),
+          stage: "run-triage",
+          timeoutMs: runTriageTimeoutMs,
+          workingDirectory: workspaceRepoDirectory,
+          workspace,
+        });
+        if (result.exitCode !== 0) {
+          await persistAttempt({
+            attempt,
+            error:
+              result.timeoutError?.message ?? formatAgentCommandFailure(result),
+            status: "failed",
+          });
+          return undefined;
+        }
+        const readResult = await tryReadWorkspaceJson(
+          workspace,
+          artifactPaths.runTriageAdvice,
+        );
+        if (!readResult.ok) {
+          await persistAttempt({
+            attempt,
+            error: readResult.error,
+            status: "failed",
+          });
+          return undefined;
+        }
+        let advice: RunTriageAdvice;
+        try {
+          advice = readRunTriageAdvice(readResult.value);
         } catch (error) {
           await persistAttempt({
             attempt,
@@ -6714,6 +6800,24 @@ function createRepairStrategyPrompt(input: {
       `Write only the completed JSON object to ${artifactPaths.repairAdvice}. After writing it, do not call another tool.`,
     ].join("\n"),
     stage: "repair-strategy",
+  });
+}
+
+function createRunTriagePrompt(input: {
+  repoProfile: RepoProfile;
+  submittedCodeSandboxClass: SubmittedCodeSandboxClass;
+}): string {
+  return createStagePrompt({
+    artifactPaths: [artifactPaths.repoProfile, artifactPaths.runTriageAdvice],
+    instructions: [
+      `Read ${artifactPaths.repoProfile} for the backend-resolved repository profile. You may also read the repository under /workspace/repo to assess lifecycle weight: workspace-graph breadth, build requirements, service migrations, and seed paths.`,
+      `This run's submitted-code sandbox class is ${input.submittedCodeSandboxClass}. The standard class reserves roughly 2 vCPUs and 4 GiB of memory; the heavyweight class is the larger bounded reservation for capacity-classified repositories.`,
+      "Advise how Repo Preparation should shape a demo runtime that fits this envelope. Prefer lighter lifecycles: a development server over a production build, the narrowest workspace closure that serves the demo, and fixtures or seeds over service migrations.",
+      "You may not edit the repository, run lifecycle commands, change the run plan, or fail the run; your advice is purely additive steering.",
+      `Write one JSON object of the shape {"preparationStrategyHints":["..."],"envelopeFitWarning":"..."} to ${artifactPaths.runTriageAdvice}. Use at most 8 short hints. envelopeFitWarning is optional; include it only to state a concrete risk that the default lifecycle will not fit the sandbox envelope.`,
+      "After writing it, do not call another tool.",
+    ].join("\n"),
+    stage: "run-triage",
   });
 }
 

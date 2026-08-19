@@ -42,6 +42,7 @@ export const makeADemoArtifactPaths = {
   repairAdvice: `${makeADemoDirectory}/repair-advice.json`,
   repairRoundLedger: `${makeADemoDirectory}/repair-round-ledger.json`,
   runPlan: `${makeADemoDirectory}/run-plan.json`,
+  runTriageAdvice: `${makeADemoDirectory}/run-triage-advice.json`,
   runtimeTargetSelection: `${makeADemoDirectory}/runtime-target-selection.json`,
   runtimeTargetSelectionContract: `${makeADemoDirectory}/runtime-target-selection-contract.json`,
   scriptCandidate: `${makeADemoDirectory}/script-candidate.json`,
@@ -73,6 +74,8 @@ export function stageWriteableArtifactPaths(
       return [makeADemoArtifactPaths.fidelityAdjudication];
     case "repair-strategy":
       return [makeADemoArtifactPaths.repairAdvice];
+    case "run-triage":
+      return [makeADemoArtifactPaths.runTriageAdvice];
     case "runtime-target-selection":
       return [makeADemoArtifactPaths.runtimeTargetSelection];
     case "script-repair":
