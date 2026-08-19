@@ -24,6 +24,7 @@ import {
   AgentHarnessArtifactTransferError,
   AgentHarnessCommandTimeoutError,
   AgentHarnessSandboxUnavailableError,
+  defaultWorkspaceCommandTimeoutMs,
 } from "../../../agent-harness/daytona/workspace.interface";
 import {
   type PipelineEventLogger,
@@ -177,7 +178,9 @@ const defaultSandboxDiskGB = 3;
 // When building those snapshots, note 10GB is the Daytona org's per-sandbox
 // disk maximum (a 20GB request is rejected with "exceeds maximum allowed per
 // sandbox", measured 2026-08-08); disk headroom must come from cache pruning.
-const defaultCommandTimeoutMs = 10 * 60_000;
+// The omitted-timeoutMs bound is the seam contract's, not this provider's:
+// the deadline cap (N156) substitutes the same value before clamping.
+const defaultCommandTimeoutMs = defaultWorkspaceCommandTimeoutMs;
 const defaultLogWriteTimeoutMs = 5_000;
 const defaultPtyConnectionTimeoutMs = 30_000;
 const defaultPtyDisconnectTimeoutMs = 5_000;

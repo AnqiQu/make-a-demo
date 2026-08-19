@@ -552,6 +552,32 @@ describe("runAgentHarnessPipeline", () => {
     expect(isAgentHarnessInfrastructureError(error)).toBe(true);
   });
 
+  it("hands the workspace seam the job deadline so stage timeouts cap at the remaining budget", async () => {
+    // N156 (twenty): the between-stage assertion alone let stage-internal
+    // timeouts carry a run to 112 minutes. The workspace decorator needs the
+    // absolute deadline, so the orchestrator must pass it at creation.
+    let received: { atMs: number; totalMs: number } | undefined;
+    const startedAt = Date.now();
+
+    await runAgentHarnessPipeline(
+      pipelineInput({ runId: "run_deadline_wiring" }),
+      stubPipelineDependencies({
+        async createWorkspace({ jobDeadline }) {
+          received = jobDeadline;
+          return workspace();
+        },
+        async prepareRepo() {
+          return { manifest: preparationManifest() };
+        },
+      }),
+      { jobDeadlineMs: 5 * 60_000 },
+    ).catch(() => undefined);
+
+    expect(received?.totalMs).toBe(5 * 60_000);
+    expect(received?.atMs).toBeGreaterThanOrEqual(startedAt + 5 * 60_000);
+    expect(received?.atMs).toBeLessThan(startedAt + 5 * 60_000 + 60_000);
+  });
+
   it("records async stage failures after the stage promise rejects", async () => {
     const artifacts: Record<string, unknown> = {};
 

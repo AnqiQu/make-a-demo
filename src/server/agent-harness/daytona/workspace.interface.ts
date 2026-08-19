@@ -179,6 +179,14 @@ export type AgentHarnessWorkspaceDownloadFile = {
   sourcePath: string;
 };
 
+/**
+ * The command duration the seam guarantees when `timeoutMs` is omitted.
+ * Providers must apply exactly this bound so callers and decorators can
+ * reason about an omitted timeout without knowing the provider (N156: the
+ * deadline cap substitutes this value before clamping to the job budget).
+ */
+export const defaultWorkspaceCommandTimeoutMs = 10 * 60_000;
+
 export type AgentHarnessWorkspaceExecuteOptions = {
   env?: Record<string, string>;
   /** Maximum silence between streamed output chunks; omitted for no idle limit. */

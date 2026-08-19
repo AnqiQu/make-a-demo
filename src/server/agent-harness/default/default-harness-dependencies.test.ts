@@ -10,6 +10,7 @@ import {
   AgentHarnessArtifactTransferError,
   AgentHarnessCommandTimeoutError,
   AgentHarnessControlPlaneError,
+  AgentHarnessJobDeadlineError,
   AgentHarnessSandboxUnavailableError,
   type AgentHarnessWorkspace,
   isAgentHarnessInfrastructureError,
@@ -72,9 +73,55 @@ describe("createDefaultAgentHarnessDependencies", () => {
       archiveSizeBytes: 134_113_964,
     };
 
-    await harness.dependencies.createWorkspace({ repoProfile: twentyProfile });
+    await harness.dependencies.createWorkspace({
+      jobDeadline: testJobDeadline(),
+      repoProfile: twentyProfile,
+    });
 
     expect(submittedCodeSandboxClass).toBe("heavyweight");
+  });
+
+  it("caps every workspace command at the job deadline it was created with", async () => {
+    // N156 (twenty, 112.7 min vs a 90-minute budget): stage timeouts must
+    // shrink to the remaining wall-clock budget, and once the budget is
+    // spent the next command fails as the classified job deadline instead
+    // of running its full stage timeout.
+    const recordedTimeouts: Array<number | undefined> = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async execute(_command, options) {
+        recordedTimeouts.push(options?.timeoutMs);
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+      workspaceProvider: {
+        async create() {
+          return { async destroy() {}, id: "workspace", workspace };
+        },
+      },
+    });
+
+    const created = await harness.dependencies.createWorkspace({
+      jobDeadline: { atMs: Date.now() + 2_000, totalMs: 90 * 60_000 },
+      repoProfile: repoProfile(),
+    });
+    await created.execute("opencode run", { timeoutMs: 20 * 60_000 });
+
+    expect(recordedTimeouts[0]).toBeGreaterThan(0);
+    expect(recordedTimeouts[0]).toBeLessThanOrEqual(2_000);
+
+    const expired = await harness.dependencies.createWorkspace({
+      jobDeadline: { atMs: Date.now() - 1, totalMs: 90 * 60_000 },
+      repoProfile: repoProfile(),
+    });
+    await expect(
+      expired.execute("opencode run", { timeoutMs: 20 * 60_000 }),
+    ).rejects.toBeInstanceOf(AgentHarnessJobDeadlineError);
+    expect(recordedTimeouts).toHaveLength(1);
   });
 
   it("feeds agents a bounded, redacted excerpt of a failed command's output", async () => {
@@ -117,6 +164,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
     });
 
     await harness.dependencies.createWorkspace({
+      jobDeadline: testJobDeadline(),
       repoProfile: repoProfile(),
     });
     await harness.dependencies.planFlow({
@@ -529,6 +577,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
       workspaces: { isMonorepo: true, packageDirectories: ["apps/*"] },
     };
     await harness.dependencies.createWorkspace({
+      jobDeadline: testJobDeadline(),
       repoProfile: multiAppProfile,
     });
 
@@ -731,6 +780,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
       workspaces: { isMonorepo: true, packageDirectories: ["apps/*"] },
     };
     await harness.dependencies.createWorkspace({
+      jobDeadline: testJobDeadline(),
       repoProfile: multiAppProfile,
     });
 
@@ -2124,6 +2174,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
       },
     });
     await harness.dependencies.createWorkspace({
+      jobDeadline: testJobDeadline(),
       repoProfile: repoProfile(),
     });
 
@@ -2180,7 +2231,10 @@ describe("createDefaultAgentHarnessDependencies", () => {
         },
       },
     });
-    await harness.dependencies.createWorkspace({ repoProfile: repoProfile() });
+    await harness.dependencies.createWorkspace({
+      jobDeadline: testJobDeadline(),
+      repoProfile: repoProfile(),
+    });
 
     await expect(
       harness.dependencies.planFlow({
@@ -2244,7 +2298,10 @@ describe("createDefaultAgentHarnessDependencies", () => {
         },
       },
     });
-    await harness.dependencies.createWorkspace({ repoProfile: repoProfile() });
+    await harness.dependencies.createWorkspace({
+      jobDeadline: testJobDeadline(),
+      repoProfile: repoProfile(),
+    });
 
     await expect(
       harness.dependencies.planFlow({
@@ -2302,7 +2359,10 @@ describe("createDefaultAgentHarnessDependencies", () => {
         },
       },
     });
-    await harness.dependencies.createWorkspace({ repoProfile: repoProfile() });
+    await harness.dependencies.createWorkspace({
+      jobDeadline: testJobDeadline(),
+      repoProfile: repoProfile(),
+    });
 
     await expect(
       harness.dependencies.planFlow({
@@ -7672,7 +7732,10 @@ describe("createDefaultAgentHarnessDependencies", () => {
         },
       },
     });
-    await harness.dependencies.createWorkspace({ repoProfile: repoProfile() });
+    await harness.dependencies.createWorkspace({
+      jobDeadline: testJobDeadline(),
+      repoProfile: repoProfile(),
+    });
 
     const advice = await harness.dependencies.adviseRepairStrategy?.({
       budgets: {
@@ -7831,7 +7894,10 @@ describe("createDefaultAgentHarnessDependencies", () => {
         },
       },
     });
-    await harness.dependencies.createWorkspace({ repoProfile: repoProfile() });
+    await harness.dependencies.createWorkspace({
+      jobDeadline: testJobDeadline(),
+      repoProfile: repoProfile(),
+    });
 
     const advice = await harness.dependencies.adviseRunTriage?.({
       repoProfile: { ...repoProfile(), archiveSizeBytes: 134_113_964 },
@@ -10807,6 +10873,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
 
     try {
       await harness.dependencies.createWorkspace({
+        jobDeadline: testJobDeadline(),
         repoProfile: repoProfile(),
       });
       const report = await harness.dependencies.validateCapturePath({
@@ -10888,6 +10955,7 @@ describe("createDefaultAgentHarnessDependencies", () => {
 
     try {
       await harness.dependencies.createWorkspace({
+        jobDeadline: testJobDeadline(),
         repoProfile: repoProfile(),
       });
       const report = await harness.dependencies.validateCapturePath({
@@ -11777,6 +11845,7 @@ async function runFlowPlanningScenario(input: {
     },
   });
   await harness.dependencies.createWorkspace({
+    jobDeadline: testJobDeadline(),
     repoProfile: repoProfile(),
   });
   const result = await harness.dependencies.planFlow({
@@ -12009,7 +12078,10 @@ async function runRepairStrategyScenario(input: {
       },
     },
   });
-  await harness.dependencies.createWorkspace({ repoProfile: repoProfile() });
+  await harness.dependencies.createWorkspace({
+    jobDeadline: testJobDeadline(),
+    repoProfile: repoProfile(),
+  });
   const advice = await harness.dependencies.adviseRepairStrategy?.({
     budgets: {
       bonusRounds: 0,
@@ -12072,12 +12144,20 @@ async function runRunTriageScenario(input: {
       },
     },
   });
-  await harness.dependencies.createWorkspace({ repoProfile: repoProfile() });
+  await harness.dependencies.createWorkspace({
+    jobDeadline: testJobDeadline(),
+    repoProfile: repoProfile(),
+  });
   const advice = await harness.dependencies.adviseRunTriage?.({
     repoProfile: { ...repoProfile(), archiveSizeBytes: 134_113_964 },
     submittedCodeSandboxClass: "heavyweight",
   });
   return { advice, attempts };
+}
+
+// A job deadline far enough out that no test command ever hits the cap.
+function testJobDeadline() {
+  return { atMs: Date.now() + 90 * 60_000, totalMs: 90 * 60_000 };
 }
 
 function repoProfile(): RepoProfile {

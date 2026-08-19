@@ -8,6 +8,7 @@ import type {
   CaptureLocatorFailure,
   SubmittedAppExplorationResult,
 } from "../app-explorer/submitted-app-explorer";
+import type { WorkspaceJobDeadline } from "../daytona/deadline-capped-workspace";
 import { selectSubmittedCodeSandboxClass } from "../daytona/submitted-code-sandbox-class";
 import {
   AgentHarnessJobDeadlineError,
@@ -173,7 +174,13 @@ export type AgentHarnessPipelineDependencies = {
   capturePreparationWorkspaceDiff: (input: {
     workspace: AgentHarnessWorkspace;
   }) => Promise<PreparationWorkspaceDiff>;
+  /**
+   * Creates the paired agent/submitted-code workspace. Implementations must
+   * cap every command they run for this job at `jobDeadline.atMs` (N156): a
+   * stage may never be granted more time than the job has left.
+   */
   createWorkspace(input: {
+    jobDeadline: WorkspaceJobDeadline;
     repoProfile: RepoProfile;
   }): Promise<AgentHarnessWorkspace>;
   /**
@@ -489,7 +496,10 @@ export async function runAgentHarnessPipeline(
       }),
     );
 
-    workspace = await dependencies.createWorkspace({ repoProfile });
+    workspace = await dependencies.createWorkspace({
+      jobDeadline: { atMs: jobDeadlineAtMs, totalMs: jobDeadlineMs },
+      repoProfile,
+    });
     runTriage = await consultRunTriage({ dependencies, repoProfile });
     runPlan = await runAsyncStage(
       "run-plan-synthesis",

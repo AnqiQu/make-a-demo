@@ -42,6 +42,7 @@ import {
   isExplicitAuthenticationFeature,
   readRouteDistinctContent,
 } from "../app-explorer/submitted-app-explorer";
+import { createDeadlineCappedWorkspace } from "../daytona/deadline-capped-workspace";
 import { downloadSubmittedCodeArchive } from "../daytona/submitted-code-artifact-archive";
 import { uploadSubmittedCodeExternalResourceCache } from "../daytona/submitted-code-external-resource-cache";
 import { selectSubmittedCodeSandboxClass } from "../daytona/submitted-code-sandbox-class";
@@ -1288,7 +1289,7 @@ export async function createDefaultAgentHarnessDependencies(
       );
       opencodeSessionId = undefined;
     },
-    async createWorkspace({ repoProfile }) {
+    async createWorkspace({ jobDeadline, repoProfile }) {
       const provider =
         options.workspaceProvider ??
         (await createDaytonaWorkspaceProvider({
@@ -1296,9 +1297,17 @@ export async function createDefaultAgentHarnessDependencies(
           logger: options.logger,
           providerID,
         }));
-      workspaceHandle = await provider.create({
+      const handle = await provider.create({
         submittedCodeSandboxClass: selectSubmittedCodeSandboxClass(repoProfile),
       });
+      // N156: every command this job runs — agent commands, lifecycle
+      // waits, install/build gates — is capped at the remaining wall-clock
+      // budget. The handle keeps the raw destroy so teardown outlives the
+      // deadline.
+      workspaceHandle = {
+        ...handle,
+        workspace: createDeadlineCappedWorkspace(handle.workspace, jobDeadline),
+      };
       return workspaceHandle.workspace;
     },
     async exploreApp({
