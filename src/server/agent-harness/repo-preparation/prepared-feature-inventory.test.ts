@@ -133,6 +133,45 @@ describe("assertPreparedFeatureInventory", () => {
     ).toThrow(/accessible name/i);
   });
 
+  it("rejects a selector-shaped canvas-delta locator but accepts app-state keys verbatim", () => {
+    // N157: a canvas-delta locator is an accessible name, so selector syntax
+    // is rejected like every other locator. An app-state key is the app's
+    // own storage key — whatever the app writes, including dots or dashes —
+    // so the accessible-name rule must not apply to it.
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest: manifestWithFeatures([
+          {
+            expectedProof: { kind: "canvas-delta", locator: ".tool-rectangle" },
+            id: "draw-shapes",
+            label: "Drawing shapes",
+          },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).toThrow(/accessible name/i);
+
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest: manifestWithFeatures([
+          {
+            expectedProof: {
+              contains: '"type":"rectangle"',
+              key: ".excalidraw/scene",
+              kind: "app-state",
+              source: "local-storage",
+            },
+            id: "draw-shapes",
+            label: "Drawing shapes",
+          },
+        ]),
+        repoSourcePaths: new Set(["README.md", "src/routes.tsx"]),
+      }),
+    ).not.toThrow();
+  });
+
   it("rejects two features declaring the identical proof", () => {
     expect(() =>
       assertPreparedFeatureInventory({

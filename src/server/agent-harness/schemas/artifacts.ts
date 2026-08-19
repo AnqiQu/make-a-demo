@@ -227,9 +227,17 @@ type DataStrategyDeclaration = {
  * never drift apart.
  */
 export const expectedProofKinds = [
+  "app-state",
+  "canvas-delta",
   "element-appears",
   "state-transition",
   "visible-text",
+] as const;
+
+/** The storages an app-state proof may read; always the app origin's own. */
+export const appStateProofSources = [
+  "local-storage",
+  "session-storage",
 ] as const;
 
 /**
@@ -241,10 +249,26 @@ export const expectedProofKinds = [
  * observed state reads `from` and requires state `to` afterward (states are
  * accessible names, or the words "enabled"/"disabled"). Locators and texts
  * live in the accessible-name space the harvest produces — never CSS or
- * XPath. Where declared, the proof subsumes wording-based grounding: the
- * feature passes only if its proof passes.
+ * XPath.
+ *
+ * Two rungs exist for features whose outcome never enters the DOM (N157).
+ * `app-state` (preferred) reads the string the app itself persists under
+ * `key` in the declared storage and requires it to contain the substring
+ * `contains` — the declaration is data (a key and a substring), never
+ * executable code. `canvas-delta` (weakest acceptable) clicks the single
+ * control named `locator` and requires the page's largest visible canvas
+ * region to render different pixels afterward. Where declared, the proof
+ * subsumes wording-based grounding: the feature passes only if its proof
+ * passes.
  */
 type ExpectedProof =
+  | {
+      kind: "app-state";
+      source: (typeof appStateProofSources)[number];
+      key: string;
+      contains: string;
+    }
+  | { kind: "canvas-delta"; locator: string }
   | { kind: "element-appears"; name: string }
   | { kind: "state-transition"; locator: string; from: string; to: string }
   | { kind: "visible-text"; text: string };
@@ -499,6 +523,16 @@ type ActionCatalogAction = {
     from: string;
     to: string;
   };
+  /**
+   * Present only on catalog actions minted from a passed declared proof
+   * whose evidence lives outside the DOM (N157): `app-state` rides the
+   * assert minted from a passed app-state proof, `canvas-delta` rides the
+   * exercised click minted from a passed canvas-delta proof. Grounding
+   * treats such an action as sufficient feature evidence on its own — the
+   * proof executed against the app's persisted state or the canvas pixels,
+   * which no DOM assert can witness.
+   */
+  declaredProofKind?: "app-state" | "canvas-delta";
   /**
    * For asserts on text that becomes visible only after an interaction: the
    * catalog id of the revealing interaction. Such an assert is valid demo
@@ -996,6 +1030,17 @@ function readExpectedProof(value: unknown, parentPath: string): ExpectedProof {
   }
   if (kind === "element-appears") {
     return { kind, name: readNonEmptyString(proof, "name", path) };
+  }
+  if (kind === "app-state") {
+    return {
+      contains: readNonEmptyString(proof, "contains", path),
+      key: readNonEmptyString(proof, "key", path),
+      kind,
+      source: readEnum(proof, "source", appStateProofSources, path),
+    };
+  }
+  if (kind === "canvas-delta") {
+    return { kind, locator: readNonEmptyString(proof, "locator", path) };
   }
   return {
     from: readNonEmptyString(proof, "from", path),
@@ -1611,6 +1656,28 @@ function readAction(value: unknown, index: number): ActionCatalogAction {
   if (revealedBy !== undefined && kind !== "assert") {
     throw new Error(`${path}.revealedBy is only valid on assert actions`);
   }
+  const declaredProofKind =
+    record.declaredProofKind === undefined
+      ? undefined
+      : readEnum(
+          record,
+          "declaredProofKind",
+          ["app-state", "canvas-delta"],
+          path,
+        );
+  if (declaredProofKind === "app-state" && kind !== "assert") {
+    throw new Error(
+      `${path}.declaredProofKind app-state is only valid on assert actions`,
+    );
+  }
+  if (
+    declaredProofKind === "canvas-delta" &&
+    (kind !== "click" || exercised !== true)
+  ) {
+    throw new Error(
+      `${path}.declaredProofKind canvas-delta is only valid on browser-exercised click actions`,
+    );
+  }
   const stateTransition =
     record.stateTransition === undefined
       ? undefined
@@ -1649,6 +1716,7 @@ function readAction(value: unknown, index: number): ActionCatalogAction {
   }
   return {
     confidence: readConfidenceNumber(record, "confidence", path),
+    ...(declaredProofKind === undefined ? {} : { declaredProofKind }),
     evidence: readNonEmptyString(record, "evidence", path),
     ...(exercised === undefined ? {} : { exercised: true as const }),
     expectedResult: readNonEmptyString(record, "expectedResult", path),

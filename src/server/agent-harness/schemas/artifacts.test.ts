@@ -139,6 +139,52 @@ describe("agent harness artifact schemas", () => {
     });
   });
 
+  it("parses the non-DOM proof marker on declared-proof catalog actions", () => {
+    // N157: a passed app-state or canvas-delta proof mints the only catalog
+    // evidence a canvas feature can have; the marker must survive the reader
+    // round-trip or grounding loses it.
+    const catalog = validActionCatalog();
+    const action = catalog.actions[0];
+    if (action === undefined) {
+      throw new Error("Expected an Action Catalog fixture");
+    }
+    const parsed = readActionCatalog({
+      ...catalog,
+      actions: [
+        { ...action, declaredProofKind: "canvas-delta", exercised: true },
+      ],
+    });
+
+    expect(parsed.actions[0]?.declaredProofKind).toBe("canvas-delta");
+  });
+
+  it("rejects a non-DOM proof marker on an action shape the proof cannot mint", () => {
+    // canvas-delta proofs are clicks the backend exercised; app-state proofs
+    // are asserts. Any other pairing is a fabricated grounding shortcut.
+    const catalog = validActionCatalog();
+    const action = catalog.actions[0];
+    if (action === undefined) {
+      throw new Error("Expected an Action Catalog fixture");
+    }
+
+    expect(() =>
+      readActionCatalog({
+        ...catalog,
+        actions: [{ ...action, declaredProofKind: "canvas-delta" }],
+      }),
+    ).toThrow(
+      "actions[0].declaredProofKind canvas-delta is only valid on browser-exercised click actions",
+    );
+    expect(() =>
+      readActionCatalog({
+        ...catalog,
+        actions: [{ ...action, declaredProofKind: "app-state" }],
+      }),
+    ).toThrow(
+      "actions[0].declaredProofKind app-state is only valid on assert actions",
+    );
+  });
+
   it("parses a local click navigation destination without reading outcome prose", () => {
     const catalog = validActionCatalog();
     const parsed = readActionCatalog({
@@ -452,6 +498,31 @@ describe("agent harness artifact schemas", () => {
       readPreparationManifest(manifest).productContext.featureInventory[0]
         ?.expectedProof,
     ).toEqual({ kind: "element-appears", name: "Delete row" });
+
+    (feature as Record<string, unknown>).expectedProof = {
+      contains: '"type":"rectangle"',
+      key: "excalidraw",
+      kind: "app-state",
+      source: "local-storage",
+    };
+    expect(
+      readPreparationManifest(manifest).productContext.featureInventory[0]
+        ?.expectedProof,
+    ).toEqual({
+      contains: '"type":"rectangle"',
+      key: "excalidraw",
+      kind: "app-state",
+      source: "local-storage",
+    });
+
+    (feature as Record<string, unknown>).expectedProof = {
+      kind: "canvas-delta",
+      locator: "Rectangle",
+    };
+    expect(
+      readPreparationManifest(manifest).productContext.featureInventory[0]
+        ?.expectedProof,
+    ).toEqual({ kind: "canvas-delta", locator: "Rectangle" });
   });
 
   it("rejects declared proofs with unknown kinds or missing fields", () => {
@@ -464,7 +535,7 @@ describe("agent harness artifact schemas", () => {
       kind: "screenshot-diff",
     };
     expect(() => readPreparationManifest(manifest)).toThrow(
-      "expectedProof.kind must be one of: element-appears, state-transition, visible-text",
+      "expectedProof.kind must be one of: app-state, canvas-delta, element-appears, state-transition, visible-text",
     );
 
     (feature as Record<string, unknown>).expectedProof = {
@@ -473,6 +544,32 @@ describe("agent harness artifact schemas", () => {
     };
     expect(() => readPreparationManifest(manifest)).toThrow(
       /expectedProof\.from must be a non-empty string/,
+    );
+
+    (feature as Record<string, unknown>).expectedProof = {
+      contains: '"type":"rectangle"',
+      key: "excalidraw",
+      kind: "app-state",
+      source: "cookie",
+    };
+    expect(() => readPreparationManifest(manifest)).toThrow(
+      "expectedProof.source must be one of: local-storage, session-storage",
+    );
+
+    (feature as Record<string, unknown>).expectedProof = {
+      key: "excalidraw",
+      kind: "app-state",
+      source: "local-storage",
+    };
+    expect(() => readPreparationManifest(manifest)).toThrow(
+      /expectedProof\.contains must be a non-empty string/,
+    );
+
+    (feature as Record<string, unknown>).expectedProof = {
+      kind: "canvas-delta",
+    };
+    expect(() => readPreparationManifest(manifest)).toThrow(
+      /expectedProof\.locator must be a non-empty string/,
     );
   });
 

@@ -66,7 +66,9 @@ export function createPreparationManifestTemplate(
         entryPaths: [],
         // N107: replace with the typed outcome that proves this feature on
         // its entry route — visible-text, element-appears, or
-        // state-transition {locator, from, to} in accessible-name space.
+        // state-transition {locator, from, to} in accessible-name space;
+        // canvas features use app-state {source, key, contains} or
+        // canvas-delta {locator} instead (N157).
         expectedProof: {
           kind: "visible-text",
           text: `replace-with-on-screen-text-proving ${feature}`,

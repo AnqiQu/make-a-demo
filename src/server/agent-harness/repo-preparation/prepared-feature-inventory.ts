@@ -168,7 +168,7 @@ export function assertPreparedFeatureInventory(input: {
     throw new Error(
       `PreparationManifest maker-requested features must declare expectedProof: ${missingProofs.join(
         "; ",
-      )}. Declare the typed browser-checkable outcome that proves each feature on its entry route — visible-text (an exact on-screen string), element-appears (a visible element's accessible name), or state-transition (click the control named locator while its state reads from and observe state to).`,
+      )}. Declare the typed browser-checkable outcome that proves each feature on its entry route — visible-text (an exact on-screen string), element-appears (a visible element's accessible name), state-transition (click the control named locator while its state reads from and observe state to), app-state (the value the app persists under key in local-storage or session-storage contains the substring contains; preferred for canvas features), or canvas-delta (clicking the control named locator visibly changes the canvas pixels; weakest acceptable).`,
     );
   }
 }
@@ -220,12 +220,16 @@ function assertDeclaredProofs(
     );
   }
   const selectorShaped = declared.flatMap(({ path, proof }) => {
+    // app-state values are the app's own storage key and stored substring,
+    // not accessible names, so the selector-shape rule never applies (N157).
     const locatorValues =
-      proof.kind === "visible-text"
+      proof.kind === "visible-text" || proof.kind === "app-state"
         ? []
         : proof.kind === "element-appears"
           ? [proof.name]
-          : [proof.locator, proof.from, proof.to];
+          : proof.kind === "canvas-delta"
+            ? [proof.locator]
+            : [proof.locator, proof.from, proof.to];
     return locatorValues.some((value) => selectorShapedPattern.test(value))
       ? [`${path}.expectedProof`]
       : [];

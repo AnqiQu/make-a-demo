@@ -28,6 +28,10 @@ const failureCauseGuidance: Record<
 };
 
 const proofKindGuidance: Record<(typeof expectedProofKinds)[number], string> = {
+  "app-state":
+    "for features whose outcome renders to a canvas or otherwise never enters the DOM: the storage the app persists its own state in (`local-storage` or `session-storage`), the `key` the app writes, and a substring `contains` that the stored value holds only when the feature works (a drawing app's persisted scene JSON contains its seeded shape types). Prefer this over canvas-delta whenever the app persists state.",
+  "canvas-delta":
+    "the weakest acceptable proof, only for canvas features with no persisted state: the accessible name of the single control whose click visibly changes the canvas pixels. The backend clicks it and screenshot-diffs the canvas region; a canvas that repaints on its own cannot be proven this way.",
   "element-appears":
     "the accessible name of an element that exists only when the feature works. Prefer names rendered from seeded data over static chrome.",
   "state-transition":

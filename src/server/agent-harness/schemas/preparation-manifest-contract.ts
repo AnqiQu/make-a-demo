@@ -2,7 +2,11 @@ import {
   provisionableServices,
   sandboxServiceConnectionUrls,
 } from "../sandbox-services/sandbox-services";
-import { type PreparationManifest, dataStrategyRungs } from "./artifacts";
+import {
+  type PreparationManifest,
+  appStateProofSources,
+  dataStrategyRungs,
+} from "./artifacts";
 
 const stringArray = {
   items: { type: "string" },
@@ -57,8 +61,9 @@ export function createPreparationManifestContract() {
       "when any feature uses bypass or demo-identity, authBypassOrDemoIdentity must describe the active secret-free authentication bootstrap",
       "feature ids must be stable safe identifiers and unique within featureInventory",
       "every data-backed feature must declare its dataSeams: the repo-relative path and functionName of the function the UI calls (now returning the in-code fixture under the demo gate) and the fixtureModule holding the fixture literal; declared files must exist in the prepared diff",
-      "every maker-requested feature must declare expectedProof: the typed browser-checkable outcome that proves the feature on its first entry route (visible-text: an exact on-screen string; element-appears: a visible element's accessible name; state-transition: click the control named locator while its state reads from and observe state to)",
+      "every maker-requested feature must declare expectedProof: the typed browser-checkable outcome that proves the feature on its first entry route (visible-text: an exact on-screen string; element-appears: a visible element's accessible name; state-transition: click the control named locator while its state reads from and observe state to; app-state: the stored value under key in the declared storage contains the substring contains; canvas-delta: clicking the control named locator visibly changes the canvas pixels)",
       "expectedProof locators, names, and texts are accessible names or on-screen strings — never CSS selectors or XPath",
+      "a feature whose outcome renders to a canvas and never enters the DOM must declare app-state (preferred: the storage key the app itself persists its scene or store under, plus a substring the stored value holds only when the feature works) or canvas-delta (weakest acceptable: the accessible name of the single control whose click visibly changes the canvas); DOM-provable features must keep the DOM rungs",
       "a state-transition proof's from must never be disabled: seed fixture state so the control starts enabled (history pre-populated so Undo is clickable, a followable author whose control will rename)",
       "each feature's first entryPath must be a route no other feature claims",
       "a production-entry startCommandUsed such as node dist/..., node build/..., or node .next/... requires buildCommandUsed to declare the build that emits that entry; when startCommandUsed is npm, yarn, pnpm, or bun run <script>, resolve that script through the repo profile's packageScripts and apply the same production-entry rule; otherwise use the repository's development server",
@@ -139,6 +144,29 @@ export function createPreparationManifestContract() {
                 entryPaths: localAppPathArray,
                 expectedProof: {
                   oneOf: [
+                    {
+                      additionalProperties: false,
+                      properties: {
+                        contains: { minLength: 1, type: "string" },
+                        key: { minLength: 1, type: "string" },
+                        kind: { const: "app-state", type: "string" },
+                        source: {
+                          enum: [...appStateProofSources],
+                          type: "string",
+                        },
+                      },
+                      required: ["contains", "key", "kind", "source"],
+                      type: "object",
+                    },
+                    {
+                      additionalProperties: false,
+                      properties: {
+                        kind: { const: "canvas-delta", type: "string" },
+                        locator: { minLength: 1, type: "string" },
+                      },
+                      required: ["kind", "locator"],
+                      type: "object",
+                    },
                     {
                       additionalProperties: false,
                       properties: {

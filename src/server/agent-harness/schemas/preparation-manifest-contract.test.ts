@@ -46,7 +46,7 @@ describe("createPreparationManifestContract", () => {
     expect(contract.invariants.join(" ")).toContain("dataSeams");
   });
 
-  it("describes the declared proof obligation with its three typed kinds", () => {
+  it("describes the declared proof obligation with its typed kinds", () => {
     // N107: the feature says how to prove it. With additionalProperties:
     // false the contract must name the field, and its shape must force one
     // typed kind per declaration.
@@ -56,11 +56,41 @@ describe("createPreparationManifestContract", () => {
     const proof = feature.properties.expectedProof;
 
     expect(proof.oneOf.map((variant) => variant.properties.kind.const)).toEqual(
-      ["element-appears", "state-transition", "visible-text"],
+      [
+        "app-state",
+        "canvas-delta",
+        "element-appears",
+        "state-transition",
+        "visible-text",
+      ],
     );
     expect(feature.required).not.toContain("expectedProof");
     expect(contract.invariants.join(" ")).toContain("expectedProof");
     expect(contract.invariants.join(" ")).toContain("accessible name");
+  });
+
+  it("constrains app-state proofs to the app's own storages and steers canvas features onto the non-DOM rungs", () => {
+    // N157: canvas outcomes never enter the DOM, so the contract must both
+    // shape the new rungs (storage enum, required substring) and tell the
+    // agent when to reach for them instead of the DOM rungs.
+    const contract = createPreparationManifestContract();
+    const proof =
+      contract.properties.productContext.properties.featureInventory.items
+        .properties.expectedProof;
+    const appState = proof.oneOf.find(
+      (variant) => variant.properties.kind.const === "app-state",
+    );
+
+    expect(appState?.required).toEqual(["contains", "key", "kind", "source"]);
+    expect(
+      appState !== undefined &&
+        "source" in appState.properties &&
+        appState.properties.source.enum,
+    ).toEqual(["local-storage", "session-storage"]);
+    const invariants = contract.invariants.join(" ");
+    expect(invariants).toContain("canvas");
+    expect(invariants).toContain("app-state");
+    expect(invariants).toContain("canvas-delta");
   });
 
   it("describes the data strategy answer to detected services", () => {
