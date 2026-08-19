@@ -1449,6 +1449,7 @@ export async function createDefaultAgentHarnessDependencies(
     async prepareRepo({
       demoBrief,
       normalizedSupportingDocuments,
+      preparationStrategyHints,
       repoProfile,
       repoSourcePaths,
       runPlan,
@@ -1509,11 +1510,17 @@ export async function createDefaultAgentHarnessDependencies(
             prompt: initialRun
               ? createRepoPreparationPrompt({
                   demoBrief,
+                  ...(preparationStrategyHints === undefined
+                    ? {}
+                    : { preparationStrategyHints }),
                   repoProfile,
                   runPlan,
                 })
               : createRepoPreparationRepairPrompt({
                   demoBrief,
+                  ...(preparationStrategyHints === undefined
+                    ? {}
+                    : { preparationStrategyHints }),
                   previousResult: previousResult ?? {
                     exitCode: 1,
                     stderr: "",
@@ -6513,8 +6520,26 @@ function createFidelityAdjudicationPrompt(input: {
   });
 }
 
+/**
+ * Formats run-triage strategy hints for a preparation prompt. Hints are
+ * additive steering: they compete with default approach guidance and never
+ * relax the stage's contract rules, so the label says exactly that.
+ */
+function createRunTriageHintInstructions(
+  hints: readonly string[] | undefined,
+): string[] {
+  if (hints === undefined || hints.length === 0) {
+    return [];
+  }
+  return [
+    "Run-triage strategy hints (advisory, from pre-run capacity triage; they add to and never override the rules above):",
+    ...hints.map((hint) => `- ${hint}`),
+  ];
+}
+
 function createRepoPreparationPrompt(input: {
   demoBrief: AgentHarnessPipelineInput["demoBrief"];
+  preparationStrategyHints?: readonly string[];
   repoProfile: RepoProfile;
   runPlan: RunPlan;
 }): string {
@@ -6551,6 +6576,7 @@ function createRepoPreparationPrompt(input: {
       offlineFeatureStateInstruction,
       dataFixturePlaybookInstruction,
       ...createDataStrategyInstruction(input.repoProfile),
+      ...createRunTriageHintInstructions(input.preparationStrategyHints),
       sealedNetworkWorldRulesInstruction,
       "Do not invent core product behavior that is absent from the source. If a requested capability is truly absent, leave concrete evidence in knownLimitations rather than fabricating it.",
       "Every feature sourcePaths list must cite at least one original browser route, page, component, or UI module used by the prepared route. If the original app cannot be prepared through the allowed seams, do not synthesize a substitute product.",
@@ -6575,6 +6601,7 @@ function createRepoPreparationPrompt(input: {
 
 function createRepoPreparationRepairPrompt(input: {
   demoBrief: AgentHarnessPipelineInput["demoBrief"];
+  preparationStrategyHints?: readonly string[];
   previousResult: { stderr: string; stdout: string };
   readError: string;
   repoProfile: RepoProfile;
@@ -6591,6 +6618,7 @@ function createRepoPreparationRepairPrompt(input: {
     offlineFeatureStateInstruction,
     dataFixturePlaybookInstruction,
     ...createDataStrategyInstruction(input.repoProfile),
+    ...createRunTriageHintInstructions(input.preparationStrategyHints),
     `Use this local runtime URL in the manifest: ${input.runPlan.expectedLocalUrl}`,
     `Use this install command unless you have a stronger repo-specific reason: ${input.runPlan.installCommand}`,
     `Use this start command unless you have a stronger repo-specific reason: ${input.runPlan.startCommand}`,

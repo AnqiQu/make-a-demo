@@ -188,6 +188,62 @@ describe("createDefaultAgentHarnessDependencies", () => {
     );
   });
 
+  it("surfaces run-triage strategy hints across preparation prompt attempts", async () => {
+    const prompts: string[] = [];
+    let manifestReads = 0;
+    const workspace = createFakeAgentHarnessWorkspace({
+      async execute(command) {
+        if (
+          command === "cat '/workspace/.makeademo/preparation-manifest.json'"
+        ) {
+          manifestReads += 1;
+          return manifestReads === 1
+            ? { exitCode: 1, stderr: "No such file or directory", stdout: "" }
+            : {
+                exitCode: 0,
+                stderr: "",
+                stdout: JSON.stringify(preparationManifest()),
+              };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: {
+        async run(input) {
+          prompts.push(input.prompt);
+          return { exitCode: 0, stderr: "", stdout: "" };
+        },
+      },
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await harness.dependencies.prepareRepo({
+      demoBrief: { keyProductFeatures: ["dashboard"] },
+      normalizedSupportingDocuments: undefined,
+      preparationStrategyHints: [
+        "Prefer the development server over a production build.",
+        "Seed demo data through fixtures instead of service migrations.",
+      ],
+      repoProfile: repoProfile(),
+      repoSourcePaths: ["package.json", "src/App.tsx"],
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(prompts).toHaveLength(2);
+    for (const prompt of prompts) {
+      expect(prompt).toContain(
+        "Prefer the development server over a production build.",
+      );
+      expect(prompt).toContain(
+        "Seed demo data through fixtures instead of service migrations.",
+      );
+    }
+  });
+
   it("captures gitignored workspace paths while skipping dependency caches", async () => {
     const commands: string[] = [];
     const digest = "a".repeat(64);
