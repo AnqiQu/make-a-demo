@@ -7,6 +7,7 @@ import {
 
 const catalog = (
   actions: Array<{
+    declaredProofKind?: "app-state" | "canvas-delta";
     exercised?: true;
     featureIds: string[];
     kind: "assert" | "click" | "navigate";
@@ -16,6 +17,9 @@ const catalog = (
 ): ActionCatalog => ({
   actions: actions.map((action, index) => ({
     confidence: 1,
+    ...(action.declaredProofKind === undefined
+      ? {}
+      : { declaredProofKind: action.declaredProofKind }),
     evidence: "Playwright",
     expectedResult: "visible",
     ...(action.exercised === undefined ? {} : { exercised: true as const }),
@@ -68,6 +72,41 @@ describe("feature groundability", () => {
         authWallRoutes: new Set(),
       }),
     ).toEqual(["dashboard", "search"]);
+  });
+
+  it("grounds a canvas feature through a non-DOM declared-proof action alone", () => {
+    // N157: a canvas feature's only catalog evidence is the action minted
+    // from its passed app-state or canvas-delta proof. That action subsumes
+    // the assert-plus-interaction pair — no DOM assert can ever exist — but
+    // an auth-walled route still disqualifies it.
+    const actionCatalog = catalog([
+      {
+        declaredProofKind: "canvas-delta",
+        exercised: true,
+        featureIds: ["draw-shapes"],
+        kind: "click",
+        route: "/",
+      },
+      {
+        declaredProofKind: "app-state",
+        featureIds: ["saved-scene"],
+        kind: "assert",
+        route: "/walled",
+      },
+    ]);
+
+    expect(
+      isFeatureGroundable("draw-shapes", {
+        actionCatalog,
+        authWallRoutes: new Set(),
+      }),
+    ).toBe(true);
+    expect(
+      isFeatureGroundable("saved-scene", {
+        actionCatalog,
+        authWallRoutes: new Set(["/walled"]),
+      }),
+    ).toBe(false);
   });
 
   it("excludes a feature whose only interaction navigates to an auth-wall shape", () => {

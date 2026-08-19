@@ -3724,6 +3724,112 @@ describe("feature verdict ledger", () => {
     );
   });
 
+  it("grounds a canvas feature through a passed app-state proof on a route that renders no DOM content", async () => {
+    // N157 (excalidraw): the feature's outcome lives on a canvas, so its
+    // route harvests no headings, no text, and no assertable DOM evidence.
+    // The passed app-state proof must ground the feature AND satisfy flow
+    // planning's evidence demand by itself, or validation fails with a gap
+    // no DOM preparation can close.
+    const { result } = await exploreObservation({
+      declaredProofs: [
+        {
+          detail:
+            'stored local-storage value under "excalidraw" contains "type":"rectangle" on /',
+          featureId: "draw-shapes",
+          passed: true,
+        },
+      ],
+      featureInventory: [
+        preparedFeature({
+          entryPaths: ["/"],
+          expectedProof: {
+            contains: '"type":"rectangle"',
+            key: "excalidraw",
+            kind: "app-state",
+            source: "local-storage",
+          },
+          id: "draw-shapes",
+          label: "Drawing shapes",
+          requestedFeature: "draw and label shapes",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["draw-shapes"],
+          path: "/",
+          requestedPath: "/",
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    expect(artifacts.validationReport.status).toBe("passed");
+    expect(artifacts.validationReport.featureVerdicts).toEqual([
+      expect.objectContaining({
+        featureId: "draw-shapes",
+        groundedBy: "declared-proof",
+        verdict: "grounded",
+      }),
+    ]);
+    expect(artifacts.actionCatalog.actions).toContainEqual(
+      expect.objectContaining({
+        declaredProofKind: "app-state",
+        featureIds: ["draw-shapes"],
+        id: "declared-proof-draw-shapes",
+        kind: "assert",
+      }),
+    );
+  });
+
+  it("grounds a canvas feature through a passed canvas-delta proof as an exercised click", async () => {
+    // N157 fallback rung: the backend clicked the named control and saw the
+    // canvas pixels change. The minted click is browser-exercised evidence
+    // and must carry the marker that makes the feature flow-plannable.
+    const { result } = await exploreObservation({
+      declaredProofs: [
+        {
+          detail:
+            'the canvas changed after clicking "Rectangle" on / (canvas-delta)',
+          featureId: "draw-shapes",
+          passed: true,
+        },
+      ],
+      featureInventory: [
+        preparedFeature({
+          entryPaths: ["/"],
+          expectedProof: { kind: "canvas-delta", locator: "Rectangle" },
+          id: "draw-shapes",
+          label: "Drawing shapes",
+          requestedFeature: "draw and label shapes",
+        }),
+      ],
+      routes: [
+        observedRoute({
+          featureIds: ["draw-shapes"],
+          path: "/",
+          requestedPath: "/",
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    expect(artifacts.validationReport.status).toBe("passed");
+    expect(artifacts.actionCatalog.actions).toContainEqual(
+      expect.objectContaining({
+        declaredProofKind: "canvas-delta",
+        exercised: true,
+        featureIds: ["draw-shapes"],
+        id: "declared-proof-draw-shapes",
+        kind: "click",
+        preferredLocator: {
+          name: "Rectangle",
+          strategy: "role",
+          value: "button",
+        },
+      }),
+    );
+  });
+
   it("normalizes a bare fragment entryPath into observed route space for declared-proof actions", async () => {
     // N124 (homer): the manifest contract legally allows entryPaths that
     // start with "#" or "?", but every observed AppMap route lives in

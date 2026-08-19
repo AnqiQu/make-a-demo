@@ -1626,7 +1626,11 @@ function createActions(
  * Passed declared proofs become first-class catalog actions: the same typed
  * outcome Script Generation and Capture consume, so the assertion language
  * is one across all three stages. A state-transition proof is an exercised
- * click carrying its transition; the other kinds are asserts.
+ * click carrying its transition; a canvas-delta proof is an exercised click
+ * whose observed outcome is the canvas repaint; an app-state proof is an
+ * assert whose evidence lives in the app's persisted state, not the DOM.
+ * The two non-DOM kinds carry `declaredProofKind` so grounding accepts them
+ * without the DOM assert a canvas feature can never have (N157).
  */
 function createDeclaredProofActions(
   featureInventory: PreparedDemoFeature[],
@@ -1667,6 +1671,50 @@ function createDeclaredProofActions(
             from: proof.from,
             to: proof.to,
           },
+        },
+      ];
+    }
+    if (proof.kind === "canvas-delta") {
+      return [
+        {
+          confidence: 1,
+          declaredProofKind: "canvas-delta",
+          evidence: `Declared proof executed: ${proofResult.detail}`,
+          exercised: true,
+          expectedResult: proofResult.detail,
+          featureIds: [feature.id],
+          id,
+          kind: "click",
+          preferredLocator: {
+            name: proof.locator,
+            strategy: "role",
+            value: "button",
+          },
+          risks: [],
+          route,
+        },
+      ];
+    }
+    if (proof.kind === "app-state") {
+      return [
+        {
+          confidence: 1,
+          declaredProofKind: "app-state",
+          evidence: `Declared proof executed: ${proofResult.detail}`,
+          expectedResult: `the app's persisted ${proof.source} state under ${JSON.stringify(
+            proof.key,
+          )} contains ${JSON.stringify(proof.contains)}`,
+          featureIds: [feature.id],
+          id,
+          kind: "assert",
+          preferredLocator: {
+            reason:
+              "The proof's evidence is the app's own persisted state, not an element; the page body is the filming surface.",
+            strategy: "css",
+            value: "body",
+          },
+          risks: [],
+          route,
         },
       ];
     }
@@ -2727,6 +2775,12 @@ function readExplorationFailure(input: {
         return undefined;
       }
       const tagged = actionsByFeatureId.get(feature.id) ?? [];
+      // A passed non-DOM proof (N157) is complete flow evidence by itself:
+      // the feature's outcome lives in app state or canvas pixels, so no
+      // preparation repair could ever render the missing DOM assert.
+      if (tagged.some((action) => action.declaredProofKind !== undefined)) {
+        return undefined;
+      }
       const missing = [
         ...(tagged.some((action) => action.kind !== "assert")
           ? []
@@ -4023,6 +4077,94 @@ try {
             : "no visible element with accessible name " + JSON.stringify(proof.name) + " on " + target.path,
           featureId: target.featureId,
           passed: visible,
+        });
+      } else if (proof.kind === "app-state") {
+        // N157 preferred non-DOM rung: the app's own persisted state is the
+        // evidence. Read once, and once more after the settle window for
+        // apps that write their store shortly after boot.
+        const readStoredValue = () => page.evaluate(([source, key]) => {
+          try {
+            const storage = source === "session-storage" ? window.sessionStorage : window.localStorage;
+            return storage.getItem(key);
+          } catch { return null; }
+        }, [proof.source, proof.key]).catch(() => null);
+        let stored = await readStoredValue();
+        if (!(typeof stored === "string" && stored.includes(proof.contains))) {
+          await waitForQuietDom(250, 1500);
+          stored = await readStoredValue();
+        }
+        const passed = typeof stored === "string" && stored.includes(proof.contains);
+        result.declaredProofs.push({
+          detail: passed
+            ? "stored " + proof.source + " value under " + JSON.stringify(proof.key) + " contains " + JSON.stringify(proof.contains) + " on " + target.path
+            : typeof stored === "string"
+              ? "stored " + proof.source + " value under " + JSON.stringify(proof.key) + " does not contain " + JSON.stringify(proof.contains) + " on " + target.path
+              : "no " + proof.source + " value under " + JSON.stringify(proof.key) + " on " + target.path,
+          featureId: target.featureId,
+          passed,
+        });
+      } else if (proof.kind === "canvas-delta") {
+        // N157 weakest acceptable rung: click the named control and require
+        // the largest visible canvas region to render different pixels. Two
+        // pre-click shots detect self-animating canvases, whose repaints
+        // this proof could never attribute to the click.
+        const exact = page.getByRole("button", { exact: true, name: proof.locator });
+        const control = (await exact.count()) === 1 ? exact : page.getByRole("button", { exact: false, name: proof.locator });
+        const matches = await control.count();
+        if (matches !== 1) {
+          result.declaredProofs.push({
+            detail: "control " + JSON.stringify(proof.locator) + " matched " + matches + " elements on " + target.path + "; the proof needs exactly one",
+            featureId: target.featureId,
+            passed: false,
+          });
+          continue;
+        }
+        const canvases = page.locator("canvas");
+        const canvasCount = await canvases.count().catch(() => 0);
+        let box = null;
+        for (let index = 0; index < canvasCount; index += 1) {
+          const candidate = canvases.nth(index);
+          if (!(await candidate.isVisible().catch(() => false))) continue;
+          const candidateBox = await candidate.boundingBox().catch(() => null);
+          if (!candidateBox || candidateBox.width < 2 || candidateBox.height < 2) continue;
+          if (box === null || candidateBox.width * candidateBox.height > box.width * box.height) box = candidateBox;
+        }
+        const viewport = page.viewportSize() || { height: 720, width: 1280 };
+        const clip = box === null ? null : {
+          height: Math.min(box.height, viewport.height - Math.max(box.y, 0)),
+          width: Math.min(box.width, viewport.width - Math.max(box.x, 0)),
+          x: Math.max(box.x, 0),
+          y: Math.max(box.y, 0),
+        };
+        if (clip === null || clip.width < 2 || clip.height < 2) {
+          result.declaredProofs.push({
+            detail: "no visible canvas element on " + target.path,
+            featureId: target.featureId,
+            passed: false,
+          });
+          continue;
+        }
+        const before = await page.screenshot({ clip });
+        await page.waitForTimeout(300);
+        const beforeAgain = await page.screenshot({ clip });
+        if (!before.equals(beforeAgain)) {
+          result.declaredProofs.push({
+            detail: "the canvas repaints without interaction on " + target.path + "; canvas-delta cannot attribute a change to " + JSON.stringify(proof.locator),
+            featureId: target.featureId,
+            passed: false,
+          });
+          continue;
+        }
+        await control.click({ timeout: 4000 });
+        await waitForQuietDom(250, 1500);
+        const after = await page.screenshot({ clip });
+        const passed = !beforeAgain.equals(after);
+        result.declaredProofs.push({
+          detail: passed
+            ? "the canvas repainted after clicking " + JSON.stringify(proof.locator) + " on " + target.path
+            : "the canvas did not change after clicking " + JSON.stringify(proof.locator) + " on " + target.path,
+          featureId: target.featureId,
+          passed,
         });
       } else {
         const exact = page.getByRole("button", { exact: true, name: proof.locator });

@@ -1030,6 +1030,132 @@ ${fillers}
     }
   }, 40_000);
 
+  it("executes app-state and canvas-delta proofs against a live canvas page", async () => {
+    // N157 (excalidraw): the feature's outcome renders to a canvas and never
+    // enters the DOM. The app-state rung reads the app's own persisted
+    // storage; the canvas-delta rung clicks the named control and
+    // screenshot-diffs the canvas region. Pass and fail verdicts must both
+    // reach the observation with honest details.
+    const canvasPage = `<!doctype html><html><head><title>Canvas Studio</title></head><body>
+<main>
+<h1>Canvas Studio</h1>
+<button id="draw">Draw rectangle</button>
+<button>Inert control</button>
+<canvas id="board" width="300" height="200"></canvas>
+<script>
+localStorage.setItem("studio-scene", JSON.stringify({ shapes: [{ label: "Server rack", type: "rectangle" }] }));
+const context = document.getElementById("board").getContext("2d");
+context.fillStyle = "#ffffff";
+context.fillRect(0, 0, 300, 200);
+document.getElementById("draw").addEventListener("click", () => {
+  context.fillStyle = "#c0392b";
+  context.fillRect(40, 40, 120, 80);
+});
+</script>
+</main>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(canvasPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-canvas-proofs-"),
+      );
+      const canvasFeature = (
+        id: string,
+        expectedProof: PreparedDemoFeature["expectedProof"],
+      ): PreparedDemoFeature => ({
+        authStrategy: "none",
+        description: `Canvas behavior ${id}.`,
+        entryPaths: ["/"],
+        ...(expectedProof === undefined ? {} : { expectedProof }),
+        fixtureNotes: [],
+        id,
+        label: id,
+        sourcePaths: ["src/board.tsx"],
+      });
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`, [
+          canvasFeature("scene-persisted", {
+            contains: '"type":"rectangle"',
+            key: "studio-scene",
+            kind: "app-state",
+            source: "local-storage",
+          }),
+          canvasFeature("scene-wrong-shape", {
+            contains: '"type":"ellipse"',
+            key: "studio-scene",
+            kind: "app-state",
+            source: "local-storage",
+          }),
+          canvasFeature("scene-missing-key", {
+            contains: '"type":"rectangle"',
+            key: "absent-key",
+            kind: "app-state",
+            source: "local-storage",
+          }),
+          canvasFeature("draw-rectangle", {
+            kind: "canvas-delta",
+            locator: "Draw rectangle",
+          }),
+          canvasFeature("inert-control", {
+            kind: "canvas-delta",
+            locator: "Inert control",
+          }),
+        ])
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 45_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        declaredProofs?: Array<{
+          detail: string;
+          featureId: string;
+          passed: boolean;
+        }>;
+        fatalError?: string;
+      };
+
+      expect(result.fatalError).toBeUndefined();
+      const byFeature = new Map(
+        (result.declaredProofs ?? []).map((proof) => [proof.featureId, proof]),
+      );
+      expect(byFeature.get("scene-persisted")?.passed).toBe(true);
+      expect(byFeature.get("scene-persisted")?.detail).toContain(
+        "studio-scene",
+      );
+      expect(byFeature.get("scene-wrong-shape")?.passed).toBe(false);
+      expect(byFeature.get("scene-wrong-shape")?.detail).toContain("ellipse");
+      expect(byFeature.get("scene-missing-key")?.passed).toBe(false);
+      expect(byFeature.get("scene-missing-key")?.detail).toContain(
+        "absent-key",
+      );
+      expect(byFeature.get("draw-rectangle")?.passed).toBe(true);
+      expect(byFeature.get("inert-control")?.passed).toBe(false);
+      expect(byFeature.get("inert-control")?.detail).toContain(
+        "did not change",
+      );
+    } finally {
+      server.close();
+    }
+  }, 60_000);
+
   it("re-harvests a feature entry route whose first paint rendered nothing", async () => {
     // The first hit races a cold compile and serves only a skeleton; every
     // later hit renders the real page. A feature entry route about to be
