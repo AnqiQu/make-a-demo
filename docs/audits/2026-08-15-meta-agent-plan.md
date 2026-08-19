@@ -239,6 +239,21 @@ the run report. No blocking authority: triage cannot fail a run, only
 annotate and steer. Acceptance: a twenty-class profile yields a
 lighter-lifecycle hint and a capacity warning before any sandbox work.
 
+Landed. Triage consults the strategist once at run start, gated on the
+deterministic heavyweight submitted-code capacity classification
+(`selectSubmittedCodeSandboxClass`), so standard-class runs never pay
+for it — the design-rule-4 trigger vocabulary's "capacity-class
+classification". A fresh configured-model `run-triage` stage reads the
+repo-profile artifact plus the materialized screened repo and answers
+through the remove-then-read `run-triage-advice.json` artifact
+(schema: up to eight non-empty hints plus an optional warning; audit
+copies under `agent-artifact-attempts/run-triage/`). Missing, invalid,
+timed-out, or failed advice is fail-open. Hints flow additively into
+both repo-preparation prompt attempts and never override contract
+text; the warning is persisted as `envelopeFitWarning` on the pipeline
+run manifest on passed and failed runs alike — the twenty acceptance
+is the failed-run-report test.
+
 ### M3 (offline diagnostician)
 
 A CLI (`bun run diagnose:run <run-directory>`) that reads a completed
