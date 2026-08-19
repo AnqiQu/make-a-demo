@@ -38,6 +38,12 @@ strict digraph "dependency-cruiser output"{
     "src/server/agent-harness/app-explorer/submitted-app-explorer.ts" -> "src/server/agent-harness/tools/sandbox-capacity.ts"
     "src/server/agent-harness/app-explorer/submitted-app-explorer.ts" -> "src/server/agent-harness/app-explorer/auth-wall.ts"
     "src/server/agent-harness/app-explorer/submitted-app-explorer.ts" -> "src/server/agent-harness/app-explorer/stderr-error-signal.ts"
+    subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/agent-harness" {label="agent-harness" subgraph "cluster_src/server/agent-harness/daytona" {label="daytona" "src/server/agent-harness/daytona/deadline-capped-workspace.test.ts" [label=<deadline-capped-workspace.test.ts> tooltip="deadline-capped-workspace.test.ts" URL="src/server/agent-harness/daytona/deadline-capped-workspace.test.ts" fillcolor="#ddfeff"] } } } }
+    "src/server/agent-harness/daytona/deadline-capped-workspace.test.ts" -> "src/server/agent-harness/daytona/deadline-capped-workspace.ts"
+    "src/server/agent-harness/daytona/deadline-capped-workspace.test.ts" -> "src/server/agent-harness/daytona/workspace.interface.ts"
+    "src/server/agent-harness/daytona/deadline-capped-workspace.test.ts" -> "src/server/agent-harness/daytona/workspace.test-helpers.ts"
+    subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/agent-harness" {label="agent-harness" subgraph "cluster_src/server/agent-harness/daytona" {label="daytona" "src/server/agent-harness/daytona/deadline-capped-workspace.ts" [label=<deadline-capped-workspace.ts> tooltip="deadline-capped-workspace.ts" URL="src/server/agent-harness/daytona/deadline-capped-workspace.ts" fillcolor="#ddfeff"] } } } }
+    "src/server/agent-harness/daytona/deadline-capped-workspace.ts" -> "src/server/agent-harness/daytona/workspace.interface.ts"
     subgraph "cluster_src" {label="src" subgraph "cluster_src/server" {label="server" subgraph "cluster_src/server/agent-harness" {label="agent-harness" subgraph "cluster_src/server/agent-harness/daytona" {label="daytona" "src/server/agent-harness/daytona/submitted-code-artifact-archive.test.ts" [label=<submitted-code-artifact-archive.test.ts> tooltip="submitted-code-artifact-archive.test.ts" URL="src/server/agent-harness/daytona/submitted-code-artifact-archive.test.ts" fillcolor="#ddfeff"] } } } }
     "src/server/agent-harness/daytona/submitted-code-artifact-archive.test.ts" -> "src/server/agent-harness/daytona/submitted-code-artifact-archive.ts"
     "src/server/agent-harness/daytona/submitted-code-artifact-archive.test.ts" -> "src/server/agent-harness/daytona/workspace.test-helpers.ts"
@@ -101,6 +107,7 @@ strict digraph "dependency-cruiser output"{
     "src/server/agent-harness/default/default-harness-dependencies.ts" -> "src/server/agent-harness/app-explorer/auth-wall.ts"
     "src/server/agent-harness/default/default-harness-dependencies.ts" -> "src/server/agent-harness/app-explorer/stderr-error-signal.ts"
     "src/server/agent-harness/default/default-harness-dependencies.ts" -> "src/server/agent-harness/app-explorer/submitted-app-explorer.ts"
+    "src/server/agent-harness/default/default-harness-dependencies.ts" -> "src/server/agent-harness/daytona/deadline-capped-workspace.ts"
     "src/server/agent-harness/default/default-harness-dependencies.ts" -> "src/server/agent-harness/daytona/submitted-code-artifact-archive.ts"
     "src/server/agent-harness/default/default-harness-dependencies.ts" -> "src/server/agent-harness/daytona/submitted-code-external-resource-cache.ts"
     "src/server/agent-harness/default/default-harness-dependencies.ts" -> "src/server/agent-harness/daytona/submitted-code-sandbox-class.ts"
