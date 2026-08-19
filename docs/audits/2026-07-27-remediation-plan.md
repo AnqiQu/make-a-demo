@@ -8594,6 +8594,22 @@ Acceptance: a run that reaches its deadline
 mid-stage fails within minutes of the 90-minute
 mark, not twenty-plus.
 
+Landed: a deadline-capped workspace decorator now
+wraps the sandbox handle at creation. Every
+execute/executeSubmittedCode command — agent runs,
+install/build gates, readiness-probe attempts — has
+its timeout clamped to the remaining job budget
+(the omitted-timeout default moved into the seam
+contract so decorator and provider cannot drift),
+and a command issued after the budget is spent is
+refused with the classified job-deadline error
+instead of starting. Teardown, log collection, and
+transfers stay uncapped so a deadline-crossed run
+still cleans up and keeps its evidence. The
+between-stage assertions are unchanged; overshoot
+is now bounded by one clamped command, not a stack
+of ten-minute defaults.
+
 ### N157 (High, feature) — a proof rung for canvas-rendered features
 
 Declared proofs need a vocabulary for features whose
@@ -8611,6 +8627,28 @@ through them. Acceptance: excalidraw's wave-14
 requested features ground through an app-state or
 canvas-delta proof and the run proceeds past
 app-exploration.
+
+Landed: both rungs exist end to end, declared as
+data, never code. app-state names a storage
+(local-storage or session-storage), the key the app
+persists under, and a substring the stored value
+must contain; canvas-delta names the control whose
+click must change the largest visible canvas region
+(screenshot-diff, with a self-animating-canvas
+guard that fails honestly when a delta cannot be
+attributed). Manifest contract, schema reader,
+verification guide, and inventory assertions all
+carry them; the generated explorer script executes
+them, so the preflight probe learned them for free.
+A passed non-DOM proof mints a catalog action
+marked declaredProofKind, and both the explorer's
+flow-evidence-gap check and isFeatureGroundable
+accept that marker as complete grounding — a canvas
+route harvests no DOM asserts, so nothing else
+could satisfy the assert+interaction pair. Known
+boundary: the demo-script vocabulary still has no
+draw-on-canvas verbs; that is excalidraw's next
+frontier, to be surfaced by the rerun.
 
 ### Watchlist (updated)
 
