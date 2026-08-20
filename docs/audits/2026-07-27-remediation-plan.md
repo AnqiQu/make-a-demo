@@ -8769,6 +8769,36 @@ Acceptance: excalidraw's wave-15 evidence produces
 no compiled waitForURL for the plus banner and the
 scene grounds on in-app actions only.
 
+Landed: a shared missing-value detector
+(route-placeholders) recognizes literal
+`undefined`/`null` path segments, decoded, in both
+the path and the hash route. Link harvesting and
+the exercised-click catalog builder both drop such
+destinations, so the click is recorded with no
+navigation destination. A click observed leaving
+the app origin now records where it went in a new
+externalDestination field — non-navigable evidence,
+mirroring N142's auth-wall treatment: excluded from
+exercised evidence, from isFeatureGroundable, and
+from the flow-evidence-gap check, and a requested
+feature left with only external clicks fails with
+a new "external-destination" cause naming each
+id → URL, with matching repair guidance in the
+verification guide. The verdict branch sits after
+the declared-proof branch, so a passed N157 proof
+still grounds a canvas feature despite the banner
+click — excalidraw's grounding is protected by a
+dedicated test. Defense in depth at the script
+contract: a click navigationDestination carrying a
+missing-value interpolation is rejected even when
+the catalog agrees, and navigation enrichment
+strips a poisoned catalog destination rather than
+injecting it (old evidence cannot trap the repair
+loop on an unfixable reject). Off-app URLs were
+already rejected by the script action reader's
+local-app-path assertion; that mechanism is now
+pinned by a regression test.
+
 ### N159 (High, bugfix) — the build-command rules must obey the classifier that polices them
 
 Three moves, one theme. (1) Make the
@@ -8793,11 +8823,42 @@ wave-15 round 2 with the strategist's directive
 yields a candidate containing the explicit package
 builds.
 
+Landed: all three moves. (1) The runtime repair
+prompt now computes a missing-build-output
+predicate — runtime-configuration classification
+plus "no declared build produces" in the failure
+summary (both classifier paths, static and
+runtime, land that message in logsSummary) — and
+swaps the omit-build-for-dev line for an explicit
+declare-the-build-that-emits-that-entry
+instruction, the same conditional pattern as the
+adjacent preserve-fields escape hatch. (2) The
+artifact-repair prompt's shape sentence
+(app-scoped vs root aggregate) moved from its
+contract section to its approach section; the
+omit-for-dev sentence stays contract. Shape is
+strategy, not law — directives can now lawfully
+prescribe directus's explicit package builds.
+(3) resolvePreparationRuntime's honored-build
+predicate gained an unanchored, boundary-guarded
+consumed-build-output detector over the resolved
+start script, OR'd with the anchored
+production-entry match: outline's
+`concurrently … nodemon ./build/server/index.js`
+dev shape is now production-entry-like and its
+declared build is honored. Absent-workspace builds
+are still stripped first, unchanged.
+
 ### Watchlist (updated)
 
-- N156 amendment: deadline-cap deaths must name
-  wall-clock exhaustion, not a millisecond command
-  timeout.
+- N156 amendment — landed: the deadline-capped
+  decorator converts a command timeout into the
+  classified job-deadline error ("exceeded its
+  90-minute wall-clock budget") only when the cap
+  was binding; unclamped timeouts and
+  inactivity/transport errors pass through, so
+  ordinary stage timeouts keep their exit-124
+  repair path.
 - calcom: first capture reached; next wave tests
   whether prep stays fast enough to finish capture
   inside the clock (N150's savings now matter).
