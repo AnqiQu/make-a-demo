@@ -32,7 +32,10 @@ import {
   readScriptCandidate,
   readValidationReport,
 } from "../schemas/artifacts";
-import { findRoutePlaceholder } from "../tools/route-placeholders";
+import {
+  findMissingValueSegment,
+  findRoutePlaceholder,
+} from "../tools/route-placeholders";
 import { assertCanonicalDemoNarrative } from "./demo-narrative";
 import { assertCaptureReadyScriptQuality } from "./script-quality";
 
@@ -347,8 +350,16 @@ export function ensureSceneNavigation(input: {
         typeof record.sourceActionId === "string"
           ? actionsById.get(record.sourceActionId)
           : undefined;
-      const destination =
+      // N158: a catalog destination carrying a missing-value interpolation
+      // is unreachable — strip it instead of injecting a guaranteed-dead
+      // waitForURL the repair loop could never fix.
+      const sourceDestination =
         source?.kind === "click" ? source.navigationDestination : undefined;
+      const destination =
+        sourceDestination !== undefined &&
+        findMissingValueSegment(sourceDestination) !== undefined
+          ? undefined
+          : sourceDestination;
       if (record.navigationDestination === destination) return action;
       actionsChanged = true;
       changed = true;
@@ -758,6 +769,17 @@ function assertActionMatchesCatalog(
     throw new Error(
       `Browser action ${action.id} targets ${action.path} but its observed ActionCatalog route is ${sourceAction.route}`,
     );
+  }
+  // N158 (excalidraw, 2026-08-19): the app interpolated a missing value into
+  // its own href and the capture waited forever on /undefined/plus. Catalog
+  // agreement is no defense — the compiled waitForURL would never resolve.
+  if (action.type === "click" && action.navigationDestination !== undefined) {
+    const missingValue = findMissingValueSegment(action.navigationDestination);
+    if (missingValue !== undefined) {
+      throw new Error(
+        `Browser action ${action.id} navigationDestination ${action.navigationDestination} carries a missing-value interpolation ("${missingValue}"); the app never serves that path, so the click must omit its navigation destination`,
+      );
+    }
   }
   if (
     action.type === "click" &&

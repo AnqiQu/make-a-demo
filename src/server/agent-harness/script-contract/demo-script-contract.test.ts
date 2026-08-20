@@ -649,6 +649,113 @@ describe("DemoScriptContract", () => {
     ).toMatchObject({ navigationDestination: "/auth/login", type: "click" });
   });
 
+  it("rejects a click navigation destination that is not a valid local path", () => {
+    // N158 (excalidraw): the compiled script waited forever on
+    // "/undefined/plus?utm_source=..." — the app interpolated a missing
+    // value into its own URL and the catalog agreed with it. Catalog
+    // agreement is no defense; the contract must reject any destination
+    // that is not a navigable local path.
+    const catalog = readActionCatalog({
+      ...actionCatalog(),
+      actions: [
+        ...actionCatalog().actions.map((action) =>
+          action.id === "open-dashboard"
+            ? {
+                ...action,
+                navigationDestination: "/undefined/plus?utm_source=excalidraw",
+              }
+            : action,
+        ),
+        navigateAction(),
+      ],
+    });
+    const script = structuredClone(validDemoScript()) as unknown as {
+      scenes: Array<{ actions: Array<Record<string, unknown>> }>;
+    };
+    const clickAction = script.scenes[0]?.actions.find(
+      (action) => action.type === "click",
+    );
+    if (clickAction === undefined) {
+      throw new Error("Expected a click action fixture");
+    }
+    clickAction.navigationDestination = "/undefined/plus?utm_source=excalidraw";
+
+    const report = validateDemoScriptCandidateContract({
+      actionCatalog: catalog,
+      flowSpec: flowSpec(),
+      preparationManifest: preparationManifest(),
+      scriptCandidate: scriptCandidate(script),
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain("missing-value interpolation");
+  });
+
+  it("never injects a catalog destination carrying a missing-value interpolation", () => {
+    // N158: enrichment must strip the unreachable destination rather than
+    // copy it into the script, where the reject above would trap the repair
+    // loop on evidence no repair round can change.
+    const catalog = readActionCatalog({
+      ...actionCatalog(),
+      actions: [
+        ...actionCatalog().actions.map((action) =>
+          action.id === "open-dashboard"
+            ? {
+                ...action,
+                navigationDestination: "/undefined/plus?utm_source=excalidraw",
+              }
+            : action,
+        ),
+        navigateAction(),
+      ],
+    });
+
+    const augmented = ensureSceneNavigation({
+      actionCatalog: catalog,
+      scriptCandidate: readScriptCandidate(scriptCandidate(validDemoScript())),
+    });
+
+    const actions = (
+      augmented.scriptJsonContent as {
+        scenes: Array<{ actions: Array<Record<string, unknown>> }>;
+      }
+    ).scenes[0]?.actions;
+    expect(
+      actions?.find((action) => action.type === "click"),
+    ).not.toHaveProperty("navigationDestination");
+    expect(
+      validateDemoScriptCandidateContract({
+        actionCatalog: catalog,
+        flowSpec: flowSpec(),
+        preparationManifest: preparationManifest(),
+        scriptCandidate: augmented,
+      }),
+    ).toMatchObject({ status: "passed" });
+  });
+
+  it("rejects a click navigation destination pointing off the app", () => {
+    const script = structuredClone(validDemoScript()) as unknown as {
+      scenes: Array<{ actions: Array<Record<string, unknown>> }>;
+    };
+    const clickAction = script.scenes[0]?.actions.find(
+      (action) => action.type === "click",
+    );
+    if (clickAction === undefined) {
+      throw new Error("Expected a click action fixture");
+    }
+    clickAction.navigationDestination = "https://plus.excalidraw.com/plus";
+
+    const report = validateDemoScriptCandidateContract({
+      actionCatalog: readActionCatalog(actionCatalog()),
+      flowSpec: flowSpec(),
+      preparationManifest: preparationManifest(),
+      scriptCandidate: scriptCandidate(script),
+    });
+
+    expect(report.status).toBe("failed");
+    expect(report.logsSummary).toContain("local app path");
+  });
+
   it("derives the missing Scene navigation from the catalog route", () => {
     const catalog = readActionCatalog({
       ...actionCatalog(),
