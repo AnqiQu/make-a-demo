@@ -861,6 +861,67 @@ describe("resolveRuntimeTarget", () => {
     );
   });
 
+  it("keeps a declared build when the dev script consumes build output mid-command", () => {
+    // N159 (outline, 2026-08-19): `yarn run dev` resolved to a script running
+    // nodemon over ./build/server/index.js — the N148 classifier demanded the
+    // build every round while resolution stripped every declaration because
+    // the anchored production-entry regex only matches scripts that START
+    // with node/bun. A dev start whose resolved script consumes build output
+    // is production-entry-like and its declared build must be honored.
+    const preparationManifest = manifest("server/index.ts");
+    preparationManifest.buildCommandUsed = "yarn run build";
+    preparationManifest.startCommandUsed = "yarn run dev";
+    const scripts = {
+      build: "vite build && tsc --project tsconfig.server.json",
+      dev: 'concurrently "vite build --watch" "nodemon ./build/server/index.js"',
+    };
+    const runPlan: RunPlan = {
+      allowedPorts: [3000],
+      appDir: ".",
+      assumptions: [],
+      env: {},
+      expectedLocalUrl: "http://127.0.0.1:3000",
+      installCommand: "yarn install --frozen-lockfile",
+      localServices: [],
+      riskFlags: [],
+      runtime: "node",
+      startCommand: "yarn run dev",
+      targetSelection: {
+        evidencePaths: ["package.json", "server/index.ts"],
+        reason: "The repository exposes one browser runtime.",
+        role: "product",
+        source: "single-candidate",
+        targetId: ".",
+      },
+      validationExpectations: [],
+    };
+
+    const resolution = resolvePreparationRuntime({
+      preparationManifest,
+      repoProfile: profile({
+        browserRuntimeCandidates: [
+          {
+            dir: ".",
+            evidencePaths: ["package.json", "server/index.ts"],
+            frameworks: ["vite"],
+            ports: [],
+            scripts,
+          },
+        ],
+        candidateInstallCommands: ["yarn install --frozen-lockfile"],
+        lockfiles: ["yarn.lock"],
+        packageManager: "yarn",
+        packageScripts: scripts,
+        workspacePackages: [],
+      }),
+      runPlan,
+    });
+
+    expect(resolution.preparationManifest.buildCommandUsed).toBe(
+      "yarn run build",
+    );
+  });
+
   it("still rejects an absent workspace build for a production-entry start", () => {
     const preparationManifest = manifest("apps/api/src/main.ts");
     preparationManifest.buildCommandUsed =

@@ -135,12 +135,33 @@ function readResolvedProductionEntry(
   command: string,
   scripts: Record<string, string> | undefined,
 ): string | undefined {
-  const scriptName = readScriptName(command);
-  const resolvedCommand =
-    scriptName === undefined ? command : scripts?.[scriptName];
+  const resolvedCommand = resolveScriptCommand(command, scripts);
   return resolvedCommand === undefined
     ? undefined
     : readProductionEntry(resolvedCommand);
+}
+
+function resolveScriptCommand(
+  command: string,
+  scripts: Record<string, string> | undefined,
+): string | undefined {
+  const scriptName = readScriptName(command);
+  return scriptName === undefined ? command : scripts?.[scriptName];
+}
+
+/**
+ * A start whose resolved script references a path inside a conventional
+ * build-output directory is production-entry-like even when the reference
+ * sits mid-command (nodemon, concurrently — outline's `yarn run dev`). The
+ * anchored production-entry regex misses those shapes, but the N148
+ * runtime-configuration classifier resolves them and demands the build every
+ * round — so the honored-build predicate must agree with the classifier or
+ * repair never converges (N159).
+ */
+function consumesBuildOutput(command: string): boolean {
+  return /(?<![\w.@-])(?:\.\/)?(?:\.next|\.output|build|dist|out)\/[^\s"']+/.test(
+    command,
+  );
 }
 
 /** Applies an unambiguous backend-owned target to the auditable manifest. */
@@ -168,12 +189,15 @@ export function resolvePreparationRuntime(input: {
   }
   const { buildCommandUsed: agentBuildCommand, ...manifest } =
     input.preparationManifest;
+  const resolvedStartCommand = resolveScriptCommand(
+    runtimeTarget.start.command,
+    readRuntimeScripts(runtimeTarget.start.cwd, input.repoProfile),
+  );
   const startsFromProductionEntry =
     runtimeTarget.build === undefined &&
-    readResolvedProductionEntry(
-      runtimeTarget.start.command,
-      readRuntimeScripts(runtimeTarget.start.cwd, input.repoProfile),
-    ) !== undefined;
+    resolvedStartCommand !== undefined &&
+    (readProductionEntry(resolvedStartCommand) !== undefined ||
+      consumesBuildOutput(resolvedStartCommand));
   const buildCommandUsed =
     runtimeTarget.build?.command ??
     readHonoredAgentBuildCommand(
