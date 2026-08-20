@@ -6631,6 +6631,10 @@ function createRepoPreparationRepairPrompt(input: {
     `Use this local runtime URL in the manifest: ${input.runPlan.expectedLocalUrl}`,
     `Use this install command unless you have a stronger repo-specific reason: ${input.runPlan.installCommand}`,
     `Use this start command unless you have a stronger repo-specific reason: ${input.runPlan.startCommand}`,
+    // Build SHAPE is strategy, not law (N159): a strategist directive may
+    // lawfully prescribe a broader or explicit build, so this stays out of
+    // the contract section.
+    "If a monorepo build is required, select an app-scoped package script instead of the root aggregate build.",
     `Previous OpenCode output excerpt:\n${formatOpenCodeOutputExcerpt(
       input.previousResult,
     )}`,
@@ -6648,7 +6652,7 @@ function createRepoPreparationRepairPrompt(input: {
     "Preserve original routes, UI components, styles, brand assets, and interaction logic. Repair only authentication, data, external-service, fixture, seed, asset-vendoring, environment, or configuration seams; never create a replacement app or standalone demo server.",
     "Do not finish until the manifest exists at that exact path.",
     "Do not write secrets into files. Replace external services with local fixtures or mocks.",
-    "Omit buildCommandUsed for development-server starts. If a monorepo build is required, select an app-scoped package script instead of the root aggregate build.",
+    "Omit buildCommandUsed for development-server starts.",
     "Do not add command-level working directory flags; workspace command resolution is backend-owned.",
     "The manifest must include every field required by the backend-owned contract. Changed files and validation evidence are recorded by the backend, not authored in the manifest.",
     appDirShapeInstruction,
@@ -6684,6 +6688,12 @@ function createRuntimePreparationRepairPrompt(input: {
   const runtimeConfigurationRepair = runtimeConfigurationClassifications.has(
     input.failureReport.failureClassification?.trim() ?? "",
   );
+  // N159 (outline): when the classifier names a build-output entry the start
+  // command consumes, the omit-build-for-dev default is the exact rule the
+  // classifier is overruling — repeating it deadlocks the repair loop.
+  const missingBuildOutputRepair =
+    runtimeConfigurationRepair &&
+    /no declared build produces/.test(input.failureReport.logsSummary);
   const rebuildFromScreenedSource =
     input.failureReport.stage === "preparation-fidelity";
   const approach = [
@@ -6712,7 +6722,13 @@ function createRuntimePreparationRepairPrompt(input: {
           "The repository was restored from the immutable screened source and the failed manifest was removed. Rebuild the complete preparation candidate and manifest from this clean baseline; no prior workspace edit remains.",
         ]
       : []),
-    "Omit buildCommandUsed for development-server starts. If validation reports that a root aggregate build is too broad, use the exact app-scoped command from the failure summary.",
+    ...(missingBuildOutputRepair
+      ? [
+          "The failure summary names a build-output entry the start command consumes but no declared build produces. Declare the buildCommandUsed that emits that exact entry; the omit-build-for-dev-server default does not apply to this failure.",
+        ]
+      : [
+          "Omit buildCommandUsed for development-server starts. If validation reports that a root aggregate build is too broad, use the exact app-scoped command from the failure summary.",
+        ]),
     ...(runtimeConfigurationRepair
       ? [
           "The backend classified this as a runtime-configuration error. Correct the backend-resolved build/start command fields that caused it; keep appDir, install, port, and base URL unchanged unless the same structured failure names one of them.",
