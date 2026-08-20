@@ -8668,3 +8668,143 @@ With N156–N157 landed and M1 in progress: the five
 greens hold; excalidraw grounds through the new
 rung; ghost gets a first real diagnosis; directus's
 capture arc finally exercises N152.
+
+## Addendum (2026-08-19, wave-15 — the strategist's first live wave: its advice was right and the rule layer refused it twice: N158–N159)
+
+Batch matrix-2026-08-19T22-22-10-154Z, report
+matrix-report-2026-08-19T23-58-58-426Z.json, launched
+minutes after N156/N157 landed — everything specced
+to date ran live, including M1/M2. Three passed
+(homer seventh consecutive, conduit, cyberchef);
+midday and ghostfolio regressed from wave-14; calcom
+broke through to capture for the first time in its
+history and died at the wall clock mid-capture.
+
+Validated this wave: N152's first production
+exercise — excalidraw compiled three
+navigation-observed clicks through the single-span
+navigatedClick and the marker protocol held (no
+nested-marker violation); the failure it surfaced is
+new and real (→ N158). N157 grounded excalidraw's
+canvas features (deepest excalidraw run ever, into
+capture). N156 enforced the deadline exactly twice
+(calcom and twenty both ended at 90m, not 112m) —
+though a deadline-capped stage dies with a
+misleading "Daytona command did not finish within
+3745ms" instead of naming wall-clock exhaustion;
+amend N156's landing to report the deadline as the
+cause when the cap is the remaining-budget floor.
+M2's triage warnings were both accurate, twenty's
+prophetically so ("production frontend build
+requests 8 GiB; unlikely to fit") — it then died
+exactly there. calcom's capture breakthrough
+plausibly owes to triage steering preparation away
+from the broad Turbo closure.
+
+The wave's defining pattern: the strategist (M1)
+consulted on five runs, diagnosed correctly on all
+five, and twice the pipeline's own rule layer
+refused the correct fix.
+
+directus: the strategist saw that the graph-closure
+build excludes @directus/extensions (it is consumed
+by vite.config without being a declared dependency,
+so `--filter=@directus/app...` never builds it) and
+prescribed the exact explicit command. The repair
+agent kept the graph build in both subsequent
+candidates — the directive never entered a
+candidate. The build-shape rule ("narrowest
+app-scoped build, never a root aggregate build")
+lives in the repair CONTRACT section, which
+directives by design cannot supersede.
+
+outline: five repair rounds, buildCommandUsed NONE
+in every candidate, while the N148 classifier
+demanded a build every round ("startCommandUsed runs
+build/server/index.js but no declared build produces
+it" — resolved through `yarn run dev`). The
+contract carries both "Omit buildCommandUsed for
+development-server starts" (unconditional) and the
+runtime-configuration escape hatch ("correct the
+build/start fields") — for a dev start whose script
+consumes build output, the two contract lines
+contradict and the agent obeyed the conservative
+one, five rounds running.
+
+midday and ghostfolio regressed on preparation
+nondeterminism, not machinery: midday's demo gating
+left server components constructing a Supabase
+client without env (routes served empty shells);
+ghostfolio's Nest API was healthy while the client
+route 404'd (static-client serving path). The
+strategist diagnosed both correctly; budgets ended
+the runs. No new rule; watch both.
+
+ghost repeated its wave-14 artifact-production
+death unchanged (never enters the repair loop, so
+the strategist never sees it). twenty remains
+capacity-bound at the org caps, exactly as its
+triage warning predicted.
+
+### N158 (High, bugfix) — external navigation destinations must never ground clicks
+
+Excalidraw's script waited on
+`http://127.0.0.1:5000/undefined/plus?utm_source=excalidraw…`
+— the app's external "Excalidraw+" marketing banner,
+recorded as a navigable click with a literal
+`undefined` interpolated into the local path. Three
+fixes at the existing seams: (1) the exploration
+evidence builder must never interpolate a missing
+value into a destination path — resolve or drop;
+(2) at catalog build, a click whose observed
+destination is cross-origin is non-navigable
+evidence — treated like N142's auth-wall
+destinations: never grounds an inferred feature,
+and a requested feature left with only external
+destinations fails with an "external destination"
+detail on the existing classification; (3) the
+script contract rejects any navigationDestination
+that is not a valid local path (defense in depth).
+Acceptance: excalidraw's wave-15 evidence produces
+no compiled waitForURL for the plus banner and the
+scene grounds on in-app actions only.
+
+### N159 (High, bugfix) — the build-command rules must obey the classifier that polices them
+
+Three moves, one theme. (1) Make the
+omit-build-for-dev contract line
+classification-aware: when the failure is a
+runtime-configuration error naming a build-output
+entry that the resolved start script consumes, the
+omit rule yields — the same pattern that fixed the
+preserve-fields handcuff. (2) Reclassify
+build-command SHAPE guidance (app-scoped vs root
+aggregate) from contract to approach, where
+directives can lawfully supersede it — the directus
+loss. (3) Align resolvePreparationRuntime's
+honored-build predicate with the script-resolving
+classifier: a dev start whose resolved script
+consumes build output is production-entry-like, and
+a declared build for it must be honored, not
+stripped. Acceptance: outline's wave-15 evidence
+converges (a round declares the build, resolution
+keeps it, preflight passes); replaying directus's
+wave-15 round 2 with the strategist's directive
+yields a candidate containing the explicit package
+builds.
+
+### Watchlist (updated)
+
+- N156 amendment: deadline-cap deaths must name
+  wall-clock exhaustion, not a millisecond command
+  timeout.
+- calcom: first capture reached; next wave tests
+  whether prep stays fast enough to finish capture
+  inside the clock (N150's savings now matter).
+- midday, ghostfolio: prep nondeterminism
+  regressions; strategist diagnoses on file.
+- ghost: artifact-production loop, still outside
+  every repair seam — needs its own diagnosis.
+- twenty: org caps; triage now predicts it at run
+  start. Consider whether a confirmed envelope
+  warning should arm earlier stop eligibility.
