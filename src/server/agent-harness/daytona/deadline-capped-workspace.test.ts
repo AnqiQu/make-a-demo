@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDeadlineCappedWorkspace } from "./deadline-capped-workspace";
 import {
+  AgentHarnessCommandTimeoutError,
   AgentHarnessJobDeadlineError,
   type AgentHarnessWorkspaceExecuteOptions,
   defaultWorkspaceCommandTimeoutMs,
@@ -102,6 +103,63 @@ describe("createDeadlineCappedWorkspace", () => {
       capped.executeSubmittedCode("bun run build"),
     ).rejects.toBeInstanceOf(AgentHarnessJobDeadlineError);
     expect(recorded).toHaveLength(0);
+  });
+
+  it("reports wall-clock exhaustion when a clamped command hits its cap", async () => {
+    // Wave-15 (calcom, twenty): a stage killed by the remaining-budget floor
+    // died with "Daytona command did not finish within 3745ms" — a raw
+    // millisecond timeout that hides the real cause. When the cap was the
+    // binding constraint, the failure must name the job's wall-clock budget.
+    const workspace = createFakeAgentHarnessWorkspace({
+      execute: async (_command, options) => {
+        throw new AgentHarnessCommandTimeoutError(
+          options?.timeoutMs ?? 0,
+          "deadline",
+        );
+      },
+    });
+    const capped = createDeadlineCappedWorkspace(workspace, {
+      atMs: Date.now() + 2_000,
+      totalMs: 90 * 60_000,
+    });
+
+    await expect(
+      capped.execute("opencode run", { timeoutMs: 20 * 60_000 }),
+    ).rejects.toThrow(/90-minute wall-clock budget/);
+  });
+
+  it("keeps a stage's own timeout error when the cap was not binding", async () => {
+    // A command that times out inside a plentiful budget is an ordinary
+    // stage timeout: orchestration converts it into bounded agent feedback,
+    // so it must not be re-labeled as wall-clock exhaustion.
+    const workspace = createFakeAgentHarnessWorkspace({
+      execute: async (_command, options) => {
+        throw new AgentHarnessCommandTimeoutError(
+          options?.timeoutMs ?? 0,
+          "deadline",
+        );
+      },
+      executeSubmittedCode: async () => {
+        throw new AgentHarnessCommandTimeoutError(1_000, "inactivity");
+      },
+    });
+    const capped = createDeadlineCappedWorkspace(workspace, {
+      atMs: Date.now() + 60 * 60_000,
+      totalMs: 90 * 60_000,
+    });
+
+    await expect(
+      capped.execute("opencode run", { timeoutMs: 1_000 }),
+    ).rejects.toBeInstanceOf(AgentHarnessCommandTimeoutError);
+    // An inactivity timeout is silence, not budget: even under a clamped
+    // overall timeout it keeps its own diagnosis.
+    const clamped = createDeadlineCappedWorkspace(workspace, {
+      atMs: Date.now() + 2_000,
+      totalMs: 90 * 60_000,
+    });
+    await expect(
+      clamped.executeSubmittedCode("bun run build", { timeoutMs: 60_000 }),
+    ).rejects.toBeInstanceOf(AgentHarnessCommandTimeoutError);
   });
 
   it("keeps teardown and audit seams working after the deadline", async () => {

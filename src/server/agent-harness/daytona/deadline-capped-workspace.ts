@@ -1,4 +1,5 @@
 import {
+  AgentHarnessCommandTimeoutError,
   AgentHarnessJobDeadlineError,
   type AgentHarnessWorkspace,
   type AgentHarnessWorkspaceExecuteOptions,
@@ -32,27 +33,52 @@ export function createDeadlineCappedWorkspace(
 ): AgentHarnessWorkspace {
   const capOptions = (
     options?: AgentHarnessWorkspaceExecuteOptions,
-  ): AgentHarnessWorkspaceExecuteOptions => {
+  ): { clamped: boolean; options: AgentHarnessWorkspaceExecuteOptions } => {
     const remainingMs = jobDeadline.atMs - Date.now();
     if (remainingMs <= 0) {
       throw new AgentHarnessJobDeadlineError(jobDeadline.totalMs);
     }
+    const requestedMs = options?.timeoutMs ?? defaultWorkspaceCommandTimeoutMs;
     return {
-      ...options,
-      timeoutMs: Math.min(
-        options?.timeoutMs ?? defaultWorkspaceCommandTimeoutMs,
-        remainingMs,
-      ),
+      clamped: remainingMs < requestedMs,
+      options: { ...options, timeoutMs: Math.min(requestedMs, remainingMs) },
     };
+  };
+  // A command killed by the remaining-budget floor died of wall-clock
+  // exhaustion, not of its own stage timeout: re-labeling it keeps the
+  // failure message truthful and keeps orchestration from converting the
+  // cap into agent retry feedback. Inactivity and transport timeouts keep
+  // their own diagnosis — silence and lost trailers are not budget.
+  const runCapped = async <T>(
+    options: AgentHarnessWorkspaceExecuteOptions | undefined,
+    run: (capped: AgentHarnessWorkspaceExecuteOptions) => Promise<T>,
+  ): Promise<T> => {
+    const cap = capOptions(options);
+    try {
+      return await run(cap.options);
+    } catch (error) {
+      if (
+        cap.clamped &&
+        error instanceof AgentHarnessCommandTimeoutError &&
+        error.kind === "deadline"
+      ) {
+        throw new AgentHarnessJobDeadlineError(jobDeadline.totalMs);
+      }
+      throw error;
+    }
   };
   const capped: AgentHarnessWorkspace = {
     collectNetworkStateLog: () => workspace.collectNetworkStateLog(),
     collectSandboxLogs: () => workspace.collectSandboxLogs(),
     destroy: () => workspace.destroy(),
     execute: async (command, options) =>
-      workspace.execute(command, capOptions(options)),
+      runCapped(options, (cappedOptions) =>
+        workspace.execute(command, cappedOptions),
+      ),
     executeSubmittedCode: async (command, options) =>
-      workspace.executeSubmittedCode(command, capOptions(options)),
+      runCapped(options, (cappedOptions) =>
+        workspace.executeSubmittedCode(command, cappedOptions),
+      ),
     promoteSubmittedCodeFiles: (paths) =>
       workspace.promoteSubmittedCodeFiles(paths),
     readSubmittedCodeAppStatus: () => workspace.readSubmittedCodeAppStatus(),
