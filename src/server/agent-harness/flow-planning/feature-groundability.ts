@@ -6,8 +6,11 @@ import type { ActionCatalog } from "../schemas/artifacts";
  * prepared feature is groundable when the ActionCatalog tags a visible
  * assertion and a usable interaction for it on selectable routes. A feature
  * with exercised interactions is behavioral, so at least one exercised
- * interaction must remain after auth-degraded clicks are removed; genuinely
- * read-only features may use their observed navigation. One exception
+ * interaction must remain after auth-degraded and external-destination
+ * clicks are removed (N142, N158) — both leave the app's demonstrable
+ * surface, so a flow built on either films the browser departing the
+ * product; genuinely read-only features may use their observed navigation.
+ * One exception
  * (N157): an action minted from a passed non-DOM declared proof (app-state
  * or canvas-delta) grounds its feature by itself — the feature's outcome
  * lives in app state or canvas pixels, so the visible DOM assert can never
@@ -27,7 +30,9 @@ export function isFeatureGroundable(
     input.allowedAuthWallFeatureIds?.has(featureId) === true;
   const isUsableInteraction = (
     action: ActionCatalog["actions"][number],
-  ): boolean => authEvidenceAllowed || !isAuthDegradedClick(action);
+  ): boolean =>
+    action.externalDestination === undefined &&
+    (authEvidenceAllowed || !isAuthDegradedClick(action));
   const actions = input.actionCatalog.actions.filter(
     (action) =>
       (action.featureIds ?? []).includes(featureId) &&

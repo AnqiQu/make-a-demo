@@ -34,6 +34,37 @@ export function findRoutePlaceholder(path: string): string | undefined {
   return undefined;
 }
 
+/**
+ * Detects a missing-value interpolation in a navigation path (N158).
+ *
+ * An app that builds a URL from an unset value emits the literal `undefined`
+ * or `null` into the path (excalidraw's marketing banner rendered
+ * `/undefined/plus?...` from an unset env var, and the compiled demo script
+ * waited on that URL forever). Returns the offending segment, searching the
+ * URL path and a hash-router path the same way `findRoutePlaceholder` does,
+ * or undefined for a path with no interpolated hole. Callers must drop the
+ * destination rather than rewrite it — only the app knows what belonged
+ * there.
+ */
+export function findMissingValueSegment(path: string): string | undefined {
+  let url: URL;
+  try {
+    url = new URL(path, "http://makeademo.invalid");
+  } catch {
+    return undefined;
+  }
+  const hashPath = url.hash.split("?")[0] ?? "";
+  for (const routePart of [url.pathname, hashPath]) {
+    for (const rawSegment of routePart.split("/")) {
+      const segment = decodeSegment(rawSegment);
+      if (segment === "undefined" || segment === "null") {
+        return segment;
+      }
+    }
+  }
+  return undefined;
+}
+
 function decodeSegment(segment: string): string {
   try {
     return decodeURIComponent(segment);

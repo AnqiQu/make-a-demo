@@ -24,7 +24,10 @@ import {
   readAppMap,
   readValidationReport,
 } from "../schemas/artifacts";
-import { findRoutePlaceholder } from "../tools/route-placeholders";
+import {
+  findMissingValueSegment,
+  findRoutePlaceholder,
+} from "../tools/route-placeholders";
 import {
   type SandboxCapacityEvidence,
   readSandboxCapacityEvidence,
@@ -191,6 +194,8 @@ type ObservedInteraction = {
   name: string;
   /** Local same-origin destination observed after a click changed the URL. */
   navigationDestination?: string;
+  /** Off-origin URL observed after a click left the app (N158). */
+  externalDestination?: string;
   outcome: string;
   /**
    * The control state change this interaction caused (N105): a
@@ -1265,6 +1270,10 @@ function readLocalLinkDestination(
   href: string,
   sameOrigin: boolean | undefined,
 ): string | undefined {
+  // A literal undefined/null segment is the app interpolating a missing
+  // value into its own URL (N158): the path is local-shaped but navigates
+  // nowhere real, so it must never become navigation evidence.
+  if (findMissingValueSegment(href) !== undefined) return undefined;
   if (/^(?:\/(?!\/)|#|\?)/.test(href)) return href;
   if (sameOrigin !== true) return undefined;
   try {
@@ -1498,9 +1507,13 @@ function createActions(
         id,
         kind: interaction.kind,
         ...createLocatorCandidateFields(id, interaction.locatorEvidence),
-        ...(interaction.navigationDestination === undefined
+        ...(interaction.navigationDestination === undefined ||
+        findMissingValueSegment(interaction.navigationDestination) !== undefined
           ? {}
           : { navigationDestination: interaction.navigationDestination }),
+        ...(interaction.externalDestination === undefined
+          ? {}
+          : { externalDestination: interaction.externalDestination }),
         preferredLocator,
         risks: [],
         route: route.path,
@@ -1989,9 +2002,17 @@ function readFeatureVerdicts(input: {
     const authDegradedActionIds = new Set(
       authDegradedActions.map(({ id }) => id),
     );
+    // A click that left the app origin is non-navigable evidence (N158):
+    // like an auth-wall destination it never proves a feature, so it is
+    // excluded from the exercised evidence below.
+    const externalDegradedActions = tagged.filter(
+      (action) => action.externalDestination !== undefined,
+    );
     const exercisedActions = tagged.filter(
       (action) =>
-        action.exercised === true && !authDegradedActionIds.has(action.id),
+        action.exercised === true &&
+        !authDegradedActionIds.has(action.id) &&
+        action.externalDestination === undefined,
     );
     if (
       input.requestedFeatureIds.has(feature.id) &&
@@ -2038,6 +2059,27 @@ function readFeatureVerdicts(input: {
         action.kind === "assert" &&
         assertEvidenceMatchesFeature(action, feature),
     );
+    // A requested feature left with only external-destination clicks has no
+    // in-app evidence at all: name the destination the clicks reached so
+    // repair steers at the entry route, not at wording. A passed declared
+    // proof or any in-app evidence above outranks this — the external click
+    // is degraded evidence, never a veto.
+    if (
+      input.requestedFeatureIds.has(feature.id) &&
+      externalDegradedActions.length > 0 &&
+      exercisedActions.length === 0 &&
+      matchingAsserts.length === 0
+    ) {
+      const destinations = externalDegradedActions.map(
+        (action) => `${action.id} → ${action.externalDestination}`,
+      );
+      return failed(
+        feature,
+        "external-destination",
+        `external-destination browser interaction${destinations.length === 1 ? "" : "s"}: ${destinations.join(", ")}`,
+        externalDegradedActions.map(({ id }) => id),
+      );
+    }
     // A browser-exercised interaction proves the feature. Without one,
     // verified assert evidence counts only when its visible text matches
     // the feature, so read-only pages can ground while a wrong entry route
@@ -2647,6 +2689,15 @@ function readExplorationFailure(input: {
         };
       }
     }
+    // Only-external evidence means the entry route is wrong or the feature
+    // never renders in-app: naming the destination the clicks reached keeps
+    // repair off wording alignment (N158).
+    if (verdict.failedBecause === "external-destination") {
+      return {
+        sentence: ` ${featureName} has only browser evidence that leaves the app (${verdict.detail ?? "external-destination clicks"}) — an off-origin destination can never prove a feature. Point entryPaths at the in-app surface that shows this feature, or prepare in-app state so the feature renders locally.`,
+        verdict,
+      };
+    }
     // A failed declared proof already names the exact observed gap; the
     // repair either fixes the app state so the declared outcome is real or
     // corrects the declaration — wording alignment is never the answer.
@@ -2782,7 +2833,14 @@ function readExplorationFailure(input: {
         return undefined;
       }
       const missing = [
-        ...(tagged.some((action) => action.kind !== "assert")
+        // An external-destination click is non-navigable evidence (N158):
+        // flow planning will never count it, so it cannot satisfy the
+        // interaction half here either.
+        ...(tagged.some(
+          (action) =>
+            action.kind !== "assert" &&
+            action.externalDestination === undefined,
+        )
           ? []
           : ["an interaction"]),
         ...(tagged.some((action) => action.kind === "assert")
@@ -3832,10 +3890,15 @@ try {
           if (!outcome) continue;
           const stateTransition = readStateTransition(before, after);
           let navigationDestination;
+          let externalDestination;
           if (after.url !== before.url) {
             const landed = new URL(after.url);
             if (landed.origin === baseOrigin) {
               navigationDestination = landed.pathname + landed.search + landed.hash;
+            } else {
+              // N158: a click that left the app origin is non-navigable
+              // evidence; record where it went so verdicts can name it.
+              externalDestination = landed.href.slice(0, 200);
             }
             if (crawlScope === "full" && landed.origin === baseOrigin && !seen.has(normalizeCrawlUrl(landed.href))) {
               queue.push({
@@ -3852,6 +3915,7 @@ try {
             locatorEvidence,
             name,
             ...(navigationDestination ? { navigationDestination } : {}),
+            ...(externalDestination ? { externalDestination } : {}),
             outcome,
             ...(stateTransition ? { stateTransition } : {}),
             ...(revealedTexts.length > 0 ? { revealedTexts } : {}),

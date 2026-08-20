@@ -9,6 +9,7 @@ const catalog = (
   actions: Array<{
     declaredProofKind?: "app-state" | "canvas-delta";
     exercised?: true;
+    externalDestination?: string;
     featureIds: string[];
     kind: "assert" | "click" | "navigate";
     navigationDestination?: string;
@@ -23,6 +24,9 @@ const catalog = (
     evidence: "Playwright",
     expectedResult: "visible",
     ...(action.exercised === undefined ? {} : { exercised: true as const }),
+    ...(action.externalDestination === undefined
+      ? {}
+      : { externalDestination: action.externalDestination }),
     featureIds: action.featureIds,
     id: `action-${index}`,
     kind: action.kind,
@@ -107,6 +111,36 @@ describe("feature groundability", () => {
         authWallRoutes: new Set(["/walled"]),
       }),
     ).toBe(false);
+  });
+
+  it("excludes a feature whose only interaction leaves the app origin", () => {
+    // N158 (excalidraw): a click observed leaving the app is non-navigable
+    // evidence, exactly like an auth-wall destination — a flow built on it
+    // would film the browser departing the product.
+    const actionCatalog = catalog([
+      { featureIds: ["plus-plans"], kind: "assert", route: "/" },
+      {
+        exercised: true,
+        externalDestination: "https://plus.excalidraw.com/plus",
+        featureIds: ["plus-plans"],
+        kind: "click",
+        route: "/",
+      },
+      { featureIds: ["canvas"], kind: "assert", route: "/" },
+      {
+        exercised: true,
+        featureIds: ["canvas"],
+        kind: "click",
+        route: "/",
+      },
+    ]);
+
+    expect(
+      readGroundableFeatureIds(["plus-plans", "canvas"], {
+        actionCatalog,
+        authWallRoutes: new Set(),
+      }),
+    ).toEqual(["canvas"]);
   });
 
   it("excludes a feature whose only interaction navigates to an auth-wall shape", () => {

@@ -121,6 +121,81 @@ describe("exploreSubmittedApp", () => {
     );
   });
 
+  it("drops a link destination carrying a missing-value interpolation", async () => {
+    // N158 (excalidraw): the app's marketing banner built its href from an
+    // unset env value, producing the local-looking "/undefined/plus?..." —
+    // the compiled script then waited on that URL forever. A destination
+    // with a literal undefined/null segment is the app interpolating a
+    // missing value; the click stays observable, its destination does not.
+    const { result } = await exploreObservation({
+      routes: [
+        observedRoute({
+          headings: ["Canvas"],
+          links: [
+            {
+              href: "/undefined/plus?utm_source=excalidraw",
+              locatorEvidence: {
+                locator: {
+                  exact: true,
+                  name: "Excalidraw+",
+                  role: "link",
+                  strategy: "role",
+                },
+                verification: {
+                  matchCount: 1,
+                  route: "/",
+                  targetHref: "/undefined/plus?utm_source=excalidraw",
+                  visible: true,
+                },
+              },
+              name: "Excalidraw+",
+            },
+          ],
+          title: "Canvas App",
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    const linkClick = artifacts.actionCatalog.actions.find(
+      ({ id }) => id === "click-link-1-1",
+    );
+    expect(linkClick).toBeDefined();
+    expect(linkClick?.navigationDestination).toBeUndefined();
+  });
+
+  it("drops an exercised click's destination carrying a missing-value interpolation", async () => {
+    // The same broken app-built URL can be observed live: clicking the
+    // banner lands the SPA fallback on "/undefined/...". The exercised click
+    // keeps its outcome evidence; the destination must not compile into a
+    // waitForURL.
+    const { result } = await exploreObservation({
+      routes: [
+        observedRoute({
+          headings: ["Canvas"],
+          interactions: [
+            {
+              kind: "click",
+              locator: { name: "Try Plus", strategy: "role", value: "button" },
+              name: "Try Plus",
+              navigationDestination: "/undefined/plus?utm_source=excalidraw",
+              outcome: "navigated to /undefined/plus?utm_source=excalidraw",
+            },
+          ],
+          title: "Canvas App",
+        }),
+      ],
+    });
+    const artifacts = requireArtifacts(result);
+
+    const exercisedClick = artifacts.actionCatalog.actions.find(
+      ({ id }) => id === "click-interaction-1-1",
+    );
+    expect(exercisedClick).toBeDefined();
+    expect(exercisedClick?.exercised).toBe(true);
+    expect(exercisedClick?.navigationDestination).toBeUndefined();
+  });
+
   it("bounds browser work and stops crawling when the prepared app exits", async () => {
     const { commands } = await exploreObservation({
       routes: [observedRoute({ headings: ["Dashboard"] })],
@@ -2004,6 +2079,113 @@ describe("exploreSubmittedApp", () => {
       status: "failed",
     });
     expect(result.validationReport.logsSummary).toContain("/auth/login");
+  });
+
+  it("fails a requested feature left with only external-destination clicks", async () => {
+    // N158 (excalidraw): the feature's one exercised interaction left the app
+    // for the marketing site. Like an auth-wall destination, that click can
+    // never prove the feature — the verdict must name the external
+    // destination instead of blaming wording.
+    const feature = preparedFeature({
+      description: "Compare plus plans.",
+      entryPaths: ["/"],
+      id: "plus-plans",
+      label: "Plus plans",
+      requestedFeature: "plus plans",
+    });
+    const { result } = await exploreObservation({
+      featureInventory: [feature],
+      requestedFeatures: ["plus plans"],
+      routes: [
+        observedRoute({
+          featureIds: [feature.id],
+          headings: ["Canvas workspace"],
+          interactions: [
+            {
+              externalDestination: "https://plus.excalidraw.com/plus",
+              kind: "click",
+              locator: { name: "Try Plus", strategy: "role", value: "button" },
+              name: "Try Plus",
+              outcome: "The page changed",
+            },
+          ],
+          path: "/",
+          text: ["Freehand drawing tools"],
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      featureVerdicts: [
+        expect.objectContaining({
+          failedBecause: "external-destination",
+          featureId: feature.id,
+          verdict: "failed",
+        }),
+      ],
+      status: "failed",
+    });
+    expect(result.validationReport.logsSummary).toContain(
+      "https://plus.excalidraw.com/plus",
+    );
+  });
+
+  it("keeps a proof-grounded feature grounded despite an external-destination click", async () => {
+    // The external click is non-navigable evidence, not a veto: a feature
+    // whose declared proof passed still grounds through it (N157), and only
+    // the external destination stays unusable for flow planning.
+    const feature = preparedFeature({
+      description: "Draw and label shapes on the canvas.",
+      entryPaths: ["/"],
+      expectedProof: {
+        contains: '"type":"rectangle"',
+        key: "excalidraw",
+        kind: "app-state",
+        source: "local-storage",
+      },
+      id: "draw-shapes",
+      label: "Draw shapes",
+      requestedFeature: "draw and label shapes",
+    });
+    const { result } = await exploreObservation({
+      declaredProofs: [
+        {
+          detail: 'stored value under "excalidraw" contains "type":"rectangle"',
+          featureId: feature.id,
+          passed: true,
+        },
+      ],
+      featureInventory: [feature],
+      requestedFeatures: ["draw and label shapes"],
+      routes: [
+        observedRoute({
+          featureIds: [feature.id],
+          headings: [],
+          interactions: [
+            {
+              externalDestination: "https://plus.excalidraw.com/plus",
+              kind: "click",
+              locator: { name: "Try Plus", strategy: "role", value: "button" },
+              name: "Try Plus",
+              outcome: "The page changed",
+            },
+          ],
+          path: "/",
+          text: [],
+        }),
+      ],
+    });
+
+    expect(result.validationReport).toMatchObject({
+      featureVerdicts: [
+        expect.objectContaining({
+          featureId: feature.id,
+          groundedBy: "declared-proof",
+          verdict: "grounded",
+        }),
+      ],
+      status: "passed",
+    });
   });
 
   it("recognizes an OAuth-only redirect as a protected feature auth wall", async () => {

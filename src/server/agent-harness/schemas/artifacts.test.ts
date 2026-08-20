@@ -224,6 +224,51 @@ describe("agent harness artifact schemas", () => {
     ).toThrow("actions[0].navigationDestination must be a local app route");
   });
 
+  it("parses an observed external destination on a click action", () => {
+    // N158: a click the browser watched leave the app origin is non-navigable
+    // evidence. The observed URL must survive the reader round-trip so
+    // grounding and verdicts can name it.
+    const catalog = validActionCatalog();
+    const action = catalog.actions[0];
+    if (action === undefined) {
+      throw new Error("Expected an Action Catalog fixture");
+    }
+    const parsed = readActionCatalog({
+      ...catalog,
+      actions: [
+        {
+          ...action,
+          externalDestination: "https://plus.excalidraw.com/plus",
+        },
+      ],
+    });
+
+    expect(parsed.actions[0]?.externalDestination).toBe(
+      "https://plus.excalidraw.com/plus",
+    );
+  });
+
+  it("rejects an external destination on a non-click action", () => {
+    const catalog = validActionCatalog();
+    const action = catalog.actions[0];
+    if (action === undefined) {
+      throw new Error("Expected an Action Catalog fixture");
+    }
+
+    expect(() =>
+      readActionCatalog({
+        ...catalog,
+        actions: [
+          {
+            ...action,
+            externalDestination: "https://plus.excalidraw.com/plus",
+            kind: "assert",
+          },
+        ],
+      }),
+    ).toThrow("actions[0].externalDestination is only valid on click actions");
+  });
+
   it("rejects a state transition on an action the browser never exercised", () => {
     const catalog = validActionCatalog();
     expect(() =>

@@ -383,6 +383,7 @@ export const featureVerdictFailureCauses = [
   "auth-wall",
   "declared-proof-failed",
   "error-state-route",
+  "external-destination",
   "no-assert-candidates",
   "route-shared-with-winners",
   "skeleton-rows",
@@ -548,6 +549,15 @@ type ActionCatalogAction = {
    * before another navigation can start.
    */
   navigationDestination?: string;
+  /**
+   * Off-origin URL observed when this click left the app (N158): the app's
+   * marketing banner, an OAuth provider, a docs site. Like an auth-wall
+   * destination, this is non-navigable evidence — the click never grounds an
+   * inferred feature, and a requested feature left with only such clicks
+   * fails with the destination named in its verdict. Mutually exclusive with
+   * `navigationDestination`.
+   */
+  externalDestination?: string;
   featureIds?: string[];
   route: string;
   kind:
@@ -1696,6 +1706,15 @@ function readAction(value: unknown, index: number): ActionCatalogAction {
       `${path}.navigationDestination is only valid on click actions`,
     );
   }
+  const externalDestination =
+    record.externalDestination === undefined
+      ? undefined
+      : readNonEmptyString(record, "externalDestination", path);
+  if (externalDestination !== undefined && kind !== "click") {
+    throw new Error(
+      `${path}.externalDestination is only valid on click actions`,
+    );
+  }
   if (
     locatorCandidates !== undefined &&
     preferredLocatorCandidateId === undefined
@@ -1730,6 +1749,7 @@ function readAction(value: unknown, index: number): ActionCatalogAction {
       : { featureIds: readStringArray(record, "featureIds", path) }),
     id: readNonEmptyString(record, "id", path),
     kind,
+    ...(externalDestination === undefined ? {} : { externalDestination }),
     ...(locatorCandidates === undefined ? {} : { locatorCandidates }),
     ...(navigationDestination === undefined ? {} : { navigationDestination }),
     preferredLocator: readPreferredLocator(record.preferredLocator, path),

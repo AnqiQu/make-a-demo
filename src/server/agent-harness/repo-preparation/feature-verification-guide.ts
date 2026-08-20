@@ -17,6 +17,8 @@ const failureCauseGuidance: Record<
     "The declared expectedProof was executed on the feature's entry route and did not hold. Fix the prepared app state so the declared outcome really happens, or correct the expectedProof declaration to what the feature actually shows.",
   "error-state-route":
     "A route tagged to the feature rendered an error state — an error-status document response or an error-shaped page body. Fix the runtime fault; no wording change can ground a crashed route.",
+  "external-destination":
+    "The feature's only browser evidence is a click that leaves the app for an external site — an off-origin destination can never prove a feature. Point entryPaths at the in-app surface that shows the feature, or prepare in-app state so it renders locally.",
   "no-assert-candidates":
     "The feature's routes rendered no assertable headings or text. Seed fixtures so the entry route shows real content instead of an empty shell.",
   "route-shared-with-winners":

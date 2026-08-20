@@ -177,6 +177,80 @@ describe("generated exploration script", () => {
     }
   }, 35_000);
 
+  it("records a click that leaves the app origin as an external destination", async () => {
+    // N158 (excalidraw): a marketing-banner click that navigates off the app
+    // must be recorded as non-navigable evidence — the observed external URL,
+    // never a local navigationDestination the compiler could wait on.
+    const awayServer = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(
+        "<!doctype html><html><head><title>Plus</title></head><body><h1>Plus plans</h1></body></html>",
+      );
+    });
+    await new Promise<void>((resolve) =>
+      awayServer.listen(0, "127.0.0.1", resolve),
+    );
+    const awayAddress = awayServer.address();
+    if (awayAddress === null || typeof awayAddress === "string") {
+      throw new Error("away server did not expose a port");
+    }
+    const awayUrl = `http://127.0.0.1:${awayAddress.port}/plus`;
+    const appPage = `<!doctype html><html><head><title>Canvas</title></head><body>
+<h1>Canvas</h1>
+<button onclick="location.href='${awayUrl}'">Try Plus</button>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(appPage);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("test server did not expose a port");
+    }
+    try {
+      const outputDirectory = await mkdtemp(
+        join(tmpdir(), "makeademo-explorer-external-"),
+      );
+      const script = (
+        await buildExplorerScript(`http://127.0.0.1:${address.port}`)
+      ).replaceAll("/workspace/.makeademo/exploration", outputDirectory);
+      const scriptPath = join(outputDirectory, "explore-app.mjs");
+      await writeFile(scriptPath, script);
+
+      const { stdout } = await execFileAsync("bun", [scriptPath], {
+        env: {
+          ...process.env,
+          NODE_PATH: join(process.cwd(), "node_modules"),
+        },
+        timeout: 30_000,
+      });
+      const marker = stdout.split("[makeademo:exploration] ")[1];
+      expect(marker).toBeDefined();
+      const result = JSON.parse((marker ?? "").trim()) as {
+        routes: Array<{
+          interactions: Array<{
+            externalDestination?: string;
+            name: string;
+            navigationDestination?: string;
+          }>;
+        }>;
+      };
+
+      const interaction = result.routes[0]?.interactions.find(
+        ({ name }) => name === "Try Plus",
+      );
+      expect(interaction).toBeDefined();
+      expect(interaction?.navigationDestination).toBeUndefined();
+      expect(interaction?.externalDestination).toBe(awayUrl);
+    } finally {
+      server.close();
+      awayServer.close();
+    }
+  }, 35_000);
+
   it("records control renames and disabled-to-enabled transitions as interaction outcomes", async () => {
     // N105: a toggle that renames itself (Follow → Unfollow) and a click
     // that enables a disabled control (Save draft → Undo enabled) are
