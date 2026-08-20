@@ -344,3 +344,67 @@ of scope until their stages gain a consultation point.
 **Model.** The strategist uses the session's configured
 `${providerID}/${modelID}` like every other stage; no separate model
 knob in M1.
+
+## First live audit (wave-15, 2026-08-19)
+
+M1 and M2 ran for the first time in batch
+matrix-2026-08-19T22-22-10-154Z. Verdict: both work
+as designed; the losses this wave were in the rule
+layer the strategist advises, not in the strategist.
+
+What worked:
+- Consultation gating: the strategist fired on
+  exactly the five runs with repeated failures
+  (midday, ghostfolio, directus, outline, twenty)
+  and stayed silent on passes, on ghost (which dies
+  in artifact production, outside the repair loop),
+  and on excalidraw (capture-side).
+- Advice quality: five for five on diagnosis. It
+  caught that directus's graph-closure build cannot
+  produce @directus/extensions and prescribed the
+  exact explicit command; chased twenty's
+  `vite: command not found` to the workspace bin
+  resolution; named the exact blocking migration
+  script on outline; correctly located midday's
+  Supabase server-component gating and ghostfolio's
+  client-route 404.
+- Both prose channels used appropriately
+  (directives for approach changes, hints for
+  evidence-grade steering). No stop advice issued;
+  twenty's late rounds arguably merited one, but
+  the vite fix was real progress — judgment call,
+  not defect.
+- M2 triage: both envelope warnings accurate;
+  twenty's predicted the exact death. calcom's
+  hints plausibly enabled its first-ever capture
+  arc.
+
+Gaps found (M1 follow-ups):
+1. Advice adherence is invisible. Directus's
+   directive never entered the repair candidates
+   and nothing flagged it. The ledger needs an
+   `adhered` outcome per advice (directive-vs-
+   candidate delta, deterministic), so an ignored
+   directive is visible to the next consultation
+   and to wave diagnosis.
+2. Directives lose to misclassified contract rules.
+   The build-shape rule sat in the contract section,
+   which directives cannot supersede — correct
+   mechanics, wrong classification. N159 fixes the
+   instance; the standing lesson is that the
+   approach/contract split is itself an audit
+   surface: every contradiction diagnosis should ask
+   "is this rule law or policy, and does the
+   classifier agree?"
+3. The round ledger was not present in the run
+   mirrors (repair-round-ledger.json absent from
+   artifacts/workspace/.makeademo). The strategist
+   plainly received the context, but the persisted
+   audit substrate is missing — verify the
+   write/cleanup path and mirror it per the M1
+   implementation notes.
+4. Triage-confirmed capacity predictions currently
+   change nothing downstream. Open question
+   promoted: a run whose envelope warning is later
+   confirmed by a resource-exhaustion failure could
+   arm stop eligibility one round earlier.
