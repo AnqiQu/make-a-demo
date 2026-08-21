@@ -416,6 +416,53 @@ describe("createDaytonaControlPlaneEnvelope", () => {
     ).toMatchObject({ sandboxId: "submitted_replacement" });
   });
 
+  it("fails fast when a hang follows the target to its wedge-remedy replacement", async () => {
+    // N161 (ghostfolio, 2026-08-20): fs.upload hung two full attempt
+    // windows, the wedged sandbox was recreated, and the upload hung two
+    // MORE full windows against the fresh sandbox before the ladder ran
+    // out — ~40 minutes for one transfer. A hang that survives recreation
+    // indicts the transfer or the control plane, not the target; the
+    // strongest remedy is already spent, so another window buys nothing.
+    const { envelope, events } = createRecordingEnvelope();
+    let attempts = 0;
+    let recreations = 0;
+    let sandboxId = "submitted_wedged";
+
+    const thrown: unknown = await envelope
+      .run(
+        "fs.upload",
+        () => {
+          attempts += 1;
+          return new Promise<string>(() => {});
+        },
+        {
+          attemptTimeoutMs: 10,
+          ladderMs: [1_000, 1_000, 1_000, 1_000],
+          onTargetWedged: () => {
+            recreations += 1;
+            sandboxId = "submitted_replacement";
+            return true;
+          },
+          sandboxId: () => sandboxId,
+          wrapExhausted: false,
+        },
+      )
+      .then(() => undefined)
+      .catch((error: unknown) => error);
+
+    // Two hangs prove the wedge, one against the replacement — never more.
+    expect(attempts).toBe(3);
+    expect(recreations).toBe(1);
+    expect(String((thrown as Error | undefined)?.message)).toMatch(
+      /recreation did not clear the hang/,
+    );
+    expect(events.at(-1)?.entry).toMatchObject({
+      classification: "hung-after-recreation",
+      event: "daytona.fs.upload.failed",
+      sandboxId: "submitted_replacement",
+    });
+  });
+
   it("does not combine hangs from different sandbox targets", async () => {
     const { envelope, waits } = createRecordingEnvelope();
     let attempts = 0;

@@ -213,6 +213,9 @@ function runAttemptWithTimeout<T>(
  * job's wall clock (N133). A caller with a replaceable target can use
  * `onTargetWedged` as a rung in that same ladder; the replay still consumes
  * the next ordinary retry and therefore cannot widen the existing budget.
+ * Recreation is also the last hang remedy: a hung attempt after a
+ * successful replacement fails the envelope immediately (N161), because a
+ * hang that survives a fresh target indicts the operation, not the target.
  *
  * Command execution and managed-app session commands run through the
  * envelope too (N123: a raw 502 on a manifest `cat` killed a finished
@@ -276,6 +279,7 @@ export function createDaytonaControlPlaneEnvelope(envelopeOptions: {
       let conflictPolls = 0;
       let consecutiveHungAttempts = 0;
       let lastHungSandboxId: string | undefined;
+      let wedgeRemedySpent = false;
       for (let attemptNumber = 1; ; attemptNumber += 1) {
         const attemptAttribution = readAttribution();
         await logBestEffort(
@@ -308,6 +312,41 @@ export function createDaytonaControlPlaneEnvelope(envelopeOptions: {
             consecutiveHungAttempts = 0;
             lastHungSandboxId = undefined;
           }
+          if (attemptTimedOut && wedgeRemedySpent) {
+            // A hang that follows the target to its replacement indicts the
+            // transfer or the control plane, not the target. Recreation is
+            // the strongest remedy on the ladder; once it is spent, another
+            // full attempt window can buy nothing (N161: ghostfolio's
+            // fs.upload burned two more 10-minute windows against a fresh
+            // sandbox, 2026-08-20).
+            const hungAfterRecreation = Object.assign(
+              new Error(
+                `Daytona ${operation} hung for another full attempt window against the freshly recreated sandbox target; recreation did not clear the hang, so the operation fails fast instead of spending further windows on it.`,
+              ),
+              { cause: error, name: attemptTimeoutErrorName },
+            );
+            await logBestEffort(
+              "error",
+              {
+                attempt: attemptNumber,
+                classification: "hung-after-recreation",
+                error: formatErrorDiagnostic(error),
+                event: `daytona.${operation}.failed`,
+                ...attemptAttribution,
+              },
+              `Daytona ${operation} hung against the recreated target; failing fast after ${attemptNumber} attempt(s).`,
+            );
+            if (options.wrapExhausted === false) {
+              throw hungAfterRecreation;
+            }
+            throw new AgentHarnessControlPlaneError({
+              attempts: attemptNumber,
+              cause: hungAfterRecreation,
+              classification: "transient",
+              operation,
+              ...attemptAttribution,
+            });
+          }
           const classification = classify(error);
           const hasTransientRetryBudget =
             classification === "transient" &&
@@ -333,6 +372,7 @@ export function createDaytonaControlPlaneEnvelope(envelopeOptions: {
             );
             targetReplaced = await options.onTargetWedged(error);
             if (targetReplaced) {
+              wedgeRemedySpent = true;
               consecutiveHungAttempts = 0;
               lastHungSandboxId = undefined;
             }
