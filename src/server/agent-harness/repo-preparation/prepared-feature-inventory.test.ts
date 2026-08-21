@@ -409,7 +409,7 @@ describe("assertPreparedFeatureInventory", () => {
     ).not.toThrow();
   });
 
-  it("rejects feature evidence owned by a non-selected browser application", () => {
+  it("rejects a feature whose sources cite no path in the selected application", () => {
     const preparationManifest = manifestWithFeatures([
       {
         id: "landing-page",
@@ -431,7 +431,39 @@ describe("assertPreparedFeatureInventory", () => {
         ]),
         runPlan: dashboardRunPlan(),
       }),
-    ).toThrow(/belongs to non-selected browser application apps\/website/);
+    ).toThrow(/must cite the selected browser application apps\/dashboard/);
+  });
+
+  // N162 (ghost, 2026-08-20): admin features genuinely live in a sibling
+  // client directory that the selected server app builds and serves.
+  // Directory ownership is not a target switch; the appDir lock and the
+  // cite-the-selected-app anchor above carry that protection.
+  it("accepts sibling-client sourcePaths when the feature also cites the selected application", () => {
+    const preparationManifest = manifestWithFeatures([
+      {
+        id: "manage-posts",
+        label: "Manage posts",
+        sourcePaths: [
+          "apps/dashboard/src/server/admin/app.ts",
+          "apps/website/src/app/page.tsx",
+        ],
+      },
+    ]);
+    preparationManifest.appDir = "apps/dashboard";
+
+    expect(() =>
+      assertPreparedFeatureInventory({
+        demoBrief: { keyProductFeatures: [] },
+        preparationManifest,
+        repoProfile: multiAppProfile(),
+        repoSourcePaths: new Set([
+          "README.md",
+          "apps/dashboard/src/server/admin/app.ts",
+          "apps/website/src/app/page.tsx",
+        ]),
+        runPlan: dashboardRunPlan(),
+      }),
+    ).not.toThrow();
   });
 
   // N122(2): the enforcement half of the data-backend ladder's closed loop —

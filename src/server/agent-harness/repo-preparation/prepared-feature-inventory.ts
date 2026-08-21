@@ -382,7 +382,14 @@ function assertDataStrategyCoverage(
   }
 }
 
-/** Rejects preparation output that switches away from a locked browser app. */
+/**
+ * Rejects preparation output that switches away from a locked browser app:
+ * the appDir stays locked and every feature anchors to the selected app by
+ * citing at least one of its paths. Paths under sibling client directories
+ * are legitimate supplementary context — a selected server app can build and
+ * serve a client that lives in a sibling directory (ghost's admin client,
+ * N162), so directory ownership alone never rejects a manifest.
+ */
 function assertPreparationRuntimeTarget(input: {
   preparationManifest: PreparationManifest;
   repoProfile?: RepoProfile;
@@ -395,37 +402,13 @@ function assertPreparationRuntimeTarget(input: {
       `PreparationManifest.appDir must remain locked to ${targetId}; received ${input.preparationManifest.appDir}`,
     );
   }
-  const siblingTargets = (input.repoProfile.browserRuntimeCandidates ?? [])
-    .map(({ dir }) => dir)
-    .filter((dir) => dir !== targetId && dir !== ".");
-  for (const [field, paths] of [
-    [
-      "productContext.evidencePaths",
-      input.preparationManifest.productContext.evidencePaths,
-    ],
-    ...input.preparationManifest.productContext.featureInventory.map(
-      (feature, index) => [
-        `productContext.featureInventory[${index}].sourcePaths`,
-        feature.sourcePaths,
-      ],
-    ),
-  ] as Array<[string, string[]]>) {
-    for (const path of paths) {
-      const sibling = siblingTargets.find((dir) => isWithin(path, dir));
-      if (sibling !== undefined) {
-        throw new Error(
-          `${field} path ${path} belongs to non-selected browser application ${sibling}`,
-        );
-      }
-    }
-  }
   for (const [
     index,
     feature,
   ] of input.preparationManifest.productContext.featureInventory.entries()) {
     if (!feature.sourcePaths.some((path) => isWithin(path, targetId))) {
       throw new Error(
-        `productContext.featureInventory[${index}].sourcePaths must cite the selected browser application ${targetId}`,
+        `productContext.featureInventory[${index}].sourcePaths must cite the selected browser application ${targetId} with at least one path. Paths in sibling client applications may accompany that anchor when the selected application builds or serves them, but never replace it.`,
       );
     }
   }
