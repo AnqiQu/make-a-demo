@@ -9090,3 +9090,87 @@ consultation.
   both already diagnosed by the strategist.
 - directus: client-stub engagement is the last
   blocker; the adapter-trace directive is on file.
+
+### Wave-16 landings (2026-08-21)
+
+- N160 — landed, all three moves. (1)
+  createOfflineLifecycleCommand now hard-disables the
+  manager's own network on every part of the chain
+  (YARN_ENABLE_NETWORK=false for berry;
+  npm_config_offline=true for npm and pnpm; classic
+  yarn and bun have no manager-level switch and keep
+  the sealed network as their enforcement), so a
+  fetch the sealed network would strand fails in
+  seconds with a named cause instead of ~9.5 minutes
+  of ECONNREFUSED retries. (2) The repo profiler
+  reads the root .yarnrc.yml (enableScripts: false)
+  and .npmrc (ignore-scripts=true) into a new
+  RepoProfile.lifecycleScriptsDisabled fact — root
+  config only; a member's config never speaks for
+  the install — and the pass is skipped entirely
+  when the repo itself forbids lifecycle scripts:
+  the gated install skipped nothing, so there is no
+  offline work to run. (3) Attribution landed as
+  skip-and-continue, which is stronger than the
+  specced fail-named: when the pass fails with the
+  manager's own offline-refusal signature
+  (isOfflineLifecycleNetworkRefusal — enableNetwork,
+  ENOTCACHED/only-if-cached, ERR_PNPM_NO_OFFLINE;
+  deliberately NOT bare ECONNREFUSED, which stays
+  with the agent-repairable download-failure hint),
+  the harness records a
+  lifecycle.offline-refusal.skipped sandbox-log
+  event and continues to preflight — no repair round
+  is consumed, and anything the pass would have
+  built surfaces there as a specific, repairable
+  failure. Acceptance met: outline (enableScripts:
+  false) never runs the pass; twenty's refusal skips
+  in seconds.
+
+- N161 — landed, with a correction to this
+  addendum's diagnosis. The claim "every retry
+  re-entered the sandbox it had already called
+  wedged" was wrong: the run's pipeline log shows
+  onTargetWedged DID fire and recreated aa4194b8 as
+  32a9a641 — and the upload then hung two MORE full
+  600s windows against the fresh sandbox until the
+  transient ladder ran out. The real gap: recreation
+  is the strongest hang remedy, and after it is
+  spent another full window can buy nothing. Landed:
+  a hung attempt after a successful wedge-remedy
+  replacement fails the envelope immediately with a
+  hung-after-recreation event and an error naming
+  that recreation did not clear the hang (the
+  11.5MB archive rules out a legitimately slow
+  transfer). Replay of ghostfolio's wave-16
+  sequence: two windows → recreate → one window →
+  named fast failure (30 minutes and an honest
+  cause, down from 40 and a generic timeout).
+
+- N162 — landed (1); (2) withdrawn with a
+  correction. The sibling-path throw is removed from
+  assertPreparationRuntimeTarget: featureInventory
+  sourcePaths (and productContext evidencePaths) may
+  cite non-selected client directories, because the
+  appDir lock plus the per-feature anchor — every
+  feature must cite at least one path in the
+  selected app, now with an actionable message
+  saying sibling paths may accompany that anchor —
+  already carry the target-switch protection, and
+  any feature citing only sibling paths still fails
+  the anchor. The addendum's claim that the
+  artifact-production loop "runs with no memory" was
+  wrong: accumulatedArtifactError already feeds
+  every distinct prior rejection into each retry.
+  Ghost oscillated because its constraint pair was
+  genuinely unsatisfiable (admin features' true
+  sources all live in apps/ember-admin, and sibling
+  paths were forbidden) — no consultation can solve
+  an unsatisfiable contract, removing the bad
+  constraint can. Strategist wiring into the
+  artifact-production loop is therefore deferred
+  until a wave shows a repeated rejection that
+  memory-plus-satisfiable-constraints cannot
+  converge; if one appears, spec it as its own
+  N-item rather than resurrecting N162(2) as
+  written.
