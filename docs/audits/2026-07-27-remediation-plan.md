@@ -8869,3 +8869,224 @@ are still stripped first, unchanged.
 - twenty: org caps; triage now predicts it at run
   start. Consider whether a confirmed envelope
   warning should arm earlier stop eligibility.
+
+## Addendum (2026-08-20, wave-16 — N158/N159 hold; the sealed network's own lifecycle pass becomes the top blocker: N160–N162)
+
+Batch matrix-2026-08-20T06-54-29-864Z (report
+matrix-report-2026-08-20T08-24-19-276Z.json), eleven
+repos, the first wave after N158, N159, and the N156
+amendment landed. Five passed: homer (5.6m), conduit
+(13.7m), midday (70.3m — its nondeterminism
+regression resolved, carrying the strategist's first
+observed spend-bonus-round), excalidraw (40.1m), and
+cyberchef (52.3m). Six failed: calcom, directus,
+ghost, ghostfolio, outline, twenty.
+
+### What wave-16 proved
+
+- N158 validated end-to-end: excalidraw compiled no
+  waitForURL for the plus banner and passed.
+- N159 validated on directus: wave-15's refused
+  directive now lands. Rounds 1–2 failed on unbuilt
+  @directus/extensions, the strategist directed
+  "make the lifecycle explicitly build
+  @directus/extensions", the directive was applied,
+  and round 3 moved past the build entirely.
+- Outline escaped the omit-build deadlock: from
+  round 2 every candidate compiled the server via
+  `yarn build:server && yarn db:migrate` in the
+  provisioned-postgres migrationCommand, which the
+  classifier accepts. (N159's resolver alignment
+  was not exercised — no candidate declared
+  buildCommandUsed.)
+- N151 held calcom out of capture correctly: after
+  one migration failure and two runtime crashes,
+  rounds 4–7 all failed feature-auth-barrier —
+  weekly-availability clicks land on /auth/login.
+
+### Diagnoses
+
+- outline (82.6m, budget exhausted): rounds
+  alternate between real app repairs — a seed
+  schema error, then the seed's redis-client init
+  retrying 127.0.0.1:6379 188 times until killed,
+  both precisely diagnosed by the strategist — and
+  rounds 2/4/6 dying inside the harness's own
+  offline lifecycle pass `yarn rebuild && yarn run
+  postinstall`: 9m28s of registry ECONNREFUSED
+  retries each (~28 minutes total), classified
+  "install failure" and charged to a candidate that
+  never declared the command. Outline's .yarnrc.yml
+  both forbids lifecycle scripts (enableScripts:
+  false) and demands registry metadata
+  (npmMinimalAgeGate: 4320); the agent removed the
+  age gate in round 3 and the pass still fetched.
+  → N160.
+- twenty (74.4m): no OOM and no ENOSPC this wave —
+  real build-graph progress (unbuilt twenty-shared,
+  then dist present but missing declarations, then
+  a broken vite entry — UNRESOLVED_ENTRY
+  index.html — in round 5). Round 2 died in the
+  same `yarn rebuild` pass; the strategist's
+  directive named it "deterministically invokes
+  network-dependent lifecycle downloads" — a
+  correct diagnosis aimed at an actor that cannot
+  fix a harness-owned command. → N160. Separately,
+  M2 triage warned the CRM cannot fit the envelope
+  and recommended the self-contained website;
+  target selection rejected the website as "a
+  marketing product mockup" and chose the CRM for
+  fidelity. Both are right on their own axis; the
+  run burned 74 minutes between them. → watchlist.
+- ghostfolio (46.5m): infra, not repo. Daytona
+  fs.upload into the submitted-code sandbox hung
+  600s four consecutive times (~40 minutes — the
+  entire failure); the wedged-target detector fired
+  at attempts 2 and 4 and the retry loop still fed
+  the same sandbox; the post-mortem diff found
+  /workspace/repo absent. The prep-nondeterminism
+  watch item was never even tested. → N161.
+- ghost (37.5m): the artifact-production loop is
+  now legible. Three manifest static-validation
+  rejections, alternating between two rules:
+  featureInventory sourcePaths under
+  apps/ember-admin "belongs to non-selected browser
+  application" (rounds 1 and 3) and an
+  embedded-config rung declaring migration/seed
+  commands (round 2). Ghost's admin features
+  genuinely live in the non-selected client
+  directory and are served through the selected
+  server app: directory ownership is not
+  consumption — N159's lesson resurfacing at a
+  different seam. The loop has no fingerprints, no
+  ledger, and no strategist. → N162.
+- directus (55.7m): after the N159 win, a genuine
+  new class: "client stub not engaged" —
+  dataStrategy declares client-stub fixtures but
+  the running app kept issuing real calls to
+  127.0.0.1:8055 through rounds 3–5. The
+  strategist's second directive named the likely
+  repair (trace the Axios/SDK adapter selection;
+  make the hydration translations response an array
+  so newTranslations?.reduce cannot throw); round 5
+  was unchanged and the strategist issued its first
+  observed stop. Repo-repair problem; the seams
+  behaved.
+- calcom (84.5m): the auth-degraded gate blocked
+  capture for four straight rounds; the repair
+  never made MAKEADEMO_DEMO satisfy both server and
+  client session checks on the availability routes
+  (the strategist also flagged a stale /pro/30
+  probe vs the app's /pro/30min). Repo-repair
+  problem; the seams behaved.
+
+### N160 (High, bugfix) — the offline lifecycle pass must actually be offline
+
+createOfflineLifecycleCommand's berry arm
+(`yarn rebuild [&& yarn run postinstall]`,
+tools/dependency-install-gate.ts) is documented
+"run only while the network is closed", but berry's
+rebuild performs registry requests: outline retried
+ECONNREFUSED for 9m28s three times; twenty's round
+2 was killed at the lifecycle deadline inside the
+same pass. Three fixes: (1) run the pass with the
+package manager's network hard-disabled
+(YARN_ENABLE_NETWORK=false; npm and pnpm offline
+equivalents) so an attempted fetch fails in seconds
+with a named cause instead of minutes of retries;
+(2) honor the repo's own script policy — when
+.yarnrc.yml declares enableScripts: false there is
+nothing to rebuild, so skip the pass; (3) fix the
+attribution: a harness-owned lifecycle command must
+fail as harness lifecycle, not be classified into
+the candidate's repair loop — outline's repair
+agent was charged three rounds for a command it
+never declared and cannot lawfully change.
+Acceptance: replaying outline's wave-16 lifecycle,
+the pass either completes offline or fails fast
+naming the harness-owned pass, and no repair round
+is consumed by it.
+
+### N161 (High, bugfix) — wedged upload targets must be recreated, not retried into
+
+Ghostfolio: fs.upload hung 600s four consecutive
+times into one sandbox while the wedged-target
+detector fired twice, and every retry re-entered
+the sandbox it had already called wedged. Extend
+N153's remedy to the control plane: a wedged-target
+detection on fs.upload (or any control-plane call
+addressed to a sandbox) recreates the paired
+sandbox and replays the transfer; a second wedge
+fails the run fast, naming the sandbox.
+Acceptance: replaying ghostfolio's wave-16 sequence
+spends at most two timeout windows before
+recreation or a named fast failure.
+
+### N162 (Medium, bugfix) — sourcePaths ownership is not consumption, and blind rejection loops need the meta seam
+
+Ghost burned its whole preparation budget on three
+static rejections with no memory between them. Two
+fixes: (1) featureInventory sourcePaths under a
+non-selected browser application must be accepted
+when the selected app builds or serves that client
+(or the rejection downgraded to a repairable
+classification carrying remediation), instead of
+the flat "belongs to non-selected browser
+application" refusal; (2) route repeated identical
+artifact-validation rejections through the same
+fingerprint and consultation machinery as preflight
+failures — the artifact-production loop currently
+runs with no ledger and no strategist, so round 3
+repeated round 1 verbatim. Acceptance: ghost's
+wave-16 attempt-1 manifest either validates or
+yields a classified, strategist-visible round;
+identical consecutive rejections trigger a
+consultation.
+
+### Meta-orchestrator audit (second live wave)
+
+- First observed spend-bonus-round (midday) — the
+  run passed. The advice artifact carries no reason
+  field; require a reason on every advice kind.
+- First observed stop (directus round 5): the
+  reason cites the unchanged fingerprint and
+  exhausted budget; it coincided with the budget
+  floor, so early-stop behavior was not observable
+  this wave.
+- Diagnosis quality stays high: outline's two seed
+  diagnoses, calcom's server/client session split
+  and stale-probe catch, directus's adapter trace,
+  and twenty's rebuild-determinism call were all
+  correct and specific.
+- Two gaps repeat from the first audit: advice
+  application is still invisible in the pipeline
+  log (no strategist events at all), and
+  repair-round-ledger.json still appears in no run
+  mirror.
+- New gap: outline's identical harness-owned
+  install failure occurred three times without a
+  consultation while both seed fingerprints drew
+  one on their second occurrence — verify the
+  fingerprint gating covers harness-owned lifecycle
+  commands (or accept that N160(3) removes those
+  rounds from the repair loop entirely).
+
+### Watchlist (updated)
+
+- twenty: envelope-vs-fidelity is now the whole
+  problem — triage predicts the CRM cannot fit;
+  selection rightly rejects the website as a
+  mockup. Decide the policy: fail fast with a named
+  capacity outcome honoring the brief, or let a
+  confirmed triage warning override fidelity. Ties
+  to the standing earlier-stop-eligibility
+  question.
+- calcom: one auth-session repair from capture; the
+  strategist's session-path directive is on file.
+- ghostfolio: infra-killed before preparation; the
+  nondeterminism watch inherits to the next wave.
+- outline: after N160, the remaining work is
+  repo-level (seed schema, redis-free seed path) —
+  both already diagnosed by the strategist.
+- directus: client-stub engagement is the last
+  blocker; the adapter-trace directive is on file.
