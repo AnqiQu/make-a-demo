@@ -108,6 +108,15 @@ export type RepoProfile = {
    * flags, which agents get wrong (N79).
    */
   yarnVariant?: "berry" | "classic";
+  /**
+   * True when the repo's own root package-manager config disables dependency
+   * lifecycle scripts (.yarnrc.yml `enableScripts: false` or .npmrc
+   * `ignore-scripts=true`). A real install in such a repo runs no lifecycle
+   * scripts, so the harness's network-closed lifecycle pass has no skipped
+   * work to run and is skipped entirely (N160(2)). Absent when scripts stay
+   * enabled and on profiles persisted before detection existed.
+   */
+  lifecycleScriptsDisabled?: boolean;
   lockfiles: string[];
   workspaces: {
     isMonorepo: boolean;

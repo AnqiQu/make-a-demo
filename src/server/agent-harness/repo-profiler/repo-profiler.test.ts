@@ -172,6 +172,73 @@ describe("profileRepo", () => {
     expect(profile.yarnVariant).toBeUndefined();
   });
 
+  it("records that the repo's own config disables lifecycle scripts", () => {
+    // N160(2), outline: enableScripts: false means a real install in this
+    // repo runs no lifecycle scripts, so the harness's offline lifecycle
+    // pass has no work and must be skipped.
+    const berry = profileRepo({
+      files: [
+        {
+          path: "package.json",
+          text: JSON.stringify({ scripts: { dev: "vite" } }),
+        },
+        {
+          path: ".yarnrc.yml",
+          text: "nodeLinker: node-modules\n\nenableScripts: false\n\nnpmMinimalAgeGate: 4320\n",
+        },
+        { path: "yarn.lock", text: "" },
+      ],
+      repoUrl: "https://github.com/example/outline",
+    });
+    const npm = profileRepo({
+      files: [
+        {
+          path: "package.json",
+          text: JSON.stringify({ scripts: { dev: "vite" } }),
+        },
+        { path: ".npmrc", text: "ignore-scripts=true\n" },
+        { path: "package-lock.json", text: "{}" },
+      ],
+      repoUrl: "https://github.com/example/npm-repo",
+    });
+
+    expect(berry.lifecycleScriptsDisabled).toBe(true);
+    expect(npm.lifecycleScriptsDisabled).toBe(true);
+  });
+
+  it("leaves lifecycleScriptsDisabled unset when scripts stay enabled", () => {
+    const commentedOut = profileRepo({
+      files: [
+        {
+          path: "package.json",
+          text: JSON.stringify({ scripts: { dev: "vite" } }),
+        },
+        {
+          path: ".yarnrc.yml",
+          text: "# enableScripts: false\nnodeLinker: node-modules\nenableScripts: true\n",
+        },
+        { path: "yarn.lock", text: "" },
+      ],
+      repoUrl: "https://github.com/example/scripts-enabled",
+    });
+    const nestedOnly = profileRepo({
+      files: [
+        {
+          path: "package.json",
+          text: JSON.stringify({ scripts: { dev: "vite" } }),
+        },
+        // A member's config never speaks for the repo root the install
+        // runs from.
+        { path: "packages/tool/.npmrc", text: "ignore-scripts=true\n" },
+        { path: "package-lock.json", text: "{}" },
+      ],
+      repoUrl: "https://github.com/example/nested-config",
+    });
+
+    expect(commentedOut.lifecycleScriptsDisabled).toBeUndefined();
+    expect(nestedOnly.lifecycleScriptsDisabled).toBeUndefined();
+  });
+
   it("records an assumption when conflicting lockfiles force a manager tiebreak", () => {
     const profile = profileRepo({
       files: [

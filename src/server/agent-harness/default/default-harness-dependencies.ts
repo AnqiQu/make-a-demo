@@ -156,6 +156,7 @@ import {
 import {
   createOfflineLifecycleCommand,
   hasNetworkInstallFailureSignature,
+  isOfflineLifecycleNetworkRefusal,
   parseInstallCommand,
   readYarnInstallVariant,
   runDependencyInstallThroughGate,
@@ -2991,6 +2992,12 @@ async function validateResolvedSubmittedCodeRuntime(
     // reinstalls from scratch.
     const lifecycleCommand = createOfflineLifecycleCommand({
       installCommand: lifecycleInstallCommand,
+      ...(input.repoProfile.lifecycleScriptsDisabled === undefined
+        ? {}
+        : {
+            lifecycleScriptsDisabled:
+              input.repoProfile.lifecycleScriptsDisabled,
+          }),
       packageScripts: input.repoProfile.packageScripts,
       ...(input.repoProfile.yarnVariant === undefined
         ? {}
@@ -3029,134 +3036,153 @@ async function validateResolvedSubmittedCodeRuntime(
           lifecycle.stdout,
           lifecycleFileTail,
         ].join("\n");
-        // Yarn berry reports only "couldn't be built successfully (…logs can
-        // be found here: /tmp/xfs-*/build.log)" — each failed package's real
-        // error lives in that file (calcom, 2026-08-07). Harvest bounded
-        // tails so the report carries causes, not references.
-        const referencedBuildLogs = [
-          ...new Set(
-            [
-              ...lifecycleOutput.matchAll(
-                /logs can be found here: (\/[^\s)]+\/build\.log)/g,
-              ),
-            ]
-              .map((match) => match[1])
-              .filter((path): path is string => path !== undefined),
-          ),
-        ].slice(0, 3);
-        const buildLogEvidence: string[] = [];
-        for (const logPath of referencedBuildLogs) {
-          const logTail = await executeSubmitted(
-            input.workspace,
-            `tail -c 2000 ${shellQuote(logPath)}`,
-          );
-          if (logTail.exitCode === 0 && logTail.stdout.trim().length > 0) {
-            buildLogEvidence.push(
-              `Referenced build log ${logPath} (tail):\n${redactSecretText(logTail.stdout)}`,
-            );
+        if (isOfflineLifecycleNetworkRefusal(lifecycleOutput)) {
+          // The refusal is the offline enforcement the harness itself
+          // provoked (N160(3)): no candidate declared this command and no
+          // repair can change it, so failing the round would charge the
+          // agent for harness-owned work (outline lost three rounds and
+          // ~28 minutes to exactly this, 2026-08-20). Record the skip and
+          // let preflight measure the tree's real state — anything the
+          // pass would have built surfaces there as a specific,
+          // repairable failure.
+          try {
+            await input.workspace.writeSandboxLog({
+              event: "lifecycle.offline-refusal.skipped",
+              message: `Harness-owned offline lifecycle pass (${lifecycleCommand}) was refused by the package manager's offline enforcement and skipped; the sealed submitted-code network makes its downloads impossible by design.`,
+            });
+          } catch {
+            // The skip must never be displaced by an observability failure.
           }
-        }
-        // The reference harvest above needs the stream to have carried the
-        // reference — exactly what a dropped tail loses. The managers write
-        // their failure logs at documented locations regardless; harvest
-        // those unconditionally and skip paths already covered.
-        const managerLogEvidence = (
-          await harvestPackageManagerLogs(input.workspace)
-        ).filter(
-          (entry) =>
-            !referencedBuildLogs.some((logPath) => entry.includes(logPath)),
-        );
-        const downloadFailure = isLifecycleDownloadFailure(
-          [lifecycleOutput, ...buildLogEvidence, ...managerLogEvidence].join(
-            "\n",
-          ),
-        );
-        const lifecycleFailureEvidence = readCommandFailureEvidence({
-          additionalEvidence: [...buildLogEvidence, ...managerLogEvidence],
-          exitCode: lifecycle.exitCode,
-          fileTail: lifecycleFileTail,
-          stderr: lifecycle.stderr,
-          stdout: lifecycle.stdout,
-        });
-        const lifecycleDiskPressure = readDiskPressureEvidence(
-          lifecycleOutput,
-          lifecycleFailureEvidence.excerpt,
-        );
-        // Exit 124 is the deadline-evidence conversion of a timeout kill:
-        // the work in the tail completed and the hang began after its last
-        // line. Naming it "install failure" sent five ghost repair rounds
-        // chasing a phantom install with dependency-only edit rights
-        // (2026-08-09); "lifecycle timeout" keeps full repo latitude.
-        const timedOut = lifecycle.exitCode === 124;
-        // "no CPU progress" is a measurement claim: it is earned only when
-        // alive lines on this command's own record prove the heartbeat
-        // functions here, so silence afterward means a genuinely idle tree.
-        // Without them, silence is the only recorded fact (the heartbeat
-        // was silent batch-wide while commands worked, 2026-08-09).
-        const heartbeatSpoke = /\[makeademo:alive\] cpu \d+/.test(
-          `${lifecycle.stdout}`,
-        );
-        const timeoutSummary = `${lifecycle.stdout}`.includes(
-          "produced no output",
-        )
-          ? `Network-closed lifecycle scripts were killed after 5 minutes of silence${heartbeatSpoke ? " with no CPU progress" : ""}`
-          : "Network-closed lifecycle scripts were killed at their overall deadline";
-        const outputContradictsSuccessfulCompletion =
-          lifecycleFailureEvidence.killed ||
-          lifecycleFailureEvidence.nonzeroToolExit;
-        const lifecycleSummary = timedOut
-          ? outputContradictsSuccessfulCompletion
-            ? [
-                `Network-closed lifecycle failure cause: ${lifecycleFailureEvidence.causeLine}`,
-                `${timeoutSummary} (exit 124). The output records a kill or nonzero tool exit before the deadline, so no completed-success inference is safe.`,
-              ]
-            : [
-                `${timeoutSummary} (exit 124): ${lifecycleFailureEvidence.causeLine}`,
-                "Everything in the output below completed successfully — the hang began after its last line; repair the step that would have run next, not the completed work.",
-              ]
-          : [
-              `Network-closed lifecycle failure cause: ${lifecycleFailureEvidence.causeLine}`,
-            ];
-        const lifecycleHints = [
-          ...(downloadFailure
-            ? [
-                "This lifecycle step tries to download something, and the submitted-code network stays sealed after the install window closes — the download can never succeed, on any retry. Make the demo not need it: neutralize the downloading step for the demo, avoid the downloaded artifact at runtime, or vendor the artifact into the repo.",
-              ]
-            : []),
-          ...(lifecycleDiskPressure.exhausted
-            ? [diskExhaustionRepairHint(lifecycleDiskPressure.markerLines)]
-            : []),
-        ];
-        return failedPreparationValidation({
-          attemptedCommand: lifecycleCommand,
-          classification: timedOut ? "lifecycle timeout" : "install failure",
-          exitCode: lifecycle.exitCode,
-          logsSummary: [
-            ...lifecycleSummary,
-            ...(lifecycleFailureEvidence.excerpt.length === 0
-              ? []
-              : [`Command output:\n${lifecycleFailureEvidence.excerpt}`]),
-            ...[...buildLogEvidence, ...managerLogEvidence]
-              .map((evidence) =>
-                removePromotedCauseLine(
-                  evidence,
-                  lifecycleFailureEvidence.causeLine,
+        } else {
+          // Yarn berry reports only "couldn't be built successfully (…logs can
+          // be found here: /tmp/xfs-*/build.log)" — each failed package's real
+          // error lives in that file (calcom, 2026-08-07). Harvest bounded
+          // tails so the report carries causes, not references.
+          const referencedBuildLogs = [
+            ...new Set(
+              [
+                ...lifecycleOutput.matchAll(
+                  /logs can be found here: (\/[^\s)]+\/build\.log)/g,
                 ),
-              )
-              .filter((evidence) => evidence.length > 0),
-            ...lifecycleDiskPressure.markerLines,
-            // Proves the record saw the command end: output that merely
-            // stops (killed child, dropped stream) has no such trailer.
-            `[makeademo:command-end] exit=${lifecycle.exitCode}`,
-          ].join("\n"),
-          manifest,
-          stage,
-          stderr: lifecycle.stderr,
-          stdout: lifecycle.stdout,
-          ...(lifecycleHints.length > 0
-            ? { suggestedRepairHints: lifecycleHints }
-            : {}),
-        });
+              ]
+                .map((match) => match[1])
+                .filter((path): path is string => path !== undefined),
+            ),
+          ].slice(0, 3);
+          const buildLogEvidence: string[] = [];
+          for (const logPath of referencedBuildLogs) {
+            const logTail = await executeSubmitted(
+              input.workspace,
+              `tail -c 2000 ${shellQuote(logPath)}`,
+            );
+            if (logTail.exitCode === 0 && logTail.stdout.trim().length > 0) {
+              buildLogEvidence.push(
+                `Referenced build log ${logPath} (tail):\n${redactSecretText(logTail.stdout)}`,
+              );
+            }
+          }
+          // The reference harvest above needs the stream to have carried the
+          // reference — exactly what a dropped tail loses. The managers write
+          // their failure logs at documented locations regardless; harvest
+          // those unconditionally and skip paths already covered.
+          const managerLogEvidence = (
+            await harvestPackageManagerLogs(input.workspace)
+          ).filter(
+            (entry) =>
+              !referencedBuildLogs.some((logPath) => entry.includes(logPath)),
+          );
+          const downloadFailure = isLifecycleDownloadFailure(
+            [lifecycleOutput, ...buildLogEvidence, ...managerLogEvidence].join(
+              "\n",
+            ),
+          );
+          const lifecycleFailureEvidence = readCommandFailureEvidence({
+            additionalEvidence: [...buildLogEvidence, ...managerLogEvidence],
+            exitCode: lifecycle.exitCode,
+            fileTail: lifecycleFileTail,
+            stderr: lifecycle.stderr,
+            stdout: lifecycle.stdout,
+          });
+          const lifecycleDiskPressure = readDiskPressureEvidence(
+            lifecycleOutput,
+            lifecycleFailureEvidence.excerpt,
+          );
+          // Exit 124 is the deadline-evidence conversion of a timeout kill:
+          // the work in the tail completed and the hang began after its last
+          // line. Naming it "install failure" sent five ghost repair rounds
+          // chasing a phantom install with dependency-only edit rights
+          // (2026-08-09); "lifecycle timeout" keeps full repo latitude.
+          const timedOut = lifecycle.exitCode === 124;
+          // "no CPU progress" is a measurement claim: it is earned only when
+          // alive lines on this command's own record prove the heartbeat
+          // functions here, so silence afterward means a genuinely idle tree.
+          // Without them, silence is the only recorded fact (the heartbeat
+          // was silent batch-wide while commands worked, 2026-08-09).
+          const heartbeatSpoke = /\[makeademo:alive\] cpu \d+/.test(
+            `${lifecycle.stdout}`,
+          );
+          const timeoutSummary = `${lifecycle.stdout}`.includes(
+            "produced no output",
+          )
+            ? `Network-closed lifecycle scripts were killed after 5 minutes of silence${heartbeatSpoke ? " with no CPU progress" : ""}`
+            : "Network-closed lifecycle scripts were killed at their overall deadline";
+          const outputContradictsSuccessfulCompletion =
+            lifecycleFailureEvidence.killed ||
+            lifecycleFailureEvidence.nonzeroToolExit;
+          const lifecycleSummary = timedOut
+            ? outputContradictsSuccessfulCompletion
+              ? [
+                  `Network-closed lifecycle failure cause: ${lifecycleFailureEvidence.causeLine}`,
+                  `${timeoutSummary} (exit 124). The output records a kill or nonzero tool exit before the deadline, so no completed-success inference is safe.`,
+                ]
+              : [
+                  `${timeoutSummary} (exit 124): ${lifecycleFailureEvidence.causeLine}`,
+                  "Everything in the output below completed successfully — the hang began after its last line; repair the step that would have run next, not the completed work.",
+                ]
+            : [
+                `Network-closed lifecycle failure cause: ${lifecycleFailureEvidence.causeLine}`,
+              ];
+          const lifecycleHints = [
+            ...(downloadFailure
+              ? [
+                  "This lifecycle step tries to download something, and the submitted-code network stays sealed after the install window closes — the download can never succeed, on any retry. Make the demo not need it: neutralize the downloading step for the demo, avoid the downloaded artifact at runtime, or vendor the artifact into the repo.",
+                ]
+              : []),
+            ...(lifecycleDiskPressure.exhausted
+              ? [diskExhaustionRepairHint(lifecycleDiskPressure.markerLines)]
+              : []),
+          ];
+          return failedPreparationValidation({
+            attemptedCommand: lifecycleCommand,
+            classification: timedOut ? "lifecycle timeout" : "install failure",
+            exitCode: lifecycle.exitCode,
+            logsSummary: [
+              ...lifecycleSummary,
+              ...(lifecycleFailureEvidence.excerpt.length === 0
+                ? []
+                : [`Command output:\n${lifecycleFailureEvidence.excerpt}`]),
+              ...[...buildLogEvidence, ...managerLogEvidence]
+                .map((evidence) =>
+                  removePromotedCauseLine(
+                    evidence,
+                    lifecycleFailureEvidence.causeLine,
+                  ),
+                )
+                .filter((evidence) => evidence.length > 0),
+              ...lifecycleDiskPressure.markerLines,
+              // Proves the record saw the command end: output that merely
+              // stops (killed child, dropped stream) has no such trailer.
+              `[makeademo:command-end] exit=${lifecycle.exitCode}`,
+            ].join("\n"),
+            manifest,
+            stage,
+            stderr: lifecycle.stderr,
+            stdout: lifecycle.stdout,
+            ...(lifecycleHints.length > 0
+              ? { suggestedRepairHints: lifecycleHints }
+              : {}),
+          });
+        }
       }
     }
     if (input.installDependencies !== false) {

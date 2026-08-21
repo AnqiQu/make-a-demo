@@ -129,6 +129,7 @@ export function profileRepo(input: RepoProfileInput): RepoProfile {
     .filter((file) => isEnvironmentFileName(file.path))
     .map((file) => file.path);
   const yarnVariant = readYarnVariant(primaryPackage?.json, paths);
+  const lifecycleScriptsDisabled = readLifecycleScriptPolicy(files);
 
   return {
     ...(Number.isFinite(input.archiveSizeBytes) &&
@@ -136,6 +137,7 @@ export function profileRepo(input: RepoProfileInput): RepoProfile {
       ? { archiveSizeBytes: input.archiveSizeBytes }
       : {}),
     ...(yarnVariant === undefined ? {} : { yarnVariant }),
+    ...(lifecycleScriptsDisabled ? { lifecycleScriptsDisabled } : {}),
     authHints: Object.keys(dependencies).filter((name) =>
       authPackagePattern.test(name),
     ),
@@ -717,6 +719,25 @@ function readYarnVariant(
   if (paths.has(".yarnrc.yml")) return "berry";
   if (paths.has(".yarnrc")) return "classic";
   return undefined;
+}
+
+/**
+ * True when the repo's root package-manager config disables dependency
+ * lifecycle scripts, so a real install runs none and the harness's
+ * network-closed lifecycle pass has no skipped work to run (N160(2):
+ * outline's `enableScripts: false` doomed every `yarn rebuild`). Only the
+ * root config speaks for the install the harness runs; nested members'
+ * configs never do.
+ */
+function readLifecycleScriptPolicy(files: RepoProfileFile[]): boolean {
+  const yarnrc = files.find(({ path }) => path === ".yarnrc.yml")?.text;
+  if (yarnrc !== undefined && /^\s*enableScripts:\s*false\s*$/m.test(yarnrc)) {
+    return true;
+  }
+  const npmrc = files.find(({ path }) => path === ".npmrc")?.text;
+  return (
+    npmrc !== undefined && /^\s*ignore-scripts\s*=\s*true\s*$/m.test(npmrc)
+  );
 }
 
 function readPnpmWorkspacePatterns(files: RepoProfileFile[]): string[] {

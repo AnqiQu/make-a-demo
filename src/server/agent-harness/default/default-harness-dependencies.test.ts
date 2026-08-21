@@ -5518,10 +5518,109 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(commands).toEqual(
       expect.arrayContaining([
         expect.stringContaining(
-          "npm rebuild && npm run --if-present postinstall",
+          "npm_config_offline=true npm rebuild && npm_config_offline=true npm run --if-present postinstall",
         ),
       ]),
     );
+  });
+
+  it("skips the offline lifecycle pass when the repo's config disables lifecycle scripts", async () => {
+    // N160(2), outline: .yarnrc.yml enableScripts: false means the gated
+    // install skipped no lifecycle work, so the pass has nothing to run —
+    // it previously burned ~9.5 minutes per round retrying registry
+    // fetches the sealed network refused (2026-08-20).
+    const commands: string[] = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        commands.push(command);
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.validatePreparation({
+        preparationManifest: {
+          ...preparationManifest(),
+          installCommandUsed: "yarn install --immutable",
+        },
+        repoProfile: {
+          ...repoProfile(),
+          lifecycleScriptsDisabled: true,
+          packageScripts: {
+            dev: "next dev",
+            postinstall: "yarn patch-package",
+          },
+          yarnVariant: "berry",
+        },
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).resolves.toMatchObject({ status: "passed" });
+
+    expect(commands.some((command) => command.includes("yarn rebuild"))).toBe(
+      false,
+    );
+    expect(
+      commands.some((command) => command.includes("run postinstall")),
+    ).toBe(false);
+  });
+
+  it("skips past the manager's own offline refusal instead of charging a repair round", async () => {
+    // N160(3), outline/twenty: the pass's failure was the offline
+    // enforcement the harness itself provoked — no candidate declared the
+    // command and none can repair it. The pass is recorded as skipped and
+    // preflight measures the tree's real state.
+    const sandboxLog: Array<Record<string, unknown>> = [];
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("yarn rebuild")) {
+          return {
+            exitCode: 1,
+            stderr:
+              "➤ YN0000: Network access have been disabled by configuration (enableNetwork: false)",
+            stdout: "",
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+      async writeSandboxLog(entry) {
+        sandboxLog.push(entry);
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    await expect(
+      harness.dependencies.validatePreparation({
+        preparationManifest: {
+          ...preparationManifest(),
+          installCommandUsed: "yarn install --immutable",
+        },
+        repoProfile: {
+          ...repoProfile(),
+          packageScripts: { dev: "next dev" },
+          yarnVariant: "berry",
+        },
+        runPlan: runPlan(),
+        workspace,
+      }),
+    ).resolves.toMatchObject({ status: "passed" });
+
+    expect(
+      sandboxLog.some(
+        (entry) => entry.event === "lifecycle.offline-refusal.skipped",
+      ),
+    ).toBe(true);
   });
 
   it("classifies a failed offline lifecycle pass as an install failure with its output", async () => {
