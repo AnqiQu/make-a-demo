@@ -9174,3 +9174,289 @@ consultation.
   converge; if one appears, spec it as its own
   N-item rather than resurrecting N162(2) as
   written.
+
+## Addendum (2026-08-22, wave-17 — the best wave yet: 6/11, directus's first pass; two of my own N160 landing bugs surface, and the failures split cleanly: N163–N165)
+
+Batch matrix-2026-08-22T02-26-42-139Z, report
+matrix-report-2026-08-22T04-02-58-151Z. Six of
+eleven repos passed — more than any previous wave:
+homer (5.9m), conduit (25.7m), excalidraw (51.6m),
+cyberchef (77.1m), directus (89.3m — its FIRST
+pass ever; the client-stub engagement directive
+from wave-16's watchlist is resolved), ghostfolio
+(88.2m — the infra-killed wave-16 run was
+nondeterministic as suspected). Failures: midday
+(90.2m, wall clock), calcom (90.8m, wall clock),
+ghost (90.8m, wall clock), outline (59.5m, round
+exhaustion), twenty (78.0m, strategist stop).
+
+### What wave-17 proved
+
+- N160 fail-fast works: outline's stranded
+  lifecycle fetches died in seconds, not 9.5
+  minutes — the run ended at 59.5m against
+  wave-16's 82.6m. But both of the other N160
+  moves missed in production (N163 below): the
+  refusal predicate never matched yarn 4's real
+  wording, and lifecycleScriptsDisabled never left
+  None because the profiler never saw .yarnrc.yml.
+- N161 held: no upload-envelope hangs this wave.
+- N162 held: ghost sailed through manifest
+  validation with its ember-admin sourcePaths and
+  reached runtime preflight for the first time
+  since wave-14 — the failure moved forward into a
+  real app-startup problem, which is progress.
+- N156's message held: midday and calcom report
+  "exceeded its 90-minute wall-clock budget" —
+  named, not generic.
+- The strategist's stop advice terminates runs:
+  twenty ended at 78.0m on the stop instead of
+  grinding to the 90-minute ceiling.
+
+### Diagnoses
+
+- outline (59.5m, rounds exhausted): three layers.
+  (1) The offline lifecycle pass still charged
+  repair rounds 2 and 4 because yarn 4's actual
+  refusal is "➤ YN0080: ... has been blocked
+  because of your configuration settings" — my
+  predicate guessed "Network access have been
+  disabled" and enableNetwork, which yarn prints
+  in neither form here. (2) repo-profile.json
+  shows lifecycleScriptsDisabled: None despite
+  outline's root enableScripts: false — the
+  profiler code is correct but .yarnrc.yml text
+  never reaches profileRepo: it was not a readable
+  file name in the snapshot. My profiler unit test
+  fed the text directly and masked the missing
+  seam — exactly the fakes-everywhere failure the
+  testing rules warn about. Both are N163, landed
+  this session. (3) With rounds freed, the real
+  remaining failure is repo-level: migrations die
+  with "The server does not support SSL
+  connections" plus outline's own
+  [MISSING_ENV_FILE] — the prepared runtime needs
+  a DATABASE_URL without SSL against the local
+  Postgres and a materialized .env. The
+  strategist's demo-mode migration directive is on
+  file; this is repair-agent territory, watchlist.
+- twenty (78.0m, stopped): every install attempt
+  died before yarn ever ran — corepack must fetch
+  the repo-pinned yarn@4.13.0 from
+  https://repo.yarnpkg.com/4.13.0/... and that
+  request failed with the same network error in
+  five attempts, including retries inside the open
+  install window; the snapshot's corepack cache
+  holds only 4.11.0. Corepack's fetch is not
+  governed by YARN_ENABLE_NETWORK (it runs before
+  yarn exists) and evidently repo.yarnpkg.com is
+  not reachable where registry.yarnpkg.com is
+  (outline's installs used the registry all wave).
+  The strategist's stop correctly named the
+  blocked target and the exhausted budget. This is
+  N164: the pinned manager is a harness
+  provisioning concern, not an agent-repairable
+  fault.
+- ghost (90.8m, wall clock): six preflight rounds
+  of a genuinely evolving startup repair. The
+  start command now rebuilds the admin client at
+  launch (pnpm -C ../.. exec nx run
+  @tryghost/admin:build && pnpm build:assets &&
+  nodemon index.js) and the build fails:
+  @tryghost/shade:build and
+  @tryghost/kg-unsplash-selector:build die on
+  TS2688 "Cannot find type definition file for
+  'vite/client'", and the chain exits 130 at the
+  readiness deadline. The nx-cloud client fetch to
+  cloud.nx.app is blocked by the sealed runtime
+  and logged, but nx continues without it — noise
+  and stall risk, not the cause (N165 neutralizes
+  it cheaply). No strategist consult fired: the
+  failure fingerprint evolved every round and
+  first repeated only on the final attempt, which
+  is exactly the gating contract — watch whether a
+  same-theme-different-fingerprint chain deserves
+  consultation, but change nothing yet.
+- midday (90.2m, wall clock): the repair loop was
+  CONVERGING and ran out of clock. Attempt 1:
+  three routes render nothing; attempts 2–3: both
+  feature proofs missing; attempts 4–6: only the
+  transactions proof missing. The strategist's
+  escalate-hint (WelcomeSummary's fixture lacks
+  data.openInvoices; QuickActions still builds a
+  Supabase browser client in demo mode) was
+  verifiably right — invoicing passed the round
+  after it landed. But six repair cycles at 8–22
+  minutes each (repair-2 alone 18.2m) plus 12.9m
+  preparation consumed the whole budget with one
+  proof string left. Wave-13's midday passed at
+  70.3m; this wave's preparation started from a
+  worse state and the loop paid for it.
+- calcom (90.8m, wall clock): same shape.
+  Preparation alone took 25.9m, repair-2 took
+  22.6m, and the loop was converging (startup
+  fixed → proofs missing → auth-degraded: clicks
+  land on /auth/login, needs the seeded demo
+  session the strategist's directive describes).
+  Repair round 5 was admitted at 04:01:07 with
+  roughly one minute of wall clock left and was
+  killed twelve seconds in — a round that could
+  never have finished. That admission gap is N165.
+
+### N163 (High, bugfix) — N160's landing missed production twice; landed 2026-08-22
+
+Two bugs in my own wave-16 landing, both proven by
+outline's run artifacts and both fixed this
+session with seam-honest regression tests:
+
+1. isOfflineLifecycleNetworkRefusal now matches
+   yarn 4's real per-request refusal — "has been
+   blocked because of your configuration
+   settings" (YN0080) — alongside the enableNetwork
+   and disabled-network wordings. The regression
+   test carries outline's verbatim line. Bare
+   ECONNREFUSED still deliberately does not match.
+2. .yarnrc.yml now reaches the snapshot as
+   readable text — but through
+   registryConfigFileNames, not the plain readable
+   list, because berry configs can embed
+   npmAuthToken/npmAuthIdent credentials exactly
+   like .npmrc's _authToken. The credential
+   pattern in isCredentialRegistryConfig gained
+   npmAuth(Token|Ident), so a credentialed
+   .yarnrc.yml is quarantined from the execution
+   archive and flagged by the static screen, while
+   a clean one (outline's) flows to the profiler
+   and lifecycleScriptsDisabled finally fires.
+   Regression tests run the real snapshot reader
+   both ways: clean text reaches the profiler;
+   credentialed .yarnrc.yml joins the quarantine
+   exclusions.
+
+Acceptance: outline's next run must show
+lifecycleScriptsDisabled: true in
+repo-profile.json and zero lifecycle-attributed
+repair rounds.
+
+### N164 (High, bugfix) — provision the repo-pinned package manager; corepack's fetch is outside every window we control
+
+The dependency-install gate assumes the package
+manager exists, but corepack materializes the
+pinned version lazily from repo.yarnpkg.com — a
+host the sandbox cannot resolve even inside the
+open install window, and a fetch that ignores
+every yarn-level network switch because it runs
+before yarn does. Fix at the gate seam, in order
+of preference: (1) set
+COREPACK_NPM_REGISTRY=https://registry.npmjs.org
+in the gate's install environment so corepack
+fetches the pinned CLI from the npm registry
+(@yarnpkg/cli-dist), which demonstrably works in
+the window; (2) run corepack install inside the
+open window before the install command so the
+manager is cached before the network reseals;
+(3) pre-cache current yarn majors in the snapshot
+image as defense in depth (the cache held 4.11.0;
+twenty pins 4.13.0 — a cache can lag, so this is
+the backstop, not the fix). Acceptance: twenty's
+install reaches yarn's own output (even a
+failing install) instead of dying in corepack.
+
+### N165 (Medium, bugfix) — do not admit a repair round the budget cannot fit, and neutralize nx cloud in sealed runtimes
+
+Two small deterministic guards from this wave's
+wall-clock deaths:
+
+1. Round admission: calcom's repair round 5 was
+   admitted with ~1 minute of remaining wall
+   clock against a run whose median
+   repair-plus-preflight cycle cost ~10 minutes;
+   it was killed 12 seconds in. Before starting a
+   repair round, compare remaining wall clock
+   against the run's own observed cycle cost
+   (median of completed repair+validation cycles,
+   or a floor constant before any completes);
+   when the budget cannot fit another cycle, end
+   the run with the named budget outcome
+   immediately. That converts a doomed
+   mid-round kill into an honest early stop and
+   returns the leftover minutes to the matrix.
+2. nx cloud: ghost's sealed runtime logged a
+   blocked cloud.nx.app client fetch on every
+   start; twenty is nx-managed too. Export
+   NX_NO_CLOUD=true (and drop
+   NX_CLOUD_ACCESS_TOKEN if present) in the
+   prepared runtime environment so nx never
+   reaches for its cloud client under the sealed
+   network. Removes a stall risk and a recurring
+   red herring from preflight logs; it would not
+   have saved ghost, which is why this rides
+   along at Medium instead of standing alone.
+
+### Meta-orchestrator audit (third live wave)
+
+Five consultations across four runs; every one of
+the six passing runs consulted zero times — the
+gating spends nothing on healthy loops, and
+directus's first pass needed no advice. Kinds:
+midday escalate-hint then spend-bonus-round;
+calcom directive (seeded demo session across
+server and client checks — matches the observed
+auth-degraded evidence exactly); outline directive
+(demo-mode migration handling); twenty stop
+(named the blocked repo.yarnpkg.com target and
+exhausted budget — correct, and the run honored
+it, ending 12 minutes under the ceiling). The
+midday escalate-hint is the first advice whose
+effect is directly measurable in artifacts: the
+invoicing proof it addressed passed on the next
+attempt. One audit gap: the spend-bonus-round
+artifact records no reason — the advice schema
+should require a reason for bonus grants so the
+ledger can answer "why did this run get a seventh
+round"; fold into the standing M1 follow-up items
+(ledger adhered field, run-mirror persistence,
+pipeline-log visibility). Ghost's zero consults
+are consistent with fingerprint gating (first
+repeat happened on the final attempt); noted on
+the watch, no change proposed.
+
+### Watchlist (updated)
+
+- midday and calcom: both are one converging
+  repair short of passing inside the budget; N165
+  reclaims the doomed-round minutes and the
+  strategist directives are on file. If they miss
+  again next wave with rounds to spare, the
+  question becomes preparation quality (midday
+  prepared into a worse starting state than its
+  wave-13 pass), not budget.
+- outline: with N163 landed, rounds 2 and 4 come
+  back; the remaining failure is repo-level
+  (.env materialization, SSL-free DATABASE_URL
+  for migrations). Expect a pass or a pure
+  repo-repair failure next wave.
+- twenty: N164 unblocks corepack; after that the
+  standing envelope-vs-fidelity policy question
+  (CRM too big for the budget) likely returns.
+- ghost: startup repair is real agent work now
+  (admin build at launch fails on vite/client
+  type defs). Watch whether the repair agent
+  finds the prebuilt-assets path or needs a
+  same-theme consultation gate change.
+- spend-bonus-round reasons: schema change queued
+  with the M1 ledger follow-ups.
+
+### Wave-17 landings (2026-08-22)
+
+- N163 — landed same-session, both fixes, gates
+  green (lint, typecheck, 1424 tests, knip). The
+  YN0080 signature joined the refusal predicate
+  with outline's verbatim line as the regression;
+  .yarnrc.yml entered registryConfigFileNames so
+  its text reaches the profiler while credentialed
+  variants (npmAuthToken/npmAuthIdent) are
+  quarantined and screened — the plain readable
+  list was deliberately NOT used, because it would
+  have bypassed credential screening.
+- N164, N165 — specced above, not yet implemented.
