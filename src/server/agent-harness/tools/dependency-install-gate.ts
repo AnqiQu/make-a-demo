@@ -324,7 +324,7 @@ export function createOfflineLifecycleCommand(input: {
  * network, must NOT match — those remain agent-repairable.
  */
 export function isOfflineLifecycleNetworkRefusal(output: string): boolean {
-  return /enableNetwork|Network access ha(?:s|ve) been disabled|ENOTCACHED|only-if-cached|ERR_PNPM_NO_OFFLINE/i.test(
+  return /enableNetwork|Network access ha(?:s|ve) been disabled|has been blocked because of your configuration settings|ENOTCACHED|only-if-cached|ERR_PNPM_NO_OFFLINE/i.test(
     output,
   );
 }

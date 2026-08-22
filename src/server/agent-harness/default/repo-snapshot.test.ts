@@ -92,6 +92,46 @@ describe("readGithubRepoSnapshot", () => {
     ).toEqual({ path: "package-link.json", symlinkTarget: "package.json" });
   });
 
+  it("reads the root .yarnrc.yml so lifecycle-script policy reaches the profiler", async () => {
+    // N160(2) regression, wave 17: outline's enableScripts: false never
+    // reached profileRepo because .yarnrc.yml was not a readable file name,
+    // so lifecycleScriptsDisabled could never be set in production.
+    const runDirectory = join(
+      tmpdir(),
+      `makeademo-yarnrc-snapshot-${crypto.randomUUID()}`,
+    );
+    await mkdir(runDirectory, { recursive: true });
+    const snapshot = await readGithubRepoSnapshot(
+      {
+        log: async () => undefined,
+        repoUrl: "https://github.com/acme/berry-app",
+        runDirectory,
+      },
+      {
+        git: {
+          async archiveRevision(input) {
+            await writeFile(input.archivePath, "berry archive");
+          },
+          async clone(input) {
+            await mkdir(input.checkoutPath, { recursive: true });
+            await writeFile(join(input.checkoutPath, "package.json"), "{}");
+            await writeFile(
+              join(input.checkoutPath, ".yarnrc.yml"),
+              "nodeLinker: node-modules\nenableScripts: false\n",
+            );
+          },
+          async readHead() {
+            return "abc123def456";
+          },
+        },
+      },
+    );
+
+    expect(
+      snapshot.files.find(({ path }) => path === ".yarnrc.yml")?.text,
+    ).toContain("enableScripts: false");
+  });
+
   it("reads compose files and prisma schemas for data-service detection", async () => {
     // N122: servicesRequired detection reads docker-compose services and the
     // Prisma datasource provider — those files must reach the profiler with
@@ -556,6 +596,10 @@ describe("readGithubRepoSnapshot", () => {
           "registry=https://registry.npmjs.org/\n",
         );
         await writeFile(
+          join(input.checkoutPath, ".yarnrc.yml"),
+          'npmRegistries:\n  "https://npm.corp.example":\n    npmAuthToken: corp_secret\n',
+        );
+        await writeFile(
           join(input.checkoutPath, "config", "prod.tfvars"),
           'db_password = "hunter2"\n',
         );
@@ -594,6 +638,7 @@ describe("readGithubRepoSnapshot", () => {
     expect(excludedPaths).toEqual([
       ".envrc",
       ".npmrc",
+      ".yarnrc.yml",
       "config/prod.env",
       "config/prod.tfvars",
       "config/secrets.txt",

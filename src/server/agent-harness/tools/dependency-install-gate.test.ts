@@ -216,6 +216,14 @@ describe("dependency install gate", () => {
     ).toBe(true);
     expect(
       isOfflineLifecycleNetworkRefusal(
+        // Yarn 4's actual refusal wording (outline, wave 17): per-request
+        // YN0080 blocks citing "your configuration settings", not the
+        // enableNetwork flag name.
+        "➤ YN0080: │ es6-error@npm:4.1.1: Request to 'https://registry.yarnpkg.com/es6-error/-/es6-error-4.1.1.tgz' has been blocked because of your configuration settings",
+      ),
+    ).toBe(true);
+    expect(
+      isOfflineLifecycleNetworkRefusal(
         "npm ERR! code ENOTCACHED\nnpm ERR! request to https://registry.npmjs.org/node-gyp failed: cache mode is 'only-if-cached' but no cached response is available.",
       ),
     ).toBe(true);
