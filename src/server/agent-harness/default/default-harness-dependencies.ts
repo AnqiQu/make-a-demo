@@ -4577,16 +4577,81 @@ function legibleFailureExcerpt(input: {
         : input.stdout;
   // Liveness beats (CPU sampler and agent-liveness plugin) are watchdog
   // transport, never evidence — sampler output would dilute the bounded tail.
-  const cleaned = collapseRepeatedErrorBlocks(
-    stripAnsi(source)
-      .split("\n")
-      .filter((line) => !/^\[makeademo:(?:agent-)?alive\]/.test(line.trim()))
-      .join("\n"),
+  const cleaned = capRepeatedWarningClasses(
+    collapseRepeatedErrorBlocks(
+      stripAnsi(source)
+        .split("\n")
+        .filter((line) => !/^\[makeademo:(?:agent-)?alive\]/.test(line.trim()))
+        .join("\n"),
+    ),
   ).trim();
   if (cleaned.length <= failureEvidenceTailBytes) {
     return cleaned;
   }
   return `[earlier output elided]\n${cleaned.slice(-failureEvidenceTailBytes)}`;
+}
+
+// N173 (twenty, wave-19): rolldown printed the same [PLUGIN_TIMINGS] class
+// five times and filled the bounded tail while the two real build errors
+// went unquoted. A paragraph is warning-class when it opens with a
+// bracketed tag, names no error, and carries no failure prose; per class,
+// the first two paragraphs stay and later ones collapse into one marker.
+// Error-class lines inside a capped paragraph (rolldown's `(os error 2)`
+// box art) always survive — the cap removes noise, never causes.
+const warningClassParagraphLimit = 2;
+const warningClassTagPattern = /^\[([^\]\n]{1,64})\]/;
+const failureProsePattern =
+  /\bcould not\b|\bcannot\b|\bfail(?:s|ed|ure)?\b|\bmissing\b|\bunable to\b/i;
+
+function capRepeatedWarningClasses(value: string): string {
+  const kept: string[] = [];
+  const paragraphCounts = new Map<string, number>();
+  const elided = new Map<string, { count: number; markerIndex: number }>();
+  let cappingTag: string | undefined;
+  for (const line of value.split("\n")) {
+    const trimmed = line.trim();
+    const tag = warningClassTagPattern.exec(trimmed)?.[1];
+    const startsWarningParagraph =
+      tag !== undefined &&
+      !failureProsePattern.test(trimmed) &&
+      readLastErrorCauseLine(trimmed) === undefined;
+    if (startsWarningParagraph) {
+      const count = (paragraphCounts.get(tag) ?? 0) + 1;
+      paragraphCounts.set(tag, count);
+      if (count <= warningClassParagraphLimit) {
+        cappingTag = undefined;
+        kept.push(line);
+        continue;
+      }
+      cappingTag = tag;
+      const record = elided.get(tag);
+      if (record === undefined) {
+        elided.set(tag, { count: 1, markerIndex: kept.length });
+        kept.push("");
+      } else {
+        record.count += 1;
+      }
+      continue;
+    }
+    if (cappingTag !== undefined) {
+      if (trimmed.length === 0) {
+        cappingTag = undefined;
+        continue;
+      }
+      if (tag !== undefined || readLastErrorCauseLine(trimmed) !== undefined) {
+        cappingTag = undefined;
+        kept.push(line);
+        continue;
+      }
+      continue;
+    }
+    kept.push(line);
+  }
+  for (const [tag, record] of elided) {
+    kept[record.markerIndex] =
+      `[${tag}] repeated ${record.count} more time(s); similar output elided`;
+  }
+  return kept.join("\n");
 }
 
 function readCommandFailureEvidence(input: {

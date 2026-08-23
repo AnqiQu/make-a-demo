@@ -6824,6 +6824,76 @@ describe("createDefaultAgentHarnessDependencies", () => {
     expect(hints).toContain("[makeademo:disk] build before");
   });
 
+  it("headlines the build error text, not rolldown's error-named stack frame, above a capped warning flood", async () => {
+    // N173 (twenty, wave-19): the evidence showed "at unwrapBindingResult
+    // (...rolldown...)" atop a flood of PLUGIN_TIMINGS warnings while the
+    // real UNLOADABLE_DEPENDENCY errors sat unquoted.
+    const timingsBlock = (breakdown: string) =>
+      [
+        "[PLUGIN_TIMINGS] Your build spent significant time in plugins. Here is a breakdown:",
+        `  - ${breakdown}`,
+        "See https://rolldown.rs/options/checks#plugintimings for more details.",
+      ].join("\n");
+    const workspace = createFakeAgentHarnessWorkspace({
+      async executeSubmittedCode(command) {
+        if (command.includes("vite build")) {
+          return {
+            exitCode: 1,
+            stderr: "",
+            stdout: [
+              timingsBlock("vite:esbuild-transpile (83%)"),
+              timingsBlock("vite:css-post (8%)"),
+              timingsBlock("vite:esbuild-transpile (76%)"),
+              timingsBlock("rolldown:vite-resolve (54%)"),
+              timingsBlock("vite:asset (11%)"),
+              "✓ 26940 modules transformed.",
+              "✗ Build failed in 1m 39s",
+              "error during build:",
+              "Build failed with 2 errors:",
+              "[UNLOADABLE_DEPENDENCY] Could not load src/modules/demo/isDemoMode",
+              "│                                     ╰─────────── No such file or directory (os error 2)",
+              "at unwrapBindingResult (file:///workspace/repo/node_modules/rolldown/dist/shared/error-BuvQYXuZ.mjs:18:128)",
+              "at async buildEnvironment (file:///workspace/repo/node_modules/vite/dist/node/chunks/node.js:33253:64)",
+            ].join("\n\n"),
+          };
+        }
+        return { exitCode: 0, stderr: "", stdout: "" };
+      },
+    });
+    const harness = await createDefaultAgentHarnessDependencies({
+      artifactStore: { async writeJson() {} },
+      openCodeRunner: repoPreparationRunner(),
+      outputRoot: "/tmp/makeademo-test",
+      repoSourceArchive: await repoSourceArchive(),
+    });
+
+    const report = await harness.dependencies.validatePreparation({
+      preparationManifest: {
+        ...preparationManifest(),
+        buildCommandUsed: "vite build",
+        installCommandUsed: "npm ci --no-audit",
+      },
+      repoProfile: repoProfile(),
+      runPlan: runPlan(),
+      workspace,
+    });
+
+    expect(report).toMatchObject({
+      failureClassification: "build failure",
+      status: "failed",
+    });
+    const headline = report.logsSummary.split("\n", 1)[0] ?? "";
+    expect(headline).not.toContain("at unwrapBindingResult");
+    expect(headline).toContain("No such file or directory (os error 2)");
+    expect(report.logsSummary).toContain(
+      "[UNLOADABLE_DEPENDENCY] Could not load src/modules/demo/isDemoMode",
+    );
+    const timingsMentions =
+      report.logsSummary.split("[PLUGIN_TIMINGS]").length - 1;
+    expect(timingsMentions).toBeLessThanOrEqual(3);
+    expect(report.logsSummary).toContain("elided");
+  });
+
   it("adds the disk steering when the offline lifecycle dies out of space", async () => {
     const workspace = createFakeAgentHarnessWorkspace({
       async executeSubmittedCode(command) {
